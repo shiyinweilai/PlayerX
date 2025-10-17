@@ -5,3 +5,4 @@ cache
 video-compare
 sdl_ttf
 ffmpeg
+*.zip

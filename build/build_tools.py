@@ -43,7 +43,8 @@ def build_ffmpeg(args):
 
 def build_sdl_ttf(args):
     if os.path.exists(f"{script_dir}/../sdl_ttf"):
-        os.system(f"wget https://github.com/libsdl-org/SDL_ttf/archive/refs/tags/release-2.24.0.zip -O {script_dir}/../sdl_ttf/release-2.24.0.zip")
+        os.system(
+            f"wget https://github.com/libsdl-org/SDL_ttf/archive/refs/tags/release-2.24.0.zip -O {script_dir}/../sdl_ttf/release-2.24.0.zip")
         os.system(f"unzip {script_dir}/../release-2.24.0.zip -d {script_dir}/../sdl_ttf")
     # 检查依赖是否存在，如果不存在则下载
     external_dir = os.path.join(source_dir, 'external')
@@ -92,6 +93,27 @@ def build_sdl_ttf(args):
     run(['make', 'install'], cwd=build_dir, capture_output=True)
 
 
+def build_sdl(args):
+    # 配置CMake参数
+    cmake_args = [
+        'cmake', source_dir,
+        f'-B{build_dir}',
+        f'-DCMAKE_BUILD_TYPE=Release',
+        f'-DCMAKE_INSTALL_PREFIX={install_dir}'
+    ]
+
+    if args.mode == 'static':
+        cmake_args += ['-DBUILD_SHARED_LIBS=OFF']
+    elif args.mode == 'both':
+        cmake_args += ['-DBUILD_SHARED_LIBS=ON']
+    try:
+        run(cmake_args, cwd=build_dir, capture_output=True)
+        run(['make', '-j', str(os.cpu_count() or 1)], cwd=build_dir, capture_output=True)
+        run(['make', 'install'], cwd=build_dir, capture_output=True)
+    except SystemExit:
+        sys.exit(1)
+
+
 def build_video_compare(args):
     shutil.copy(f"{script_dir}/CMakeLists.txt", f"{source_dir}/CMakeLists.txt")
     ffmpeg_install_dir = os.path.join(script_dir, 'ffmpeg/install')
@@ -112,15 +134,20 @@ def build_video_compare(args):
 
 
 def main():
+    print(f"\033[34m开始构建目标: {args.target}\033[0m")
     if args.target == 'ffmpeg':
         build_ffmpeg(args)
     elif args.target == 'sdl_ttf':
         build_sdl_ttf(args)
     elif args.target == 'video_compare':
         build_video_compare(args)
+    elif args.target == 'sdl':
+        build_sdl(args)
     else:
         print("\033[31m错误: 未指定有效的构建目标\033[0m")
         sys.exit(1)
+    print("\033[32m构建完成\033[0m")
+    print(f"\033[32m安装目录: {install_dir}\033[0m")
 
 
 def init():
@@ -133,14 +160,10 @@ def init():
 
 
 if __name__ == '__main__':
-    if os.name == 'nt':
-        os.system("chcp 65001 && cls")
-    else:
-        os.system("clear")
+    print("\033c", end="")
     parser = argparse.ArgumentParser(description="简化的统一构建工具")
-    parser.add_argument('--target', choices=['ffmpeg', 'sdl_ttf', 'video_compare'], help='构建目标')
+    parser.add_argument('--target', choices=['ffmpeg', 'sdl_ttf', 'video_compare', 'sdl'], help='构建目标')
     parser.add_argument('-s', '--source', required=True, help='源码目录路径')
-    parser.add_argument('--clean', action='store_true', help='清理之前的构建目录')
     parser.add_argument('-m', '--mode', default='shared', choices=['shared', 'static', 'both'], help='构建模式')
 
     args = parser.parse_args()
