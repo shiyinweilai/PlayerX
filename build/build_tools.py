@@ -42,6 +42,9 @@ def build_ffmpeg(args):
 
 
 def build_sdl_ttf(args):
+    if os.path.exists(f"{script_dir}/../sdl_ttf"):
+        os.system(f"wget https://github.com/libsdl-org/SDL_ttf/archive/refs/tags/release-2.24.0.zip -O {script_dir}/../sdl_ttf/release-2.24.0.zip")
+        os.system(f"unzip {script_dir}/../release-2.24.0.zip -d {script_dir}/../sdl_ttf")
     # 检查依赖是否存在，如果不存在则下载
     external_dir = os.path.join(source_dir, 'external')
     freetype_dir = os.path.join(external_dir, 'freetype')
