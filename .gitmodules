@@ -1,0 +1,3 @@
+[submodule "video-compare"]
+	path = video-compare
+	url = https://github.com/pixop/video-compare.git
