@@ -3,6 +3,6 @@ VCPlayer/
 demo_tool/
 cache
 video-compare
-sdl_ttf
 ffmpeg
 *.zip
+build/sdl

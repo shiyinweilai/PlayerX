@@ -8,3 +8,6 @@
 [submodule "sdl"]
 	path = sdl
 	url = https://github.com/libsdl-org/SDL.git
+[submodule "sdl_ttf"]
+	path = sdl_ttf
+	url = https://github.com/libsdl-org/SDL_ttf.git
