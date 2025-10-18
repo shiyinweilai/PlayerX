@@ -79,13 +79,17 @@ def build_sdl(args):
         os.chdir(f"{script_dir}/../sdl_ttf")
         os.system("git checkout release-3.2.x")
         os.chdir(script_dir)
-        sdl_install_dir = os.path.join(script_dir, 'sdl/install')
+        sdl_install_dir = os.path.join(script_dir, 'sdl3/install')
         cmake_args += [f'-DSDL3TTF_SAMPLES=OFF',
                        f'-DSDL3TTF_INSTALL=ON',
                        f'-DSDL3TTF_VENDORED=ON',
                        f'-DSDL3TTF_HARFBUZZ=ON',
                        f'-DCMAKE_PREFIX_PATH={sdl_install_dir}',
                        ]
+    if args.target == 'sdl2':
+        os.chdir(f"{script_dir}/../sdl")
+        os.system("git checkout release-2.24.x")
+        os.chdir(script_dir)
     if args.mode == 'static':
         cmake_args += ['-DBUILD_SHARED_LIBS=OFF']
     elif args.mode == 'both':
@@ -113,7 +117,7 @@ def main():
     print(f"\033[34m开始构建目标: {args.target}\033[0m")
     if args.target == 'ffmpeg':
         build_ffmpeg(args)
-    elif args.target == 'sdl' or args.target == 'sdl2_ttf' or args.target == 'sdl3_ttf':
+    elif args.target == 'sdl2' or args.target == 'sdl3' or args.target == 'sdl2_ttf' or args.target == 'sdl3_ttf':
         build_sdl(args)
     elif args.target == 'video_compare':
         build_video_compare(args)
@@ -136,7 +140,7 @@ def init():
 if __name__ == '__main__':
     print("\033c", end="")
     parser = argparse.ArgumentParser(description="简化的统一构建工具")
-    parser.add_argument('--target', choices=['ffmpeg', 'sdl', 'sdl2_ttf', 'sdl3_ttf', 'video_compare'], help='构建目标')
+    parser.add_argument('--target', choices=['ffmpeg', 'sdl2', 'sdl3', 'sdl2_ttf', 'sdl3_ttf', 'video_compare'], help='构建目标')
     parser.add_argument('-s', '--source', required=True, help='源码目录路径')
     parser.add_argument('-m', '--mode', default='shared', choices=['shared', 'static', 'both'], help='构建模式')
 

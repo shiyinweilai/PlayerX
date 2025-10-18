@@ -8,6 +8,9 @@
 #include <filesystem>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -32,69 +35,15 @@ TTF_Font* font = nullptr;
 TTF_Font* title_font = nullptr;
 
 // 文件选择状态
-std::vector<std::string> video_files;
-int selected_file1 = -1;
-int selected_file2 = -1;
-std::string current_directory;
+std::string selected_file1 = "";
+std::string selected_file2 = "";
 
-// 获取用户主目录
-std::string get_home_directory() {
-#ifdef _WIN32
-    char path[MAX_PATH];
-    if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, path))) {
-        return std::string(path);
-    }
-    return "C:\\";
-#else
-    const char* home = getenv("HOME");
-    if (home) return home;
-    
-    struct passwd* pw = getpwuid(getuid());
-    if (pw) return pw->pw_dir;
-    
-    return "/";
-#endif
-}
-
-// 获取视频文件扩展名列表
-std::vector<std::string> get_video_extensions() {
-    return {
-        ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm",
-        ".m4v", ".3gp", ".3g2", ".mpeg", ".mpg", ".ts", ".mts",
-        ".m2ts", ".ogv", ".divx", ".rm", ".rmvb", ".asf", ".amv"
-    };
-}
-
-// 检查文件是否为视频文件
-bool is_video_file(const std::string& filename) {
-    size_t dot_pos = filename.find_last_of(".");
-    if (dot_pos == std::string::npos) return false;
-    
-    std::string ext = filename.substr(dot_pos);
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    
-    auto extensions = get_video_extensions();
-    return std::find(extensions.begin(), extensions.end(), ext) != extensions.end();
-}
-
-// 扫描目录中的视频文件
-void scan_directory(const std::string& path) {
-    video_files.clear();
-    
-    try {
-        for (const auto& entry : std::filesystem::directory_iterator(path)) {
-            if (entry.is_regular_file() && is_video_file(entry.path().filename().string())) {
-                video_files.push_back(entry.path().string());
-            }
-        }
-        
-        // 按文件名排序
-        std::sort(video_files.begin(), video_files.end());
-        
-    } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error scanning directory: " << e.what() << std::endl;
-    }
-}
+// 线程安全变量
+std::mutex file_mutex;
+std::condition_variable file_cv;
+bool file_selection_in_progress = false;
+int pending_file_selection = 0; // 0: 无, 1: 文件1, 2: 文件2
+std::string pending_file_path = "";
 
 // 获取文件名（不含路径）
 std::string get_filename(const std::string& path) {
@@ -144,6 +93,92 @@ void run_video_compare(const std::string& file1, const std::string& file2) {
     int result = system(command.c_str());
     if (result != 0) {
         std::cerr << "Failed to run video-compare" << std::endl;
+    }
+}
+
+// 使用AppleScript打开文件选择对话框（在后台线程中执行）
+std::string open_file_dialog_thread() {
+#ifdef __APPLE__
+    std::string script = R"(
+        tell application "System Events"
+            set theFile to choose file with prompt "请选择视频文件" of type {"public.movie"}
+            set thePath to POSIX path of theFile
+            return thePath
+        end tell
+    )";
+    
+    std::string command = "osascript -e '" + script + "'";
+    
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        return "";
+    }
+    
+    char buffer[1024];
+    std::string result = "";
+    
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    
+    pclose(pipe);
+    
+    // 移除末尾的换行符
+    if (!result.empty() && result[result.length()-1] == '\n') {
+        result.erase(result.length()-1);
+    }
+    
+    return result;
+#else
+    // 对于非macOS系统，使用简单的命令行输入
+    std::cout << "请输入视频文件路径: ";
+    std::string path;
+    std::getline(std::cin, path);
+    return path;
+#endif
+}
+
+// 文件选择线程函数
+void file_selection_thread(int file_number) {
+    std::string file_path = open_file_dialog_thread();
+    
+    std::lock_guard<std::mutex> lock(file_mutex);
+    pending_file_path = file_path;
+    pending_file_selection = file_number;
+    file_selection_in_progress = false;
+    file_cv.notify_one();
+}
+
+// 开始文件选择（非阻塞）
+void start_file_selection(int file_number) {
+    std::lock_guard<std::mutex> lock(file_mutex);
+    if (file_selection_in_progress) {
+        return; // 已经有文件选择在进行中
+    }
+    
+    file_selection_in_progress = true;
+    pending_file_selection = 0;
+    pending_file_path = "";
+    
+    // 在新线程中执行文件选择
+    std::thread(file_selection_thread, file_number).detach();
+}
+
+// 检查是否有文件选择结果
+void check_file_selection_results() {
+    std::unique_lock<std::mutex> lock(file_mutex);
+    if (!file_selection_in_progress && pending_file_selection != 0) {
+        if (!pending_file_path.empty()) {
+            if (pending_file_selection == 1) {
+                selected_file1 = pending_file_path;
+                std::cout << "Selected file 1: " << pending_file_path << std::endl;
+            } else if (pending_file_selection == 2) {
+                selected_file2 = pending_file_path;
+                std::cout << "Selected file 2: " << pending_file_path << std::endl;
+            }
+        }
+        pending_file_selection = 0;
+        pending_file_path = "";
     }
 }
 
@@ -238,43 +273,32 @@ void handle_click(int x, int y) {
     int window_width, window_height;
     SDL_GetWindowSize(window, &window_width, &window_height);
     
-    // 检查文件列表点击
-    int list_y = 120;
-    int list_height = window_height - 250;
-    int items_per_page = list_height / 25;
+    // 检查按钮点击
+    int button_y = 200;
+    int button_width = 200;
+    int button_height = 50;
+    int button_spacing = 30;
     
-    if (x >= 40 && x <= window_width - 40 && y >= list_y && y < list_y + items_per_page * 25) {
-        int item_index = (y - list_y) / 25;
-        if (item_index < (int)video_files.size()) {
-            if (selected_file1 == item_index) {
-                selected_file1 = -1;
-            } else if (selected_file2 == item_index) {
-                selected_file2 = -1;
-            } else if (selected_file1 == -1) {
-                selected_file1 = item_index;
-            } else if (selected_file2 == -1) {
-                selected_file2 = item_index;
-            } else {
-                // 替换第一个选择
-                selected_file1 = selected_file2;
-                selected_file2 = item_index;
-            }
-        }
+    // 选择第一个文件按钮
+    SDL_Rect file1_rect = {(window_width - button_width) / 2, button_y, button_width, button_height};
+    if (point_in_rect(x, y, file1_rect)) {
+        start_file_selection(1);
     }
     
-    // 检查按钮点击
-    int button_y = window_height - 60;
-    int button_width = 120;
-    int button_height = 40;
+    // 选择第二个文件按钮
+    SDL_Rect file2_rect = {(window_width - button_width) / 2, button_y + button_height + button_spacing, button_width, button_height};
+    if (point_in_rect(x, y, file2_rect)) {
+        start_file_selection(2);
+    }
     
     // 比较按钮
-    SDL_Rect compare_rect = {20, button_y, button_width, button_height};
-    if (point_in_rect(x, y, compare_rect) && selected_file1 != -1 && selected_file2 != -1) {
-        run_video_compare(video_files[selected_file1], video_files[selected_file2]);
+    SDL_Rect compare_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 2, button_width, button_height};
+    if (point_in_rect(x, y, compare_rect) && !selected_file1.empty() && !selected_file2.empty()) {
+        run_video_compare(selected_file1, selected_file2);
     }
     
     // 退出按钮
-    SDL_Rect exit_rect = {150, button_y, button_width, button_height};
+    SDL_Rect exit_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 3, button_width, button_height};
     if (point_in_rect(x, y, exit_rect)) {
         SDL_Event quit_event;
         quit_event.type = SDL_QUIT;
@@ -294,70 +318,85 @@ void render() {
     // 绘制标题
     draw_text("Video Compare Player", 20, 20, TEXT_COLOR, title_font);
     
-    // 绘制当前目录
-    draw_text("Current Directory: " + current_directory, 20, 70, TEXT_COLOR, font);
+    // 绘制说明文本
+    draw_text("请选择两个视频文件进行比较", 20, 80, TEXT_COLOR, font);
     
-    // 绘制文件列表
-    int list_y = 120;
-    int list_height = window_height - 250;
-    int items_per_page = list_height / 25;
-    
-    draw_text("Select two video files to compare:", 20, list_y - 30, TEXT_COLOR, font);
-    
-    for (int i = 0; i < std::min(items_per_page, (int)video_files.size()); i++) {
-        int file_index = i;
-        if (file_index >= (int)video_files.size()) break;
-        
-        std::string filename = get_filename(video_files[file_index]);
-        SDL_Color color = TEXT_COLOR;
-        
-        if (file_index == selected_file1 || file_index == selected_file2) {
-            color = SELECTED_COLOR;
-        }
-        
-        draw_text(filename, 40, list_y + i * 25, color, font);
-    }
-    
-    // 绘制选中的文件
-    std::string selected_text = "Selected: ";
-    if (selected_file1 != -1) {
-        selected_text += get_filename(video_files[selected_file1]);
-    }
-    if (selected_file2 != -1) {
-        selected_text += " vs " + get_filename(video_files[selected_file2]);
-    }
-    
-    draw_text(selected_text, 20, window_height - 100, TEXT_COLOR, font);
+    // 检查文件选择状态
+    std::lock_guard<std::mutex> lock(file_mutex);
+    bool is_selecting = file_selection_in_progress;
     
     // 绘制按钮
-    bool can_compare = (selected_file1 != -1 && selected_file2 != -1);
+    int button_y = 200;
+    int button_width = 200;
+    int button_height = 50;
+    int button_spacing = 30;
     
-    int button_y = window_height - 60;
-    int button_width = 120;
-    int button_height = 40;
+    // 选择第一个文件按钮
+    SDL_Rect file1_rect = {(window_width - button_width) / 2, button_y, button_width, button_height};
+    SDL_Color file1_color = is_selecting ? SDL_Color{100, 100, 100, 255} : BUTTON_COLOR;
+    SDL_SetRenderDrawColor(renderer, file1_color.r, file1_color.g, file1_color.b, file1_color.a);
+    SDL_RenderFillRect(renderer, &file1_rect);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &file1_rect);
+    
+    std::string file1_text = is_selecting ? "选择中..." : (selected_file1.empty() ? "选择第一个文件" : get_filename(selected_file1));
+    draw_text(file1_text, (window_width - file1_text.length() * 8) / 2, button_y + 15, 
+              is_selecting ? SDL_Color{150, 150, 150, 255} : TEXT_COLOR, font);
+    
+    // 选择第二个文件按钮
+    SDL_Rect file2_rect = {(window_width - button_width) / 2, button_y + button_height + button_spacing, button_width, button_height};
+    SDL_Color file2_color = is_selecting ? SDL_Color{100, 100, 100, 255} : BUTTON_COLOR;
+    SDL_SetRenderDrawColor(renderer, file2_color.r, file2_color.g, file2_color.b, file2_color.a);
+    SDL_RenderFillRect(renderer, &file2_rect);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &file2_rect);
+    
+    std::string file2_text = is_selecting ? "选择中..." : (selected_file2.empty() ? "选择第二个文件" : get_filename(selected_file2));
+    draw_text(file2_text, (window_width - file2_text.length() * 8) / 2, button_y + button_height + button_spacing + 15, 
+              is_selecting ? SDL_Color{150, 150, 150, 255} : TEXT_COLOR, font);
     
     // 比较按钮
+    bool can_compare = (!selected_file1.empty() && !selected_file2.empty() && !is_selecting);
     SDL_Color compare_color = can_compare ? BUTTON_COLOR : SDL_Color{100, 100, 100, 255};
-    SDL_Rect compare_rect = {20, button_y, button_width, button_height};
+    SDL_Rect compare_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 2, button_width, button_height};
     
     SDL_SetRenderDrawColor(renderer, compare_color.r, compare_color.g, compare_color.b, compare_color.a);
     SDL_RenderFillRect(renderer, &compare_rect);
-    
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderDrawRect(renderer, &compare_rect);
     
-    draw_text("Compare", 20 + (button_width - 50) / 2, button_y + 12, 
+    draw_text("开始比较", (window_width - 60) / 2, button_y + (button_height + button_spacing) * 2 + 15, 
               can_compare ? TEXT_COLOR : SDL_Color{150, 150, 150, 255}, font);
     
     // 退出按钮
-    SDL_Rect exit_rect = {150, button_y, button_width, button_height};
-    SDL_SetRenderDrawColor(renderer, BUTTON_COLOR.r, BUTTON_COLOR.g, BUTTON_COLOR.b, BUTTON_COLOR.a);
+    SDL_Rect exit_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 3, button_width, button_height};
+    SDL_Color exit_color = is_selecting ? SDL_Color{100, 100, 100, 255} : BUTTON_COLOR;
+    SDL_SetRenderDrawColor(renderer, exit_color.r, exit_color.g, exit_color.b, exit_color.a);
     SDL_RenderFillRect(renderer, &exit_rect);
-    
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderDrawRect(renderer, &exit_rect);
     
-    draw_text("Exit", 150 + (button_width - 30) / 2, button_y + 12, TEXT_COLOR, font);
+    draw_text("退出", (window_width - 30) / 2, button_y + (button_height + button_spacing) * 3 + 15, 
+              is_selecting ? SDL_Color{150, 150, 150, 255} : TEXT_COLOR, font);
+    
+    // 绘制选中的文件信息
+    if (!selected_file1.empty() || !selected_file2.empty()) {
+        std::string selected_text = "已选择: ";
+        if (!selected_file1.empty()) {
+            selected_text += get_filename(selected_file1);
+        }
+        if (!selected_file2.empty()) {
+            selected_text += " vs " + get_filename(selected_file2);
+        }
+        
+        SDL_Rect selected_bg_rect = {15, window_height - 80, window_width - 30, 30};
+        SDL_SetRenderDrawColor(renderer, 30, 144, 255, 50); // 半透明蓝色背景
+        SDL_RenderFillRect(renderer, &selected_bg_rect);
+        SDL_SetRenderDrawColor(renderer, 30, 144, 255, 255); // 蓝色边框
+        SDL_RenderDrawRect(renderer, &selected_bg_rect);
+        
+        draw_text(selected_text, 20, window_height - 65, TEXT_COLOR, font);
+    }
     
     SDL_RenderPresent(renderer);
 }
@@ -366,10 +405,6 @@ int main(int argc, char* argv[]) {
     if (!init_sdl()) {
         return 1;
     }
-    
-    // 初始化当前目录
-    current_directory = get_home_directory();
-    scan_directory(current_directory);
     
     bool running = true;
     while (running) {
@@ -391,6 +426,9 @@ int main(int argc, char* argv[]) {
                     break;
             }
         }
+        
+        // 检查文件选择结果
+        check_file_selection_results();
         
         render();
         SDL_Delay(16); // 约60FPS
