@@ -45,6 +45,10 @@ bool file_selection_in_progress = false;
 int pending_file_selection = 0; // 0: 无, 1: 文件1, 2: 文件2
 std::string pending_file_path = "";
 
+// 新增：鼠标位置（用于悬停高亮）
+static int g_mouse_x = -1;
+static int g_mouse_y = -1;
+
 // 获取文件名（不含路径）
 std::string get_filename(const std::string& path) {
     size_t last_slash = path.find_last_of("/\\");
@@ -96,21 +100,71 @@ void run_video_compare(const std::string& file1, const std::string& file2) {
     }
 }
 
-// 使用AppleScript打开文件选择对话框（在后台线程中执行）
+// 使用macOS原生API打开文件选择对话框（在后台线程中执行）
 std::string open_file_dialog_thread() {
 #ifdef __APPLE__
-    std::string script = R"(
-        tell application "System Events"
-            set theFile to choose file with prompt "请选择视频文件" of type {"public.movie"}
-            set thePath to POSIX path of theFile
-            return thePath
-        end tell
-    )";
+    // 使用Objective-C++调用macOS原生文件选择API
+    std::string command = R"OBJC(
+#import <Cocoa/Cocoa.h>
+
+int main(int argc, const char * argv[]) {
+    @autoreleasepool {
+        [NSApplication sharedApplication];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [NSApp activateIgnoringOtherApps:YES];
+
+        NSOpenPanel *panel = [NSOpenPanel openPanel];
+        panel.title = @"请选择视频文件";
+        panel.allowsMultipleSelection = NO;
+        panel.canChooseDirectories = NO;
+        panel.canChooseFiles = YES;
+        // 使用常见扩展名，兼容性更好
+        panel.allowedFileTypes = @[@"mov", @"mp4", @"m4v", @"avi", @"mkv", @"webm"]; 
+
+        [panel center];
+        [panel setLevel:NSModalPanelWindowLevel];
+
+        NSInteger result = [panel runModal];
+        if (result == NSModalResponseOK) {
+            NSURL *url = panel.URLs.firstObject;
+            const char *path = url.fileSystemRepresentation;
+            printf("%s", path);
+            return 0;
+        }
+        return 1;
+    }
+}
+)OBJC";
     
-    std::string command = "osascript -e '" + script + "'";
+    // 将Objective-C代码写入临时文件
+    std::string temp_file = "/tmp/video_select.m";
+    FILE* code_file = fopen(temp_file.c_str(), "w");
+    if (!code_file) {
+        std::cerr << "Failed to create temporary Objective-C file" << std::endl;
+        return "";
+    }
+    fprintf(code_file, "%s", command.c_str());
+    fclose(code_file);
     
-    FILE* pipe = popen(command.c_str(), "r");
+    // 编译并执行Objective-C程序（开启ARC）
+    std::string compile_cmd = "clang -fobjc-arc -framework Cocoa -o /tmp/video_select /tmp/video_select.m";
+    std::string exec_cmd = "/tmp/video_select";
+    
+    std::cout << "Compiling Objective-C code..." << std::endl;
+    int compile_status = system(compile_cmd.c_str());
+    
+    if (compile_status != 0) {
+        std::cerr << "Failed to compile Objective-C code" << std::endl;
+        remove(temp_file.c_str());
+        return "";
+    }
+    
+    std::cout << "Executing file selection dialog..." << std::endl;
+    FILE* pipe = popen(exec_cmd.c_str(), "r");
     if (!pipe) {
+        std::cerr << "Failed to open pipe for file selection" << std::endl;
+        remove(temp_file.c_str());
+        remove("/tmp/video_select");
         return "";
     }
     
@@ -121,7 +175,13 @@ std::string open_file_dialog_thread() {
         result += buffer;
     }
     
-    pclose(pipe);
+    int status = pclose(pipe);
+    std::cout << "File selection execution status: " << status << std::endl;
+    std::cout << "File selection result: " << result << std::endl;
+    
+    // 清理临时文件
+    remove(temp_file.c_str());
+    remove("/tmp/video_select");
     
     // 移除末尾的换行符
     if (!result.empty() && result[result.length()-1] == '\n') {
@@ -140,12 +200,16 @@ std::string open_file_dialog_thread() {
 
 // 文件选择线程函数
 void file_selection_thread(int file_number) {
+    std::cout << "文件选择线程启动，选择文件: " << file_number << std::endl;
     std::string file_path = open_file_dialog_thread();
+    
+    std::cout << "文件选择结果: " << (file_path.empty() ? "空" : file_path) << std::endl;
     
     std::lock_guard<std::mutex> lock(file_mutex);
     pending_file_path = file_path;
     pending_file_selection = file_number;
     file_selection_in_progress = false;
+    std::cout << "文件选择线程结束，file_selection_in_progress设置为false" << std::endl;
     file_cv.notify_one();
 }
 
@@ -153,12 +217,19 @@ void file_selection_thread(int file_number) {
 void start_file_selection(int file_number) {
     std::lock_guard<std::mutex> lock(file_mutex);
     if (file_selection_in_progress) {
+        std::cout << "文件选择正在进行中，跳过新的选择请求" << std::endl;
         return; // 已经有文件选择在进行中
     }
     
     file_selection_in_progress = true;
     pending_file_selection = 0;
     pending_file_path = "";
+    std::cout << "开始文件选择: " << file_number << ", file_selection_in_progress设置为true" << std::endl;
+
+    // 在弹出系统文件选择前最小化当前窗口，避免遮挡（macOS下尤为重要）
+    if (window) {
+        SDL_MinimizeWindow(window);
+    }
     
     // 在新线程中执行文件选择
     std::thread(file_selection_thread, file_number).detach();
@@ -168,6 +239,7 @@ void start_file_selection(int file_number) {
 void check_file_selection_results() {
     std::unique_lock<std::mutex> lock(file_mutex);
     if (!file_selection_in_progress && pending_file_selection != 0) {
+        std::cout << "检测到文件选择结果: " << pending_file_selection << std::endl;
         if (!pending_file_path.empty()) {
             if (pending_file_selection == 1) {
                 selected_file1 = pending_file_path;
@@ -176,9 +248,19 @@ void check_file_selection_results() {
                 selected_file2 = pending_file_path;
                 std::cout << "Selected file 2: " << pending_file_path << std::endl;
             }
+        } else {
+            std::cout << "文件路径为空，可能是用户取消了选择" << std::endl;
         }
         pending_file_selection = 0;
         pending_file_path = "";
+
+        // 文件选择结束后恢复并置顶SDL窗口
+        lock.unlock();
+        if (window) {
+            SDL_RestoreWindow(window);
+            SDL_RaiseWindow(window);
+        }
+        lock.lock();
     }
 }
 
@@ -271,7 +353,9 @@ void cleanup() {
 // 处理鼠标点击
 void handle_click(int x, int y) {
     int window_width, window_height;
-    SDL_GetWindowSize(window, &window_width, &window_height);
+    // 使用渲染器输出尺寸，避免在HiDPI下坐标不一致
+    SDL_GetRendererOutputSize(renderer, &window_width, &window_height);
+    std::cout << "Mouse click at: (" << x << ", " << y << ") renderer size: " << window_width << "x" << window_height << std::endl;
     
     // 检查按钮点击
     int button_y = 200;
@@ -281,28 +365,40 @@ void handle_click(int x, int y) {
     
     // 选择第一个文件按钮
     SDL_Rect file1_rect = {(window_width - button_width) / 2, button_y, button_width, button_height};
+    std::cout << "file1_rect: x=" << file1_rect.x << ", y=" << file1_rect.y << ", w=" << file1_rect.w << ", h=" << file1_rect.h << std::endl;
     if (point_in_rect(x, y, file1_rect)) {
+        std::cout << "点击命中: 选择第一个文件按钮" << std::endl;
         start_file_selection(1);
+        return;
     }
     
     // 选择第二个文件按钮
     SDL_Rect file2_rect = {(window_width - button_width) / 2, button_y + button_height + button_spacing, button_width, button_height};
+    std::cout << "file2_rect: x=" << file2_rect.x << ", y=" << file2_rect.y << ", w=" << file2_rect.w << ", h=" << file2_rect.h << std::endl;
     if (point_in_rect(x, y, file2_rect)) {
+        std::cout << "点击命中: 选择第二个文件按钮" << std::endl;
         start_file_selection(2);
+        return;
     }
     
     // 比较按钮
     SDL_Rect compare_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 2, button_width, button_height};
+    std::cout << "compare_rect: x=" << compare_rect.x << ", y=" << compare_rect.y << ", w=" << compare_rect.w << ", h=" << compare_rect.h << std::endl;
     if (point_in_rect(x, y, compare_rect) && !selected_file1.empty() && !selected_file2.empty()) {
+        std::cout << "点击命中: 开始比较按钮" << std::endl;
         run_video_compare(selected_file1, selected_file2);
+        return;
     }
     
     // 退出按钮
     SDL_Rect exit_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 3, button_width, button_height};
+    std::cout << "exit_rect: x=" << exit_rect.x << ", y=" << exit_rect.y << ", w=" << exit_rect.w << ", h=" << exit_rect.h << std::endl;
     if (point_in_rect(x, y, exit_rect)) {
+        std::cout << "点击命中: 退出按钮" << std::endl;
         SDL_Event quit_event;
         quit_event.type = SDL_QUIT;
         SDL_PushEvent(&quit_event);
+        return;
     }
 }
 
@@ -313,7 +409,14 @@ void render() {
     SDL_RenderClear(renderer);
     
     int window_width, window_height;
-    SDL_GetWindowSize(window, &window_width, &window_height);
+    // 使用渲染器输出尺寸，确保与鼠标事件坐标一致
+    SDL_GetRendererOutputSize(renderer, &window_width, &window_height);
+    
+    // 检查字体是否加载成功
+    if (!font || !title_font) {
+        std::cerr << "Fonts not loaded properly!" << std::endl;
+        return;
+    }
     
     // 绘制标题
     draw_text("Video Compare Player", 20, 20, TEXT_COLOR, title_font);
@@ -325,40 +428,50 @@ void render() {
     std::lock_guard<std::mutex> lock(file_mutex);
     bool is_selecting = file_selection_in_progress;
     
+    // std::cout << "Rendering - is_selecting: " << is_selecting 
+    //           << ", file1: " << (selected_file1.empty() ? "empty" : selected_file1)
+    //           << ", file2: " << (selected_file2.empty() ? "empty" : selected_file2) << std::endl;
+    
     // 绘制按钮
     int button_y = 200;
     int button_width = 200;
     int button_height = 50;
     int button_spacing = 30;
     
-    // 选择第一个文件按钮
+    // 选择第一个文件按钮 - 只有当没有选择进行中时才可点击
     SDL_Rect file1_rect = {(window_width - button_width) / 2, button_y, button_width, button_height};
-    SDL_Color file1_color = is_selecting ? SDL_Color{100, 100, 100, 255} : BUTTON_COLOR;
+    // 根据悬停与选择状态调整颜色
+    bool hover_file1 = (!is_selecting && point_in_rect(g_mouse_x, g_mouse_y, file1_rect));
+    SDL_Color file1_color = is_selecting ? SDL_Color{100, 100, 100, 255} : (hover_file1 ? BUTTON_HOVER_COLOR : BUTTON_COLOR);
     SDL_SetRenderDrawColor(renderer, file1_color.r, file1_color.g, file1_color.b, file1_color.a);
     SDL_RenderFillRect(renderer, &file1_rect);
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderDrawRect(renderer, &file1_rect);
     
     std::string file1_text = is_selecting ? "选择中..." : (selected_file1.empty() ? "选择第一个文件" : get_filename(selected_file1));
-    draw_text(file1_text, (window_width - file1_text.length() * 8) / 2, button_y + 15, 
+    int text_width = file1_text.length() * 8; // 估算文本宽度
+    draw_text(file1_text, (window_width - text_width) / 2, button_y + 15, 
               is_selecting ? SDL_Color{150, 150, 150, 255} : TEXT_COLOR, font);
     
-    // 选择第二个文件按钮
+    // 选择第二个文件按钮 - 只有当没有选择进行中时才可点击
     SDL_Rect file2_rect = {(window_width - button_width) / 2, button_y + button_height + button_spacing, button_width, button_height};
-    SDL_Color file2_color = is_selecting ? SDL_Color{100, 100, 100, 255} : BUTTON_COLOR;
+    bool hover_file2 = (!is_selecting && point_in_rect(g_mouse_x, g_mouse_y, file2_rect));
+    SDL_Color file2_color = is_selecting ? SDL_Color{100, 100, 100, 255} : (hover_file2 ? BUTTON_HOVER_COLOR : BUTTON_COLOR);
     SDL_SetRenderDrawColor(renderer, file2_color.r, file2_color.g, file2_color.b, file2_color.a);
     SDL_RenderFillRect(renderer, &file2_rect);
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderDrawRect(renderer, &file2_rect);
     
     std::string file2_text = is_selecting ? "选择中..." : (selected_file2.empty() ? "选择第二个文件" : get_filename(selected_file2));
-    draw_text(file2_text, (window_width - file2_text.length() * 8) / 2, button_y + button_height + button_spacing + 15, 
+    text_width = file2_text.length() * 8; // 估算文本宽度
+    draw_text(file2_text, (window_width - text_width) / 2, button_y + button_height + button_spacing + 15, 
               is_selecting ? SDL_Color{150, 150, 150, 255} : TEXT_COLOR, font);
     
-    // 比较按钮
+    // 比较按钮 - 只有当两个文件都已选择且没有选择进行中时才可点击
     bool can_compare = (!selected_file1.empty() && !selected_file2.empty() && !is_selecting);
-    SDL_Color compare_color = can_compare ? BUTTON_COLOR : SDL_Color{100, 100, 100, 255};
     SDL_Rect compare_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 2, button_width, button_height};
+    bool hover_compare = (can_compare && point_in_rect(g_mouse_x, g_mouse_y, compare_rect));
+    SDL_Color compare_color = can_compare ? (hover_compare ? BUTTON_HOVER_COLOR : BUTTON_COLOR) : SDL_Color{100, 100, 100, 255};
     
     SDL_SetRenderDrawColor(renderer, compare_color.r, compare_color.g, compare_color.b, compare_color.a);
     SDL_RenderFillRect(renderer, &compare_rect);
@@ -368,16 +481,16 @@ void render() {
     draw_text("开始比较", (window_width - 60) / 2, button_y + (button_height + button_spacing) * 2 + 15, 
               can_compare ? TEXT_COLOR : SDL_Color{150, 150, 150, 255}, font);
     
-    // 退出按钮
+    // 退出按钮 - 总是可点击
     SDL_Rect exit_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 3, button_width, button_height};
-    SDL_Color exit_color = is_selecting ? SDL_Color{100, 100, 100, 255} : BUTTON_COLOR;
+    bool hover_exit = point_in_rect(g_mouse_x, g_mouse_y, exit_rect);
+    SDL_Color exit_color = hover_exit ? BUTTON_HOVER_COLOR : BUTTON_COLOR;
     SDL_SetRenderDrawColor(renderer, exit_color.r, exit_color.g, exit_color.b, exit_color.a);
     SDL_RenderFillRect(renderer, &exit_rect);
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderDrawRect(renderer, &exit_rect);
     
-    draw_text("退出", (window_width - 30) / 2, button_y + (button_height + button_spacing) * 3 + 15, 
-              is_selecting ? SDL_Color{150, 150, 150, 255} : TEXT_COLOR, font);
+    draw_text("退出", (window_width - 30) / 2, button_y + (button_height + button_spacing) * 3 + 15, TEXT_COLOR, font);
     
     // 绘制选中的文件信息
     if (!selected_file1.empty() || !selected_file2.empty()) {
@@ -418,6 +531,11 @@ int main(int argc, char* argv[]) {
                     if (event.button.button == SDL_BUTTON_LEFT) {
                         handle_click(event.button.x, event.button.y);
                     }
+                    break;
+                case SDL_MOUSEMOTION:
+                    // 新增：更新鼠标位置用于悬停高亮
+                    g_mouse_x = event.motion.x;
+                    g_mouse_y = event.motion.y;
                     break;
                 case SDL_KEYDOWN:
                     if (event.key.keysym.sym == SDLK_ESCAPE) {
