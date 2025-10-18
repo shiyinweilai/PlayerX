@@ -6,3 +6,4 @@ video-compare
 ffmpeg
 *.zip
 build/sdl
+player/build
