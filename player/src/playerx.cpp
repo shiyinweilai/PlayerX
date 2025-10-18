@@ -19,6 +19,12 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <pwd.h>
+// 添加POSIX相关头文件以支持open/posix_spawn/waitpid等
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+// 声明environ用于posix_spawn传递环境变量
+extern char **environ;
 #endif
 
 // 颜色定义
@@ -83,24 +89,85 @@ bool point_in_rect(int x, int y, const SDL_Rect& rect) {
 
 // 运行video-compare
 void run_video_compare(const std::string& file1, const std::string& file2) {
-    std::string command;
-    
-    // 构建video-compare命令
-#ifdef _WIN32
-    command = "video-compare.exe \"" + file1 + "\" \"" + file2 + "\"";
+#ifndef _WIN32
+    // 可能的二进制路径候选（优先使用安装产物，与player.sh一致）
+    std::vector<std::string> candidates = {
+        "/Users/rbyang/Documents/UGit/private/PlayerX/build/player/install/bin/video-compare",
+        "./video-compare"
+    };
+    std::string exe;
+    for (const auto& c : candidates) {
+        if (std::filesystem::exists(c) && access(c.c_str(), X_OK) == 0) { exe = c; break; }
+    }
+    if (exe.empty()) {
+        std::cerr << "Cannot find video-compare executable. Tried:" << std::endl;
+        for (const auto& c : candidates) std::cerr << "  " << c << std::endl;
+        return;
+    }
+
+    // 构造argv
+    std::vector<char*> argv;
+    argv.push_back(const_cast<char*>(exe.c_str()));
+    argv.push_back(const_cast<char*>("-w"));
+    argv.push_back(const_cast<char*>("960x540"));
+    argv.push_back(const_cast<char*>(file1.c_str()));
+    argv.push_back(const_cast<char*>(file2.c_str()));
+    argv.push_back(nullptr);
+
+    // 打开日志文件，捕获stdout/stderr
+    const char* log_path = "/tmp/video-compare.run.log";
+    int log_fd = ::open(log_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (log_fd == -1) {
+        std::perror("open log file");
+    }
+
+    // 使用posix_spawn执行
+    pid_t pid = 0;
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    if (log_fd != -1) {
+        posix_spawn_file_actions_adddup2(&actions, log_fd, STDOUT_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, log_fd, STDERR_FILENO);
+    }
+
+    std::cout << "Running: " << exe << " -w 960x540 " << file1 << " " << file2 << std::endl;
+
+    int spawn_rc = posix_spawn(&pid, exe.c_str(), &actions, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if (log_fd != -1) ::close(log_fd);
+
+    if (spawn_rc != 0) {
+        std::cerr << "posix_spawn failed: errno=" << spawn_rc << std::endl;
+        return;
+    }
+
+    // 等待进程结束
+    int status = 0;
+    if (waitpid(pid, &status, 0) == -1) {
+        std::perror("waitpid");
+        return;
+    }
+    if (WIFEXITED(status)) {
+        int code = WEXITSTATUS(status);
+        if (code != 0) {
+            std::cerr << "video-compare exited with code: " << code << ". See /tmp/video-compare.run.log for details." << std::endl;
+        }
+    } else if (WIFSIGNALED(status)) {
+        std::cerr << "video-compare terminated by signal: " << WTERMSIG(status) << std::endl;
+    }
 #else
-    command = "./video-compare \"" + file1 + "\" \"" + file2 + "\"";
-#endif
-    
+    // Windows 简单回退（后续可改为CreateProcess）
+    std::string command = "video-compare.exe -w 960x540 \"" + file1 + "\" \"" + file2 + "\"";
     std::cout << "Running: " << command << std::endl;
-    
     int result = system(command.c_str());
     if (result != 0) {
-        std::cerr << "Failed to run video-compare" << std::endl;
+        std::cerr << "video-compare exited with code: " << result << std::endl;
     }
+#endif
 }
 
 // 使用macOS原生API打开文件选择对话框（在后台线程中执行）
+void file_selection_thread(int file_number);
 std::string open_file_dialog_thread() {
 #ifdef __APPLE__
     // 使用Objective-C++调用macOS原生文件选择API
