@@ -40,6 +40,7 @@ def build_ffmpeg(args):
     except SystemExit:
         sys.exit(1)
 
+
 def build_sdl_ttf(args):
     # 先检查SDL3是否已构建，如果没有则先构建SDL3
 
@@ -77,8 +78,13 @@ def build_sdl_ttf(args):
         f'-B{build_dir}',
         f'-DCMAKE_BUILD_TYPE=Release',
         f'-DCMAKE_INSTALL_PREFIX={install_dir}',
-
     ]
+    if args.target == 'sdl2_ttf':
+        cmake_args += [f'-DSDL2TTF_SAMPLES=OFF',
+                       f'-DSDL2TTF_INSTALL=ON',
+                       f'-DSDL2TTF_VENDORED=ON',
+                       f'-DSDL2TTF_HARFBUZZ=ON'
+                       ]
     if args.target == 'sdl3_ttf':
         sdl_install_dir = os.path.join(script_dir, 'sdl/install')
         cmake_args += [f'-DSDL3TTF_SAMPLES=OFF',
