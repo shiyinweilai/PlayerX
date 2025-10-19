@@ -30,9 +30,12 @@ extern char **environ;
 // 颜色定义
 const SDL_Color BACKGROUND_COLOR = {54, 69, 79, 255};
 const SDL_Color TEXT_COLOR = {255, 255, 255, 255};
+const SDL_Color SUBTEXT_COLOR = {200, 200, 200, 255};
 const SDL_Color BUTTON_COLOR = {70, 130, 180, 255};
 const SDL_Color BUTTON_HOVER_COLOR = {100, 149, 237, 255};
-const SDL_Color SELECTED_COLOR = {50, 205, 50, 255};
+const SDL_Color DISABLED_COLOR = {100, 100, 100, 255};
+const SDL_Color PANEL_BG = {40, 48, 56, 255};
+const SDL_Color PANEL_BORDER = {90, 100, 110, 255};
 
 // 全局变量
 SDL_Window* window = nullptr;
@@ -64,6 +67,12 @@ std::string get_filename(const std::string& path) {
     return path;
 }
 
+// 文本测量
+void measure_text(const std::string& text, TTF_Font* use_font, int& w, int& h) {
+    if (!use_font || text.empty()) { w = h = 0; return; }
+    if (TTF_SizeUTF8(use_font, text.c_str(), &w, &h) != 0) { w = h = 0; }
+}
+
 // 绘制文本
 void draw_text(const std::string& text, int x, int y, SDL_Color color, TTF_Font* font) {
     SDL_Surface* surface = TTF_RenderUTF8_Blended(font, text.c_str(), color);
@@ -80,6 +89,15 @@ void draw_text(const std::string& text, int x, int y, SDL_Color color, TTF_Font*
     
     SDL_DestroyTexture(texture);
     SDL_FreeSurface(surface);
+}
+
+// 居中绘制文本（按给定矩形居中）
+void draw_text_centered(const std::string& text, const SDL_Rect& area, SDL_Color color, TTF_Font* use_font) {
+    int w = 0, h = 0;
+    measure_text(text, use_font, w, h);
+    int x = area.x + (area.w - w) / 2;
+    int y = area.y + (area.h - h) / 2;
+    draw_text(text, x, y, color, use_font);
 }
 
 // 检查点是否在矩形内
@@ -179,6 +197,7 @@ int main(int argc, const char * argv[]) {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         [NSApp activateIgnoringOtherApps:YES];
+        [[NSRunningApplication currentApplication] activateWithOptions:NSApplicationActivateIgnoringOtherApps];
 
         NSOpenPanel *panel = [NSOpenPanel openPanel];
         panel.title = @"请选择视频文件";
@@ -189,6 +208,8 @@ int main(int argc, const char * argv[]) {
         panel.allowedFileTypes = @[@"mov", @"mp4", @"m4v", @"avi", @"mkv", @"webm"]; 
 
         [panel center];
+        [panel makeKeyAndOrderFront:nil];
+        [panel orderFrontRegardless];
         [panel setLevel:NSModalPanelWindowLevel];
 
         NSInteger result = [panel runModal];
@@ -293,10 +314,7 @@ void start_file_selection(int file_number) {
     pending_file_path = "";
     std::cout << "开始文件选择: " << file_number << ", file_selection_in_progress设置为true" << std::endl;
 
-    // 在弹出系统文件选择前最小化当前窗口，避免遮挡（macOS下尤为重要）
-    if (window) {
-        SDL_MinimizeWindow(window);
-    }
+    // 不再最小化窗口，依赖系统对话框置顶
     
     // 在新线程中执行文件选择
     std::thread(file_selection_thread, file_number).detach();
@@ -321,10 +339,9 @@ void check_file_selection_results() {
         pending_file_selection = 0;
         pending_file_path = "";
 
-        // 文件选择结束后恢复并置顶SDL窗口
+        // 文件选择结束后，确保窗口处于前台
         lock.unlock();
         if (window) {
-            SDL_RestoreWindow(window);
             SDL_RaiseWindow(window);
         }
         lock.lock();
@@ -417,59 +434,15 @@ void cleanup() {
     SDL_Quit();
 }
 
-// 处理鼠标点击
-void handle_click(int x, int y) {
-    int window_width, window_height;
-    // 使用渲染器输出尺寸，避免在HiDPI下坐标不一致
-    SDL_GetRendererOutputSize(renderer, &window_width, &window_height);
-    std::cout << "Mouse click at: (" << x << ", " << y << ") renderer size: " << window_width << "x" << window_height << std::endl;
-    
-    // 检查按钮点击
-    int button_y = 200;
-    int button_width = 200;
-    int button_height = 50;
-    int button_spacing = 30;
-    
-    // 选择第一个文件按钮
-    SDL_Rect file1_rect = {(window_width - button_width) / 2, button_y, button_width, button_height};
-    std::cout << "file1_rect: x=" << file1_rect.x << ", y=" << file1_rect.y << ", w=" << file1_rect.w << ", h=" << file1_rect.h << std::endl;
-    if (point_in_rect(x, y, file1_rect)) {
-        std::cout << "点击命中: 选择第一个文件按钮" << std::endl;
-        start_file_selection(1);
-        return;
-    }
-    
-    // 选择第二个文件按钮
-    SDL_Rect file2_rect = {(window_width - button_width) / 2, button_y + button_height + button_spacing, button_width, button_height};
-    std::cout << "file2_rect: x=" << file2_rect.x << ", y=" << file2_rect.y << ", w=" << file2_rect.w << ", h=" << file2_rect.h << std::endl;
-    if (point_in_rect(x, y, file2_rect)) {
-        std::cout << "点击命中: 选择第二个文件按钮" << std::endl;
-        start_file_selection(2);
-        return;
-    }
-    
-    // 比较按钮
-    SDL_Rect compare_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 2, button_width, button_height};
-    std::cout << "compare_rect: x=" << compare_rect.x << ", y=" << compare_rect.y << ", w=" << compare_rect.w << ", h=" << compare_rect.h << std::endl;
-    if (point_in_rect(x, y, compare_rect) && !selected_file1.empty() && !selected_file2.empty()) {
-        std::cout << "点击命中: 开始比较按钮" << std::endl;
-        run_video_compare(selected_file1, selected_file2);
-        return;
-    }
-    
-    // 退出按钮
-    SDL_Rect exit_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 3, button_width, button_height};
-    std::cout << "exit_rect: x=" << exit_rect.x << ", y=" << exit_rect.y << ", w=" << exit_rect.w << ", h=" << exit_rect.h << std::endl;
-    if (point_in_rect(x, y, exit_rect)) {
-        std::cout << "点击命中: 退出按钮" << std::endl;
-        SDL_Event quit_event;
-        quit_event.type = SDL_QUIT;
-        SDL_PushEvent(&quit_event);
-        return;
-    }
-}
+// 缓存按钮矩形，供点击检测
+static SDL_Rect g_btn_choose_left = {0,0,0,0};
+static SDL_Rect g_btn_choose_right = {0,0,0,0};
+static SDL_Rect g_btn_compare = {0,0,0,0};
+static SDL_Rect g_btn_quit = {0,0,0,0};
+static SDL_Rect g_panel_left = {0,0,0,0};
+static SDL_Rect g_panel_right = {0,0,0,0};
 
-// 主渲染函数
+// 主渲染函数（全新布局：顶部标题 + 中部左右预览面板 + 底部工具栏）
 void render() {
     // 清屏
     SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
@@ -485,100 +458,131 @@ void render() {
         return;
     }
     
-    // 绘制标题
-    draw_text("Video Compare Player", 20, 20, TEXT_COLOR, title_font);
+    // 布局参数
+    const int padding = 20;
+    const int header_h = 70;
+    const int toolbar_h = 90;
+    const int gap = padding;
     
-    // 绘制说明文本
-    draw_text("请选择两个视频文件进行比较", 20, 80, TEXT_COLOR, font);
+    // 顶部标题与说明
+    SDL_Rect header_rect = {padding, padding, window_width - 2*padding, header_h - padding};
+    draw_text("Video Compare Player", header_rect.x, header_rect.y, TEXT_COLOR, title_font);
+    draw_text("请选择两个视频文件进行比较（预览面板为占位，未来用于分屏播放）", header_rect.x, header_rect.y + 40, SUBTEXT_COLOR, font);
     
-    // 检查文件选择状态
-    std::lock_guard<std::mutex> lock(file_mutex);
-    bool is_selecting = file_selection_in_progress;
-    
-    // std::cout << "Rendering - is_selecting: " << is_selecting 
-    //           << ", file1: " << (selected_file1.empty() ? "empty" : selected_file1)
-    //           << ", file2: " << (selected_file2.empty() ? "empty" : selected_file2) << std::endl;
-    
-    // 绘制按钮
-    int button_y = 200;
-    int button_width = 200;
-    int button_height = 50;
-    int button_spacing = 30;
-    
-    // 选择第一个文件按钮 - 只有当没有选择进行中时才可点击
-    SDL_Rect file1_rect = {(window_width - button_width) / 2, button_y, button_width, button_height};
-    // 根据悬停与选择状态调整颜色
-    bool hover_file1 = (!is_selecting && point_in_rect(g_mouse_x, g_mouse_y, file1_rect));
-    SDL_Color file1_color = is_selecting ? SDL_Color{100, 100, 100, 255} : (hover_file1 ? BUTTON_HOVER_COLOR : BUTTON_COLOR);
-    SDL_SetRenderDrawColor(renderer, file1_color.r, file1_color.g, file1_color.b, file1_color.a);
-    SDL_RenderFillRect(renderer, &file1_rect);
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    SDL_RenderDrawRect(renderer, &file1_rect);
-    
-    std::string file1_text = is_selecting ? "选择中..." : (selected_file1.empty() ? "选择第一个文件" : get_filename(selected_file1));
-    int text_width = file1_text.length() * 8; // 估算文本宽度
-    draw_text(file1_text, (window_width - text_width) / 2, button_y + 15, 
-              is_selecting ? SDL_Color{150, 150, 150, 255} : TEXT_COLOR, font);
-    
-    // 选择第二个文件按钮 - 只有当没有选择进行中时才可点击
-    SDL_Rect file2_rect = {(window_width - button_width) / 2, button_y + button_height + button_spacing, button_width, button_height};
-    bool hover_file2 = (!is_selecting && point_in_rect(g_mouse_x, g_mouse_y, file2_rect));
-    SDL_Color file2_color = is_selecting ? SDL_Color{100, 100, 100, 255} : (hover_file2 ? BUTTON_HOVER_COLOR : BUTTON_COLOR);
-    SDL_SetRenderDrawColor(renderer, file2_color.r, file2_color.g, file2_color.b, file2_color.a);
-    SDL_RenderFillRect(renderer, &file2_rect);
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    SDL_RenderDrawRect(renderer, &file2_rect);
-    
-    std::string file2_text = is_selecting ? "选择中..." : (selected_file2.empty() ? "选择第二个文件" : get_filename(selected_file2));
-    text_width = file2_text.length() * 8; // 估算文本宽度
-    draw_text(file2_text, (window_width - text_width) / 2, button_y + button_height + button_spacing + 15, 
-              is_selecting ? SDL_Color{150, 150, 150, 255} : TEXT_COLOR, font);
-    
-    // 比较按钮 - 只有当两个文件都已选择且没有选择进行中时才可点击
-    bool can_compare = (!selected_file1.empty() && !selected_file2.empty() && !is_selecting);
-    SDL_Rect compare_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 2, button_width, button_height};
-    bool hover_compare = (can_compare && point_in_rect(g_mouse_x, g_mouse_y, compare_rect));
-    SDL_Color compare_color = can_compare ? (hover_compare ? BUTTON_HOVER_COLOR : BUTTON_COLOR) : SDL_Color{100, 100, 100, 255};
-    
-    SDL_SetRenderDrawColor(renderer, compare_color.r, compare_color.g, compare_color.b, compare_color.a);
-    SDL_RenderFillRect(renderer, &compare_rect);
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    SDL_RenderDrawRect(renderer, &compare_rect);
-    
-    draw_text("开始比较", (window_width - 60) / 2, button_y + (button_height + button_spacing) * 2 + 15, 
-              can_compare ? TEXT_COLOR : SDL_Color{150, 150, 150, 255}, font);
-    
-    // 退出按钮 - 总是可点击
-    SDL_Rect exit_rect = {(window_width - button_width) / 2, button_y + (button_height + button_spacing) * 3, button_width, button_height};
-    bool hover_exit = point_in_rect(g_mouse_x, g_mouse_y, exit_rect);
-    SDL_Color exit_color = hover_exit ? BUTTON_HOVER_COLOR : BUTTON_COLOR;
-    SDL_SetRenderDrawColor(renderer, exit_color.r, exit_color.g, exit_color.b, exit_color.a);
-    SDL_RenderFillRect(renderer, &exit_rect);
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    SDL_RenderDrawRect(renderer, &exit_rect);
-    
-    draw_text("退出", (window_width - 30) / 2, button_y + (button_height + button_spacing) * 3 + 15, TEXT_COLOR, font);
-    
-    // 绘制选中的文件信息
-    if (!selected_file1.empty() || !selected_file2.empty()) {
-        std::string selected_text = "已选择: ";
-        if (!selected_file1.empty()) {
-            selected_text += get_filename(selected_file1);
-        }
-        if (!selected_file2.empty()) {
-            selected_text += " vs " + get_filename(selected_file2);
-        }
-        
-        SDL_Rect selected_bg_rect = {15, window_height - 80, window_width - 30, 30};
-        SDL_SetRenderDrawColor(renderer, 30, 144, 255, 50); // 半透明蓝色背景
-        SDL_RenderFillRect(renderer, &selected_bg_rect);
-        SDL_SetRenderDrawColor(renderer, 30, 144, 255, 255); // 蓝色边框
-        SDL_RenderDrawRect(renderer, &selected_bg_rect);
-        
-        draw_text(selected_text, 20, window_height - 65, TEXT_COLOR, font);
+    // 中部预览区
+    int panels_y = header_rect.y + header_rect.h + padding;
+    int panels_h = std::max(100, window_height - panels_y - toolbar_h - padding);
+    int panels_w = window_width - 2*padding;
+    int each_w = (panels_w - gap) / 2;
+    g_panel_left = {padding, panels_y, each_w, panels_h};
+    g_panel_right = {padding + each_w + gap, panels_y, each_w, panels_h};
+
+    auto draw_panel = [&](const SDL_Rect& r, const std::string& title, const std::string& filename){
+        // 背景
+        SDL_SetRenderDrawColor(renderer, PANEL_BG.r, PANEL_BG.g, PANEL_BG.b, PANEL_BG.a);
+        SDL_RenderFillRect(renderer, &r);
+        // 边框
+        SDL_SetRenderDrawColor(renderer, PANEL_BORDER.r, PANEL_BORDER.g, PANEL_BORDER.b, 255);
+        SDL_RenderDrawRect(renderer, &r);
+        // 标题
+        SDL_Rect title_area = {r.x + 10, r.y + 10, r.w - 20, 24};
+        draw_text(title, title_area.x, title_area.y, SUBTEXT_COLOR, font);
+        // 中央占位提示
+        SDL_Rect center_area = {r.x + 10, r.y + 10 + 24, r.w - 20, r.h - 20 - 24 - 30};
+        draw_text_centered("预览占位", center_area, SDL_Color{180,180,180,255}, font);
+        // 底部文件名
+        std::string name = filename.empty() ? "未选择文件" : get_filename(filename);
+        SDL_Rect bottom_area = {r.x + 10, r.y + r.h - 28, r.w - 20, 20};
+        draw_text_centered(name, bottom_area, TEXT_COLOR, font);
+    };
+
+    // 绘制左右面板
+    {
+        std::lock_guard<std::mutex> lock(file_mutex);
+        draw_panel(g_panel_left, "左侧预览", selected_file1);
+        draw_panel(g_panel_right, "右侧预览", selected_file2);
     }
-    
+
+    // 底部工具栏按钮
+    int btn_w = 180;
+    int btn_h = 50;
+    int btn_gap = 30;
+    int total_btn_w = btn_w*4 + btn_gap*3;
+    int btn_start_x = std::max(padding, (window_width - total_btn_w)/2);
+    int btn_y = window_height - toolbar_h/2 - btn_h/2;
+
+    g_btn_choose_left  = {btn_start_x + (btn_w+btn_gap)*0, btn_y, btn_w, btn_h};
+    g_btn_choose_right = {btn_start_x + (btn_w+btn_gap)*1, btn_y, btn_w, btn_h};
+    g_btn_compare      = {btn_start_x + (btn_w+btn_gap)*2, btn_y, btn_w, btn_h};
+    g_btn_quit         = {btn_start_x + (btn_w+btn_gap)*3, btn_y, btn_w, btn_h};
+
+    auto draw_button = [&](const SDL_Rect& r, const std::string& label, bool enabled){
+        bool hover = enabled && point_in_rect(g_mouse_x, g_mouse_y, r);
+        SDL_Color color = enabled ? (hover ? BUTTON_HOVER_COLOR : BUTTON_COLOR) : DISABLED_COLOR;
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+        SDL_RenderFillRect(renderer, &r);
+        SDL_SetRenderDrawColor(renderer, 255,255,255,255);
+        SDL_RenderDrawRect(renderer, &r);
+        draw_text_centered(label, r, enabled ? TEXT_COLOR : SDL_Color{150,150,150,255}, font);
+    };
+
+    bool is_selecting = false;
+    {
+        std::lock_guard<std::mutex> lock(file_mutex);
+        is_selecting = file_selection_in_progress;
+    }
+
+    draw_button(g_btn_choose_left,  is_selecting ? "选择中..." : "选择左侧文件", !is_selecting);
+    draw_button(g_btn_choose_right, is_selecting ? "选择中..." : "选择右侧文件", !is_selecting);
+
+    bool can_compare = false;
+    {
+        std::lock_guard<std::mutex> lock(file_mutex);
+        can_compare = (!selected_file1.empty() && !selected_file2.empty() && !file_selection_in_progress);
+    }
+    draw_button(g_btn_compare, "开始比较", can_compare);
+    draw_button(g_btn_quit, "退出", true);
+
     SDL_RenderPresent(renderer);
+}
+
+// 处理鼠标点击（更新为新布局按钮）
+void handle_click(int x, int y) {
+    int window_width, window_height;
+    SDL_GetRendererOutputSize(renderer, &window_width, &window_height);
+    bool is_selecting = false;
+    {
+        std::lock_guard<std::mutex> lock(file_mutex);
+        is_selecting = file_selection_in_progress;
+    }
+
+    if (!is_selecting && point_in_rect(x, y, g_btn_choose_left)) {
+        std::cout << "点击命中: 选择左侧文件" << std::endl;
+        start_file_selection(1);
+        return;
+    }
+    if (!is_selecting && point_in_rect(x, y, g_btn_choose_right)) {
+        std::cout << "点击命中: 选择右侧文件" << std::endl;
+        start_file_selection(2);
+        return;
+    }
+
+    if (point_in_rect(x, y, g_btn_compare)) {
+        std::lock_guard<std::mutex> lock(file_mutex);
+        if (!selected_file1.empty() && !selected_file2.empty() && !file_selection_in_progress) {
+            std::cout << "点击命中: 开始比较按钮" << std::endl;
+            run_video_compare(selected_file1, selected_file2);
+            return;
+        }
+    }
+
+    if (point_in_rect(x, y, g_btn_quit)) {
+        std::cout << "点击命中: 退出按钮" << std::endl;
+        SDL_Event quit_event;
+        quit_event.type = SDL_QUIT;
+        SDL_PushEvent(&quit_event);
+        return;
+    }
 }
 
 int main(int argc, char* argv[]) {
