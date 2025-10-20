@@ -23,7 +23,7 @@
   },
   "build": {
     "appId": "com.example.video-compare",
-    "productName": "Video Compare",
+    "productName": "VideoCompare",
     "directories": {
       "output": "dist"
     },
@@ -40,7 +40,7 @@
       "mac-inner/**",
       "linux-inner/**"
     ],
-    "copyright": "Copyright © 2025 Video Compare",
+    "copyright": "Copyright © 2025 VideoCompare",
     "mac": {
       "target": "dmg",
       "icon": "icon.icns",
@@ -48,7 +48,7 @@
     },
     "win": {
       "target": "nsis",
-      "executableName": "Video Compare",
+      "executableName": "VideoCompare",
       "icon": "icon.ico"
     },
     "linux": {

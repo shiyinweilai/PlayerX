@@ -16,3 +16,4 @@ build/sdl2_ttf
 build/sdl3_ttf
 sdl
 sdl_ttf
+.vscode

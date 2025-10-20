@@ -1,4 +1,4 @@
-# Video Compare - 跨平台视频比较工具
+# VideoCompare - 跨平台视频比较工具
 
 一个基于 Electron 的跨平台 GUI 应用程序，用于比较两个视频文件。
 

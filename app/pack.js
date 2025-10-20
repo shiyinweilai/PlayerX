@@ -18,15 +18,11 @@ function getRequiredFiles(platform) {
       'swscale-8.dll'
     ],
     'darwin': [
-      'video-compare',
-      // macOS 应用通常打包为 .app 格式，这里列出可能的依赖文件
-      'libSDL2.dylib',
-      'libSDL2_ttf.dylib'
+      // 仅支持 .app Bundle，避免终端弹出
+      'VideoCompare'
     ],
     'linux': [
-      'video-compare',
-      'libSDL2.so',
-      'libSDL2_ttf.so'
+      'video-compare'
     ]
   };
   
@@ -35,21 +31,29 @@ function getRequiredFiles(platform) {
 
 // 检查必要文件是否存在
 function checkRequiredFiles(platform) {
-  const innerDir = platform === 'win32' ? 'win-inner' : 'mac-inner';
+  const innerDir = platform === 'win32' ? 'win-inner' : (platform === 'linux' ? 'linux-inner' : 'mac-inner');
   const requiredFiles = getRequiredFiles(platform);
   
   console.log(`检查${innerDir}目录下的必要文件是否存在...`);
   
   const missingFiles = [];
-  requiredFiles.forEach(file => {
-    if (!fs.existsSync(path.join(__dirname, innerDir, file))) {
-      missingFiles.push(file);
+  if (platform === 'darwin') {
+    // 强制要求 .app Bundle
+    const appBundleExists = fs.existsSync(path.join(__dirname, innerDir, 'VideoCompare'));
+    if (!appBundleExists) {
+      missingFiles.push('VideoCompare (.app 应用包)');
     }
-  });
+  } else {
+    requiredFiles.forEach(file => {
+      if (!fs.existsSync(path.join(__dirname, innerDir, file))) {
+        missingFiles.push(file);
+      }
+    });
+  }
   
   if (missingFiles.length > 0) {
     console.error(`以下必要文件缺失: ${missingFiles.join(', ')}`);
-    console.log(`请将${platform}平台的视频比较工具放入${innerDir}目录`);
+    console.log(`请将${platform}平台的视频比较工具放入${innerDir}目录。macOS 请确保放置完整的 VideoCompare（例如：mac-inner/VideoCompare），并在打包配置中 asarUnpack。`);
     return false;
   }
   
@@ -75,7 +79,18 @@ function main() {
   
   try {
     // 运行electron-builder打包
-    execSync('npx electron-builder', { stdio: 'inherit' });
+    // macOS 默认跳过签名，避免卡住；通过环境变量 MAC_SIGN=1 或 CSC_IDENTITY_AUTO_DISCOVERY=true 开启
+    const signEnabled = (process.env.MAC_SIGN === '1') || (process.env.CSC_IDENTITY_AUTO_DISCOVERY === 'true');
+    let cmd = 'npx electron-builder';
+    if (platform === 'darwin' && !signEnabled) {
+      // 两种方式都设置，确保electron-builder不去自动发现签名证书
+      process.env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
+      process.env.CSC_FOR_PULL_REQUEST = 'true'; // 明确告知跳过签名
+      cmd += ' --config.mac.identity=null';
+      console.log('[macOS] 已禁用签名，若需签名请设置环境变量 MAC_SIGN=1');
+    }
+
+    execSync(cmd, { stdio: 'inherit' });
     console.log('打包完成！输出目录: dist/');
   } catch (error) {
     console.error('打包失败:', error.message);

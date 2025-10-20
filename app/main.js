@@ -70,21 +70,55 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
       exePath = path.join(__dirname, exeDirName, exeName)
     }
 
+    // macOS: 额外支持 .app Bundle，避免弹出终端
+    let appBundlePath = null
+    if (os.platform() === 'darwin') {
+      const bundleName = 'VideoCompare' // 如果你打成 .app，请将名称保持一致
+      const bundleCandidates = app.isPackaged
+        ? [
+            path.join(process.resourcesPath, 'app.asar.unpacked', exeDirName, bundleName),
+            path.join(process.resourcesPath, exeDirName, bundleName)
+          ]
+        : [
+            path.join(__dirname, exeDirName, bundleName)
+          ]
+      appBundlePath = bundleCandidates.find(p => fs.existsSync(p)) || null
+    }
+
     console.log('当前平台:', os.platform())
     console.log('process.resourcesPath:', process.resourcesPath)
-    console.log('执行路径:', exePath)
+    console.log('执行路径(可执行):', exePath)
+    if (appBundlePath) console.log('发现 .app Bundle:', appBundlePath)
     console.log('参数 file1:', file1)
     console.log('参数 file2:', file2)
 
-    if (!fs.existsSync(exePath)) {
-      return reject(`找不到可执行文件: ${exePath}\n请确认已将 ${exeName} 和相关依赖文件放入 ${exeDirName} 目录，且在打包配置中包含并 asarUnpack。`)
-    }
-
-    // GUI程序通常不会退出，使用spawn以脱离模式启动，不等待退出
+    // 先判断 .app Bundle；若存在，优先用 open 启动（不会弹出终端）
     const { spawn } = require('child_process')
-    const exeCwd = path.dirname(exePath)
-
     try {
+      if (os.platform() === 'darwin') {
+        if (!appBundlePath) {
+          return reject(`macOS 平台要求使用 .app Bundle 启动以避免弹出终端。未找到: ${path.join(app.isPackaged ? process.resourcesPath : __dirname, exeDirName, 'VideoCompare')}`)
+        }
+        const args = ['-a', appBundlePath, '--args', file1, file2]
+        const child = spawn('open', args, {
+          cwd: path.dirname(appBundlePath),
+          detached: true,
+          stdio: 'ignore'
+        })
+        child.on('error', (error) => {
+          const msg = `启动 .app 失败: ${error.message}\ncode: ${error.code || ''}\npath: ${appBundlePath}`
+          reject(msg)
+        })
+        child.unref()
+        return resolve(`已启动 ${path.basename(appBundlePath)} (open -a)`)    
+      }
+
+      // 非 macOS，回退到原有可执行文件逻辑
+      const exeCwd = path.dirname(exePath)
+      if (!fs.existsSync(exePath)) {
+        return reject(`找不到可执行文件: ${exePath}\n请确认已将 ${exeName} 和相关依赖文件放入 ${exeDirName} 目录，且在打包配置中包含并 asarUnpack。`)
+      }
+
       const child = spawn(exePath, [file1, file2], {
         cwd: exeCwd,
         detached: true,
@@ -99,7 +133,7 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
       child.unref()
       resolve(`已启动 ${exeName}`)
     } catch (error) {
-      const msg = `执行失败: ${error.message}\ncode: ${error.code || ''}\npath: ${exePath}`
+      const msg = `执行失败: ${error.message}\ncode: ${error.code || ''}\npath: ${appBundlePath || exePath}`
       reject(msg)
     }
   })
