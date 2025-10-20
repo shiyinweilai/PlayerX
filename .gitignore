@@ -3,7 +3,6 @@ VCPlayer/
 demo_tool/
 cache
 video-compare
-ffmpeg
 *.zip
 build/sdl
 player/build
@@ -18,3 +17,6 @@ sdl
 sdl_ttf
 .vscode
 build/video_compare
+sdl
+ffmpeg
+sdl_ttf
