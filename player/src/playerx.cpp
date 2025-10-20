@@ -23,6 +23,10 @@
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <limits.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 // 声明environ用于posix_spawn传递环境变量
 extern char **environ;
 #endif
@@ -105,32 +109,52 @@ bool point_in_rect(int x, int y, const SDL_Rect& rect) {
     return x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
 }
 
+// 新增：获取当前可执行文件所在目录（POSIX/macOS）
+static std::string get_executable_dir() {
+#ifndef _WIN32
+#ifdef __APPLE__
+    char pathbuf[PATH_MAX];
+    uint32_t size = sizeof(pathbuf);
+    if (_NSGetExecutablePath(pathbuf, &size) == 0) {
+        char realbuf[PATH_MAX];
+        if (realpath(pathbuf, realbuf)) {
+            std::string full(realbuf);
+            size_t pos = full.find_last_of("/\\");
+            if (pos != std::string::npos) return full.substr(0, pos);
+        }
+    }
+#else
+    char pathbuf[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", pathbuf, sizeof(pathbuf)-1);
+    if (len > 0) {
+        pathbuf[len] = '\0';
+        std::string full(pathbuf);
+        size_t pos = full.find_last_of("/\\");
+        if (pos != std::string::npos) return full.substr(0, pos);
+    }
+#endif
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd))) return std::string(cwd);
+    return std::string(".");
+#else
+    // Windows 下此函数不使用
+    return std::string(".");
+#endif
+}
+
 // 运行video-compare
 void run_video_compare(const std::string& file1, const std::string& file2) {
 #ifndef _WIN32
-    // 可能的二进制路径候选（优先使用安装产物，与player.sh一致）
+    // 可能的二进制路径候选：优先同目录，其次常见安装产物，最后当前目录
+    std::string exeDir = get_executable_dir();
     std::vector<std::string> candidates = {
-        "/Users/rbyang/Documents/UGit/private/PlayerX/build/player/install/bin/video-compare",
-        "./video-compare"
+        exeDir + "/video-compare",
+        exeDir + "/../bin/video-compare",
     };
     std::string exe;
     for (const auto& c : candidates) {
         if (std::filesystem::exists(c) && access(c.c_str(), X_OK) == 0) { exe = c; break; }
     }
-    if (exe.empty()) {
-        std::cerr << "Cannot find video-compare executable. Tried:" << std::endl;
-        for (const auto& c : candidates) std::cerr << "  " << c << std::endl;
-        return;
-    }
-
-    // 构造argv
-    std::vector<char*> argv;
-    argv.push_back(const_cast<char*>(exe.c_str()));
-    argv.push_back(const_cast<char*>("-w"));
-    argv.push_back(const_cast<char*>("960x540"));
-    argv.push_back(const_cast<char*>(file1.c_str()));
-    argv.push_back(const_cast<char*>(file2.c_str()));
-    argv.push_back(nullptr);
 
     // 打开日志文件，捕获stdout/stderr
     const char* log_path = "/tmp/video-compare.run.log";
@@ -139,7 +163,7 @@ void run_video_compare(const std::string& file1, const std::string& file2) {
         std::perror("open log file");
     }
 
-    // 使用posix_spawn执行
+    // 使用posix_spawn/posix_spawnp执行
     pid_t pid = 0;
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
@@ -148,14 +172,38 @@ void run_video_compare(const std::string& file1, const std::string& file2) {
         posix_spawn_file_actions_adddup2(&actions, log_fd, STDERR_FILENO);
     }
 
-    std::cout << "Running: " << exe << " -w 960x540 " << file1 << " " << file2 << std::endl;
+    // 构造argv
+    std::vector<char*> argv;
+    if (!exe.empty()) {
+        argv.push_back(const_cast<char*>(exe.c_str()));
+    } else {
+        argv.push_back(const_cast<char*>("video-compare"));
+    }
+    argv.push_back(const_cast<char*>("-w"));
+    argv.push_back(const_cast<char*>("960x540"));
+    argv.push_back(const_cast<char*>(file1.c_str()));
+    argv.push_back(const_cast<char*>(file2.c_str()));
+    argv.push_back(nullptr);
 
-    int spawn_rc = posix_spawn(&pid, exe.c_str(), &actions, nullptr, argv.data(), environ);
+    int spawn_rc = 0;
+    if (!exe.empty()) {
+        std::cout << "Running: " << exe << " -w 960x540 " << file1 << " " << file2 << std::endl;
+        spawn_rc = posix_spawn(&pid, exe.c_str(), &actions, nullptr, argv.data(), environ);
+    } else {
+        std::cout << "Running via PATH: video-compare -w 960x540 " << file1 << " " << file2 << std::endl;
+        spawn_rc = posix_spawnp(&pid, "video-compare", &actions, nullptr, argv.data(), environ);
+    }
+
     posix_spawn_file_actions_destroy(&actions);
     if (log_fd != -1) ::close(log_fd);
 
     if (spawn_rc != 0) {
         std::cerr << "posix_spawn failed: errno=" << spawn_rc << std::endl;
+        if (exe.empty()) {
+            std::cerr << "Cannot find video-compare executable. Tried:" << std::endl;
+            for (const auto& c : candidates) std::cerr << "  " << c << std::endl;
+            std::cerr << "Also tried PATH lookup for 'video-compare'." << std::endl;
+        }
         return;
     }
 
@@ -174,8 +222,28 @@ void run_video_compare(const std::string& file1, const std::string& file2) {
         std::cerr << "video-compare terminated by signal: " << WTERMSIG(status) << std::endl;
     }
 #else
-    // Windows 简单回退（后续可改为CreateProcess）
-    std::string command = "video-compare.exe -w 960x540 \"" + file1 + "\" \"" + file2 + "\"";
+    // Windows：优先使用同目录的video-compare.exe
+    char exeFullPath[MAX_PATH];
+    DWORD length = GetModuleFileNameA(NULL, exeFullPath, MAX_PATH);
+    std::string exeDir;
+    if (length > 0 && length < MAX_PATH) {
+        int pos = (int)length - 1;
+        while (pos >= 0 && exeFullPath[pos] != '\\' && exeFullPath[pos] != '/') pos--;
+        if (pos >= 0) {
+            exeFullPath[pos] = '\0';
+            exeDir = exeFullPath;
+        }
+    }
+    std::string candidate = exeDir.empty() ? std::string("video-compare.exe") : (exeDir + "\\video-compare.exe");
+
+    std::string command;
+    if (_access(candidate.c_str(), 0) == 0) {
+        command = std::string("\"") + candidate + "\" -w 960x540 \"" + file1 + "\" \"" + file2 + "\"";
+    } else {
+        // 回退到 PATH 查找
+        command = std::string("video-compare.exe -w 960x540 \"") + file1 + "\" \"" + file2 + "\"";
+    }
+
     std::cout << "Running: " << command << std::endl;
     int result = system(command.c_str());
     if (result != 0) {

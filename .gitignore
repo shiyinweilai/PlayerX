@@ -10,3 +10,9 @@ player/build
 app/node_modules
 app/dist
 app/package-lock.json
+build/player
+build/sdl2
+build/sdl2_ttf
+build/sdl3_ttf
+sdl
+sdl_ttf
