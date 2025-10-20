@@ -17,3 +17,4 @@ build/sdl3_ttf
 sdl
 sdl_ttf
 .vscode
+build/video_compare
