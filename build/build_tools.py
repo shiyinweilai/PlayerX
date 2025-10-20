@@ -9,7 +9,7 @@ import shutil
 
 def run(cmd, cwd=None, capture_output=True):
     print(f"\033[33m>>>\033[0m {' '.join(cmd)}  (cwd={cwd or os.getcwd()})\n")
-    result = subprocess.run(cmd, cwd=cwd, capture_output=capture_output, text=True)
+    result = subprocess.run(cmd, cwd=cwd, capture_output=capture_output, text=True, encoding='utf-8', errors='replace')
     if result.returncode != 0:
         print(f"\033[31m!!! 命令执行失败: {' '.join(cmd)}\033[0m")
         if capture_output:
@@ -79,6 +79,9 @@ def build_sdl(args):
                        f'-DSDL2TTF_VENDORED=ON',
                        f'-DSDL2TTF_HARFBUZZ=ON'
                        ]
+        # 添加SDL2安装路径，让CMake能够找到SDL2
+        sdl2_install_dir = os.path.join(script_dir, 'sdl2/install')
+        cmake_args += [f'-DCMAKE_PREFIX_PATH={sdl2_install_dir}']
     if args.target == 'sdl3_ttf':
         os.chdir(f"{script_dir}/../sdl_ttf")
         os.system("git checkout release-3.2.x")
