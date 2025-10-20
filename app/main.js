@@ -4,8 +4,8 @@ const fs = require('fs')
 let win
 function createWindow() {
   win = new BrowserWindow({
-    width: 400,
-    height: 300,
+    width: 1200,
+    height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

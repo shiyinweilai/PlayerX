@@ -2,31 +2,366 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>视频对比</title>
+  <title>视频对比工具</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 15px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      padding: 30px;
+      max-width: 1200px;
+      margin: 0 auto;
+      min-width: 800px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .header h1 {
+      color: #333;
+      font-size: 28px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .header p {
+      color: #666;
+      font-size: 16px;
+    }
+
+    .comparison-layout {
+      display: flex;
+      gap: 40px;
+      margin-bottom: 30px;
+      min-height: 450px;
+      align-items: stretch;
+    }
+
+    .video-panel {
+      flex: 1;
+      border: 2px solid #e9ecef;
+      border-radius: 10px;
+      padding: 25px;
+      background: #f8f9fa;
+      min-height: 400px;
+      display: flex;
+      flex-direction: column;
+      min-width: 500px;
+    }
+
+    .video-panel.left {
+      border-color: #007bff;
+    }
+
+    .video-panel.right {
+      border-color: #28a745;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-shrink: 0;
+    }
+
+    .panel-number {
+      background: #667eea;
+      color: white;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    .panel-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #333;
+    }
+
+    .file-info-section {
+      margin-bottom: 20px;
+      flex-shrink: 0;
+    }
+
+    .file-input-group {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: stretch;
+      min-width: 0;
+    }
+
+    .file-path-input {
+      flex: 1;
+      background: white;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      padding: 10px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: #333;
+      min-height: 40px;
+      resize: vertical;
+      overflow-wrap: break-word;
+      word-break: break-all;
+      white-space: pre-wrap;
+      line-height: 1.4;
+      min-width: 300px;
+      max-width: 100%;
+    }
+
+    .file-path-input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+    }
+
+    .file-path-input::placeholder {
+      color: #999;
+    }
+
+    .select-btn {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.3s ease;
+      white-space: nowrap;
+      height: 40px;
+      align-self: flex-start;
+      min-width: 100px;
+      flex-shrink: 0;
+    }
+
+    .select-btn:hover {
+      background: #5a6fd8;
+    }
+
+    .video-preview {
+      background: #e9ecef;
+      border-radius: 5px;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6c757d;
+      font-size: 14px;
+      margin-top: 20px;
+      min-height: 200px;
+      padding: 20px;
+    }
+
+    .control-section {
+      text-align: center;
+      margin-bottom: 30px;
+      flex-shrink: 0;
+    }
+
+    .run-btn {
+      background: linear-gradient(135deg, #28a745, #20c997);
+      color: white;
+      border: none;
+      padding: 15px 40px;
+      border-radius: 30px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+    }
+
+    .run-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+    }
+
+    .run-btn:disabled {
+      background: #6c757d;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .output-section {
+      border-top: 1px solid #e9ecef;
+      padding-top: 20px;
+      flex-shrink: 0;
+    }
+
+    .output-label {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 10px;
+      font-weight: 500;
+    }
+
+    .output-box {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 10px;
+      padding: 15px;
+      min-height: 100px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      line-height: 1.5;
+      word-break: break-all;
+      overflow-wrap: break-word;
+    }
+
+    .output-box.running {
+      border-color: #ffc107;
+      background: #fffbf0;
+    }
+
+    .output-box.success {
+      border-color: #28a745;
+      background: #f8fff9;
+    }
+
+    .output-box.error {
+      border-color: #dc3545;
+      background: #fff5f5;
+    }
+
+    @media (max-width: 1000px) {
+      .comparison-layout {
+        flex-direction: column;
+        gap: 20px;
+      }
+      
+      .container {
+        min-width: auto;
+        padding: 20px;
+      }
+    }
+  </style>
 </head>
 <body>
-  <h3>选择两个文件进行比较</h3>
-  <button id="choose1">选择文件</button> <span id="label1"></span><br /><br />
-  <button id="choose2">选择文件</button> <span id="label2"></span><br /><br />
-  <button id="runBtn">运行 video-compare.exe</button>
-  <pre id="output" style="white-space: pre-wrap; border: 1px solid #ccc; padding: 10px; margin-top: 15px; height: 100px; overflow: auto;"></pre>
+  <div class="container">
+    <div class="header">
+      <h1>🎬 视频对比工具</h1>
+      <p>选择两个视频文件进行对比分析</p>
+    </div>
+
+    <div class="comparison-layout">
+      <div class="video-panel left">
+        <div class="panel-header">
+          <div class="panel-number">1</div>
+          <div class="panel-title">左侧视频</div>
+        </div>
+        
+        <div class="file-info-section">
+          <div class="file-input-group">
+            <input type="text" class="file-path-input" id="filePathInput1" placeholder="请输入文件路径或点击右侧按钮选择">
+            <button class="select-btn" id="choose1">选择文件</button>
+          </div>
+        </div>
+        
+        <div class="video-preview">
+          视频预览区域（未来扩展）
+        </div>
+      </div>
+
+      <div class="video-panel right">
+        <div class="panel-header">
+          <div class="panel-number">2</div>
+          <div class="panel-title">右侧视频</div>
+        </div>
+        
+        <div class="file-info-section">
+          <div class="file-input-group">
+            <input type="text" class="file-path-input" id="filePathInput2" placeholder="请输入文件路径或点击右侧按钮选择">
+            <button class="select-btn" id="choose2">选择文件</button>
+          </div>
+        </div>
+        
+        <div class="video-preview">
+          视频预览区域（未来扩展）
+        </div>
+      </div>
+    </div>
+
+    <div class="control-section">
+      <button class="run-btn" id="runBtn" disabled>开始对比</button>
+    </div>
+
+    <div class="output-section">
+      <div class="output-label">执行状态</div>
+      <div class="output-box" id="output">等待操作...</div>
+    </div>
+  </div>
 
   <script>
     const choose1Btn = document.getElementById('choose1')
     const choose2Btn = document.getElementById('choose2')
-    const label1 = document.getElementById('label1')
-    const label2 = document.getElementById('label2')
+    const filePathInput1 = document.getElementById('filePathInput1')
+    const filePathInput2 = document.getElementById('filePathInput2')
     const runBtn = document.getElementById('runBtn')
     const output = document.getElementById('output')
 
     let file1Path = null
     let file2Path = null
 
+    function updateRunButton() {
+      runBtn.disabled = !(file1Path && file2Path)
+    }
+
+    function updateFileDisplay(inputElement, path) {
+      if (path) {
+        inputElement.value = path
+        inputElement.style.borderColor = '#28a745'
+      } else {
+        inputElement.value = ''
+        inputElement.style.borderColor = '#dee2e6'
+      }
+    }
+
+    function handleInputChange(inputElement, pathVar) {
+      const path = inputElement.value.trim()
+      if (path) {
+        pathVar = path
+        inputElement.style.borderColor = '#28a745'
+      } else {
+        pathVar = null
+        inputElement.style.borderColor = '#dee2e6'
+      }
+      updateRunButton()
+    }
+
     choose1Btn.onclick = async () => {
       const p = await window.api.openFile()
       if (p) {
         file1Path = p
-        label1.textContent = p.split(/\\\\|\//).pop()
+        updateFileDisplay(filePathInput1, p)
+        updateRunButton()
+        output.textContent = '左侧视频文件已选择：' + p.split(/\\\\|\//).pop()
+        output.className = 'output-box success'
       }
     }
 
@@ -34,25 +369,50 @@
       const p = await window.api.openFile()
       if (p) {
         file2Path = p
-        label2.textContent = p.split(/\\\\|\//).pop()
+        updateFileDisplay(filePathInput2, p)
+        updateRunButton()
+        output.textContent = '右侧视频文件已选择：' + p.split(/\\\\|\//).pop()
+        output.className = 'output-box success'
       }
     }
+
+    filePathInput1.addEventListener('input', () => {
+      file1Path = filePathInput1.value.trim()
+      handleInputChange(filePathInput1, file1Path)
+    })
+
+    filePathInput2.addEventListener('input', () => {
+      file2Path = filePathInput2.value.trim()
+      handleInputChange(filePathInput2, file2Path)
+    })
 
     runBtn.onclick = async () => {
       if (!file1Path || !file2Path) {
-        output.textContent = '请先选择两个文件'
+        output.textContent = '请先选择两个视频文件'
+        output.className = 'output-box error'
         return
       }
 
-      output.textContent = '运行中...'
+      output.textContent = '正在启动视频对比工具...'
+      output.className = 'output-box running'
+      runBtn.disabled = true
 
       try {
         const result = await window.api.runExe(file1Path, file2Path)
-        output.textContent = '运行结果:\n' + result
+        output.textContent = '✅ ' + result
+        output.className = 'output-box success'
       } catch (e) {
-        output.textContent = '执行出错:\n' + e
+        output.textContent = '❌ ' + e
+        output.className = 'output-box error'
+      } finally {
+        runBtn.disabled = false
       }
     }
+
+    // 初始化状态
+    updateRunButton()
+    updateFileDisplay(filePathInput1, null)
+    updateFileDisplay(filePathInput2, null)
   </script>
 </body>
 </html>
