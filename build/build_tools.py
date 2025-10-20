@@ -27,8 +27,12 @@ def get_absolute_path(path):
 def make(cmake_args):
     try:
         run(cmake_args, cwd=build_dir)
-        run(['make', '-j', str(os.cpu_count() or 1)], cwd=build_dir)
-        run(['make', 'install'], cwd=build_dir)
+        if os.name == 'nt':  # Windows系统
+            run(['cmake', '--build', build_dir, '--config', 'Release', '-j', str(os.cpu_count() or 1)], cwd=build_dir)
+            run(['cmake', '--build', build_dir, '--config', 'Release', '--target', 'install'], cwd=build_dir)
+        else:  # Unix-like系统
+            run(['make', '-j', str(os.cpu_count() or 1)], cwd=build_dir)
+            run(['make', 'install'], cwd=build_dir)
     except SystemExit:
         sys.exit(1)
 
@@ -56,7 +60,7 @@ def build_sdl(args):
         external_dir = os.path.join(source_dir, 'external')
         freetype_dir = os.path.join(external_dir, 'freetype')
         harfbuzz_dir = os.path.join(external_dir, 'harfbuzz')
-        download_script = os.path.join(external_dir, 'download.sh')
+        download_script = os.path.join(external_dir, 'download.sh').replace('\\', '/')
         os.chdir(f"{script_dir}/../sdl_ttf")
         os.system("git checkout release-2.24.x")
         os.chdir(script_dir)
@@ -145,9 +149,9 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--mode', default='shared', choices=['shared', 'static', 'both'], help='构建模式')
 
     args = parser.parse_args()
-    source_dir = get_absolute_path(args.source)
+    source_dir = get_absolute_path(args.source).replace('\\', '/')
     src_basename = os.path.basename(source_dir.rstrip('/'))
-    script_dir = os.path.dirname(__file__)
+    script_dir = os.path.dirname(__file__).replace('\\', '/')
     build_dir = f"{script_dir}/{args.target}/obj"
     install_dir = f"{script_dir}/{args.target}/install"
     init()
