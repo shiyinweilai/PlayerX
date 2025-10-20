@@ -20,3 +20,4 @@ build/video_compare
 sdl
 ffmpeg
 sdl_ttf
+build/freetype

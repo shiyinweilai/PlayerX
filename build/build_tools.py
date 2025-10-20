@@ -70,18 +70,57 @@ def build_sdl(args):
         if not os.path.exists(harfbuzz_dir) or not os.listdir(harfbuzz_dir):
             need_download = True
         if need_download:
-            if os.path.exists(download_script):
-                run(['sh', download_script], cwd=source_dir)
+            if os.name == 'nt':
+                os.chdir(f"{external_dir}")
+                os.system("git clone https://github.com/libsdl-org/freetype.git")
+                os.system("git clone https://github.com/libsdl-org/harfbuzz.git")
+                os.chdir(script_dir)
             else:
+                if os.path.exists(download_script):
+                    run(['sh', download_script], cwd=source_dir)
+                else:
+                    sys.exit(1)
+        
+        # 构建Freetype库
+        freetype_build_dir = os.path.join(script_dir, 'freetype/obj')
+        freetype_install_dir = os.path.join(script_dir, 'freetype/install')
+        if not os.path.exists(freetype_install_dir) or not os.listdir(freetype_install_dir):
+            print(f"\033[34m构建Freetype库...\033[0m")
+            if os.path.exists(freetype_build_dir):
+                shutil.rmtree(freetype_build_dir)
+            if os.path.exists(freetype_install_dir):
+                shutil.rmtree(freetype_install_dir)
+            os.makedirs(freetype_build_dir, exist_ok=True)
+            os.makedirs(freetype_install_dir, exist_ok=True)
+            
+            freetype_cmake_args = [
+                'cmake', freetype_dir,
+                f'-B{freetype_build_dir}',
+                f'-DCMAKE_BUILD_TYPE=Release',
+                f'-DCMAKE_INSTALL_PREFIX={freetype_install_dir}',
+                f'-DBUILD_SHARED_LIBS=OFF'  # 构建静态库
+            ]
+            
+            try:
+                run(freetype_cmake_args, cwd=freetype_build_dir)
+                if os.name == 'nt':
+                    run(['cmake', '--build', freetype_build_dir, '--config', 'Release', '-j', str(os.cpu_count() or 1)], cwd=freetype_build_dir)
+                    run(['cmake', '--build', freetype_build_dir, '--config', 'Release', '--target', 'install'], cwd=freetype_build_dir)
+                else:
+                    run(['make', '-j', str(os.cpu_count() or 1)], cwd=freetype_build_dir)
+                    run(['make', 'install'], cwd=freetype_build_dir)
+            except SystemExit:
+                print("\033[31mFreetype构建失败\033[0m")
                 sys.exit(1)
+        
         cmake_args += [f'-DSDL2TTF_SAMPLES=OFF',
                        f'-DSDL2TTF_INSTALL=ON',
                        f'-DSDL2TTF_VENDORED=ON',
                        f'-DSDL2TTF_HARFBUZZ=ON'
                        ]
-        # 添加SDL2安装路径，让CMake能够找到SDL2
+        # 添加SDL2安装路径和Freetype安装路径
         sdl2_install_dir = os.path.join(script_dir, 'sdl2/install')
-        cmake_args += [f'-DCMAKE_PREFIX_PATH={sdl2_install_dir}']
+        cmake_args += [f'-DCMAKE_PREFIX_PATH={sdl2_install_dir};{freetype_install_dir}']
     if args.target == 'sdl3_ttf':
         os.chdir(f"{script_dir}/../sdl_ttf")
         os.system("git checkout release-3.2.x")
