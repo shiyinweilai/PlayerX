@@ -7,3 +7,6 @@ ffmpeg
 *.zip
 build/sdl
 player/build
+app/node_modules
+app/dist
+app/package-lock.json
