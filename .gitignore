@@ -21,3 +21,6 @@ sdl
 ffmpeg
 sdl_ttf
 build/freetype
+src-tauri/src-tauri
+src-tauri/node_modules
+src-tauri/package-lock.json

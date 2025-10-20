@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Tauri 调用示例</title>
+</head>
+<body>
+  <h2>调用本地可执行文件示例</h2>
+
+  <label>文件1：<input type="file" id="file1" /></label><br/>
+  <label>文件2：<input type="file" id="file2" /></label><br/>
+
+  <button id="runBtn">运行对比程序</button>
+
+  <pre id="output" style="border:1px solid #ccc; padding:10px; height:200px; overflow:auto"></pre>
+
+
+  <script>
+    const { invoke } = window.__TAURI__.tauri;
+    const runBtn = document.getElementById('runBtn');
+    const file1Input = document.getElementById('file1');
+    const file2Input = document.getElementById('file2');
+    const outputEl = document.getElementById('output');
+
+    runBtn.addEventListener('click', async () => {
+      outputEl.textContent = "";
+      if (!file1Input.files[0] || !file2Input.files[0]) {
+        outputEl.textContent = "请先选择两个文件";
+        return;
+      }
+
+      const path1 = file1Input.files[0].path;
+      const path2 = file2Input.files[0].path;
+
+      try {
+        const result = await invoke('run_executable', { arg1: path1, arg2: path2 });
+        outputEl.textContent = result;
+      } catch (e) {
+        outputEl.textContent = "错误：" + e;
+      }
+    });
+  </script>
+</body>
+</html>
