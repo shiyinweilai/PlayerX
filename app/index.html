@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>视频对比</title>
+</head>
+<body>
+  <h3>选择两个文件进行比较</h3>
+  <button id="choose1">选择文件</button> <span id="label1"></span><br /><br />
+  <button id="choose2">选择文件</button> <span id="label2"></span><br /><br />
+  <button id="runBtn">运行 video-compare.exe</button>
+  <pre id="output" style="white-space: pre-wrap; border: 1px solid #ccc; padding: 10px; margin-top: 15px; height: 100px; overflow: auto;"></pre>
+
+  <script>
+    const choose1Btn = document.getElementById('choose1')
+    const choose2Btn = document.getElementById('choose2')
+    const label1 = document.getElementById('label1')
+    const label2 = document.getElementById('label2')
+    const runBtn = document.getElementById('runBtn')
+    const output = document.getElementById('output')
+
+    let file1Path = null
+    let file2Path = null
+
+    choose1Btn.onclick = async () => {
+      const p = await window.api.openFile()
+      if (p) {
+        file1Path = p
+        label1.textContent = p.split(/\\\\|\//).pop()
+      }
+    }
+
+    choose2Btn.onclick = async () => {
+      const p = await window.api.openFile()
+      if (p) {
+        file2Path = p
+        label2.textContent = p.split(/\\\\|\//).pop()
+      }
+    }
+
+    runBtn.onclick = async () => {
+      if (!file1Path || !file2Path) {
+        output.textContent = '请先选择两个文件'
+        return
+      }
+
+      output.textContent = '运行中...'
+
+      try {
+        const result = await window.api.runExe(file1Path, file2Path)
+        output.textContent = '运行结果:\n' + result
+      } catch (e) {
+        output.textContent = '执行出错:\n' + e
+      }
+    }
+  </script>
+</body>
+</html>
