@@ -1,5 +1,5 @@
 {
-  "name": "test",
+  "name": "video-compare",
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
@@ -7,15 +7,19 @@
     "start": "electron .",
     "build": "electron-builder",
     "dist": "npm run build",
-    "pack": "node pack.js"
+    "pack": "node pack.js",
+    "pack:win": "cross-env PLATFORM=win32 node pack.js",
+    "pack:mac": "cross-env PLATFORM=darwin node pack.js",
+    "pack:linux": "cross-env PLATFORM=linux node pack.js"
   },
-  "keywords": [],
+  "keywords": ["video", "compare", "electron", "cross-platform"],
   "author": "",
   "license": "ISC",
   "description": "A simple GUI to compare two videos using an external executable.",
   "devDependencies": {
     "electron": "^38.3.0",
-    "electron-builder": "^24.0.0"
+    "electron-builder": "^24.0.0",
+    "cross-env": "^7.0.3"
   },
   "build": {
     "appId": "com.example.video-compare",
@@ -27,17 +31,30 @@
       "main.js",
       "index.html",
       "preload.js",
-      "video-compare-app/**"
+      "win-inner/**",
+      "mac-inner/**",
+      "linux-inner/**"
     ],
-
     "asarUnpack": [
-      "video-compare-app/**"
+      "win-inner/**",
+      "mac-inner/**",
+      "linux-inner/**"
     ],
-
     "copyright": "Copyright © 2025 Video Compare",
+    "mac": {
+      "target": "dmg",
+      "icon": "icon.icns",
+      "category": "public.app-category.video"
+    },
     "win": {
       "target": "nsis",
-      "executableName": "Video Compare"
+      "executableName": "Video Compare",
+      "icon": "icon.ico"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "icon.png",
+      "category": "Video"
     }
   }
 }
