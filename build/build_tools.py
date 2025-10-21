@@ -47,6 +47,12 @@ def build_ffmpeg(args):
         cmake_args += ['--disable-shared', '--enable-static']
     else:
         cmake_args += ['--enable-shared', '--enable-static']
+    if args.platform == 'windows':
+        cmake_args += [
+            '--target-os=mingw32',
+            '--arch=x86_64',
+            '--cross-prefix=x86_64-w64-mingw32-',
+        ]
     make(cmake_args)
 
 
@@ -57,11 +63,11 @@ def build_sdl(args):
         f'-DCMAKE_BUILD_TYPE=Release',
         f'-DCMAKE_INSTALL_PREFIX={install_dir}',
     ]
-    
+
     if args.target == 'sdl2_ttf':
         # 使用依赖管理模块设置SDL2_ttf的依赖库
         freetype_install_dir = deps_manager.setup_sdl_ttf_dependencies(source_dir, script_dir)
-        
+
         # 添加SDL2安装路径和Freetype安装路径
         sdl2_install_dir = os.path.join(script_dir, 'sdl2/install')
         cmake_args += [
@@ -71,7 +77,7 @@ def build_sdl(args):
             f'-DSDL2TTF_HARFBUZZ=ON',
             f'-DCMAKE_PREFIX_PATH={sdl2_install_dir};{freetype_install_dir}'
         ]
-    
+
     if args.target == 'sdl3_ttf':
         os.chdir(f"{script_dir}/../sdl_ttf")
         os.system("git checkout release-3.2.x")
@@ -84,17 +90,17 @@ def build_sdl(args):
             f'-DSDL3TTF_HARFBUZZ=ON',
             f'-DCMAKE_PREFIX_PATH={sdl_install_dir}'
         ]
-    
+
     if args.target == 'sdl2':
         os.chdir(f"{script_dir}/../sdl")
         os.system("git checkout release-2.24.x")
         os.chdir(script_dir)
-    
+
     if args.mode == 'static':
         cmake_args += ['-DBUILD_SHARED_LIBS=OFF']
     elif args.mode == 'both':
         cmake_args += ['-DBUILD_SHARED_LIBS=ON']
-    
+
     make(cmake_args)
 
 
@@ -141,15 +147,19 @@ def init():
 if __name__ == '__main__':
     print("\033c", end="")
     parser = argparse.ArgumentParser(description="简化的统一构建工具")
-    parser.add_argument('--target', choices=['ffmpeg', 'sdl2', 'sdl3', 'sdl2_ttf', 'sdl3_ttf', 'video_compare'], help='构建目标')
+    parser.add_argument('--target', choices=['ffmpeg', 'sdl2', 'sdl3',
+                        'sdl2_ttf', 'sdl3_ttf', 'video_compare'], help='构建目标')
     parser.add_argument('-s', '--source', required=True, help='源码目录路径')
     parser.add_argument('-m', '--mode', default='shared', choices=['shared', 'static', 'both'], help='构建模式')
-
+    parser.add_argument('-p', '--platform', default='host', choices=['windows', 'macos'], help='目标平台')
     args = parser.parse_args()
     source_dir = get_absolute_path(args.source).replace('\\', '/')
     src_basename = os.path.basename(source_dir.rstrip('/'))
     script_dir = os.path.dirname(__file__).replace('\\', '/')
     build_dir = f"{script_dir}/{args.target}/obj"
     install_dir = f"{script_dir}/{args.target}/install"
+    if args.platform == 'windows':
+        build_dir = f"{build_dir}_win"
+        install_dir = f"{install_dir}_win"
     init()
     main()
