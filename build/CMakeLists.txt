@@ -6,12 +6,22 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 编译选项
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -Ofast -D__STDC_CONSTANT_MACROS")
+if(MSVC)
+    # MSVC编译器选项
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi /O2 /D__STDC_CONSTANT_MACROS")
+    # MSVC警告选项 - 启用所有警告但不视为错误（针对第三方库头文件）
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
+    # 添加特定警告抑制
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4996 /wd4244 /wd4267 /wd4018")
+else()
+    # GCC/Clang编译器选项
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -Ofast -D__STDC_CONSTANT_MACROS")
+    # GCC/Clang警告选项
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-deprecated -Wno-deprecated-declarations")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wdisabled-optimization -Wctor-dtor-privacy -Woverloaded-virtual")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused -Wno-missing-field-initializers")
+endif()
 
-# 警告选项
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-deprecated -Wno-deprecated-declarations")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wdisabled-optimization -Wctor-dtor-privacy -Woverloaded-virtual")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused -Wno-missing-field-initializers")
 
 # 查找所有源文件
 file(GLOB SOURCES "*.cpp")
@@ -20,27 +30,60 @@ file(GLOB SOURCES "*.cpp")
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # 添加ffmpeg库路径和包含目录
-link_directories(${FFMPEG_INSTALL_DIR}/lib)
-include_directories(${FFMPEG_INSTALL_DIR}/include)
-
-# 添加SDL2_ttf包含目录和库路径
-link_directories(${SDL_TTF_INSTALL_DIR}/lib)
-include_directories(${SDL_TTF_INSTALL_DIR}/include)
-
-# 查找SDL2库
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 sdl2)
-
-if(NOT SDL2_FOUND)
-    message(FATAL_ERROR "SDL2 not found! Please install SDL2 development package.")
+if(EXISTS ${FFMPEG_INSTALL_DIR})
+    link_directories(${FFMPEG_INSTALL_DIR}/lib)
+    link_directories(${FFMPEG_INSTALL_DIR}/bin)
+    include_directories(${FFMPEG_INSTALL_DIR}/include)
+    message(STATUS "Using ffmpeg from ${FFMPEG_INSTALL_DIR}")
+else()
+    message(WARNING "FFMPEG_INSTALL_DIR not found: ${FFMPEG_INSTALL_DIR}")
 endif()
 
-# 设置包含目录
-include_directories(${SDL2_INCLUDE_DIRS})
+# 添加SDL2_ttf包含目录和库路径
+if(EXISTS ${SDL_TTF_INSTALL_DIR})
+    link_directories(${SDL_TTF_INSTALL_DIR}/lib)
+    include_directories(${SDL_TTF_INSTALL_DIR}/include)
+    message(STATUS "Using SDL2_ttf from ${SDL_TTF_INSTALL_DIR}")
+else()
+    message(WARNING "SDL_TTF_INSTALL_DIR not found: ${SDL_TTF_INSTALL_DIR}")
+endif()
+
+# 添加SDL2包含目录
+if(WIN32)
+    if(EXISTS ${SDL_INSTALL_DIR})
+        include_directories(${SDL_INSTALL_DIR}/include)
+        include_directories(${SDL_INSTALL_DIR}/include/SDL2)
+        link_directories(${SDL_INSTALL_DIR}/lib)
+        message(STATUS "Using SDL2 from ${SDL_INSTALL_DIR}")
+    else()
+        message(WARNING "SDL2 include directory not found: ${SDL_INSTALL_DIR}")
+    endif()
+endif()
+
+
+# 查找SDL2库
+if(WIN32)
+    # Windows平台：不使用PkgConfig，直接使用SDL2库
+    set(SDL2_LDFLAGS SDL2.lib)
+    set(SDL2_FOUND TRUE)
+    message(STATUS "Using direct SDL2 linking on Windows platform")
+else()
+    # 其他平台：使用PkgConfig查找SDL2库
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 sdl2)
+    include_directories(${SDL2_INCLUDE_DIRS})
+endif()
 
 # 链接库配置 - 使用完整的库路径和macOS框架
 set(FFMPEG_LIBS avformat avcodec avfilter avutil swscale swresample)
-set(LIBS ${FFMPEG_LIBS} ${SDL2_LDFLAGS} ${SDL_TTF_INSTALL_DIR}/lib/libSDL2_ttf.a pthread)
+
+if(WIN32)
+    # Windows平台：使用动态链接库
+    set(LIBS ${FFMPEG_LIBS} ${SDL2_LDFLAGS} SDL2_ttf.lib)
+else()
+    # 其他平台：使用静态库路径
+    set(LIBS ${FFMPEG_LIBS} ${SDL2_LDFLAGS} -lSDL2_ttf pthread)
+endif()
 
 # macOS特定框架和库
 if(APPLE)

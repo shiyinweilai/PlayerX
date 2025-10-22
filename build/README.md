@@ -25,3 +25,21 @@ python build_tools.py -s ../sdl_ttf --target sdl_ttf
 ``` bash
 python build_tools.py -s ../video-compare --target video_compare
 ```
+
+``` bash
+export PATH="/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64:$PATH"
+call "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/Tools/VsDevCmd.bat" -arch=amd64
+"D:/software/Git/bin/bash.exe" --login -i  或 "D:/software/mysys2/msys2_shell.cmd"
+
+D:/UGit/private/PlayerX/ffmpeg
+./configure --prefix=/mnt/d/UGit/private/PlayerX/build/ffmpeg/install --enable-gpl --enable-version3 --enable-shared --disable-static --toolchain=msvc --disable-x86asm
+make -j 32 --prefix=/mnt/d/UGit/private/PlayerX/build/ffmpeg/install/obj
+
+#windows
+./configure --enable-gpl --enable-version3 --enable-shared --disable-static --toolchain=msvc --disable-x86asm 
+make -j 32 
+```
+
+D:/UGit/private/PlayerX/build/video_compare/install_win/bin/video-compare.exe "C:/Users/rbyang/Videos/video.mp4" "C:/Users/rbyang/Videos/video.mp4"
+
+D:/UGit/private/PlayerX/build/ffmpeg/install_win/bin/ffprobe.exe C:/Users/rbyang/Videos/video.mp4
