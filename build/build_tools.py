@@ -182,31 +182,72 @@ def build_video_compare(args, log_file=None):
         f"-DSDL_TTF_INSTALL_DIR={sdl_ttf_install_dir}",
         f"-DSDL_INSTALL_DIR={sdl_install_dir}",
     ]
-    # 添加QT支持 - 尝试自动查找QT安装路径
-    try:
-        # 尝试使用pkg-config查找QT
-        qt_path_result = subprocess.run(['pkg-config', '--variable=prefix', 'Qt6Core'], 
-                                       capture_output=True, text=True)
-        if qt_path_result.returncode == 0:
-            qt_install_dir = qt_path_result.stdout.strip()
-            cmake_args += [f"-DQt6_DIR={qt_install_dir}/lib/cmake/Qt6"]
-            print(f"\033[32m找到QT安装目录: {qt_install_dir}\033[0m")
+    
+    # Windows平台QT配置
+    if args.platform == 'windows':
+        # Windows交叉编译时默认禁用QT GUI版本
+        cmake_args += ["-DENABLE_QT_GUI=OFF"]
+        print("\033[33mWindows交叉编译：默认禁用QT GUI版本（需要Windows QT库）\033[0m")
+        
+        # 如果用户提供了QT路径，则尝试启用QT
+        qt_env_path = os.environ.get('QT_INSTALL_DIR')
+        if qt_env_path and os.path.exists(qt_env_path):
+            cmake_args += [f"-DQT_INSTALL_DIR={qt_env_path}", "-DENABLE_QT_GUI=ON"]
+            print(f"\033[32m使用环境变量QT_INSTALL_DIR: {qt_env_path}\033[0m")
         else:
-            # 尝试常见QT安装路径
-            common_qt_paths = [
+            # 尝试查找Windows平台的QT安装路径
+            common_windows_qt_paths = [
                 '/usr/local/opt/qt',
                 '/opt/homebrew/opt/qt',
                 '/usr/local/qt',
-                '/opt/qt'
+                '/opt/qt',
+                # Windows交叉编译时可能的QT路径
+                os.path.expanduser('~/Qt'),
+                '/opt/Qt'
             ]
-            for qt_path in common_qt_paths:
+            qt_found = False
+            for qt_path in common_windows_qt_paths:
                 if os.path.exists(qt_path):
-                    cmake_args += [f"-DQt6_DIR={qt_path}/lib/cmake/Qt6"]
-                    print(f"\033[32m找到QT安装目录: {qt_path}\033[0m")
-                    break
-    except Exception as e:
-        print(f"\033[33m警告: 无法自动查找QT安装目录: {e}\033[0m")
-        print("\033[33m请确保QT6已安装，或手动设置Qt6_DIR环境变量\033[0m")
+                    # 查找Windows版本的QT
+                    for version_dir in ['6.7.0', '6.6.0', '6.5.0', '6.4.0']:
+                        mingw_qt_path = os.path.join(qt_path, version_dir, 'mingw_64')
+                        if os.path.exists(mingw_qt_path):
+                            cmake_args += [f"-DQT_INSTALL_DIR={mingw_qt_path}", "-DENABLE_QT_GUI=ON"]
+                            print(f"\033[32m找到Windows QT安装目录: {mingw_qt_path}\033[0m")
+                            qt_found = True
+                            break
+                    if qt_found:
+                        break
+            
+            if not qt_found:
+                print(f"\033[33m警告: 无法自动找到Windows QT安装目录，QT GUI版本将被禁用\033[0m")
+                print("\033[33m如需启用QT GUI版本，请手动设置QT_INSTALL_DIR环境变量指向Windows QT安装目录\033[0m")
+    else:
+        # 原有macOS/Linux QT查找逻辑
+        try:
+            # 尝试使用pkg-config查找QT
+            qt_path_result = subprocess.run(['pkg-config', '--variable=prefix', 'Qt6Core'], 
+                                           capture_output=True, text=True)
+            if qt_path_result.returncode == 0:
+                qt_install_dir = qt_path_result.stdout.strip()
+                cmake_args += [f"-DQt6_DIR={qt_install_dir}/lib/cmake/Qt6"]
+                print(f"\033[32m找到QT安装目录: {qt_install_dir}\033[0m")
+            else:
+                # 尝试常见QT安装路径
+                common_qt_paths = [
+                    '/usr/local/opt/qt',
+                    '/opt/homebrew/opt/qt',
+                    '/usr/local/qt',
+                    '/opt/qt'
+                ]
+                for qt_path in common_qt_paths:
+                    if os.path.exists(qt_path):
+                        cmake_args += [f"-DQt6_DIR={qt_path}/lib/cmake/Qt6"]
+                        print(f"\033[32m找到QT安装目录: {qt_path}\033[0m")
+                        break
+        except Exception as e:
+            print(f"\033[33m警告: 无法自动查找QT安装目录: {e}\033[0m")
+            print("\033[33m请确保QT6已安装，或手动设置Qt6_DIR环境变量\033[0m")
     
     # Windows 静态链接：为可执行程序添加最小静态标志（不改源码）
     if args.platform == 'windows' and args.mode == 'static':
