@@ -206,7 +206,7 @@ def build_video_compare(args, log_file=None):
         # 精简符号，尽可能去除未使用引用
         cmake_args += ['-DCMAKE_EXE_LINKER_FLAGS=-Wl,-dead_strip']
     make(cmake_args, log_file)
-    # subprocess.run("git restore . && git clean -df", check=True, cwd=source_dir, shell=True)
+    subprocess.run("git restore . && git clean -fdx", check=True, cwd=source_dir, shell=True)
 
 def main():
     log_filename = f"build_{args.target}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
