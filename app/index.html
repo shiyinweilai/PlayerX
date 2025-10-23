@@ -153,6 +153,12 @@
       display: none; /* 默认隐藏 */
     }
 
+    .video-panel.left .file-list {
+      margin-top: 20px;
+      border-radius: 8px;
+      border: 2px solid #e9ecef;
+    }
+
     .file-item {
       padding: 8px 12px;
       border-bottom: 1px solid #f1f3f4;
@@ -349,6 +355,31 @@
     .select-btn:hover {
       background: #556cd6;
     }
+
+    .select-btn.large-btn {
+      background: #667eea;
+      color: #fff;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 30px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+      min-width: 150px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-left: 10px;
+    }
+
+    .select-btn.large-btn:hover {
+      background: #556cd6;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    }
   </style>
 </head>
 <body>
@@ -378,25 +409,19 @@
       <div class="video-panel left">
         <div class="panel-header">
           <div class="panel-number">1</div>
-          <div class="panel-title">左侧视频</div>
+          <button class="select-btn large-btn" id="selectBtn1">选择左侧视频</button>
         </div>
         
-        <div class="select-area">
-          <button class="select-btn" id="selectBtn1">选择文件</button>
-          <div class="file-list" id="fileList1"></div>
-        </div>
+        <div class="file-list" id="fileList1"></div>
       </div>
 
       <div class="video-panel right">
         <div class="panel-header">
           <div class="panel-number">2</div>
-          <div class="panel-title">右侧视频</div>
+          <button class="select-btn large-btn" id="selectBtn2">选择右侧视频</button>
         </div>
         
-        <div class="select-area">
-          <button class="select-btn" id="selectBtn2">选择文件</button>
-          <div class="file-list" id="fileList2"></div>
-        </div>
+        <div class="file-list" id="fileList2"></div>
       </div>
     </div>
 
