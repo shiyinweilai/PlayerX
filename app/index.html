@@ -159,6 +159,42 @@
       border: 2px solid #e9ecef;
     }
 
+    /* 新增：视频信息显示区域样式 */
+    .video-info {
+      background: #fff;
+      border: 2px solid #e9ecef;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 15px 0;
+      min-height: 60px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .info-label {
+      font-size: 12px;
+      color: #6c757d;
+      font-weight: 500;
+      margin-bottom: 5px;
+    }
+
+    .info-content {
+      font-size: 14px;
+      color: #333;
+      font-weight: 600;
+      font-family: 'Courier New', monospace;
+      word-break: break-all;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .video-info.empty .info-content {
+      color: #adb5bd;
+      font-style: italic;
+    }
+
     .file-item {
       padding: 8px 12px;
       border-bottom: 1px solid #f1f3f4;
@@ -412,6 +448,12 @@
           <button class="select-btn large-btn" id="selectBtn1">选择左侧视频</button>
         </div>
         
+        <!-- 新增：视频信息显示区域 -->
+        <div class="video-info" id="videoInfo1">
+          <div class="info-label">当前选中视频：</div>
+          <div class="info-content" id="videoName1">未选择</div>
+        </div>
+        
         <div class="file-list" id="fileList1"></div>
       </div>
 
@@ -419,6 +461,12 @@
         <div class="panel-header">
           <div class="panel-number">2</div>
           <button class="select-btn large-btn" id="selectBtn2">选择右侧视频</button>
+        </div>
+        
+        <!-- 新增：视频信息显示区域 -->
+        <div class="video-info" id="videoInfo2">
+          <div class="info-label">当前选中视频：</div>
+          <div class="info-content" id="videoName2">未选择</div>
         </div>
         
         <div class="file-list" id="fileList2"></div>
@@ -440,6 +488,10 @@
       const selectBtn1 = document.getElementById('selectBtn1')
       const selectBtn2 = document.getElementById('selectBtn2')
       const modeSelect = document.getElementById('modeSelect')
+      const videoName1 = document.getElementById('videoName1')
+      const videoName2 = document.getElementById('videoName2')
+      const videoInfo1 = document.getElementById('videoInfo1')
+      const videoInfo2 = document.getElementById('videoInfo2')
 
       let file1Path = null
       let file2Path = null
@@ -495,6 +547,23 @@
         })
       }
 
+      function updateVideoInfo(panelIndex, filePath) {
+        const videoNameElement = panelIndex === 1 ? videoName1 : videoName2
+        const videoInfoElement = panelIndex === 1 ? videoInfo1 : videoInfo2
+        
+        if (filePath) {
+          // 提取文件名（去除路径）
+          const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || filePath
+          videoNameElement.textContent = fileName
+          videoNameElement.title = filePath // 添加完整路径提示
+          videoInfoElement.classList.remove('empty')
+        } else {
+          videoNameElement.textContent = '未选择'
+          videoNameElement.title = ''
+          videoInfoElement.classList.add('empty')
+        }
+      }
+
       function selectFile(filePath, panelIndex) {
         console.log(`选择文件: 面板${panelIndex}, 路径: ${filePath}`)
         
@@ -504,12 +573,16 @@
           Array.from(fileList1.children).forEach((item, index) => {
             item.classList.toggle('selected', files1[index] === filePath)
           })
+          
+          updateVideoInfo(1, filePath)
         } else {
           file2Path = filePath
           
           Array.from(fileList2.children).forEach((item, index) => {
             item.classList.toggle('selected', files2[index] === filePath)
           })
+          
+          updateVideoInfo(2, filePath)
         }
         
         updateRunButton()
