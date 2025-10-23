@@ -12,34 +12,53 @@
 
 ## 使用方法
 
-### 构建FFmpeg
-``` bash
+### 动态构建-适用macOS
+
+- 构建FFmpeg
+
+```bash
 python build_tools.py -s ../ffmpeg --target ffmpeg
 ```
-### 构建sdl
+
+- 构建sdl
 - [sdl下载源码](https://github.com/libsdl-org/SDL_ttf/releases)
-``` bash
+
+```bash
 python build_tools.py -s ../sdl_ttf --target sdl_ttf
 ```
-### 构建video-compare
-``` bash
+
+- 构建video-compare
+
+```bash
 python build_tools.py -s ../video-compare --target video_compare
 ```
 
-``` bash
-export PATH="/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64:$PATH"
-call "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/Tools/VsDevCmd.bat" -arch=amd64
-"D:/software/Git/bin/bash.exe" --login -i  或 "D:/software/mysys2/msys2_shell.cmd"
+### 静态构建-windows
 
-D:/UGit/private/PlayerX/ffmpeg
-./configure --prefix=/mnt/d/UGit/private/PlayerX/build/ffmpeg/install --enable-gpl --enable-version3 --enable-shared --disable-static --toolchain=msvc --disable-x86asm
-make -j 32 --prefix=/mnt/d/UGit/private/PlayerX/build/ffmpeg/install/obj
+- sdl2
 
-#windows
-./configure --enable-gpl --enable-version3 --enable-shared --disable-static --toolchain=msvc --disable-x86asm 
-make -j 32 
+```bash
+python3 build_tools.py --target sdl2 -s ../sdl -p windows -m static
 ```
 
-D:/UGit/private/PlayerX/build/video_compare/install_win/bin/video-compare.exe "C:/Users/rbyang/Videos/video.mp4" "C:/Users/rbyang/Videos/video.mp4"
+- sdl2_ttf
 
-D:/UGit/private/PlayerX/build/ffmpeg/install_win/bin/ffprobe.exe C:/Users/rbyang/Videos/video.mp4
+```bash
+python3 build_tools.py --target sdl2_ttf -s ../sdl_ttf -p windows -m static
+```
+
+- ffmpeg
+
+```bash
+python3 build_tools.py --target ffmpeg -s ../ffmpeg -p windows -m static
+```
+
+- video_compare
+
+```bash
+python3 build_tools.py --target video_compare -s ../video-compare -p windows -m static
+```
+### 构建静态-macos
+python3 build_tools.py --target video_compare -s ../video-compare -p macos -m static
+
+/Users/rbyang/Documents/UGit/private/PlayerX/build/video_compare/install/bin/video-compare /Users/rbyang/Downloads/media.mp4 /Users/rbyang/Downloads/media.mp4

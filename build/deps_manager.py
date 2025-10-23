@@ -30,7 +30,7 @@ def setup_sdl_ttf_dependencies(source_dir, script_dir):
     external_dir = os.path.join(source_dir, 'external')
     freetype_dir = os.path.join(external_dir, 'freetype')
     harfbuzz_dir = os.path.join(external_dir, 'harfbuzz')
-    download_script = os.path.join(external_dir, 'download.sh').replace('\\', '/')
+    download_script = os.path.join(external_dir, 'download.sh')
     
     # 切换到SDL2_ttf源码目录并检出正确分支
     os.chdir(f"{script_dir}/../sdl_ttf")
@@ -45,19 +45,12 @@ def setup_sdl_ttf_dependencies(source_dir, script_dir):
         need_download = True
     
     if need_download:
-        if os.name == 'nt':  # Windows系统
-            print("\033[34mWindows系统：手动下载依赖库...\033[0m")
-            os.chdir(f"{external_dir}")
-            os.system("git clone https://github.com/libsdl-org/freetype.git")
-            os.system("git clone https://github.com/libsdl-org/harfbuzz.git")
-            os.chdir(script_dir)
-        else:  # Unix-like系统（包括macOS）
-            print("\033[34mUnix系统：使用download.sh下载依赖库...\033[0m")
-            if os.path.exists(download_script):
-                run(['sh', download_script], cwd=source_dir)
-            else:
-                print("\033[31m错误：找不到download.sh脚本\033[0m")
-                sys.exit(1)
+        print("\033[34mUnix系统：使用download.sh下载依赖库...\033[0m")
+        if os.path.exists(download_script):
+            run(['sh', download_script], cwd=source_dir)
+        else:
+            print("\033[31m错误：找不到download.sh脚本\033[0m")
+            sys.exit(1)
     
     # 构建Freetype库
     freetype_build_dir = os.path.join(script_dir, 'freetype/obj')
@@ -82,12 +75,8 @@ def setup_sdl_ttf_dependencies(source_dir, script_dir):
         
         try:
             run(freetype_cmake_args, cwd=freetype_build_dir)
-            if os.name == 'nt':
-                run(['cmake', '--build', freetype_build_dir, '--config', 'Release', '-j', str(os.cpu_count() or 1)], cwd=freetype_build_dir)
-                run(['cmake', '--build', freetype_build_dir, '--config', 'Release', '--target', 'install'], cwd=freetype_build_dir)
-            else:
-                run(['make', '-j', str(os.cpu_count() or 1)], cwd=freetype_build_dir)
-                run(['make', 'install'], cwd=freetype_build_dir)
+            run(['make', '-j', str(os.cpu_count() or 1)], cwd=freetype_build_dir)
+            run(['make', 'install'], cwd=freetype_build_dir)
         except SystemExit:
             print("\033[31mFreetype构建失败\033[0m")
             sys.exit(1)
