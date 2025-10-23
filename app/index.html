@@ -264,6 +264,35 @@
         padding: 20px;
       }
     }
+
+    /* 新增：非拖拽的选择区域与按钮样式 */
+    .select-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 300px;
+      padding: 20px;
+      background: #fff;
+      border: 2px solid #e9ecef;
+      border-radius: 8px;
+    }
+
+    .select-btn {
+      background: #667eea;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .select-btn:hover {
+      background: #556cd6;
+    }
   </style>
 </head>
 <body>
@@ -280,11 +309,9 @@
           <div class="panel-title">左侧视频</div>
         </div>
         
-        <div class="drag-drop-area" id="dragArea1">
-          <div class="drag-icon">📁</div>
-          <div class="drag-text">点击选择文件或拖拽文件/文件夹到这里</div>
-          <div class="drag-hint">支持多个文件或文件夹</div>
-          
+        <!-- 移除拖拽布局，改为按钮选择 -->
+        <div class="select-area">
+          <button class="select-btn" id="selectBtn1">选择文件</button>
           <div class="file-list" id="fileList1"></div>
         </div>
       </div>
@@ -295,11 +322,9 @@
           <div class="panel-title">右侧视频</div>
         </div>
         
-        <div class="drag-drop-area" id="dragArea2">
-          <div class="drag-icon">📁</div>
-          <div class="drag-text">点击选择文件或拖拽文件/文件夹到这里</div>
-          <div class="drag-hint">支持多个文件或文件夹</div>
-          
+        <!-- 移除拖拽布局，改为按钮选择 -->
+        <div class="select-area">
+          <button class="select-btn" id="selectBtn2">选择文件</button>
           <div class="file-list" id="fileList2"></div>
         </div>
       </div>
@@ -316,28 +341,43 @@
   </div>
 
   <script>
-    const dragArea1 = document.getElementById('dragArea1')
-    const dragArea2 = document.getElementById('dragArea2')
+    
     const fileList1 = document.getElementById('fileList1')
     const fileList2 = document.getElementById('fileList2')
     const runBtn = document.getElementById('runBtn')
     const output = document.getElementById('output')
+    const selectBtn1 = document.getElementById('selectBtn1')
+    const selectBtn2 = document.getElementById('selectBtn2')
 
     let file1Path = null
     let file2Path = null
     let files1 = []
     let files2 = []
 
-    // 视频文件扩展名
-    const videoExtensions = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm']
+    // 视频文件扩展名 - 更全面的支持
+    const videoExtensions = [
+      '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
+      '.m4v', '.3gp', '.ogg', '.ogv', '.ts', '.mts', '.m2ts',
+      '.vob', '.mpg', '.mpeg', '.rm', '.rmvb', '.asf', '.divx'
+    ]
 
     function updateRunButton() {
       runBtn.disabled = !(file1Path && file2Path)
     }
 
     function isValidVideoFile(filePath) {
+      if (!filePath || typeof filePath !== 'string') {
+        console.log('无效的文件路径:', filePath)
+        return false
+      }
+      
       const ext = filePath.toLowerCase().substring(filePath.lastIndexOf('.')).toLowerCase()
-      return videoExtensions.includes(ext)
+      console.log('文件扩展名:', ext)
+      
+      const isValid = videoExtensions.includes(ext)
+      console.log('文件是否有效:', isValid)
+      
+      return isValid
     }
 
     function renderFileList(fileListElement, files, panelIndex) {
@@ -355,7 +395,7 @@
         fileItem.className = 'file-item'
         fileItem.innerHTML = `<span class="selected-file-path">${file}</span>`
         fileItem.onclick = (e) => {
-          e.stopPropagation() // 阻止事件冒泡，避免触发拖拽区域的点击事件
+          e.stopPropagation()
           selectFile(file, panelIndex)
         }
         fileListElement.appendChild(fileItem)
@@ -368,14 +408,12 @@
       if (panelIndex === 1) {
         file1Path = filePath
         
-        // 高亮选中的文件项
         Array.from(fileList1.children).forEach((item, index) => {
           item.classList.toggle('selected', files1[index] === filePath)
         })
       } else {
         file2Path = filePath
         
-        // 高亮选中的文件项
         Array.from(fileList2.children).forEach((item, index) => {
           item.classList.toggle('selected', files2[index] === filePath)
         })
@@ -386,16 +424,23 @@
 
     function handleFiles(filePaths, panelIndex) {
       console.log(`处理文件: 面板${panelIndex}, 文件数量: ${filePaths.length}`)
+      console.log('文件路径列表:', filePaths)
+      
       const videoFiles = []
+      const invalidFiles = []
       
       for (const filePath of filePaths) {
+        console.log('检查文件:', filePath)
         if (isValidVideoFile(filePath)) {
           console.log(`有效视频文件: ${filePath}`)
           videoFiles.push(filePath)
         } else {
           console.log(`无效文件(非视频): ${filePath}`)
+          invalidFiles.push(filePath)
         }
       }
+      
+      console.log(`找到 ${videoFiles.length} 个视频文件，${invalidFiles.length} 个无效文件`)
       
       if (panelIndex === 1) {
         files1 = [...new Set([...files1, ...videoFiles])]
@@ -411,119 +456,39 @@
         }
       }
       
-      output.textContent = `已添加 ${videoFiles.length} 个视频文件`
-      output.className = 'output-box success'
+      if (videoFiles.length > 0) {
+        output.textContent = `已添加 ${videoFiles.length} 个视频文件`
+        output.className = 'output-box success'
+      } else {
+        output.textContent = `未检测到有效的视频文件。支持格式: ${videoExtensions.join(', ')}`
+        output.className = 'output-box error'
+      }
     }
 
-    // 拖拽事件处理
-    function setupDragDrop(dragArea, panelIndex) {
-      dragArea.addEventListener('dragover', (e) => {
-        e.preventDefault()
-        dragArea.classList.add('drag-over')
-      })
+    // 通过按钮进行文件选择
+    selectBtn1.addEventListener('click', async () => {
+      try {
+        const files = await window.api.openFiles()
+        if (files && files.length > 0) {
+          handleFiles(files, 1)
+        }
+      } catch (error) {
+        output.textContent = '选择文件失败: ' + error.message
+        output.className = 'output-box error'
+      }
+    })
 
-      dragArea.addEventListener('dragleave', (e) => {
-        e.preventDefault()
-        dragArea.classList.remove('drag-over')
-      })
-
-      dragArea.addEventListener('drop', async (e) => {
-        e.preventDefault()
-        dragArea.classList.remove('drag-over')
-        
-        const files = []
-        const folders = []
-        
-        // 分析拖拽的项目 - 支持多文件拖拽
-        for (const item of e.dataTransfer.items) {
-          if (item.kind === 'file') {
-            const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null
-            if (entry) {
-              if (entry.isFile) {
-                const file = item.getAsFile()
-                // 在Electron中，拖拽的文件应该有path属性
-                if (file && file.path) {
-                  files.push(file.path)
-                }
-              } else if (entry.isDirectory) {
-                // 对于文件夹，使用fullPath
-                folders.push(entry.fullPath)
-              }
-            } else {
-              // 回退方案：直接获取文件
-              const file = item.getAsFile()
-              if (file && file.path) {
-                files.push(file.path)
-              }
-            }
-          }
+    selectBtn2.addEventListener('click', async () => {
+      try {
+        const files = await window.api.openFiles()
+        if (files && files.length > 0) {
+          handleFiles(files, 2)
         }
-        
-        // 如果没有拖拽项目，尝试从files属性获取
-        if (files.length === 0 && folders.length === 0 && e.dataTransfer.files.length > 0) {
-          for (const file of e.dataTransfer.files) {
-            if (file.path) {
-              files.push(file.path)
-            }
-          }
-        }
-        
-        // 处理拖拽的文件 - 支持多文件
-        if (files.length > 0) {
-          handleFiles(files, panelIndex)
-        }
-        
-        // 处理拖拽的文件夹
-        if (folders.length > 0) {
-          output.textContent = '正在扫描文件夹...'
-          output.className = 'output-box running'
-          
-          try {
-            for (const folder of folders) {
-              const folderFiles = await window.api.scanFolder(folder)
-              if (folderFiles && folderFiles.length > 0) {
-                handleFiles(folderFiles, panelIndex)
-                output.textContent = `从文件夹扫描到 ${folderFiles.length} 个视频文件`
-                output.className = 'output-box success'
-              } else {
-                output.textContent = `文件夹中没有找到视频文件: ${folder}`
-                output.className = 'output-box error'
-              }
-            }
-          } catch (error) {
-            output.textContent = '扫描文件夹失败: ' + error.message
-            output.className = 'output-box error'
-          }
-        }
-        
-        // 如果没有找到任何文件
-        if (files.length === 0 && folders.length === 0) {
-          output.textContent = '未检测到有效的视频文件'
-          output.className = 'output-box error'
-        }
-      })
-
-      dragArea.addEventListener('click', async (e) => {
-        // 如果点击的是文件列表项，不触发文件选择窗口
-        if (e.target.closest('.file-item')) {
-          return
-        }
-        
-        try {
-          const files = await window.api.openFiles()
-          if (files && files.length > 0) {
-            handleFiles(files, panelIndex)
-          }
-        } catch (error) {
-          output.textContent = '选择文件失败: ' + error.message
-          output.className = 'output-box error'
-        }
-      })
-    }
-
-    // 初始化拖拽区域
-    setupDragDrop(dragArea1, 1)
-    setupDragDrop(dragArea2, 2)
+      } catch (error) {
+        output.textContent = '选择文件失败: ' + error.message
+        output.className = 'output-box error'
+      }
+    })
 
     runBtn.onclick = async () => {
       if (!file1Path || !file2Path) {

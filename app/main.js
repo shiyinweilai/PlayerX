@@ -113,6 +113,7 @@ ipcMain.handle('scan-folder', async (event, folderPath) => {
 })
 
 // 根据平台获取可执行文件路径和名称
+
 function getExecutableInfo() {
   const platform = os.platform()
   let exeDirName, exeName
@@ -144,11 +145,13 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
       exePath = path.join(process.resourcesPath, 'app.asar.unpacked', exeDirName, exeName)
     } else {
       // 开发环境，可执行文件在项目目录下的对应平台子目录
-      exePath = path.join(__dirname, exeDirName, exeName)
+      // 使用 path.resolve 确保路径正确
+      exePath = path.resolve(__dirname, exeDirName, exeName)
     }
 
     console.log('当前平台:', os.platform())
     console.log('process.resourcesPath:', process.resourcesPath)
+    console.log('__dirname:', __dirname)
     console.log('执行路径(可执行):', exePath)
     console.log('参数 file1:', file1)
     console.log('参数 file2:', file2)
@@ -157,6 +160,15 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
     try {
       // 检查可执行文件是否存在
       if (!fs.existsSync(exePath)) {
+        console.log('可执行文件不存在，检查路径:', exePath)
+        console.log('当前工作目录:', process.cwd())
+        
+        // 尝试其他可能的路径
+        const altPath1 = path.resolve(process.cwd(), exeDirName, exeName)
+        const altPath2 = path.resolve(__dirname, '..', exeDirName, exeName)
+        console.log('备选路径1:', altPath1)
+        console.log('备选路径2:', altPath2)
+        
         return reject(`找不到可执行文件: ${exePath}\n请确认已将 ${exeName} 和相关依赖文件放入 ${exeDirName} 目录，且在打包配置中包含并 asarUnpack。`)
       }
 
