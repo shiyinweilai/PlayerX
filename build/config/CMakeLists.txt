@@ -5,6 +5,11 @@ project(video-compare VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# 查找QT库
+find_package(Qt6 COMPONENTS Core Widgets REQUIRED)
+
+# 启用自动MOC（元对象编译器）
+set(CMAKE_AUTOMOC ON)
 
 # GCC/Clang编译器选项
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -Ofast -D__STDC_CONSTANT_MACROS")
@@ -24,8 +29,9 @@ if(VC_DISABLE_INPUT_FEATURES)
     add_definitions(-DVC_DISABLE_INPUT_FEATURES=1)
 endif()
 
-# 查找所有源文件
+# 查找所有源文件（排除qt_main.cpp，因为我们要单独处理）
 file(GLOB SOURCES "*.cpp")
+list(FILTER SOURCES EXCLUDE REGEX "qt_main\.cpp")
 
 # 设置包含目录
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -251,11 +257,22 @@ if(APPLE)
     list(APPEND LIBS ${MACOS_FRAMEWORKS})
 endif()
 
-# 创建可执行文件
+# 创建命令行版本可执行文件
 add_executable(video-compare ${SOURCES})
 
 # 链接库
 target_link_libraries(video-compare ${LIBS})
 
+# 创建QT版本可执行文件
+add_executable(video-compare-qt qt_main.cpp)
+
+# 为QT版本链接QT库和原有库
+target_link_libraries(video-compare-qt
+    Qt6::Core
+    Qt6::Widgets
+    ${LIBS}
+)
+
 # 安装目标（可选）
 install(TARGETS video-compare DESTINATION bin)
+install(TARGETS video-compare-qt DESTINATION bin)

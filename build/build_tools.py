@@ -163,8 +163,8 @@ def build_sdl(args, log_file=None):
 
 
 def build_video_compare(args, log_file=None):
-    shutil.copy(f"{script_dir}/config/CMakeLists.txt", f"{source_dir}/CMakeLists.txt")
-    shutil.copy(f"{script_dir}/config/display.cpp", f"{source_dir}/display.cpp")
+    # shutil.copy(f"{script_dir}/config/CMakeLists.txt", f"{source_dir}/CMakeLists.txt")
+    # shutil.copy(f"{script_dir}/config/display.cpp", f"{source_dir}/display.cpp")
     ffmpeg_install_dir = os.path.join(script_dir, 'ffmpeg/install')
     sdl_ttf_install_dir = os.path.join(script_dir, 'sdl2_ttf/install')
     sdl_install_dir = os.path.join(script_dir, 'sdl2/install')
@@ -182,6 +182,32 @@ def build_video_compare(args, log_file=None):
         f"-DSDL_TTF_INSTALL_DIR={sdl_ttf_install_dir}",
         f"-DSDL_INSTALL_DIR={sdl_install_dir}",
     ]
+    # 添加QT支持 - 尝试自动查找QT安装路径
+    try:
+        # 尝试使用pkg-config查找QT
+        qt_path_result = subprocess.run(['pkg-config', '--variable=prefix', 'Qt6Core'], 
+                                       capture_output=True, text=True)
+        if qt_path_result.returncode == 0:
+            qt_install_dir = qt_path_result.stdout.strip()
+            cmake_args += [f"-DQt6_DIR={qt_install_dir}/lib/cmake/Qt6"]
+            print(f"\033[32m找到QT安装目录: {qt_install_dir}\033[0m")
+        else:
+            # 尝试常见QT安装路径
+            common_qt_paths = [
+                '/usr/local/opt/qt',
+                '/opt/homebrew/opt/qt',
+                '/usr/local/qt',
+                '/opt/qt'
+            ]
+            for qt_path in common_qt_paths:
+                if os.path.exists(qt_path):
+                    cmake_args += [f"-DQt6_DIR={qt_path}/lib/cmake/Qt6"]
+                    print(f"\033[32m找到QT安装目录: {qt_path}\033[0m")
+                    break
+    except Exception as e:
+        print(f"\033[33m警告: 无法自动查找QT安装目录: {e}\033[0m")
+        print("\033[33m请确保QT6已安装，或手动设置Qt6_DIR环境变量\033[0m")
+    
     # Windows 静态链接：为可执行程序添加最小静态标志（不改源码）
     if args.platform == 'windows' and args.mode == 'static':
         cmake_args += [
