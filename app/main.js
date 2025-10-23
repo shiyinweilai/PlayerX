@@ -60,6 +60,58 @@ ipcMain.handle('open-file', async () => {
   return filePaths[0]
 })
 
+ipcMain.handle('open-files', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Video', extensions: ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm'] }
+    ]
+  })
+  if (canceled || !filePaths || filePaths.length === 0) {
+    return null
+  }
+  return filePaths
+})
+
+ipcMain.handle('scan-folder', async (event, folderPath) => {
+  const videoExtensions = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm']
+  const videoFiles = []
+  
+  function scanDirectory(dirPath) {
+    try {
+      const items = fs.readdirSync(dirPath, { withFileTypes: true })
+      
+      for (const item of items) {
+        const fullPath = path.join(dirPath, item.name)
+        
+        if (item.isDirectory()) {
+          scanDirectory(fullPath)
+        } else if (item.isFile()) {
+          const ext = path.extname(item.name).toLowerCase()
+          if (videoExtensions.includes(ext)) {
+            videoFiles.push(fullPath)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('扫描文件夹出错:', error)
+      throw new Error(`扫描文件夹失败: ${error.message}`)
+    }
+  }
+  
+  if (!fs.existsSync(folderPath)) {
+    throw new Error('文件夹不存在: ' + folderPath)
+  }
+  
+  const stats = fs.statSync(folderPath)
+  if (!stats.isDirectory()) {
+    throw new Error('路径不是文件夹: ' + folderPath)
+  }
+  
+  scanDirectory(folderPath)
+  return videoFiles
+})
+
 // 根据平台获取可执行文件路径和名称
 function getExecutableInfo() {
   const platform = os.platform()

@@ -48,7 +48,7 @@
       display: flex;
       gap: 40px;
       margin-bottom: 30px;
-      min-height: 450px;
+      min-height: 500px;
       align-items: stretch;
     }
 
@@ -58,7 +58,7 @@
       border-radius: 10px;
       padding: 25px;
       background: #f8f9fa;
-      min-height: 400px;
+      min-height: 450px;
       display: flex;
       flex-direction: column;
       min-width: 500px;
@@ -99,80 +99,112 @@
       color: #333;
     }
 
-    .file-info-section {
-      margin-bottom: 20px;
-      flex-shrink: 0;
-    }
-
-    .file-input-group {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 10px;
-      align-items: stretch;
-      min-width: 0;
-    }
-
-    .file-path-input {
+    .drag-drop-area {
       flex: 1;
-      background: white;
-      border: 1px solid #dee2e6;
+      border: 2px dashed #adb5bd;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 300px;
+    }
+
+    .drag-drop-area:hover {
+      border-color: #667eea;
+      background: #f8f9ff;
+    }
+
+    .drag-drop-area.drag-over {
+      border-color: #28a745;
+      background: #f0fff4;
+    }
+
+    .drag-icon {
+      font-size: 48px;
+      color: #adb5bd;
+      margin-bottom: 15px;
+    }
+
+    .drag-text {
+      color: #6c757d;
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+
+    .drag-hint {
+      color: #adb5bd;
+      font-size: 14px;
+    }
+
+    .file-list {
+      width: 100%;
+      max-height: 200px;
+      overflow-y: auto;
+      margin-top: 15px;
+      border: 1px solid #e9ecef;
       border-radius: 5px;
-      padding: 10px;
+      background: white;
+    }
+
+    .file-item {
+      padding: 8px 12px;
+      border-bottom: 1px solid #f1f3f4;
+      cursor: pointer;
+      transition: background 0.2s ease;
       font-family: 'Courier New', monospace;
       font-size: 12px;
-      color: #333;
-      min-height: 40px;
-      resize: vertical;
-      overflow-wrap: break-word;
       word-break: break-all;
-      white-space: pre-wrap;
-      line-height: 1.4;
-      min-width: 300px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       max-width: 100%;
     }
 
-    .file-path-input:focus {
-      outline: none;
-      border-color: #667eea;
-      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+    .file-item:hover {
+      background: #f8f9fa;
     }
 
-    .file-path-input::placeholder {
-      color: #999;
+    .file-item.selected {
+      background: #e3f2fd;
+      border-left: 3px solid #2196f3;
     }
 
-    .select-btn {
-      background: #667eea;
-      color: white;
-      border: none;
-      padding: 8px 16px;
+    .file-item:last-child {
+      border-bottom: none;
+    }
+
+    .selected-file {
+      margin-top: 15px;
+      padding: 10px;
+      background: #e8f5e8;
       border-radius: 5px;
-      cursor: pointer;
-      font-size: 14px;
-      transition: background 0.3s ease;
+      border-left: 3px solid #28a745;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      word-break: break-all;
       white-space: nowrap;
-      height: 40px;
-      align-self: flex-start;
-      min-width: 100px;
-      flex-shrink: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
     }
 
-    .select-btn:hover {
-      background: #5a6fd8;
+    .selected-file-label {
+      font-weight: 600;
+      color: #155724;
+      margin-bottom: 5px;
     }
 
-    .video-preview {
-      background: #e9ecef;
-      border-radius: 5px;
-      flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #6c757d;
-      font-size: 14px;
-      margin-top: 20px;
-      min-height: 200px;
-      padding: 20px;
+    .selected-file-path {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
     }
 
     .control-section {
@@ -276,15 +308,17 @@
           <div class="panel-title">左侧视频</div>
         </div>
         
-        <div class="file-info-section">
-          <div class="file-input-group">
-            <input type="text" class="file-path-input" id="filePathInput1" placeholder="请输入文件路径或点击右侧按钮选择">
-            <button class="select-btn" id="choose1">选择文件</button>
+        <div class="drag-drop-area" id="dragArea1">
+          <div class="drag-icon">📁</div>
+          <div class="drag-text">点击选择文件或拖拽文件/文件夹到这里</div>
+          <div class="drag-hint">支持多个文件或文件夹</div>
+          
+          <div class="file-list" id="fileList1"></div>
+          
+          <div class="selected-file" id="selectedFile1" style="display: none;">
+            <div class="selected-file-label">已选择：</div>
+            <div id="selectedFilePath1"></div>
           </div>
-        </div>
-        
-        <div class="video-preview">
-          视频预览区域（未来扩展）
         </div>
       </div>
 
@@ -294,15 +328,17 @@
           <div class="panel-title">右侧视频</div>
         </div>
         
-        <div class="file-info-section">
-          <div class="file-input-group">
-            <input type="text" class="file-path-input" id="filePathInput2" placeholder="请输入文件路径或点击右侧按钮选择">
-            <button class="select-btn" id="choose2">选择文件</button>
+        <div class="drag-drop-area" id="dragArea2">
+          <div class="drag-icon">📁</div>
+          <div class="drag-text">点击选择文件或拖拽文件/文件夹到这里</div>
+          <div class="drag-hint">支持多个文件或文件夹</div>
+          
+          <div class="file-list" id="fileList2"></div>
+          
+          <div class="selected-file" id="selectedFile2" style="display: none;">
+            <div class="selected-file-label">已选择：</div>
+            <div id="selectedFilePath2"></div>
           </div>
-        </div>
-        
-        <div class="video-preview">
-          视频预览区域（未来扩展）
         </div>
       </div>
     </div>
@@ -318,73 +354,197 @@
   </div>
 
   <script>
-    const choose1Btn = document.getElementById('choose1')
-    const choose2Btn = document.getElementById('choose2')
-    const filePathInput1 = document.getElementById('filePathInput1')
-    const filePathInput2 = document.getElementById('filePathInput2')
+    const dragArea1 = document.getElementById('dragArea1')
+    const dragArea2 = document.getElementById('dragArea2')
+    const fileList1 = document.getElementById('fileList1')
+    const fileList2 = document.getElementById('fileList2')
+    const selectedFile1 = document.getElementById('selectedFile1')
+    const selectedFile2 = document.getElementById('selectedFile2')
+    const selectedFilePath1 = document.getElementById('selectedFilePath1')
+    const selectedFilePath2 = document.getElementById('selectedFilePath2')
     const runBtn = document.getElementById('runBtn')
     const output = document.getElementById('output')
 
     let file1Path = null
     let file2Path = null
+    let files1 = []
+    let files2 = []
+
+    // 视频文件扩展名
+    const videoExtensions = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm']
 
     function updateRunButton() {
       runBtn.disabled = !(file1Path && file2Path)
     }
 
-    function updateFileDisplay(inputElement, path) {
-      if (path) {
-        inputElement.value = path
-        inputElement.style.borderColor = '#28a745'
-      } else {
-        inputElement.value = ''
-        inputElement.style.borderColor = '#dee2e6'
-      }
+    function isValidVideoFile(filePath) {
+      const ext = filePath.toLowerCase().substring(filePath.lastIndexOf('.')).toLowerCase()
+      return videoExtensions.includes(ext)
     }
 
-    function handleInputChange(inputElement, pathVar) {
-      const path = inputElement.value.trim()
-      if (path) {
-        pathVar = path
-        inputElement.style.borderColor = '#28a745'
-      } else {
-        pathVar = null
-        inputElement.style.borderColor = '#dee2e6'
+    function renderFileList(fileListElement, files, panelIndex) {
+      fileListElement.innerHTML = ''
+      
+      if (files.length === 0) {
+        fileListElement.style.display = 'none'
+        return
       }
+      
+      fileListElement.style.display = 'block'
+      
+      files.forEach((file, index) => {
+        const fileItem = document.createElement('div')
+        fileItem.className = 'file-item'
+        fileItem.innerHTML = `<span class="selected-file-path">${file}</span>`
+        fileItem.onclick = (e) => {
+          e.stopPropagation() // 阻止事件冒泡，避免触发拖拽区域的点击事件
+          selectFile(file, panelIndex)
+        }
+        fileListElement.appendChild(fileItem)
+      })
+    }
+
+    function selectFile(filePath, panelIndex) {
+      if (panelIndex === 1) {
+        file1Path = filePath
+        selectedFilePath1.innerHTML = `<span class="selected-file-path">${filePath}</span>`
+        selectedFile1.style.display = 'block'
+        
+        // 高亮选中的文件项
+        Array.from(fileList1.children).forEach((item, index) => {
+          item.classList.toggle('selected', files1[index] === filePath)
+        })
+      } else {
+        file2Path = filePath
+        selectedFilePath2.innerHTML = `<span class="selected-file-path">${filePath}</span>`
+        selectedFile2.style.display = 'block'
+        
+        // 高亮选中的文件项
+        Array.from(fileList2.children).forEach((item, index) => {
+          item.classList.toggle('selected', files2[index] === filePath)
+        })
+      }
+      
       updateRunButton()
     }
 
-    choose1Btn.onclick = async () => {
-      const p = await window.api.openFile()
-      if (p) {
-        file1Path = p
-        updateFileDisplay(filePathInput1, p)
-        updateRunButton()
-        output.textContent = '左侧视频文件已选择：' + p.split(/\\\\|\//).pop()
-        output.className = 'output-box success'
+    function handleFiles(files, panelIndex) {
+      const videoFiles = []
+      
+      for (const file of files) {
+        if (isValidVideoFile(file)) {
+          videoFiles.push(file)
+        }
       }
+      
+      if (panelIndex === 1) {
+        files1 = [...new Set([...files1, ...videoFiles])]
+        renderFileList(fileList1, files1, 1)
+        if (files1.length > 0 && !file1Path) {
+          selectFile(files1[0], 1)
+        }
+      } else {
+        files2 = [...new Set([...files2, ...videoFiles])]
+        renderFileList(fileList2, files2, 2)
+        if (files2.length > 0 && !file2Path) {
+          selectFile(files2[0], 2)
+        }
+      }
+      
+      output.textContent = `已添加 ${videoFiles.length} 个视频文件`
+      output.className = 'output-box success'
     }
 
-    choose2Btn.onclick = async () => {
-      const p = await window.api.openFile()
-      if (p) {
-        file2Path = p
-        updateFileDisplay(filePathInput2, p)
-        updateRunButton()
-        output.textContent = '右侧视频文件已选择：' + p.split(/\\\\|\//).pop()
-        output.className = 'output-box success'
-      }
+    // 拖拽事件处理
+    function setupDragDrop(dragArea, panelIndex) {
+      dragArea.addEventListener('dragover', (e) => {
+        e.preventDefault()
+        dragArea.classList.add('drag-over')
+      })
+
+      dragArea.addEventListener('dragleave', (e) => {
+        e.preventDefault()
+        dragArea.classList.remove('drag-over')
+      })
+
+      dragArea.addEventListener('drop', async (e) => {
+        e.preventDefault()
+        dragArea.classList.remove('drag-over')
+        
+        const files = []
+        const folders = []
+        
+        // 分析拖拽的项目 - 支持多文件拖拽
+        for (const item of e.dataTransfer.items) {
+          if (item.kind === 'file') {
+            const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null
+            if (entry) {
+              if (entry.isFile) {
+                const file = item.getAsFile()
+                files.push(file.path)
+              } else if (entry.isDirectory) {
+                folders.push(entry.fullPath || item.getAsFile().path)
+              }
+            } else {
+              // 回退方案：直接获取文件路径
+              const file = item.getAsFile()
+              if (file) {
+                files.push(file.path)
+              }
+            }
+          }
+        }
+        
+        // 处理拖拽的文件 - 支持多文件
+        if (files.length > 0) {
+          handleFiles(files, panelIndex)
+        }
+        
+        // 处理拖拽的文件夹
+        if (folders.length > 0) {
+          output.textContent = '正在扫描文件夹...'
+          output.className = 'output-box running'
+          
+          try {
+            for (const folder of folders) {
+              const folderFiles = await window.api.scanFolder(folder)
+              if (folderFiles.length > 0) {
+                handleFiles(folderFiles, panelIndex)
+                output.textContent = `从文件夹扫描到 ${folderFiles.length} 个视频文件`
+                output.className = 'output-box success'
+              } else {
+                output.textContent = `文件夹中没有找到视频文件: ${folder}`
+                output.className = 'output-box error'
+              }
+            }
+          } catch (error) {
+            output.textContent = '扫描文件夹失败: ' + error.message
+            output.className = 'output-box error'
+          }
+        }
+      })
+
+      dragArea.addEventListener('click', async (e) => {
+        // 如果点击的是文件列表项，不触发文件选择窗口
+        if (e.target.closest('.file-item')) {
+          return
+        }
+        
+        try {
+          const files = await window.api.openFiles()
+          if (files && files.length > 0) {
+            handleFiles(files, panelIndex)
+          }
+        } catch (error) {
+          output.textContent = '选择文件失败: ' + error.message
+          output.className = 'output-box error'
+        }
+      })
     }
 
-    filePathInput1.addEventListener('input', () => {
-      file1Path = filePathInput1.value.trim()
-      handleInputChange(filePathInput1, file1Path)
-    })
-
-    filePathInput2.addEventListener('input', () => {
-      file2Path = filePathInput2.value.trim()
-      handleInputChange(filePathInput2, file2Path)
-    })
+    // 初始化拖拽区域
+    setupDragDrop(dragArea1, 1)
+    setupDragDrop(dragArea2, 2)
 
     runBtn.onclick = async () => {
       if (!file1Path || !file2Path) {
@@ -411,8 +571,6 @@
 
     // 初始化状态
     updateRunButton()
-    updateFileDisplay(filePathInput1, null)
-    updateFileDisplay(filePathInput2, null)
   </script>
 </body>
 </html>
