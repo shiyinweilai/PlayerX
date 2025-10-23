@@ -469,6 +469,7 @@
             <div class="detail-item"><span class="detail-label">视频编码：</span><span id="videoCodec1">-</span></div>
             <div class="detail-item"><span class="detail-label">音频编码：</span><span id="audioCodec1">-</span></div>
             <div class="detail-item"><span class="detail-label">像素格式：</span><span id="pixelFormat1">-</span></div>
+            <div class="detail-item"><span class="detail-label">颜色空间：</span><span id="colorSpace1">-</span></div>
           </div>
         </div>
         
@@ -493,6 +494,7 @@
             <div class="detail-item"><span class="detail-label">视频编码：</span><span id="videoCodec2">-</span></div>
             <div class="detail-item"><span class="detail-label">音频编码：</span><span id="audioCodec2">-</span></div>
             <div class="detail-item"><span class="detail-label">像素格式：</span><span id="pixelFormat2">-</span></div>
+            <div class="detail-item"><span class="detail-label">颜色空间：</span><span id="colorSpace2">-</span></div>
           </div>
         </div>
         
@@ -614,6 +616,7 @@
         document.getElementById(`videoCodec${suffix}`).textContent = '-'
         document.getElementById(`audioCodec${suffix}`).textContent = '-'
         document.getElementById(`pixelFormat${suffix}`).textContent = '-'
+        document.getElementById(`colorSpace${suffix}`).textContent = '-'
       }
 
       // 新增：探测视频信息
@@ -644,6 +647,7 @@
           document.getElementById(`videoCodec${suffix}`).textContent = '探测失败'
           document.getElementById(`audioCodec${suffix}`).textContent = '探测失败'
           document.getElementById(`pixelFormat${suffix}`).textContent = '探测失败'
+          document.getElementById(`colorSpace${suffix}`).textContent = '探测失败'
           
           // 在输出框中显示错误
           output.textContent = `❌ 视频信息探测失败: ${error}`
@@ -689,12 +693,14 @@
         let videoCodec = '-';
         let audioCodec = '-';
         let pixelFormat = '-';
+        let colorSpace = '-';
         
         if (videoInfo.videoStreams && videoInfo.videoStreams.length > 0) {
           const videoStream = videoInfo.videoStreams[0];
           resolution = videoStream.resolution;
           videoCodec = videoStream.codec;
           pixelFormat = videoStream.pixelFormat || '-';
+          colorSpace = videoStream.colorSpace || '-';
         }
         
         if (videoInfo.audioStreams && videoInfo.audioStreams.length > 0) {
@@ -710,6 +716,7 @@
         document.getElementById(`videoCodec${suffix}`).textContent = videoCodec;
         document.getElementById(`audioCodec${suffix}`).textContent = audioCodec;
         document.getElementById(`pixelFormat${suffix}`).textContent = pixelFormat;
+        document.getElementById(`colorSpace${suffix}`).textContent = colorSpace;
         
         console.log(`面板${panelIndex}视频信息显示完成`);
       }

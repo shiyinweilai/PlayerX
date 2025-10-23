@@ -323,12 +323,16 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
                   const pixelFormat = stream.pix_fmt || '未知'
                   const pixelFormatDisplay = pixelFormat === 'yuv420p' ? 'yuv420p (tv)' : pixelFormat
                   
+                  // 提取颜色空间信息
+                  const colorSpace = stream.color_space || stream.color_primaries || '未知'
+                  
                   info.videoStreams.push({
                     codec: stream.codec_name || '未知',
                     resolution: `${stream.width || '?'}x${stream.height || '?'}`,
                     fps: stream.r_frame_rate || '未知',
                     bitrate: stream.bit_rate || '未知',
-                    pixelFormat: pixelFormatDisplay
+                    pixelFormat: pixelFormatDisplay,
+                    colorSpace: colorSpace
                   })
                 } else if (stream.codec_type === 'audio') {
                   info.audioStreams.push({
