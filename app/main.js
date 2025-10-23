@@ -135,7 +135,7 @@ function getExecutableInfo() {
   return { exeDirName, exeName }
 }
 
-ipcMain.handle('run-exe', async (event, file1, file2) => {
+ipcMain.handle('run-exe', async (event, file1, file2, mode) => {
   return new Promise((resolve, reject) => {
     const { exeDirName, exeName } = getExecutableInfo()
     let exePath
@@ -153,6 +153,7 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
     console.log('process.resourcesPath:', process.resourcesPath)
     console.log('__dirname:', __dirname)
     console.log('执行路径(可执行):', exePath)
+    console.log('模式参数:', mode)
     console.log('参数 file1:', file1)
     console.log('参数 file2:', file2)
 
@@ -174,8 +175,8 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
 
       const exeCwd = path.dirname(exePath)
       
-      // 启动可执行文件
-      const child = spawn(exePath, [file1, file2], {
+      // 启动可执行文件，添加模式参数
+      const child = spawn(exePath, ['-W','-m', mode, file1, file2], {
         cwd: exeCwd,
         detached: true,
         windowsHide: false,
@@ -188,7 +189,7 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
       })
       
       child.unref()
-      resolve(`已启动 ${exeName}`)
+      resolve(`已启动 ${exeName}，模式: ${mode}`)
     } catch (error) {
       const msg = `执行失败: ${error.message}\ncode: ${error.code || ''}\npath: ${exePath}`
       reject(msg)

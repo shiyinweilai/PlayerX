@@ -150,6 +150,7 @@
       border: 1px solid #e9ecef;
       border-radius: 5px;
       background: white;
+      display: none; /* 默认隐藏 */
     }
 
     .file-item {
@@ -180,9 +181,61 @@
     }
 
     .control-section {
-      text-align: center;
       margin-bottom: 30px;
       flex-shrink: 0;
+    }
+
+    .control-layout {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      background: #f8f9fa;
+      border-radius: 10px;
+      padding: 20px;
+      border: 1px solid #e9ecef;
+    }
+
+    .control-left {
+      flex: 0 0 auto;
+    }
+
+    .control-right {
+      flex: 1;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+    }
+
+    .mode-select {
+      margin-bottom: 0;
+      text-align: right;
+    }
+
+    .mode-label {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 8px;
+      font-weight: 500;
+      text-align: right;
+    }
+
+    .mode-dropdown {
+      padding: 12px 16px;
+      border: 1px solid #ddd;
+      border-radius: 30px;
+      font-size: 16px;
+      background: white;
+      cursor: pointer;
+      min-width: 180px;
+      height: 48px;
+      font-weight: 500;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .mode-dropdown:focus {
+      outline: none;
+      border-color: #667eea;
     }
 
     .run-btn {
@@ -196,6 +249,9 @@
       font-weight: 600;
       transition: all 0.3s ease;
       box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+      white-space: nowrap;
+      height: 48px;
+      min-width: 120px;
     }
 
     .run-btn:hover:not(:disabled) {
@@ -302,6 +358,22 @@
       <p>选择两个视频文件进行对比分析</p>
     </div>
 
+    <!-- 新增：控制区域移到上方 -->
+    <div class="control-section">
+      <div class="control-layout">
+        <div class="control-left">
+          <button class="run-btn" id="runBtn" disabled>开始对比</button>
+        </div>
+        <div class="control-right">
+          <select class="mode-dropdown" id="modeSelect">
+            <option value="split">默认模式 (split)</option>
+            <option value="hstack">水平模式 (hstack)</option>
+            <option value="vstack">垂直模式 (vstack)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <div class="comparison-layout">
       <div class="video-panel left">
         <div class="panel-header">
@@ -309,7 +381,6 @@
           <div class="panel-title">左侧视频</div>
         </div>
         
-        <!-- 移除拖拽布局，改为按钮选择 -->
         <div class="select-area">
           <button class="select-btn" id="selectBtn1">选择文件</button>
           <div class="file-list" id="fileList1"></div>
@@ -322,16 +393,11 @@
           <div class="panel-title">右侧视频</div>
         </div>
         
-        <!-- 移除拖拽布局，改为按钮选择 -->
         <div class="select-area">
           <button class="select-btn" id="selectBtn2">选择文件</button>
           <div class="file-list" id="fileList2"></div>
         </div>
       </div>
-    </div>
-
-    <div class="control-section">
-      <button class="run-btn" id="runBtn" disabled>开始对比</button>
     </div>
 
     <div class="output-section">
@@ -341,185 +407,210 @@
   </div>
 
   <script>
-    
-    const fileList1 = document.getElementById('fileList1')
-    const fileList2 = document.getElementById('fileList2')
-    const runBtn = document.getElementById('runBtn')
-    const output = document.getElementById('output')
-    const selectBtn1 = document.getElementById('selectBtn1')
-    const selectBtn2 = document.getElementById('selectBtn2')
+    document.addEventListener('DOMContentLoaded', function() {
+      const fileList1 = document.getElementById('fileList1')
+      const fileList2 = document.getElementById('fileList2')
+      const runBtn = document.getElementById('runBtn')
+      const output = document.getElementById('output')
+      const selectBtn1 = document.getElementById('selectBtn1')
+      const selectBtn2 = document.getElementById('selectBtn2')
+      const modeSelect = document.getElementById('modeSelect')
 
-    let file1Path = null
-    let file2Path = null
-    let files1 = []
-    let files2 = []
+      let file1Path = null
+      let file2Path = null
+      let files1 = []
+      let files2 = []
+      let selectedMode = 'hstack' // 默认模式
 
-    // 视频文件扩展名 - 更全面的支持
-    const videoExtensions = [
-      '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
-      '.m4v', '.3gp', '.ogg', '.ogv', '.ts', '.mts', '.m2ts',
-      '.vob', '.mpg', '.mpeg', '.rm', '.rmvb', '.asf', '.divx'
-    ]
+      // 视频文件扩展名 - 更全面的支持
+      const videoExtensions = [
+        '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
+        '.m4v', '.3gp', '.ogg', '.ogv', '.ts', '.mts', '.m2ts',
+        '.vob', '.mpg', '.mpeg', '.rm', '.rmvb', '.asf', '.divx'
+      ]
 
-    function updateRunButton() {
-      runBtn.disabled = !(file1Path && file2Path)
-    }
-
-    function isValidVideoFile(filePath) {
-      if (!filePath || typeof filePath !== 'string') {
-        console.log('无效的文件路径:', filePath)
-        return false
+      function updateRunButton() {
+        runBtn.disabled = !(file1Path && file2Path)
       }
-      
-      const ext = filePath.toLowerCase().substring(filePath.lastIndexOf('.')).toLowerCase()
-      console.log('文件扩展名:', ext)
-      
-      const isValid = videoExtensions.includes(ext)
-      console.log('文件是否有效:', isValid)
-      
-      return isValid
-    }
 
-    function renderFileList(fileListElement, files, panelIndex) {
-      fileListElement.innerHTML = ''
-      
-      if (files.length === 0) {
-        fileListElement.style.display = 'none'
-        return
-      }
-      
-      fileListElement.style.display = 'block'
-      
-      files.forEach((file, index) => {
-        const fileItem = document.createElement('div')
-        fileItem.className = 'file-item'
-        fileItem.innerHTML = `<span class="selected-file-path">${file}</span>`
-        fileItem.onclick = (e) => {
-          e.stopPropagation()
-          selectFile(file, panelIndex)
+      function isValidVideoFile(filePath) {
+        if (!filePath || typeof filePath !== 'string') {
+          console.log('无效的文件路径:', filePath)
+          return false
         }
-        fileListElement.appendChild(fileItem)
-      })
-    }
+        
+        const ext = filePath.toLowerCase().substring(filePath.lastIndexOf('.')).toLowerCase()
+        console.log('文件扩展名:', ext)
+        
+        const isValid = videoExtensions.includes(ext)
+        console.log('文件是否有效:', isValid)
+        
+        return isValid
+      }
 
-    function selectFile(filePath, panelIndex) {
-      console.log(`选择文件: 面板${panelIndex}, 路径: ${filePath}`)
-      
-      if (panelIndex === 1) {
-        file1Path = filePath
+      function renderFileList(fileListElement, files, panelIndex) {
+        fileListElement.innerHTML = ''
         
-        Array.from(fileList1.children).forEach((item, index) => {
-          item.classList.toggle('selected', files1[index] === filePath)
-        })
-      } else {
-        file2Path = filePath
+        if (files.length === 0) {
+          fileListElement.style.display = 'none'
+          return
+        }
         
-        Array.from(fileList2.children).forEach((item, index) => {
-          item.classList.toggle('selected', files2[index] === filePath)
+        fileListElement.style.display = 'block'
+        
+        files.forEach((file, index) => {
+          const fileItem = document.createElement('div')
+          fileItem.className = 'file-item'
+          fileItem.innerHTML = `<span class="selected-file-path">${file}</span>`
+          fileItem.onclick = (e) => {
+            e.stopPropagation()
+            selectFile(file, panelIndex)
+          }
+          fileListElement.appendChild(fileItem)
         })
       }
-      
-      updateRunButton()
-    }
 
-    function handleFiles(filePaths, panelIndex) {
-      console.log(`处理文件: 面板${panelIndex}, 文件数量: ${filePaths.length}`)
-      console.log('文件路径列表:', filePaths)
-      
-      const videoFiles = []
-      const invalidFiles = []
-      
-      for (const filePath of filePaths) {
-        console.log('检查文件:', filePath)
-        if (isValidVideoFile(filePath)) {
-          console.log(`有效视频文件: ${filePath}`)
-          videoFiles.push(filePath)
+      function selectFile(filePath, panelIndex) {
+        console.log(`选择文件: 面板${panelIndex}, 路径: ${filePath}`)
+        
+        if (panelIndex === 1) {
+          file1Path = filePath
+          
+          Array.from(fileList1.children).forEach((item, index) => {
+            item.classList.toggle('selected', files1[index] === filePath)
+          })
         } else {
-          console.log(`无效文件(非视频): ${filePath}`)
-          invalidFiles.push(filePath)
+          file2Path = filePath
+          
+          Array.from(fileList2.children).forEach((item, index) => {
+            item.classList.toggle('selected', files2[index] === filePath)
+          })
         }
+        
+        updateRunButton()
       }
-      
-      console.log(`找到 ${videoFiles.length} 个视频文件，${invalidFiles.length} 个无效文件`)
-      
-      if (panelIndex === 1) {
-        files1 = [...new Set([...files1, ...videoFiles])]
-        renderFileList(fileList1, files1, 1)
-        if (files1.length > 0 && !file1Path) {
-          selectFile(files1[0], 1)
-        }
-      } else {
-        files2 = [...new Set([...files2, ...videoFiles])]
-        renderFileList(fileList2, files2, 2)
-        if (files2.length > 0 && !file2Path) {
-          selectFile(files2[0], 2)
-        }
-      }
-      
-      if (videoFiles.length > 0) {
-        output.textContent = `已添加 ${videoFiles.length} 个视频文件`
-        output.className = 'output-box success'
-      } else {
-        output.textContent = `未检测到有效的视频文件。支持格式: ${videoExtensions.join(', ')}`
-        output.className = 'output-box error'
-      }
-    }
 
-    // 通过按钮进行文件选择
-    selectBtn1.addEventListener('click', async () => {
-      try {
-        const files = await window.api.openFiles()
-        if (files && files.length > 0) {
-          handleFiles(files, 1)
+      function handleFiles(filePaths, panelIndex) {
+        console.log(`处理文件: 面板${panelIndex}, 文件数量: ${filePaths.length}`)
+        console.log('文件路径列表:', filePaths)
+        
+        const videoFiles = []
+        const invalidFiles = []
+        
+        for (const filePath of filePaths) {
+          console.log('检查文件:', filePath)
+          if (isValidVideoFile(filePath)) {
+            console.log(`有效视频文件: ${filePath}`)
+            videoFiles.push(filePath)
+          } else {
+            console.log(`无效文件(非视频): ${filePath}`)
+            invalidFiles.push(filePath)
+          }
         }
-      } catch (error) {
-        output.textContent = '选择文件失败: ' + error.message
-        output.className = 'output-box error'
+        
+        console.log(`找到 ${videoFiles.length} 个视频文件，${invalidFiles.length} 个无效文件`)
+        
+        if (panelIndex === 1) {
+          files1 = [...new Set([...files1, ...videoFiles])]
+          renderFileList(fileList1, files1, 1)
+          if (files1.length > 0 && !file1Path) {
+            selectFile(files1[0], 1)
+          }
+        } else {
+          files2 = [...new Set([...files2, ...videoFiles])]
+          renderFileList(fileList2, files2, 2)
+          if (files2.length > 0 && !file2Path) {
+            selectFile(files2[0], 2)
+          }
+        }
+        
+        if (videoFiles.length > 0) {
+          output.textContent = `已添加 ${videoFiles.length} 个视频文件`
+          output.className = 'output-box success'
+        } else {
+          output.textContent = `未检测到有效的视频文件。支持格式: ${videoExtensions.join(', ')}`
+          output.className = 'output-box error'
+        }
       }
+
+      // 通过按钮进行文件选择
+      selectBtn1.addEventListener('click', async () => {
+        console.log('选择按钮1被点击')
+        console.log('window.api:', window.api)
+        console.log('window.api.openFiles:', window.api ? window.api.openFiles : 'undefined')
+        
+        try {
+          const files = await window.api.openFiles()
+          console.log('API返回的文件列表:', files)
+          if (files && files.length > 0) {
+            handleFiles(files, 1)
+          } else {
+            console.log('没有选择文件或选择被取消')
+          }
+        } catch (error) {
+          console.error('选择文件失败:', error)
+          output.textContent = '选择文件失败: ' + error.message
+          output.className = 'output-box error'
+        }
+      })
+
+      selectBtn2.addEventListener('click', async () => {
+        console.log('选择按钮2被点击')
+        console.log('window.api:', window.api)
+        console.log('window.api.openFiles:', window.api ? window.api.openFiles : 'undefined')
+        
+        try {
+          const files = await window.api.openFiles()
+          console.log('API返回的文件列表:', files)
+          if (files && files.length > 0) {
+            handleFiles(files, 2)
+          } else {
+            console.log('没有选择文件或选择被取消')
+          }
+        } catch (error) {
+          console.error('选择文件失败:', error)
+          output.textContent = '选择文件失败: ' + error.message
+          output.className = 'output-box error'
+        }
+      })
+
+      runBtn.onclick = async () => {
+        if (!file1Path || !file2Path) {
+          output.textContent = '请先选择两个视频文件'
+          output.className = 'output-box error'
+          return
+        }
+
+        // 获取当前选择的模式
+        selectedMode = modeSelect.value
+        
+        console.log('开始对比，模式:', selectedMode)
+        console.log('文件1:', file1Path)
+        console.log('文件2:', file2Path)
+        
+        output.textContent = '正在启动视频对比工具...'
+        output.className = 'output-box running'
+        runBtn.disabled = true
+
+        try {
+          const result = await window.api.runExe(file1Path, file2Path, selectedMode)
+          console.log('启动结果:', result)
+          output.textContent = '✅ ' + result
+          output.className = 'output-box success'
+        } catch (e) {
+          console.error('启动失败:', e)
+          output.textContent = '❌ ' + e
+          output.className = 'output-box error'
+        } finally {
+          runBtn.disabled = false
+        }
+      }
+
+      // 初始化状态
+      fileList1.style.display = 'none'
+      fileList2.style.display = 'none'
+      updateRunButton()
     })
-
-    selectBtn2.addEventListener('click', async () => {
-      try {
-        const files = await window.api.openFiles()
-        if (files && files.length > 0) {
-          handleFiles(files, 2)
-        }
-      } catch (error) {
-        output.textContent = '选择文件失败: ' + error.message
-        output.className = 'output-box error'
-      }
-    })
-
-    runBtn.onclick = async () => {
-      if (!file1Path || !file2Path) {
-        output.textContent = '请先选择两个视频文件'
-        output.className = 'output-box error'
-        return
-      }
-
-      console.log('开始对比，文件1:', file1Path)
-      console.log('开始对比，文件2:', file2Path)
-      
-      output.textContent = '正在启动视频对比工具...'
-      output.className = 'output-box running'
-      runBtn.disabled = true
-
-      try {
-        const result = await window.api.runExe(file1Path, file2Path)
-        console.log('启动结果:', result)
-        output.textContent = '✅ ' + result
-        output.className = 'output-box success'
-      } catch (e) {
-        console.error('启动失败:', e)
-        output.textContent = '❌ ' + e
-        output.className = 'output-box error'
-      } finally {
-        runBtn.disabled = false
-      }
-    }
-
-    // 初始化状态
-    updateRunButton()
   </script>
 </body>
 </html>
