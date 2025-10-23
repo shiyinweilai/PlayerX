@@ -147,92 +147,22 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
       exePath = path.join(__dirname, exeDirName, exeName)
     }
 
-    // macOS: 额外支持 .app Bundle，避免弹出终端
-    let appBundlePath = null
-    if (os.platform() === 'darwin') {
-      const bundleName = 'video-compare' // 如果你打成 .app，请将名称保持一致
-      const bundleCandidates = app.isPackaged
-        ? [
-            path.join(process.resourcesPath, 'app.asar.unpacked', exeDirName, bundleName),
-            path.join(process.resourcesPath, exeDirName, bundleName)
-          ]
-        : [
-            path.join(__dirname, exeDirName, bundleName)
-          ]
-      appBundlePath = bundleCandidates.find(p => fs.existsSync(p)) || null
-    }
-
-    // 读取 .app 的 CFBundleExecutable 名称（用于回退直接执行）
-    function getBundleExecutableName(bundlePath) {
-      try {
-        const infoPlist = path.join(bundlePath, 'Contents', 'Info.plist')
-        if (!fs.existsSync(infoPlist)) return path.basename(bundlePath, '.app')
-        const raw = fs.readFileSync(infoPlist, 'utf8')
-        const m = raw.match(/<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/)
-        return m ? m[1] : path.basename(bundlePath, '.app')
-      } catch {
-        return path.basename(bundlePath, '.app')
-      }
-    }
-
     console.log('当前平台:', os.platform())
     console.log('process.resourcesPath:', process.resourcesPath)
     console.log('执行路径(可执行):', exePath)
-    if (appBundlePath) console.log('发现 .app Bundle:', appBundlePath)
     console.log('参数 file1:', file1)
     console.log('参数 file2:', file2)
 
     const { spawn } = require('child_process')
     try {
-      if (os.platform() === 'darwin') {
-        if (!appBundlePath) {
-          return reject(`macOS 平台要求使用 .app Bundle 启动以避免弹出终端。未找到: ${path.join(app.isPackaged ? process.resourcesPath : __dirname, exeDirName, 'video-compare')}`)
-        }
-        // 优先使用 open -n -a 启动（-n 强制新实例）
-        const args = ['-n', '-a', appBundlePath, '--args', file1, file2]
-        const child = spawn('open', args, {
-          cwd: path.dirname(appBundlePath),
-          detached: true,
-          stdio: 'ignore'
-        })
-        let openFailed = false
-        child.on('error', (error) => {
-          openFailed = true
-          console.warn(`[run] open -a 失败，尝试直接执行 .app 内容可执行: ${error.message}`)
-          // 回退：直接运行 .app/Contents/MacOS/<CFBundleExecutable>
-          try {
-            const execName = getBundleExecutableName(appBundlePath)
-            const macExec = path.join(appBundlePath, 'Contents', 'MacOS', execName)
-            if (!fs.existsSync(macExec)) {
-              return reject(`未找到 .app 内部可执行文件: ${macExec}`)
-            }
-            const direct = spawn(macExec, [file1, file2], {
-              cwd: path.dirname(appBundlePath),
-              detached: true,
-              stdio: 'ignore'
-            })
-            direct.on('error', (err2) => {
-              const msg = `直接执行 .app 可执行失败: ${err2.message}\npath: ${macExec}`
-              reject(msg)
-            })
-            direct.unref()
-            resolve(`已直接启动 ${execName}`)
-          } catch (errFallback) {
-            reject(`回退执行失败: ${errFallback.message}`)
-          }
-        })
-        child.unref()
-        if (!openFailed) {
-          return resolve(`已启动 ${path.basename(appBundlePath)} (open -n -a)`)    
-        }
-      }
-
-      // 非 macOS，回退到原有可执行文件逻辑
-      const exeCwd = path.dirname(exePath)
+      // 检查可执行文件是否存在
       if (!fs.existsSync(exePath)) {
         return reject(`找不到可执行文件: ${exePath}\n请确认已将 ${exeName} 和相关依赖文件放入 ${exeDirName} 目录，且在打包配置中包含并 asarUnpack。`)
       }
 
+      const exeCwd = path.dirname(exePath)
+      
+      // 启动可执行文件
       const child = spawn(exePath, [file1, file2], {
         cwd: exeCwd,
         detached: true,
@@ -244,10 +174,11 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
         const msg = `启动失败: ${error.message}\ncode: ${error.code || ''}\npath: ${exePath}`
         reject(msg)
       })
+      
       child.unref()
       resolve(`已启动 ${exeName}`)
     } catch (error) {
-      const msg = `执行失败: ${error.message}\ncode: ${error.code || ''}\npath: ${appBundlePath || exePath}`
+      const msg = `执行失败: ${error.message}\ncode: ${error.code || ''}\npath: ${exePath}`
       reject(msg)
     }
   })

@@ -179,34 +179,6 @@
       border-bottom: none;
     }
 
-    .selected-file {
-      margin-top: 15px;
-      padding: 10px;
-      background: #e8f5e8;
-      border-radius: 5px;
-      border-left: 3px solid #28a745;
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      word-break: break-all;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 100%;
-    }
-
-    .selected-file-label {
-      font-weight: 600;
-      color: #155724;
-      margin-bottom: 5px;
-    }
-
-    .selected-file-path {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 100%;
-    }
-
     .control-section {
       text-align: center;
       margin-bottom: 30px;
@@ -314,11 +286,6 @@
           <div class="drag-hint">支持多个文件或文件夹</div>
           
           <div class="file-list" id="fileList1"></div>
-          
-          <div class="selected-file" id="selectedFile1" style="display: none;">
-            <div class="selected-file-label">已选择：</div>
-            <div id="selectedFilePath1"></div>
-          </div>
         </div>
       </div>
 
@@ -334,11 +301,6 @@
           <div class="drag-hint">支持多个文件或文件夹</div>
           
           <div class="file-list" id="fileList2"></div>
-          
-          <div class="selected-file" id="selectedFile2" style="display: none;">
-            <div class="selected-file-label">已选择：</div>
-            <div id="selectedFilePath2"></div>
-          </div>
         </div>
       </div>
     </div>
@@ -358,10 +320,6 @@
     const dragArea2 = document.getElementById('dragArea2')
     const fileList1 = document.getElementById('fileList1')
     const fileList2 = document.getElementById('fileList2')
-    const selectedFile1 = document.getElementById('selectedFile1')
-    const selectedFile2 = document.getElementById('selectedFile2')
-    const selectedFilePath1 = document.getElementById('selectedFilePath1')
-    const selectedFilePath2 = document.getElementById('selectedFilePath2')
     const runBtn = document.getElementById('runBtn')
     const output = document.getElementById('output')
 
@@ -405,10 +363,10 @@
     }
 
     function selectFile(filePath, panelIndex) {
+      console.log(`选择文件: 面板${panelIndex}, 路径: ${filePath}`)
+      
       if (panelIndex === 1) {
         file1Path = filePath
-        selectedFilePath1.innerHTML = `<span class="selected-file-path">${filePath}</span>`
-        selectedFile1.style.display = 'block'
         
         // 高亮选中的文件项
         Array.from(fileList1.children).forEach((item, index) => {
@@ -416,8 +374,6 @@
         })
       } else {
         file2Path = filePath
-        selectedFilePath2.innerHTML = `<span class="selected-file-path">${filePath}</span>`
-        selectedFile2.style.display = 'block'
         
         // 高亮选中的文件项
         Array.from(fileList2.children).forEach((item, index) => {
@@ -428,12 +384,16 @@
       updateRunButton()
     }
 
-    function handleFiles(files, panelIndex) {
+    function handleFiles(filePaths, panelIndex) {
+      console.log(`处理文件: 面板${panelIndex}, 文件数量: ${filePaths.length}`)
       const videoFiles = []
       
-      for (const file of files) {
-        if (isValidVideoFile(file)) {
-          videoFiles.push(file)
+      for (const filePath of filePaths) {
+        if (isValidVideoFile(filePath)) {
+          console.log(`有效视频文件: ${filePath}`)
+          videoFiles.push(filePath)
+        } else {
+          console.log(`无效文件(非视频): ${filePath}`)
         }
       }
       
@@ -481,16 +441,29 @@
             if (entry) {
               if (entry.isFile) {
                 const file = item.getAsFile()
-                files.push(file.path)
+                // 在Electron中，拖拽的文件应该有path属性
+                if (file && file.path) {
+                  files.push(file.path)
+                }
               } else if (entry.isDirectory) {
-                folders.push(entry.fullPath || item.getAsFile().path)
+                // 对于文件夹，使用fullPath
+                folders.push(entry.fullPath)
               }
             } else {
-              // 回退方案：直接获取文件路径
+              // 回退方案：直接获取文件
               const file = item.getAsFile()
-              if (file) {
+              if (file && file.path) {
                 files.push(file.path)
               }
+            }
+          }
+        }
+        
+        // 如果没有拖拽项目，尝试从files属性获取
+        if (files.length === 0 && folders.length === 0 && e.dataTransfer.files.length > 0) {
+          for (const file of e.dataTransfer.files) {
+            if (file.path) {
+              files.push(file.path)
             }
           }
         }
@@ -508,7 +481,7 @@
           try {
             for (const folder of folders) {
               const folderFiles = await window.api.scanFolder(folder)
-              if (folderFiles.length > 0) {
+              if (folderFiles && folderFiles.length > 0) {
                 handleFiles(folderFiles, panelIndex)
                 output.textContent = `从文件夹扫描到 ${folderFiles.length} 个视频文件`
                 output.className = 'output-box success'
@@ -521,6 +494,12 @@
             output.textContent = '扫描文件夹失败: ' + error.message
             output.className = 'output-box error'
           }
+        }
+        
+        // 如果没有找到任何文件
+        if (files.length === 0 && folders.length === 0) {
+          output.textContent = '未检测到有效的视频文件'
+          output.className = 'output-box error'
         }
       })
 
@@ -553,15 +532,20 @@
         return
       }
 
+      console.log('开始对比，文件1:', file1Path)
+      console.log('开始对比，文件2:', file2Path)
+      
       output.textContent = '正在启动视频对比工具...'
       output.className = 'output-box running'
       runBtn.disabled = true
 
       try {
         const result = await window.api.runExe(file1Path, file2Path)
+        console.log('启动结果:', result)
         output.textContent = '✅ ' + result
         output.className = 'output-box success'
       } catch (e) {
+        console.error('启动失败:', e)
         output.textContent = '❌ ' + e
         output.className = 'output-box error'
       } finally {
