@@ -319,11 +319,16 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
             if (videoInfo.streams) {
               videoInfo.streams.forEach(stream => {
                 if (stream.codec_type === 'video') {
+                  // 检测像素格式，如果是yuv420p则标记为yuv420p (tv)
+                  const pixelFormat = stream.pix_fmt || '未知'
+                  const pixelFormatDisplay = pixelFormat === 'yuv420p' ? 'yuv420p (tv)' : pixelFormat
+                  
                   info.videoStreams.push({
                     codec: stream.codec_name || '未知',
                     resolution: `${stream.width || '?'}x${stream.height || '?'}`,
                     fps: stream.r_frame_rate || '未知',
-                    bitrate: stream.bit_rate || '未知'
+                    bitrate: stream.bit_rate || '未知',
+                    pixelFormat: pixelFormatDisplay
                   })
                 } else if (stream.codec_type === 'audio') {
                   info.audioStreams.push({
