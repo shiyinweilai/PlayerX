@@ -90,11 +90,14 @@ function main() {
     let cmd = 'npx electron-builder';
     if (platform === 'darwin') {
       cmd += ' --mac --arm64';
+    } else if (platform === 'win32') {
+      cmd += ' --win --x64';
     }
 
     execSync(cmd, { stdio: 'inherit', env });
 
-    console.log('打包完成！输出目录: dist/');
+    const dist_dir = path.join(__dirname, 'dist');
+    console.log('打包完成！输出目录: ', dist_dir);
   } catch (error) {
     console.error('打包失败:', error.message);
     process.exit(1);
