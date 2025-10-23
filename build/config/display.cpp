@@ -1,3 +1,27 @@
+// ============================================================================
+// display.cpp - 视频比较工具UI显示模块
+// ============================================================================
+// 功能概述：
+// 本文件实现了视频比较工具的核心UI系统，基于SDL2框架构建，提供：
+// 1. 多模式视频显示（水平堆叠、垂直堆叠、分割模式）
+// 2. 交互式缩放和平移功能
+// 3. 实时视频差异分析
+// 4. 丰富的HUD信息显示
+// 5. 键盘和鼠标交互控制
+//
+// 架构层次：
+// - 显示层：SDL窗口、渲染器、纹理管理
+// - 渲染层：视频帧渲染、UI元素绘制
+// - 交互层：输入事件处理、状态管理
+// - 工具层：颜色转换、坐标变换、图像处理
+//
+// 关键特性：
+// - 支持10位色深显示
+// - 高DPI显示适配
+// - 硬件加速渲染
+// - 实时性能优化
+// ============================================================================
+
 #include "display.h"
 #include <libgen.h>
 #include <algorithm>
@@ -26,27 +50,53 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+
+// ============================================================================
+// UI颜色系统常量定义
+// ============================================================================
+
+// 背景颜色 - 深蓝色调，提供舒适的视觉体验
 static const SDL_Color BACKGROUND_COLOR = {54, 69, 79, 0};
-static const SDL_Color LOOP_OFF_LABEL_COLOR = {0, 0, 0, 0};
-static const SDL_Color LOOP_FW_LABEL_COLOR = {80, 127, 255, 0};
-static const SDL_Color LOOP_PP_LABEL_COLOR = {191, 95, 60, 0};
-static const SDL_Color TEXT_COLOR = {255, 255, 255, 0};
-static const SDL_Color HELP_TEXT_PRIMARY_COLOR = {255, 255, 255, 0};
-static const SDL_Color HELP_TEXT_ALTERNATE_COLOR = {255, 255, 192, 0};
-static const SDL_Color POSITION_COLOR = {255, 255, 192, 0};
-static const SDL_Color TARGET_COLOR = {200, 200, 140, 0};
-static const SDL_Color ZOOM_COLOR = {255, 165, 0, 0};
-static const SDL_Color PLAYBACK_SPEED_COLOR = {0, 192, 160, 0};
-static const SDL_Color BUFFER_COLOR = {160, 225, 192, 0};
+
+// 循环模式标签颜色
+static const SDL_Color LOOP_OFF_LABEL_COLOR = {0, 0, 0, 0};      // 循环关闭状态（透明）
+static const SDL_Color LOOP_FW_LABEL_COLOR = {80, 127, 255, 0};  // 正向循环 - 蓝色
+static const SDL_Color LOOP_PP_LABEL_COLOR = {191, 95, 60, 0};   // 乒乓循环 - 橙色
+
+// 文本颜色系统
+static const SDL_Color TEXT_COLOR = {255, 255, 255, 0};                 // 主要文本颜色 - 白色
+static const SDL_Color HELP_TEXT_PRIMARY_COLOR = {255, 255, 255, 0};    // 帮助文本主色
+static const SDL_Color HELP_TEXT_ALTERNATE_COLOR = {255, 255, 192, 0};  // 帮助文本交替色 - 浅黄色
+
+// HUD信息显示颜色
+static const SDL_Color POSITION_COLOR = {255, 255, 192, 0};        // 播放位置 - 浅黄色
+static const SDL_Color TARGET_COLOR = {200, 200, 140, 0};          // 目标位置 - 浅灰色
+static const SDL_Color ZOOM_COLOR = {255, 165, 0, 0};              // 缩放信息 - 橙色
+static const SDL_Color PLAYBACK_SPEED_COLOR = {0, 192, 160, 0};    // 播放速度 - 青色
+static const SDL_Color BUFFER_COLOR = {160, 225, 192, 0};          // 缓冲区信息 - 浅绿色
+
+// 背景透明度 - 用于半透明UI元素
 static const int BACKGROUND_ALPHA = 100;
 
+
+// ============================================================================
+// UI交互参数常量
+// ============================================================================
+
+// 鼠标滚轮缩放控制：滚轮滚动12步实现2倍缩放
 static const int MOUSE_WHEEL_SCROLL_STEPS_TO_DOUBLE = 12;
+// 每步缩放比例：2^(1/12)，提供平滑的缩放体验
 static const float ZOOM_STEP_SIZE = pow(2.0F, 1.0F / float(MOUSE_WHEEL_SCROLL_STEPS_TO_DOUBLE));
+
+// 播放速度控制：按键6次实现2倍速度变化
 static const int PLAYBACK_SPEED_KEY_PRESSES_TO_DOUBLE = 6;
+// 每步速度变化比例：2^(1/6)
 static const float PLAYBACK_SPEED_STEP_SIZE = pow(2.0F, 1.0F / float(PLAYBACK_SPEED_KEY_PRESSES_TO_DOUBLE));
 
-static const int HELP_TEXT_LINE_SPACING = 1;
-static const int HELP_TEXT_HORIZONTAL_MARGIN = 26;
+// 文本显示参数
+static const int HELP_TEXT_LINE_SPACING = 1;           // 帮助文本行间距
+static const int HELP_TEXT_HORIZONTAL_MARGIN = 26;     // 帮助文本水平边距（像素）
+
 
 auto frame_deleter = [](AVFrame* frame) {
   av_freep(&frame->data[0]);
@@ -190,6 +240,25 @@ SDL::~SDL() {
   SDL_Quit();
 }
 
+// ============================================================================
+// Display构造函数 - UI系统初始化
+// ============================================================================
+// 功能：初始化整个UI显示系统，包括窗口创建、渲染器设置、资源加载等
+// 参数说明：
+//   display_number: 显示器编号（多显示器支持）
+//   mode: 显示模式（HSTACK/VSTACK/SPLIT）
+//   verbose: 是否输出详细调试信息
+//   fit_window_to_usable_bounds: 是否自动适配窗口到可用显示区域
+//   high_dpi_allowed: 是否启用高DPI支持
+//   use_10_bpc: 是否使用10位色深显示
+//   fast_input_alignment: 是否使用快速输入对齐
+//   bilinear_texture_filtering: 是否使用双线性纹理过滤
+//   window_size: 窗口尺寸配置
+//   width/height: 视频原始分辨率
+//   duration: 视频总时长
+//   wheel_sensitivity: 鼠标滚轮灵敏度
+//   left_file_name/right_file_name: 左右视频文件名
+// ============================================================================
 Display::Display(const int display_number,
                  const Mode mode,
                  const bool verbose,
@@ -218,6 +287,7 @@ Display::Display(const int display_number,
       wheel_sensitivity_{wheel_sensitivity},
       left_file_stem_{strip_ffmpeg_patterns(get_file_stem(left_file_name))},
       right_file_stem_{strip_ffmpeg_patterns(get_file_stem(right_file_name))} {
+
   const int auto_width = mode == Mode::HSTACK ? width * 2 : width;
   const int auto_height = mode == Mode::VSTACK ? height * 2 : height;
 
@@ -915,10 +985,28 @@ void Display::save_image_frames(const AVFrame* left_frame, const AVFrame* right_
   }
 }
 
+// ============================================================================
+// render_text - 文本渲染函数（带渐变效果）
+// ============================================================================
+// 功能：渲染文本纹理到屏幕，支持文本裁剪和渐变效果
+// 参数说明：
+//   x, y: 渲染起始坐标
+//   texture: 预渲染的文本纹理
+//   texture_width/height: 纹理尺寸
+//   border_extension: 边框扩展像素
+//   left_adjust: 是否左对齐（否则右对齐）
+//
+// 渲染特性：
+//   1. 自动文本裁剪：当文本过长时自动裁剪并添加渐变效果
+//   2. 渐变过渡：使用透明度渐变实现平滑的文本裁剪效果
+//   3. 对齐支持：支持左对齐和右对齐布局
+//   4. 边框渲染：为文本提供半透明背景边框
+// ============================================================================
 void Display::render_text(const int x, const int y, SDL_Texture* texture, const int texture_width, const int texture_height, const int border_extension, const bool left_adjust) {
-  // compute clip amount which ensures the filename does not extend more than half the display width
+  // 计算裁剪量：确保文件名不超过显示宽度的一半
   const int clip_amount = std::max((texture_width + double_border_extension_) - max_text_width_, 0);
-  const int gradient_amount = std::min(clip_amount, 24);
+  const int gradient_amount = std::min(clip_amount, 24);  // 渐变区域最大24像素
+
 
   SDL_Rect fill_rect = {x - border_extension + gradient_amount, y - border_extension, texture_width + double_border_extension_ - clip_amount - gradient_amount, texture_height + double_border_extension_};
 
@@ -966,14 +1054,32 @@ void Display::render_text(const int x, const int y, SDL_Texture* texture, const 
   }
 }
 
+// ============================================================================
+// render_progress_dots - 进度条点状指示器渲染
+// ============================================================================
+// 功能：在窗口顶部和底部渲染点状进度指示器，显示播放进度
+// 参数说明：
+//   position: 当前播放位置（秒）
+//   progress: 当前帧的进度位置
+//   is_top: 是否在顶部渲染（否则在底部）
+//
+// 渲染逻辑：
+//   1. 点状显示：使用交替颜色的点来表示时间轴
+//   2. 双位置显示：顶部显示左视频进度，底部显示右视频进度
+//   3. 当前帧标记：用矩形框突出显示当前帧位置
+//   4. 自适应缩放：根据DPI设置调整点的大小
+// ============================================================================
 void Display::render_progress_dots(const float position, const float progress, const bool is_top) {
   if (duration_ > 0) {
-    const float dot_size = 2.f;
+    const float dot_size = 2.f;  // 基础点大小
 
+    // 根据DPI缩放因子调整点的大小
     const int dot_width = std::round(drawable_to_window_width_factor_ * dot_size);
     const int dot_height = std::round(drawable_to_window_height_factor_ * dot_size);
 
+    // 计算Y坐标偏移：顶部或底部位置
     const int y_offset = is_top ? 1 : drawable_height_ - 1 - dot_height;
+
 
     const int x_position = std::round(position * drawable_width_ / duration_);
     const int x_progress = std::round(progress * drawable_width_ / duration_);
@@ -1232,12 +1338,29 @@ float Display::compute_psnr(const float* left_plane, const float* right_plane) {
   return -10.f * log10f(mse);
 }
 
+// ============================================================================
+// render_help - 帮助界面渲染函数
+// ============================================================================
+// 功能：渲染全屏帮助界面，显示所有快捷键和操作说明
+// 渲染流程：
+//   1. 设置半透明背景覆盖整个屏幕
+//   2. 按行渲染预先生成的帮助文本纹理
+//   3. 支持滚动显示（当内容超过屏幕高度时）
+//   4. 使用交替颜色区分不同功能区域
+//
+// 帮助内容结构：
+//   - 标题行："CONTROLS"（加粗下划线）
+//   - 快捷键列表：按键 - 功能描述
+//   - 操作说明：详细的使用指南
+// ============================================================================
 void Display::render_help() {
+  // 设置半透明混合模式，创建暗色背景覆盖
   SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
   SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA * 3 / 2);
   SDL_RenderFillRect(renderer_, nullptr);
 
-  int y = help_y_offset_;
+  int y = help_y_offset_;  // 当前渲染Y坐标（支持滚动）
+
 
   for (size_t i = 0; i < help_textures_.size(); i++) {
     int w, h;
@@ -1250,16 +1373,34 @@ void Display::render_help() {
   }
 }
 
+// ============================================================================
+// render_metadata_overlay - 元数据表格渲染函数
+// ============================================================================
+// 功能：渲染视频元数据表格，显示左右视频的技术参数对比
+// 渲染特性：
+//   1. 自适应表格布局：根据内容动态调整列宽
+//   2. 智能字体选择：根据可用空间选择大号或小号字体
+//   3. 内容截断处理：长文本自动截断并添加省略号
+//   4. 响应式设计：支持窗口大小变化和滚动显示
+//
+// 表格结构：
+//   - 表头：属性名称 | 左视频值 | 右视频值
+//   - 数据行：分辨率、编码器、帧率、色彩空间等参数
+//   - 交替行色：提高可读性
+//   - 多行支持：支持多值属性的分行显示
+// ============================================================================
 void Display::render_metadata_overlay() {
-  // Check if swap state has changed and refresh metadata if needed
+  // 检查是否需要更新元数据（当左右视频交换时）
   if (swap_left_right_ != last_swap_left_right_state_) {
     last_swap_left_right_state_ = swap_left_right_;
     update_metadata(right_metadata_, left_metadata_);
   }
 
+  // 设置半透明背景覆盖整个屏幕
   SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
   SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA * 3 / 2);
   SDL_RenderFillRect(renderer_, nullptr);
+
 
   const int table_width = drawable_width_ - HELP_TEXT_HORIZONTAL_MARGIN * 2;
   const int table_x = HELP_TEXT_HORIZONTAL_MARGIN;
@@ -1447,24 +1588,43 @@ SDL_Rect Display::get_left_selection_rect() const {
   return {clipped_x, clipped_y, clipped_w, clipped_h};
 }
 
+// ============================================================================
+// draw_selection_rect - 选择区域绘制函数
+// ============================================================================
+// 功能：在视频上绘制用户选择区域的矩形框，用于图像裁剪和保存
+// 绘制特性：
+//   1. 实时反馈：鼠标拖动时实时更新选择框显示
+//   2. 双色区分：左视频区域用红色，右视频区域用蓝色
+//   3. 半透明填充：内部使用半透明填充，外部使用实线边框
+//   4. 缩放适配：选择框会根据当前缩放级别自动调整大小
+//
+// 选择状态机：
+//   - NONE: 未开始选择
+//   - STARTED: 正在选择（显示选择框）
+//   - COMPLETED: 选择完成（准备保存）
+// ============================================================================
 void Display::draw_selection_rect() {
+  // 只在选择过程中绘制选择框
   if (selection_state_ != SelectionState::STARTED) {
     return;
   }
 
+  // 获取当前缩放区域信息
   const auto zoom_rect = compute_zoom_rect();
 
+  // 选择框绘制lambda函数
   auto draw_rect = [this](const SDL_FRect& r, Uint8 r_val, Uint8 g_val, Uint8 b_val) {
-    // Draw semi-transparent overlay
+    // 绘制半透明填充区域（内部）
     SDL_SetRenderDrawColor(renderer_, r_val / 2, g_val / 2, b_val / 2, 128);
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
     SDL_RenderFillRectF(renderer_, &r);
 
-    // Draw border
+    // 绘制实线边框（外部）
     SDL_SetRenderDrawColor(renderer_, r_val, g_val, b_val, 255);
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
     SDL_RenderDrawRectF(renderer_, &r);
   };
+
 
   SDL_Rect selection_rect = get_left_selection_rect();
   SDL_FRect drawable_rect = video_rect_to_drawable_transform(video_to_zoom_space(selection_rect, zoom_rect));
@@ -1571,13 +1731,38 @@ void Display::save_selected_area(const AVFrame* left_frame, const AVFrame* right
   }
 }
 
+// ============================================================================
+// possibly_refresh - 主UI渲染和更新函数
+// ============================================================================
+// 功能：
+//   1. 检查是否需要刷新显示（新帧、用户输入、定时器事件）
+//   2. 处理视频帧数据转换和纹理更新
+//   3. 渲染视频内容到屏幕
+//   4. 绘制UI覆盖层（HUD、帮助、元数据等）
+//   5. 处理交互式功能（缩放、选择、鼠标位置等）
+//
+// 渲染流程：
+//   1. 数据准备和预处理
+//   2. 缩放和坐标转换计算
+//   3. 交互式功能处理（鼠标位置、选择区域等）
+//   4. 渲染前准备（清屏、设置颜色）
+//   5. 视频内容渲染（左右视频、差异模式）
+//   6. UI覆盖层渲染（HUD、进度条等）
+//   7. 帮助和元数据渲染
+//   8. 特殊UI元素渲染（缩放区域、选择矩形等）
+//   9. 图像保存功能处理
+//   10. 最终渲染和状态更新
+// ============================================================================
 bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable, const std::string& message) {
+  // 检查是否需要刷新：新帧到达、用户输入、定时器事件或消息显示
   const bool has_updated_left_pts = previous_left_frame_pts_ != left_frame->pts;
   const bool has_updated_right_pts = previous_right_frame_pts_ != right_frame->pts;
 
+  // 如果没有更新事件，跳过渲染以节省性能
   if (!input_received_ && !has_updated_left_pts && !has_updated_right_pts && !timer_based_update_performed_ && message.empty()) {
     return false;
   }
+
 
   std::array<uint8_t*, 3> planes_left{left_frame->data[0], left_frame->data[1], left_frame->data[2]};
   std::array<uint8_t*, 3> planes_right{right_frame->data[0], right_frame->data[1], right_frame->data[2]};
@@ -2051,12 +2236,39 @@ Vector2D Display::compute_relative_move_offset(const Vector2D& zoom_point, const
   return new_move_offset;
 }
 
+// ============================================================================
+// update_zoom_factor_and_move_offset - 缩放和移动偏移更新函数
+// ============================================================================
+// 功能：同时更新缩放因子和移动偏移量，保持视觉中心稳定
+// 算法原理：
+//   1. 计算当前缩放中心点（根据显示模式）
+//   2. 根据新缩放因子计算相对移动偏移
+//   3. 更新缩放因子和移动偏移，实现平滑缩放效果
+//
+// 缩放中心点策略：
+//   - HSTACK模式：水平堆叠，中心点在右视频左边界（video_width_ * 1.0）
+//   - VSTACK模式：垂直堆叠，中心点在下视频上边界（video_height_ * 1.0）
+//   - 其他模式：中心点在视频中心（video_width_ * 0.5, video_height_ * 0.5）
+//
+// 设计特点：
+//   - 智能中心保持：缩放时保持用户关注的区域在屏幕中心
+//   - 平滑过渡：避免缩放时的跳跃感
+//   - 模式自适应：不同显示模式使用不同的缩放策略
+// ============================================================================
 void Display::update_zoom_factor_and_move_offset(const float zoom_factor) {
-  const Vector2D zoom_point(static_cast<float>(video_width_) * (mode_ == Mode::HSTACK ? 1.0F : 0.5F), static_cast<float>(video_height_) * (mode_ == Mode::VSTACK ? 1.0F : 0.5F));
+  // 根据显示模式计算缩放中心点
+  const Vector2D zoom_point(
+    static_cast<float>(video_width_) * (mode_ == Mode::HSTACK ? 1.0F : 0.5F), 
+    static_cast<float>(video_height_) * (mode_ == Mode::VSTACK ? 1.0F : 0.5F)
+  );
+  
+  // 计算新的移动偏移量，保持缩放中心稳定
   update_move_offset(compute_relative_move_offset(zoom_point, zoom_factor));
 
+  // 更新缩放因子
   update_zoom_factor(zoom_factor);
 }
+
 
 void Display::update_zoom_factor(const float zoom_factor) {
   global_zoom_factor_ = zoom_factor;
@@ -2068,20 +2280,78 @@ void Display::update_move_offset(const Vector2D& move_offset) {
   global_center_ = Vector2D(move_offset_.x() / video_width_ + 0.5F, move_offset_.y() / video_height_ + 0.5F);
 }
 
+// ============================================================================
+// compute_zoom_rect - 缩放区域计算函数
+// ============================================================================
+// 功能：根据当前缩放因子和中心点计算可见的缩放区域
+// 算法原理：
+//   1. 计算缩放区域的起始点：center - zoom_factor * 0.5
+//   2. 计算缩放区域的结束点：center + zoom_factor * 0.5
+//   3. 计算缩放区域的实际尺寸：end - start
+//   4. 返回包含所有信息的ZoomRect结构体
+//
+// 数学公式：
+//   start = (center_x - zoom_factor/2) * video_width
+//   end = (center_x + zoom_factor/2) * video_width
+//   size = end - start = zoom_factor * video_width
+//
+// 返回值结构体ZoomRect包含：
+//   - start: 缩放区域在视频坐标系中的起始点
+//   - end: 缩放区域在视频坐标系中的结束点
+//   - size: 缩放区域的实际尺寸
+//   - zoom_factor: 当前缩放因子（用于后续计算）
+// ============================================================================
 Display::ZoomRect Display::compute_zoom_rect() const {
+  // 视频原始尺寸向量
   const Vector2D video_extent(video_width_, video_height_);
+  
+  // 计算缩放区域在视频坐标系中的起始和结束点
   const Vector2D zoom_rect_start((global_center_ - global_zoom_factor_ * 0.5F) * video_extent);
   const Vector2D zoom_rect_end((global_center_ + global_zoom_factor_ * 0.5F) * video_extent);
+  
+  // 计算缩放区域的实际尺寸
   const Vector2D zoom_rect_size(zoom_rect_end - zoom_rect_start);
+  
+  // 返回完整的缩放区域信息
   return {zoom_rect_start, zoom_rect_end, zoom_rect_size, global_zoom_factor_};
 }
 
+
+// ============================================================================
+// get_mouse_video_position - 鼠标坐标到视频坐标转换函数
+// ============================================================================
+// 功能：将屏幕鼠标坐标转换为视频原始坐标系中的位置
+// 转换算法：
+//   mouse_video_x = (mouse_x * window_factor - zoom_start_x) * video_width / zoom_size_x
+//   mouse_video_y = (mouse_y * window_factor - zoom_start_y) * video_height / zoom_size_y
+//
+// 转换步骤：
+//   1. 将屏幕坐标转换为窗口逻辑坐标（考虑DPI缩放）
+//   2. 减去缩放区域的起始偏移量
+//   3. 按缩放比例映射到视频原始坐标系
+//   4. 向下取整得到整数像素坐标
+//
+// 应用场景：
+//   - 像素级颜色拾取：获取鼠标位置对应的视频像素颜色值
+//   - 选择区域定位：确定选择框在视频中的精确位置
+//   - 交互式功能：缩放、平移等操作的坐标计算
+// ============================================================================
 Vector2D Display::get_mouse_video_position(const int mouse_x, const int mouse_y, const Display::ZoomRect& zoom_rect) const {
-  const int mouse_video_x = std::floor((static_cast<float>(mouse_x) * video_to_window_width_factor_ - zoom_rect.start.x()) * static_cast<float>(video_width_) / zoom_rect.size.x());
-  const int mouse_video_y = std::floor((static_cast<float>(mouse_y) * video_to_window_height_factor_ - zoom_rect.start.y()) * static_cast<float>(video_height_) / zoom_rect.size.y());
+  // X坐标转换：屏幕鼠标X → 视频原始X坐标
+  const int mouse_video_x = std::floor(
+    (static_cast<float>(mouse_x) * video_to_window_width_factor_ - zoom_rect.start.x()) * 
+    static_cast<float>(video_width_) / zoom_rect.size.x()
+  );
+  
+  // Y坐标转换：屏幕鼠标Y → 视频原始Y坐标
+  const int mouse_video_y = std::floor(
+    (static_cast<float>(mouse_y) * video_to_window_height_factor_ - zoom_rect.start.y()) * 
+    static_cast<float>(video_height_) / zoom_rect.size.y()
+  );
 
   return Vector2D(mouse_video_x, mouse_video_y);
 }
+
 
 SDL_FRect Display::video_to_zoom_space(const SDL_Rect& video_rect, const Display::ZoomRect& zoom_rect) {
   // transform video coordinates to the currently zoomed area space
@@ -2097,19 +2367,43 @@ void Display::update_playback_speed(const int playback_speed_level) {
   }
 }
 
+// ============================================================================
+// input - 用户输入处理函数
+// ============================================================================
+// 功能：处理所有用户输入事件，包括键盘、鼠标、窗口事件
+// 处理流程：
+//   1. 重置状态变量
+//   2. 轮询SDL事件队列
+//   3. 分类处理不同事件类型
+//   4. 更新内部状态和标志
+//
+// 支持的事件类型：
+//   - 键盘事件：快捷键控制播放、缩放、显示模式等
+//   - 鼠标事件：点击、移动、滚轮缩放、选择区域
+//   - 窗口事件：进入/离开窗口、焦点变化
+//   - 系统事件：剪贴板操作、文件保存等
+//
+// 设计特点：
+//   - 非阻塞事件处理：使用SDL_PollEvent轮询
+//   - 状态机模式：根据当前状态处理不同输入
+//   - 多平台适配：处理不同平台的快捷键差异
+// ============================================================================
 void Display::input() {
-  seek_relative_ = 0.0F;
-  seek_from_start_ = false;
-  frame_buffer_offset_delta_ = 0;
-  frame_navigation_delta_ = 0;
-  shift_right_frames_ = 0;
-  tick_playback_ = false;
-  possibly_tick_playback_ = false;
+  // 重置输入相关状态变量
+  seek_relative_ = 0.0F;              // 相对跳转位置
+  seek_from_start_ = false;           // 是否从开始位置跳转
+  frame_buffer_offset_delta_ = 0;     // 帧缓冲区偏移变化
+  frame_navigation_delta_ = 0;        // 帧导航变化
+  shift_right_frames_ = 0;             // 右视频帧偏移
+  tick_playback_ = false;             // 播放状态变化
+  possibly_tick_playback_ = false;    // 可能的播放状态变化
 
+  // 轮询SDL事件队列，处理所有待处理事件
   while (SDL_PollEvent(&event_) != 0) {
-    input_received_ = true;
-    const SDL_Keymod keymod = SDL_GetModState();
-    const SDL_Keycode keycode = event_.key.keysym.sym;
+    input_received_ = true;  // 标记已接收到输入
+    const SDL_Keymod keymod = SDL_GetModState();    // 获取当前键盘修饰键状态
+    const SDL_Keycode keycode = event_.key.keysym.sym;  // 获取按键代码
+
 
     auto is_clipboard_mod_pressed = [keymod]() -> bool {
 #ifdef __APPLE__
@@ -2586,3 +2880,55 @@ bool Display::get_possibly_tick_playback() const {
 bool Display::get_show_fps() const {
   return show_fps_;
 }
+
+// ============================================================================
+// display.cpp - 文件总结
+// ============================================================================
+// 本文件实现了视频比较工具的核心UI系统，主要功能模块包括：
+//
+// 1. 显示系统初始化 (Display构造函数)
+//    - SDL窗口和渲染器创建
+//    - 字体和纹理资源加载
+//    - 光标和颜色系统初始化
+//
+// 2. 主渲染循环 (possibly_refresh函数)
+//    - 视频帧渲染和纹理更新
+//    - UI覆盖层绘制（HUD、帮助、元数据）
+//    - 交互式功能（缩放、选择、鼠标交互）
+//
+// 3. 用户输入处理 (input函数)
+//    - 键盘快捷键系统
+//    - 鼠标交互处理
+//    - 窗口事件管理
+//
+// 4. 渲染子系统
+//    - render_text: 文本渲染（带渐变效果）
+//    - render_progress_dots: 进度条点状指示器
+//    - render_help: 帮助界面渲染
+//    - render_metadata_overlay: 元数据表格渲染
+//    - draw_selection_rect: 选择区域绘制
+//
+// 5. 坐标转换系统
+//    - compute_zoom_rect: 缩放区域计算
+//    - get_mouse_video_position: 鼠标坐标转换
+//    - video_to_zoom_space: 视频到缩放空间转换
+//
+// 6. 状态管理
+//    - 播放状态控制
+//    - 显示模式切换
+//    - 缩放和移动状态维护
+//
+// 技术特点：
+//   - 基于SDL2的高性能图形渲染
+//   - 支持10位色深显示
+//   - 高DPI显示适配
+//   - 硬件加速纹理处理
+//   - 实时交互响应
+//
+// 设计模式：
+//   - 状态机模式：管理不同的UI状态
+//   - 观察者模式：处理用户输入事件
+//   - 策略模式：支持多种显示模式
+//   - 组合模式：UI元素的层次化渲染
+// ============================================================================
+
