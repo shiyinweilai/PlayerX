@@ -163,7 +163,8 @@ def build_sdl(args, log_file=None):
 
 
 def build_video_compare(args, log_file=None):
-    # shutil.copy(f"{script_dir}/CMakeLists.txt", f"{source_dir}/CMakeLists.txt")
+    shutil.copy(f"{script_dir}/config/CMakeLists.txt", f"{source_dir}/CMakeLists.txt")
+    shutil.copy(f"{script_dir}/config/display.cpp", f"{source_dir}/display.cpp")
     ffmpeg_install_dir = os.path.join(script_dir, 'ffmpeg/install')
     sdl_ttf_install_dir = os.path.join(script_dir, 'sdl2_ttf/install')
     sdl_install_dir = os.path.join(script_dir, 'sdl2/install')
@@ -205,8 +206,7 @@ def build_video_compare(args, log_file=None):
         # 精简符号，尽可能去除未使用引用
         cmake_args += ['-DCMAKE_EXE_LINKER_FLAGS=-Wl,-dead_strip']
     make(cmake_args, log_file)
-    # os.system(f'rm -rf {source_dir}/CMakeLists.txt')
-
+    # subprocess.run("git restore . && git clean -df", check=True, cwd=source_dir, shell=True)
 
 def main():
     log_filename = f"build_{args.target}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
