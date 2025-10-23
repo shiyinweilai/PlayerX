@@ -606,6 +606,29 @@
         }
       }
 
+      // 监听可执行文件日志
+      window.api.onExeLog((data) => {
+        console.log('收到日志:', data)
+        const timestamp = new Date().toLocaleTimeString()
+        const prefix = data.type === 'stderr' ? '[错误] ' : data.type === 'close' ? '[结束] ' : ''
+        const logEntry = `[${timestamp}] ${prefix}${data.message}\n`
+        
+        // 追加到输出框
+        output.textContent += logEntry
+        
+        // 自动滚动到底部
+        output.scrollTop = output.scrollHeight
+        
+        // 根据日志类型更新样式
+        if (data.type === 'stderr') {
+          output.className = 'output-box error'
+        } else if (data.type === 'close') {
+          output.className = data.message.includes('代码: 0') ? 'output-box success' : 'output-box error'
+        } else {
+          output.className = 'output-box running'
+        }
+      })
+
       // 初始化状态
       fileList1.style.display = 'none'
       fileList2.style.display = 'none'

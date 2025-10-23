@@ -175,17 +175,42 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode) => {
 
       const exeCwd = path.dirname(exePath)
       
-      // 启动可执行文件，添加模式参数
+      // 启动可执行文件，添加模式参数，捕获输出
       const child = spawn(exePath, ['-W','-m', mode, file1, file2], {
         cwd: exeCwd,
         detached: true,
         windowsHide: false,
-        stdio: 'ignore' // 不用管stdout/stderr，避免阻塞
+        stdio: ['ignore', 'pipe', 'pipe'] // 捕获stdout和stderr
+      })
+
+      // 捕获标准输出
+      child.stdout.on('data', (data) => {
+        const log = data.toString().trim()
+        if (log) {
+          console.log('EXE stdout:', log)
+          // 发送日志到渲染进程
+          event.sender.send('exe-log', { type: 'stdout', message: log })
+        }
+      })
+
+      // 捕获错误输出
+      child.stderr.on('data', (data) => {
+        const log = data.toString().trim()
+        if (log) {
+          console.log('EXE stderr:', log)
+          // 发送日志到渲染进程
+          event.sender.send('exe-log', { type: 'stderr', message: log })
+        }
       })
 
       child.on('error', (error) => {
         const msg = `启动失败: ${error.message}\ncode: ${error.code || ''}\npath: ${exePath}`
         reject(msg)
+      })
+      
+      child.on('close', (code) => {
+        console.log(`可执行文件退出，代码: ${code}`)
+        event.sender.send('exe-log', { type: 'close', message: `进程退出，代码: ${code}` })
       })
       
       child.unref()
