@@ -1,4 +1,4 @@
-# PlayerX - VideoCompare Player
+# PlayerX - video-compare Player
 
 一个基于SDL3的图形界面应用程序，用于选择并比较两个视频文件，使用video-compare作为后端播放器。
 

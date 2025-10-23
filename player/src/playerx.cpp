@@ -470,7 +470,7 @@ bool init_sdl() {
     }
     
     // 创建窗口
-    window = SDL_CreateWindow("VideoCompare Player", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_RESIZABLE);
+    window = SDL_CreateWindow("video-compare Player", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_RESIZABLE);
     if (!window) {
         std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
         return false;
@@ -534,7 +534,7 @@ void render() {
     
     // 顶部标题与说明
     SDL_Rect header_rect = {padding, padding, window_width - 2*padding, header_h - padding};
-    draw_text("VideoCompare Player", header_rect.x, header_rect.y, TEXT_COLOR, title_font);
+    draw_text("video-compare Player", header_rect.x, header_rect.y, TEXT_COLOR, title_font);
     draw_text("请选择两个视频文件进行比较（预览面板为占位，未来用于分屏播放）", header_rect.x, header_rect.y + 40, SUBTEXT_COLOR, font);
     
     // 中部预览区

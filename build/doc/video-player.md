@@ -19,7 +19,7 @@ Video-Compare 是一个用 C++14 编写的分屏视频比较工具，基于 FFmp
 
 ```
 ┌─────────────────┐    ┌─────────────────┐
-│    Main.cpp     │───▶│ VideoCompare类  │
+│    Main.cpp     │───▶│ video-compare类  │
 │ (命令行解析)     │    │  (主控制器)     │
 └─────────────────┘    └─────────────────┘
                               │
@@ -65,7 +65,7 @@ Video-Compare 是一个用 C++14 编写的分屏视频比较工具，基于 FFmp
 
 #### 2. video_compare.h / video_compare.cpp
 - **功能**: 主控制类，协调所有处理阶段
-- **关键类**: `VideoCompare`
+- **关键类**: `video-compare`
 - **主要方法**:
   - 多线程管理: `thread_demultiplex_*()`, `thread_decode_*()`, `thread_filter_*()`
   - 队列管理: 包队列、解码帧队列、过滤帧队列
@@ -74,7 +74,7 @@ Video-Compare 是一个用 C++14 编写的分屏视频比较工具，基于 FFmp
 #### 3. config.h
 - **功能**: 配置结构定义
 - **关键结构**:
-  - `VideoCompareConfig`: 全局配置
+  - `video-compareConfig`: 全局配置
   - `InputVideo`: 单个视频输入配置
   - `TimeShiftConfig`: 时间偏移配置
 
@@ -136,13 +136,13 @@ Video-Compare 是一个用 C++14 编写的分屏视频比较工具，基于 FFmp
 // main.cpp 中的初始化流程
 1. 解析命令行参数
 2. 注册FFmpeg组件
-3. 创建VideoCompare配置
-4. 初始化VideoCompare实例
+3. 创建video-compare配置
+4. 初始化video-compare实例
 ```
 
 ### 2. 视频处理流水线
 ```cpp
-// VideoCompare::operator()() 中的处理流程
+// video-compare::operator()() 中的处理流程
 1. 创建各个处理模块实例
 2. 启动多线程处理:
    - 解复用线程 ×2 (左右视频)

@@ -74,10 +74,6 @@ function getExecutableInfo() {
       exeDirName = 'mac-inner'
       exeName = 'video-compare'
       break
-    case 'linux':
-      exeDirName = 'linux-inner'
-      exeName = 'video-compare'
-      break
     default:
       exeDirName = 'win-inner'
       exeName = 'video-compare.exe'
@@ -102,7 +98,7 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
     // macOS: 额外支持 .app Bundle，避免弹出终端
     let appBundlePath = null
     if (os.platform() === 'darwin') {
-      const bundleName = 'VideoCompare' // 如果你打成 .app，请将名称保持一致
+      const bundleName = 'video-compare' // 如果你打成 .app，请将名称保持一致
       const bundleCandidates = app.isPackaged
         ? [
             path.join(process.resourcesPath, 'app.asar.unpacked', exeDirName, bundleName),
@@ -138,7 +134,7 @@ ipcMain.handle('run-exe', async (event, file1, file2) => {
     try {
       if (os.platform() === 'darwin') {
         if (!appBundlePath) {
-          return reject(`macOS 平台要求使用 .app Bundle 启动以避免弹出终端。未找到: ${path.join(app.isPackaged ? process.resourcesPath : __dirname, exeDirName, 'VideoCompare')}`)
+          return reject(`macOS 平台要求使用 .app Bundle 启动以避免弹出终端。未找到: ${path.join(app.isPackaged ? process.resourcesPath : __dirname, exeDirName, 'video-compare')}`)
         }
         // 优先使用 open -n -a 启动（-n 强制新实例）
         const args = ['-n', '-a', appBundlePath, '--args', file1, file2]

@@ -7,10 +7,8 @@
     "start": "electron .",
     "build": "electron-builder",
     "dist": "npm run build",
-    "pack": "node pack.js",
     "pack:win": "cross-env PLATFORM=win32 node pack.js",
-    "pack:mac": "cross-env PLATFORM=darwin node pack.js",
-    "pack:linux": "cross-env PLATFORM=linux node pack.js"
+    "pack:mac": "cross-env PLATFORM=darwin node pack.js"
   },
   "keywords": ["video", "compare", "electron", "cross-platform"],
   "author": "",
@@ -23,7 +21,7 @@
   },
   "build": {
     "appId": "com.example.video-compare",
-    "productName": "VideoCompare",
+    "productName": "video-compare",
     "directories": {
       "output": "dist"
     },
@@ -32,15 +30,13 @@
       "index.html",
       "preload.js",
       "win-inner/**",
-      "mac-inner/**",
-      "linux-inner/**"
+      "mac-inner/**"
     ],
     "asarUnpack": [
       "win-inner/**",
-      "mac-inner/**",
-      "linux-inner/**"
+      "mac-inner/**"
     ],
-    "copyright": "Copyright © 2025 VideoCompare",
+    "copyright": "Copyright © 2025 video-compare",
     "mac": {
       "target": "dmg",
       "icon": "icon.icns",
@@ -48,13 +44,8 @@
     },
     "win": {
       "target": "nsis",
-      "executableName": "VideoCompare",
+      "executableName": "video-compare",
       "icon": "icon.ico"
-    },
-    "linux": {
-      "target": "AppImage",
-      "icon": "icon.png",
-      "category": "Video"
     }
   }
 }
