@@ -6,16 +6,7 @@ const { execSync } = require('child_process');
 function getRequiredFiles(platform) {
   const platformFiles = {
     'win32': [
-      'video-compare.exe',
-      'SDL2.dll',
-      'SDL2_ttf.dll',
-      'avcodec-61.dll',
-      'avdevice-61.dll',
-      'avfilter-10.dll',
-      'avformat-61.dll',
-      'avutil-59.dll',
-      'swresample-5.dll',
-      'swscale-8.dll'
+      'video-compare.exe'
     ],
     'darwin': [
       // 仅支持 .app Bundle，避免终端弹出

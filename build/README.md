@@ -58,7 +58,11 @@ python3 build_tools.py --target ffmpeg -s ../ffmpeg -p windows -m static
 ```bash
 python3 build_tools.py --target video_compare -s ../video-compare -p windows -m static
 ```
+
 ### 构建静态-macos
+
+python3 build_tools.py --target ffmpeg -s ../ffmpeg -p macos -m static
+
 python3 build_tools.py --target video_compare -s ../video-compare -p macos -m static
 
 /Users/rbyang/Documents/UGit/private/PlayerX/build/video_compare/install/bin/video-compare /Users/rbyang/Downloads/media.mp4 /Users/rbyang/Downloads/media.mp4
