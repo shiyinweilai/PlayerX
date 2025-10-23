@@ -251,6 +251,38 @@
       flex: 0 0 auto;
     }
 
+    .control-middle {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 0 10px;
+    }
+
+    .input-field {
+      width: 100%;
+      max-width: 200px;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 20px;
+      font-size: 13px;
+      background: white;
+      transition: all 0.3s ease;
+      height: 32px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .input-field:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 2px 6px rgba(102, 126, 234, 0.3);
+    }
+
+    .input-field::placeholder {
+      color: #adb5bd;
+      font-size: 12px;
+    }
+
     .control-right {
       flex: 1;
       display: flex;
@@ -439,6 +471,10 @@
       <div class="control-layout">
         <div class="control-left">
           <button class="run-btn" id="runBtn" disabled>开始对比</button>
+        </div>
+        <!-- 新增：中间区域放置键入框 -->
+        <div class="control-middle">
+          <input type="text" class="input-field" id="customInput" placeholder="输入自定义参数..." />
         </div>
         <div class="control-right">
           <select class="mode-dropdown" id="modeSelect">
@@ -839,16 +875,20 @@
         // 获取当前选择的模式
         selectedMode = modeSelect.value
         
+        // 获取自定义参数
+        const customInput = document.getElementById('customInput').value.trim()
+        
         console.log('开始对比，模式:', selectedMode)
         console.log('文件1:', file1Path)
         console.log('文件2:', file2Path)
+        console.log('自定义参数:', customInput)
         
         output.textContent = '正在启动视频对比工具...'
         output.className = 'output-box running'
         runBtn.disabled = true
 
         try {
-          const result = await window.api.runExe(file1Path, file2Path, selectedMode)
+          const result = await window.api.runExe(file1Path, file2Path, selectedMode, customInput)
           console.log('启动结果:', result)
           output.textContent = '✅ ' + result
           output.className = 'output-box success'

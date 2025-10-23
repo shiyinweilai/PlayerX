@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('api', {
   openFiles: () => ipcRenderer.invoke('open-files'),
   scanFolder: (folderPath) => ipcRenderer.invoke('scan-folder', folderPath),
-  runExe: (file1, file2, mode) => ipcRenderer.invoke('run-exe', file1, file2, mode),
+  runExe: (file1, file2, mode, customArgs) => ipcRenderer.invoke('run-exe', file1, file2, mode, customArgs),
   
   // 添加视频信息探测API
   probeVideoInfo: (filePath) => ipcRenderer.invoke('probe-video-info', filePath),

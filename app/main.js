@@ -143,7 +143,7 @@ function getExecutableInfo() {
   return { exeDirName, exeName }
 }
 
-ipcMain.handle('run-exe', async (event, file1, file2, mode) => {
+ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => {
   return new Promise((resolve, reject) => {
     const { exeDirName, exeName } = getExecutableInfo()
     let exePath
@@ -162,6 +162,7 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode) => {
     console.log('__dirname:', __dirname)
     console.log('执行路径(可执行):', exePath)
     console.log('模式参数:', mode)
+    console.log('自定义参数:', customArgs)
     console.log('参数 file1:', file1)
     console.log('参数 file2:', file2)
 
@@ -183,8 +184,23 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode) => {
 
       const exeCwd = path.dirname(exePath)
       
-      // 启动可执行文件，添加模式参数，捕获输出
-      const child = spawn(exePath, ['-W','-m', mode, file1, file2], {
+      // 构建参数数组
+      const args = ['-W', '-m', mode]
+      
+      // 如果有自定义参数，将其添加到参数数组中
+      if (customArgs) {
+        // 将自定义参数按空格分割成数组
+        const customArgsArray = customArgs.split(' ').filter(arg => arg.trim() !== '')
+        args.push(...customArgsArray)
+      }
+      
+      // 添加文件路径参数
+      args.push(file1, file2)
+      
+      console.log('完整参数列表:', args)
+      
+      // 启动可执行文件，捕获输出
+      const child = spawn(exePath, args, {
         cwd: exeCwd,
         detached: true,
         windowsHide: false,
