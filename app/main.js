@@ -3,6 +3,7 @@ const path = require('path')
 const fs = require('fs')
 const os = require('os')
 let win
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1200,
@@ -13,7 +14,13 @@ function createWindow() {
       nodeIntegration: false
     }
   })
+  
   win.loadFile('index.html')
+  
+  // 监听窗口关闭事件，正确清理win变量
+  win.on('closed', () => {
+    win = null
+  })
 }
 
 // 增加单实例锁，避免重复启动导致无响应，并在重复启动时聚焦已有窗口
@@ -22,7 +29,8 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (win) {
+    // 改进检查逻辑：不仅要检查win是否存在，还要检查窗口是否未被销毁
+    if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore()
       win.show()
       win.focus()
@@ -218,6 +226,131 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode) => {
     } catch (error) {
       const msg = `执行失败: ${error.message}\ncode: ${error.code || ''}\npath: ${exePath}`
       reject(msg)
+    }
+  })
+})
+
+// 获取ffprobe可执行文件路径
+function getFfprobePath() {
+  const platform = os.platform()
+  let ffprobeDirName, ffprobeName
+  
+  switch (platform) {
+    case 'win32':
+      ffprobeDirName = 'win-inner'
+      ffprobeName = 'ffprobe.exe'
+      break
+    case 'darwin':
+      ffprobeDirName = 'mac-inner'
+      ffprobeName = 'ffprobe'
+      break
+    default:
+      ffprobeDirName = 'win-inner'
+      ffprobeName = 'ffprobe.exe'
+  }
+  
+  let ffprobePath
+  if (app.isPackaged) {
+    ffprobePath = path.join(process.resourcesPath, 'app.asar.unpacked', ffprobeDirName, ffprobeName)
+  } else {
+    ffprobePath = path.resolve(__dirname, ffprobeDirName, ffprobeName)
+  }
+  
+  return ffprobePath
+}
+
+// 处理视频信息探测请求
+ipcMain.handle('probe-video-info', async (event, filePath) => {
+  return new Promise((resolve, reject) => {
+    const ffprobePath = getFfprobePath()
+    
+    console.log('ffprobe路径:', ffprobePath)
+    console.log('探测视频文件:', filePath)
+    
+    // 检查文件是否存在
+    if (!fs.existsSync(filePath)) {
+      return reject(`视频文件不存在: ${filePath}`)
+    }
+    
+    // 检查ffprobe是否存在
+    if (!fs.existsSync(ffprobePath)) {
+      return reject(`ffprobe工具不存在: ${ffprobePath}`)
+    }
+    
+    const { spawn } = require('child_process')
+    
+    try {
+      // 使用ffprobe探测视频信息
+      const ffprobe = spawn(ffprobePath, [
+        '-v', 'quiet',
+        '-print_format', 'json',
+        '-show_format',
+        '-show_streams',
+        filePath
+      ])
+      
+      let stdoutData = ''
+      let stderrData = ''
+      
+      ffprobe.stdout.on('data', (data) => {
+        stdoutData += data.toString()
+      })
+      
+      ffprobe.stderr.on('data', (data) => {
+        stderrData += data.toString()
+      })
+      
+      ffprobe.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const videoInfo = JSON.parse(stdoutData)
+            
+            // 提取关键信息
+            const info = {
+              duration: videoInfo.format?.duration || '未知',
+              size: videoInfo.format?.size || '未知',
+              bitrate: videoInfo.format?.bit_rate || '未知',
+              format: videoInfo.format?.format_name || '未知',
+              videoStreams: [],
+              audioStreams: []
+            }
+            
+            // 处理视频流信息
+            if (videoInfo.streams) {
+              videoInfo.streams.forEach(stream => {
+                if (stream.codec_type === 'video') {
+                  info.videoStreams.push({
+                    codec: stream.codec_name || '未知',
+                    resolution: `${stream.width || '?'}x${stream.height || '?'}`,
+                    fps: stream.r_frame_rate || '未知',
+                    bitrate: stream.bit_rate || '未知'
+                  })
+                } else if (stream.codec_type === 'audio') {
+                  info.audioStreams.push({
+                    codec: stream.codec_name || '未知',
+                    channels: stream.channels || '未知',
+                    sampleRate: stream.sample_rate || '未知',
+                    language: stream.tags?.language || '未知'
+                  })
+                }
+              })
+            }
+            
+            resolve(info)
+          } catch (parseError) {
+            reject(`解析ffprobe输出失败: ${parseError.message}`)
+          }
+        } else {
+          reject(`ffprobe执行失败，退出码: ${code}\n错误信息: ${stderrData}`)
+        }
+      })
+      
+      ffprobe.on('error', (error) => {
+        reject(`启动ffprobe失败: ${error.message}`)
+      })
+      
+    } catch (error) {
+      reject(`执行ffprobe出错: ${error.message}`)
     }
   })
 })

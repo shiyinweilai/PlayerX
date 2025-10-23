@@ -55,13 +55,13 @@
     .video-panel {
       flex: 1;
       border: 2px solid #e9ecef;
-      border-radius: 10px;
-      padding: 25px;
+      border-radius: 8px;
+      padding: 15px;
       background: #f8f9fa;
       min-height: 450px;
       display: flex;
       flex-direction: column;
-      min-width: 500px;
+      min-width: 450px;
     }
 
     .video-panel.left {
@@ -75,26 +75,13 @@
     .panel-header {
       display: flex;
       align-items: center;
-      gap: 10px;
-      margin-bottom: 20px;
+      gap: 6px;
+      margin-bottom: 12px;
       flex-shrink: 0;
     }
 
-    .panel-number {
-      background: #667eea;
-      color: white;
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: bold;
-      font-size: 14px;
-    }
-
     .panel-title {
-      font-size: 18px;
+      font-size: 14px;
       font-weight: 600;
       color: #333;
     }
@@ -102,8 +89,8 @@
     .drag-drop-area {
       flex: 1;
       border: 2px dashed #adb5bd;
-      border-radius: 8px;
-      padding: 20px;
+      border-radius: 6px;
+      padding: 15px;
       text-align: center;
       cursor: pointer;
       transition: all 0.3s ease;
@@ -112,7 +99,7 @@
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      min-height: 300px;
+      min-height: 250px;
     }
 
     .drag-drop-area:hover {
@@ -144,43 +131,43 @@
 
     .file-list {
       width: 100%;
-      max-height: 200px;
+      max-height: 280px;
       overflow-y: auto;
-      margin-top: 15px;
+      margin-top: 10px;
       border: 1px solid #e9ecef;
       border-radius: 5px;
       background: white;
-      display: none; /* 默认隐藏 */
+      display: none;
     }
 
     .video-panel.left .file-list {
-      margin-top: 20px;
-      border-radius: 8px;
+      margin-top: 15px;
+      border-radius: 6px;
       border: 2px solid #e9ecef;
     }
 
-    /* 新增：视频信息显示区域样式 */
+    /* // 新增：视频信息显示区域样式 */
     .video-info {
       background: #fff;
       border: 2px solid #e9ecef;
-      border-radius: 8px;
-      padding: 15px;
-      margin: 15px 0;
-      min-height: 60px;
+      border-radius: 6px;
+      padding: 10px;
+      margin: 10px 0;
+      min-height: 45px;
       display: flex;
       flex-direction: column;
       justify-content: center;
     }
 
     .info-label {
-      font-size: 12px;
+      font-size: 11px;
       color: #6c757d;
       font-weight: 500;
-      margin-bottom: 5px;
+      margin-bottom: 3px;
     }
 
     .info-content {
-      font-size: 14px;
+      font-size: 13px;
       color: #333;
       font-weight: 600;
       font-family: 'Courier New', monospace;
@@ -195,13 +182,35 @@
       font-style: italic;
     }
 
+    /* 新增：详细视频信息样式 */
+    .video-details {
+      display: none;
+      margin-top: 8px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.3;
+    }
+
+    .video-details.show {
+      display: block;
+    }
+
+    .detail-item {
+      margin-bottom: 2px;
+    }
+
+    .detail-label {
+      font-weight: 600;
+      color: #495057;
+    }
+
     .file-item {
-      padding: 8px 12px;
+      padding: 6px 10px;
       border-bottom: 1px solid #f1f3f4;
       cursor: pointer;
       transition: background 0.2s ease;
       font-family: 'Courier New', monospace;
-      font-size: 12px;
+      font-size: 11px;
       word-break: break-all;
       white-space: nowrap;
       overflow: hidden;
@@ -223,7 +232,7 @@
     }
 
     .control-section {
-      margin-bottom: 30px;
+      margin-bottom: 10px;
       flex-shrink: 0;
     }
 
@@ -231,10 +240,10 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 20px;
+      gap: 15px;
       background: #f8f9fa;
-      border-radius: 10px;
-      padding: 20px;
+      border-radius: 8px;
+      padding: 5px;
       border: 1px solid #e9ecef;
     }
 
@@ -263,16 +272,16 @@
     }
 
     .mode-dropdown {
-      padding: 12px 16px;
+      padding: 10px 14px;
       border: 1px solid #ddd;
-      border-radius: 30px;
-      font-size: 16px;
+      border-radius: 25px;
+      font-size: 14px;
       background: white;
       cursor: pointer;
-      min-width: 180px;
-      height: 48px;
+      min-width: 140px;
+      height: 40px;
       font-weight: 500;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
     }
 
     .mode-dropdown:focus {
@@ -284,21 +293,21 @@
       background: linear-gradient(135deg, #28a745, #20c997);
       color: white;
       border: none;
-      padding: 15px 40px;
-      border-radius: 30px;
+      padding: 12px 30px;
+      border-radius: 25px;
       cursor: pointer;
-      font-size: 16px;
+      font-size: 14px;
       font-weight: 600;
       transition: all 0.3s ease;
-      box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+      box-shadow: 0 3px 10px rgba(40, 167, 69, 0.3);
       white-space: nowrap;
-      height: 48px;
-      min-width: 120px;
+      height: 40px;
+      min-width: 100px;
     }
 
     .run-btn:hover:not(:disabled) {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
     }
 
     .run-btn:disabled {
@@ -396,25 +405,25 @@
       background: #667eea;
       color: #fff;
       border: none;
-      padding: 12px 24px;
-      border-radius: 30px;
+      padding: 6px 12px;
+      border-radius: 18px;
       cursor: pointer;
-      font-size: 16px;
+      font-size: 13px;
       font-weight: 600;
       transition: all 0.3s ease;
-      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-      min-width: 150px;
-      height: 40px;
+      box-shadow: 0 2px 6px rgba(102, 126, 234, 0.3);
+      min-width: 100px;
+      height: 28px;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin-left: 10px;
+      margin-left: 6px;
     }
 
     .select-btn.large-btn:hover {
       background: #556cd6;
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+      transform: translateY(-1px);
+      box-shadow: 0 3px 8px rgba(102, 126, 234, 0.4);
     }
   </style>
 </head>
@@ -444,7 +453,6 @@
     <div class="comparison-layout">
       <div class="video-panel left">
         <div class="panel-header">
-          <div class="panel-number">1</div>
           <button class="select-btn large-btn" id="selectBtn1">选择左侧视频</button>
         </div>
         
@@ -452,6 +460,15 @@
         <div class="video-info" id="videoInfo1">
           <div class="info-label">当前选中视频：</div>
           <div class="info-content" id="videoName1">未选择</div>
+          <!-- 新增：详细视频信息 -->
+          <div class="video-details" id="videoDetails1">
+            <div class="detail-item"><span class="detail-label">时长：</span><span id="duration1">-</span></div>
+            <div class="detail-item"><span class="detail-label">大小：</span><span id="size1">-</span></div>
+            <div class="detail-item"><span class="detail-label">格式：</span><span id="format1">-</span></div>
+            <div class="detail-item"><span class="detail-label">分辨率：</span><span id="resolution1">-</span></div>
+            <div class="detail-item"><span class="detail-label">视频编码：</span><span id="videoCodec1">-</span></div>
+            <div class="detail-item"><span class="detail-label">音频编码：</span><span id="audioCodec1">-</span></div>
+          </div>
         </div>
         
         <div class="file-list" id="fileList1"></div>
@@ -459,7 +476,6 @@
 
       <div class="video-panel right">
         <div class="panel-header">
-          <div class="panel-number">2</div>
           <button class="select-btn large-btn" id="selectBtn2">选择右侧视频</button>
         </div>
         
@@ -467,6 +483,15 @@
         <div class="video-info" id="videoInfo2">
           <div class="info-label">当前选中视频：</div>
           <div class="info-content" id="videoName2">未选择</div>
+          <!-- 新增：详细视频信息 -->
+          <div class="video-details" id="videoDetails2">
+            <div class="detail-item"><span class="detail-label">时长：</span><span id="duration2">-</span></div>
+            <div class="detail-item"><span class="detail-label">大小：</span><span id="size2">-</span></div>
+            <div class="detail-item"><span class="detail-label">格式：</span><span id="format2">-</span></div>
+            <div class="detail-item"><span class="detail-label">分辨率：</span><span id="resolution2">-</span></div>
+            <div class="detail-item"><span class="detail-label">视频编码：</span><span id="videoCodec2">-</span></div>
+            <div class="detail-item"><span class="detail-label">音频编码：</span><span id="audioCodec2">-</span></div>
+          </div>
         </div>
         
         <div class="file-list" id="fileList2"></div>
@@ -550,6 +575,7 @@
       function updateVideoInfo(panelIndex, filePath) {
         const videoNameElement = panelIndex === 1 ? videoName1 : videoName2
         const videoInfoElement = panelIndex === 1 ? videoInfo1 : videoInfo2
+        const videoDetailsElement = panelIndex === 1 ? document.getElementById('videoDetails1') : document.getElementById('videoDetails2')
         
         if (filePath) {
           // 提取文件名（去除路径）
@@ -557,11 +583,128 @@
           videoNameElement.textContent = fileName
           videoNameElement.title = filePath // 添加完整路径提示
           videoInfoElement.classList.remove('empty')
+          
+          // 显示详细视频信息区域
+          videoDetailsElement.classList.add('show')
+          
+          // 探测视频信息
+          probeVideoInfo(filePath, panelIndex)
         } else {
           videoNameElement.textContent = '未选择'
           videoNameElement.title = ''
           videoInfoElement.classList.add('empty')
+          
+          // 隐藏详细视频信息区域
+          videoDetailsElement.classList.remove('show')
+          
+          // 重置详细视频信息
+          resetVideoDetails(panelIndex)
         }
+      }
+
+      // 新增：重置视频详细信息
+      function resetVideoDetails(panelIndex) {
+        const suffix = panelIndex === 1 ? '1' : '2'
+        document.getElementById(`duration${suffix}`).textContent = '-'
+        document.getElementById(`size${suffix}`).textContent = '-'
+        document.getElementById(`format${suffix}`).textContent = '-'
+        document.getElementById(`resolution${suffix}`).textContent = '-'
+        document.getElementById(`videoCodec${suffix}`).textContent = '-'
+        document.getElementById(`audioCodec${suffix}`).textContent = '-'
+      }
+
+      // 新增：探测视频信息
+      async function probeVideoInfo(filePath, panelIndex) {
+        const suffix = panelIndex === 1 ? '1' : '2'
+        
+        try {
+          console.log(`开始探测视频信息: 面板${panelIndex}, 文件: ${filePath}`)
+          
+          // 更新状态显示
+          document.getElementById(`duration${suffix}`).textContent = '探测中...'
+          document.getElementById(`size${suffix}`).textContent = '探测中...'
+          
+          const videoInfo = await window.api.probeVideoInfo(filePath)
+          console.log('视频信息探测结果:', videoInfo)
+          
+          // 格式化并显示视频信息
+          displayVideoInfo(videoInfo, panelIndex)
+          
+        } catch (error) {
+          console.error(`视频信息探测失败:`, error)
+          
+          // 显示错误信息
+          document.getElementById(`duration${suffix}`).textContent = '探测失败'
+          document.getElementById(`size${suffix}`).textContent = '探测失败'
+          document.getElementById(`format${suffix}`).textContent = '探测失败'
+          document.getElementById(`resolution${suffix}`).textContent = '探测失败'
+          document.getElementById(`videoCodec${suffix}`).textContent = '探测失败'
+          document.getElementById(`audioCodec${suffix}`).textContent = '探测失败'
+          
+          // 在输出框中显示错误
+          output.textContent = `❌ 视频信息探测失败: ${error}`
+          output.className = 'output-box error'
+        }
+      }
+
+      // 新增：显示视频信息
+      function displayVideoInfo(videoInfo, panelIndex) {
+        const suffix = panelIndex === 1 ? '1' : '2'
+        
+        // 格式化时长（秒转分钟:秒）
+        let durationText = '-';
+        if (videoInfo.duration && videoInfo.duration !== '未知') {
+          const duration = parseFloat(videoInfo.duration);
+          if (!isNaN(duration)) {
+            const minutes = Math.floor(duration / 60);
+            const seconds = Math.floor(duration % 60);
+            durationText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+          }
+        }
+        
+        // 格式化文件大小（字节转MB）
+        let sizeText = '-';
+        if (videoInfo.size && videoInfo.size !== '未知') {
+          const size = parseInt(videoInfo.size);
+          if (!isNaN(size)) {
+            sizeText = (size / (1024 * 1024)).toFixed(2) + ' MB';
+          }
+        }
+        
+        // 格式化比特率（bps转kbps）
+        let bitrateText = '-';
+        if (videoInfo.bitrate && videoInfo.bitrate !== '未知') {
+          const bitrate = parseInt(videoInfo.bitrate);
+          if (!isNaN(bitrate)) {
+            bitrateText = (bitrate / 1000).toFixed(0) + ' kbps';
+          }
+        }
+        
+        // 获取视频流信息
+        let resolution = '-';
+        let videoCodec = '-';
+        let audioCodec = '-';
+        
+        if (videoInfo.videoStreams && videoInfo.videoStreams.length > 0) {
+          const videoStream = videoInfo.videoStreams[0];
+          resolution = videoStream.resolution;
+          videoCodec = videoStream.codec;
+        }
+        
+        if (videoInfo.audioStreams && videoInfo.audioStreams.length > 0) {
+          const audioStream = videoInfo.audioStreams[0];
+          audioCodec = audioStream.codec;
+        }
+        
+        // 更新显示
+        document.getElementById(`duration${suffix}`).textContent = durationText;
+        document.getElementById(`size${suffix}`).textContent = sizeText;
+        document.getElementById(`format${suffix}`).textContent = videoInfo.format || '-';
+        document.getElementById(`resolution${suffix}`).textContent = resolution;
+        document.getElementById(`videoCodec${suffix}`).textContent = videoCodec;
+        document.getElementById(`audioCodec${suffix}`).textContent = audioCodec;
+        
+        console.log(`面板${panelIndex}视频信息显示完成`);
       }
 
       function selectFile(filePath, panelIndex) {

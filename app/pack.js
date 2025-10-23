@@ -5,8 +5,8 @@ const { execSync } = require('child_process');
 // 根据平台获取必要的文件列表
 function getRequiredFiles(platform) {
   const platformFiles = {
-    'win32': ['video-compare.exe'],
-    'darwin': ['video-compare']
+    'win32': ['video-compare.exe', 'ffprobe.exe'],
+    'darwin': ['video-compare', 'ffprobe']
   };
   
   return platformFiles[platform] || platformFiles['win32'];
