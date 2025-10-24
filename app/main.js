@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -14,13 +14,85 @@ function createWindow() {
       nodeIntegration: false
     }
   })
-  
+
   win.loadFile('index.html')
-  
+
   // 监听窗口关闭事件，正确清理win变量
   win.on('closed', () => {
     win = null
   })
+}
+
+// 新增：构建并安装应用菜单（示例：在 Help 菜单绑定“使用说明”）
+function showHelp() {
+  dialog.showMessageBox({
+    type: 'info',
+    title: '使用说明',
+    message: '视频对比工具使用说明',
+    detail:
+      '1. 点击“选择左侧视频/选择右侧视频”导入多个视频\n' +
+      '2. 可选：选择对比模式并输入附加参数\n' +
+      '3. 点击“开始对比”启动外部对比程序\n' +
+      '4. 程序输出会实时显示在“执行状态”中',
+    buttons: ['我知道了']
+  })
+}
+
+function buildAppMenu() {
+  const isMac = process.platform === 'darwin'
+  const template = [
+    // macOS 应用菜单（中文化）
+    ...(isMac
+      ? [{
+        label: app.name,
+        submenu: [
+          { role: 'about', label: '关于' },
+          { type: 'separator' },
+          { role: 'services', label: '服务' },
+          { type: 'separator' },
+          { role: 'hide', label: '隐藏' },
+          { role: 'hideOthers', label: '隐藏其他' },
+          { role: 'unhide', label: '显示全部' },
+          { type: 'separator' },
+          { role: 'quit', label: '退出' }
+        ]
+      }]
+      : []),
+    // 文件菜单（中文化）
+    {
+      label: '文件',
+      submenu: [
+        // 示例：在此可添加自定义功能，例如“选择左/右视频”（演示在说明部分）
+        isMac ? { role: 'close', label: '关闭窗口' } : { role: 'quit', label: '退出' },
+      ]
+    },
+
+    // 视图菜单（显式中文定义：便于增删）
+    {
+      label: '视图',
+      submenu: [
+        { role: 'reload', label: '重新加载' },
+        { role: 'forceReload', label: '强制重新加载' },
+        { role: 'toggleDevTools', label: '切换开发者工具' },
+      ]
+    },
+    // 帮助菜单（中文化）
+    {
+      label: '帮助',
+      submenu: [
+        { label: '使用说明', click: showHelp }, { type: 'separator' },
+        { label: '更多说明', click: () => shell.openExternal('https://example.com') },
+        {
+          label: '关于我们', click: () => dialog.showMessageBox({
+            type: 'info', title: '关于我们', message: '视频对比工具 v1.0\n作者：rbyang'
+          })
+        },
+      ]
+    }
+  ]
+
+  const menu = Menu.buildFromTemplate(template)
+  Menu.setApplicationMenu(menu)
 }
 
 // 增加单实例锁，避免重复启动导致无响应，并在重复启动时聚焦已有窗口
@@ -39,7 +111,11 @@ if (!gotLock) {
     }
   })
 
-  app.whenReady().then(createWindow)
+  // 修改：应用就绪后创建窗口并安装菜单
+  app.whenReady().then(() => {
+    createWindow()
+    buildAppMenu()
+  })
 
   // macOS: 当点击 Dock 图标且没有窗口时，重新创建；有窗口时恢复并聚焦
   app.on('activate', () => {
@@ -84,14 +160,14 @@ ipcMain.handle('open-files', async () => {
 ipcMain.handle('scan-folder', async (event, folderPath) => {
   const videoExtensions = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm']
   const videoFiles = []
-  
+
   function scanDirectory(dirPath) {
     try {
       const items = fs.readdirSync(dirPath, { withFileTypes: true })
-      
+
       for (const item of items) {
         const fullPath = path.join(dirPath, item.name)
-        
+
         if (item.isDirectory()) {
           scanDirectory(fullPath)
         } else if (item.isFile()) {
@@ -106,16 +182,16 @@ ipcMain.handle('scan-folder', async (event, folderPath) => {
       throw new Error(`扫描文件夹失败: ${error.message}`)
     }
   }
-  
+
   if (!fs.existsSync(folderPath)) {
     throw new Error('文件夹不存在: ' + folderPath)
   }
-  
+
   const stats = fs.statSync(folderPath)
   if (!stats.isDirectory()) {
     throw new Error('路径不是文件夹: ' + folderPath)
   }
-  
+
   scanDirectory(folderPath)
   return videoFiles
 })
@@ -125,7 +201,7 @@ ipcMain.handle('scan-folder', async (event, folderPath) => {
 function getExecutableInfo() {
   const platform = os.platform()
   let exeDirName, exeName
-  
+
   switch (platform) {
     case 'win32':
       exeDirName = 'win-inner'
@@ -139,7 +215,7 @@ function getExecutableInfo() {
       exeDirName = 'win-inner'
       exeName = 'video-compare.exe'
   }
-  
+
   return { exeDirName, exeName }
 }
 
@@ -147,7 +223,7 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
   return new Promise((resolve, reject) => {
     const { exeDirName, exeName } = getExecutableInfo()
     let exePath
-    
+
     if (app.isPackaged) {
       // 打包后，可执行文件在 app.asar.unpacked 目录中
       exePath = path.join(process.resourcesPath, 'app.asar.unpacked', exeDirName, exeName)
@@ -172,33 +248,33 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
       if (!fs.existsSync(exePath)) {
         console.log('可执行文件不存在，检查路径:', exePath)
         console.log('当前工作目录:', process.cwd())
-        
+
         // 尝试其他可能的路径
         const altPath1 = path.resolve(process.cwd(), exeDirName, exeName)
         const altPath2 = path.resolve(__dirname, '..', exeDirName, exeName)
         console.log('备选路径1:', altPath1)
         console.log('备选路径2:', altPath2)
-        
+
         return reject(`找不到可执行文件: ${exePath}\n请确认已将 ${exeName} 和相关依赖文件放入 ${exeDirName} 目录，且在打包配置中包含并 asarUnpack。`)
       }
 
       const exeCwd = path.dirname(exePath)
-      
+
       // 构建参数数组
       const args = ['-W', '-m', mode]
-      
+
       // 如果有自定义参数，将其添加到参数数组中
       if (customArgs) {
         // 将自定义参数按空格分割成数组
         const customArgsArray = customArgs.split(' ').filter(arg => arg.trim() !== '')
         args.push(...customArgsArray)
       }
-      
+
       // 添加文件路径参数
       args.push(file1, file2)
-      
+
       console.log('完整参数列表:', args)
-      
+
       // 启动可执行文件，捕获输出
       const child = spawn(exePath, args, {
         cwd: exeCwd,
@@ -231,12 +307,12 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
         const msg = `启动失败: ${error.message}\ncode: ${error.code || ''}\npath: ${exePath}`
         reject(msg)
       })
-      
+
       child.on('close', (code) => {
         console.log(`可执行文件退出，代码: ${code}`)
         event.sender.send('exe-log', { type: 'close', message: `进程退出，代码: ${code}` })
       })
-      
+
       child.unref()
       resolve(`已启动 ${exeName}，模式: ${mode}`)
     } catch (error) {
@@ -250,7 +326,7 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
 function getFfprobePath() {
   const platform = os.platform()
   let ffprobeDirName, ffprobeName
-  
+
   switch (platform) {
     case 'win32':
       ffprobeDirName = 'win-inner'
@@ -264,14 +340,14 @@ function getFfprobePath() {
       ffprobeDirName = 'win-inner'
       ffprobeName = 'ffprobe.exe'
   }
-  
+
   let ffprobePath
   if (app.isPackaged) {
     ffprobePath = path.join(process.resourcesPath, 'app.asar.unpacked', ffprobeDirName, ffprobeName)
   } else {
     ffprobePath = path.resolve(__dirname, ffprobeDirName, ffprobeName)
   }
-  
+
   return ffprobePath
 }
 
@@ -279,22 +355,22 @@ function getFfprobePath() {
 ipcMain.handle('probe-video-info', async (event, filePath) => {
   return new Promise((resolve, reject) => {
     const ffprobePath = getFfprobePath()
-    
+
     console.log('ffprobe路径:', ffprobePath)
     console.log('探测视频文件:', filePath)
-    
+
     // 检查文件是否存在
     if (!fs.existsSync(filePath)) {
       return reject(`视频文件不存在: ${filePath}`)
     }
-    
+
     // 检查ffprobe是否存在
     if (!fs.existsSync(ffprobePath)) {
       return reject(`ffprobe工具不存在: ${ffprobePath}`)
     }
-    
+
     const { spawn } = require('child_process')
-    
+
     try {
       // 使用ffprobe探测视频信息
       const ffprobe = spawn(ffprobePath, [
@@ -304,23 +380,23 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
         '-show_streams',
         filePath
       ])
-      
+
       let stdoutData = ''
       let stderrData = ''
-      
+
       ffprobe.stdout.on('data', (data) => {
         stdoutData += data.toString()
       })
-      
+
       ffprobe.stderr.on('data', (data) => {
         stderrData += data.toString()
       })
-      
+
       ffprobe.on('close', (code) => {
         if (code === 0) {
           try {
             const videoInfo = JSON.parse(stdoutData)
-            
+
             // 提取关键信息
             const info = {
               duration: videoInfo.format?.duration || '未知',
@@ -330,7 +406,7 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
               videoStreams: [],
               audioStreams: []
             }
-            
+
             // 处理视频流信息
             if (videoInfo.streams) {
               videoInfo.streams.forEach(stream => {
@@ -338,10 +414,10 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
                   // 检测像素格式，如果是yuv420p则标记为yuv420p (tv)
                   const pixelFormat = stream.pix_fmt || '未知'
                   const pixelFormatDisplay = pixelFormat === 'yuv420p' ? 'yuv420p (tv)' : pixelFormat
-                  
+
                   // 提取颜色空间信息
                   const colorSpace = stream.color_space || stream.color_primaries || '未知'
-                  
+
                   info.videoStreams.push({
                     codec: stream.codec_name || '未知',
                     resolution: `${stream.width || '?'}x${stream.height || '?'}`,
@@ -360,7 +436,7 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
                 }
               })
             }
-            
+
             resolve(info)
           } catch (parseError) {
             reject(`解析ffprobe输出失败: ${parseError.message}`)
@@ -369,11 +445,11 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
           reject(`ffprobe执行失败，退出码: ${code}\n错误信息: ${stderrData}`)
         }
       })
-      
+
       ffprobe.on('error', (error) => {
         reject(`启动ffprobe失败: ${error.message}`)
       })
-      
+
     } catch (error) {
       reject(`执行ffprobe出错: ${error.message}`)
     }
