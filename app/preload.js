@@ -15,3 +15,8 @@ contextBridge.exposeInMainWorld('api', {
     })
   }
 })
+
+contextBridge.exposeInMainWorld('menu', {
+  onSelectLeft: (cb) => ipcRenderer.on('menu-select-left', cb),
+  onSelectRight: (cb) => ipcRenderer.on('menu-select-right', cb),
+})

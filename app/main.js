@@ -62,7 +62,15 @@ function buildAppMenu() {
     {
       label: '文件',
       submenu: [
-        // 示例：在此可添加自定义功能，例如“选择左/右视频”（演示在说明部分）
+        {
+          label: '选择左侧视频',
+          click: () => { if (win) win.webContents.send('menu-select-left') }
+        },
+        {
+          label: '选择右侧视频',
+          click: () => { if (win) win.webContents.send('menu-select-right') }
+        },
+        { type: 'separator' },
         isMac ? { role: 'close', label: '关闭窗口' } : { role: 'quit', label: '退出' },
       ]
     },
@@ -81,7 +89,7 @@ function buildAppMenu() {
       label: '帮助',
       submenu: [
         { label: '使用说明', click: showHelp }, { type: 'separator' },
-        { label: '更多说明', click: () => shell.openExternal('https://example.com') },
+        { label: '更多说明', click: () => shell.openExternal('https://iwiki.woa.com/p/4016316239 PlayerX使用说明') },
         {
           label: '关于我们', click: () => dialog.showMessageBox({
             type: 'info', title: '关于我们', message: '视频对比工具 v1.0\n作者：rbyang'

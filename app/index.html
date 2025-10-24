@@ -503,7 +503,7 @@
     <div class="comparison-layout">
       <div class="video-panel left">
         <div class="panel-header">
-          <button class="select-btn large-btn" id="selectBtn1">选择左侧视频</button>
+          <button class="select-btn large-btn" id="selectBtn1">添加左侧视频</button>
         </div>
         
         <!-- 新增：视频信息显示区域 -->
@@ -528,7 +528,7 @@
 
       <div class="video-panel right">
         <div class="panel-header">
-          <button class="select-btn large-btn" id="selectBtn2">选择右侧视频</button>
+          <button class="select-btn large-btn" id="selectBtn2">添加右侧视频</button>
         </div>
         
         <!-- 新增：视频信息显示区域 -->
@@ -878,6 +878,19 @@
           output.className = 'output-box error'
         }
       })
+
+      // 新增：菜单事件绑定（从应用菜单触发与按钮一致的行为）
+      if (window.menu && typeof window.menu.onSelectLeft === 'function') {
+        window.menu.onSelectLeft(() => {
+          // 复用现有按钮逻辑，确保行为一致
+          selectBtn1.click()
+        })
+      }
+      if (window.menu && typeof window.menu.onSelectRight === 'function') {
+        window.menu.onSelectRight(() => {
+          selectBtn2.click()
+        })
+      }
 
       runBtn.onclick = async () => {
         if (!file1Path || !file2Path) {
