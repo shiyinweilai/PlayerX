@@ -1,0 +1,8 @@
+{
+  "version": "1.0.0",
+  "platforms": {
+    "win32": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/video-compare%20Setup%201.0.0.exe",
+    "darwin": "https://your-domain.com/playerx/PlayerX-1.0.0.dmg"
+  },
+  "notes": "更新说明"
+}

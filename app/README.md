@@ -23,6 +23,10 @@ npm start
 
 ## 打包发布
 
+### 版本号更新
+手动指定版本：npm run bump -- 1.0.1
+直接使用 Node：node bump-version.js 1.0.1
+
 ### 指定平台打包
 ```bash
 # Windows
