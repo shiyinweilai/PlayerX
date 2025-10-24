@@ -269,7 +269,7 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
       const exeCwd = path.dirname(exePath)
 
       // 构建参数数组
-      const args = ['-W', '-m', mode]
+      const args = ['-m', mode]
 
       // 如果有自定义参数，将其添加到参数数组中
       if (customArgs) {
@@ -277,7 +277,9 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
         const customArgsArray = customArgs.split(' ').filter(arg => arg.trim() !== '')
         args.push(...customArgsArray)
       }
-
+      if (!args.includes('-w')) {
+        args.push('--window-fit-display')
+      }
       // 添加文件路径参数
       args.push(file1, file2)
 
