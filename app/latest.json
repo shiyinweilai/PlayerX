@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "platforms": {
     "win32": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX%20Setup%201.0.0.exe",
-    "darwin": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-1.0.0-arm64.dmg"
+    "darwin": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-1.0.0-arm64-mac.zip"
   },
   "notes": "更新说明: 1.0.0 版本发布"
 }

@@ -80,14 +80,45 @@ function main() {
   
   console.log('文件检查完成，开始使用electron-builder打包...');
   
+  // 生成临时 electron-builder 配置，确保资源打入包并为 mac 启用签名/硬化
+  const isMac = platform === 'darwin'
+  const builderConfig = {
+    appId: 'com.playerx.app',
+    productName: 'PlayerX',
+    asar: true,
+    asarUnpack: [isMac ? 'mac-inner/**' : 'win-inner/**'],
+    files: ['**/*', '!dist/**'],
+    extraResources: isMac
+      ? [{ from: 'mac-inner', to: 'mac-inner' }]
+      : [{ from: 'win-inner', to: 'win-inner' }],
+    mac: {
+      hardenedRuntime: false,
+      gatekeeperAssess: false,
+      category: 'public.app-category.video',
+      // 构建 arm64 的 zip 和 dmg（未签名），zip 更适合私发使用
+      target: [
+        { target: 'zip', arch: ['arm64'] },
+        { target: 'dmg', arch: ['arm64'] }
+      ]
+    },
+    dmg: { sign: false }
+  };
+
+  const cfgPath = path.join(__dirname, 'electron-builder.temp.json');
+  fs.writeFileSync(cfgPath, JSON.stringify(builderConfig, null, 2));
+
   try {
-    // 设置环境变量来跳过签名（仅对macOS）
+    // 允许自动发现证书：不要强行禁用（之前会导致未签名）
     const env = { ...process.env };
-    if (platform === 'darwin') {
-      env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
-    }
+    // 如果你设置了 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID，electron-builder 将自动签名 & 公证
+    // 若未设置，将尝试本地钥匙串中的 Developer ID 证书；若也没有，将生成未签名包（仍可本地测试）。
     
-    let cmd = 'npx electron-builder';
+    // 私下分发：明确关闭自动证书发现，避免打包过程尝试签名
+    if (platform === 'darwin') {
+      env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+    }
+
+    let cmd = `npx electron-builder -c "${cfgPath}"`;
     if (platform === 'darwin') {
       cmd += ' --mac --arm64';
     } else if (platform === 'win32') {
@@ -101,6 +132,9 @@ function main() {
   } catch (error) {
     console.error('打包失败:', error.message);
     process.exit(1);
+  } finally {
+    // 清理临时配置文件
+    try { fs.unlinkSync(cfgPath); } catch {}
   }
 }
 
