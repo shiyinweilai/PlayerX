@@ -892,6 +892,46 @@
         })
       }
 
+      // 新增：绑定“检查更新…”菜单事件（精简为仅依赖 UPDATE_JSON_URL 的清单对比）
+      if (window.menu && typeof window.menu.onCheckUpdate === 'function') {
+        window.menu.onCheckUpdate(async () => {
+          output.textContent = '正在检查更新...'
+          output.className = 'output-box running'
+          try {
+            const res = await window.api.checkForUpdates()
+            let msg = ''
+            let cls = 'output-box success'
+            switch (res.status) {
+              case 'opened':
+                msg = `已打开下载页面：${res.updateUrl || ''}`
+                break
+              case 'update-available':
+                msg = `发现新版本：${res.latestVersion}，请点击“帮助 > 检查更新”弹窗中的前往下载按钮，或稍后手动更新。`
+                break
+              case 'uptodate':
+                msg = `已是最新版本：当前 ${res.currentVersion}，远端 ${res.latestVersion}`
+                break
+              case 'no-source':
+                msg = '未配置更新源：请设置环境变量 UPDATE_JSON_URL 指向远程版本清单（latest.json）'
+                cls = 'output-box error'
+                break
+              case 'error':
+                msg = `检查更新失败：${res.error || '未知错误'}`
+                cls = 'output-box error'
+                break
+              default:
+                msg = `未知状态：${res.status}`
+                cls = 'output-box error'
+            }
+            output.textContent = msg
+            output.className = cls
+          } catch (e) {
+            output.textContent = '检查更新失败：' + e
+            output.className = 'output-box error'
+          }
+        })
+      }
+
       runBtn.onclick = async () => {
         if (!file1Path || !file2Path) {
           output.textContent = '请先选择两个视频文件'

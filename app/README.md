@@ -1,4 +1,4 @@
-# video-compare - 跨平台视频比较工具
+# PlayerX - 跨平台视频比较工具
 
 一个基于 Electron 的跨平台 GUI 应用程序，用于比较两个视频文件。
 
@@ -40,12 +40,12 @@ npm run build
 ## 跨平台支持说明
 
 ### Windows 平台
-- 将 `video-compare.exe` 和相关 DLL 文件放入 `win-inner` 目录
+- 将 `PlayerX.exe` 和相关 DLL 文件放入 `win-inner` 目录
 - 打包后生成 NSIS 安装包
 
 ### macOS 平台
 - 将 macOS 版本的视频比较工具放入 `mac-inner` 目录
-- 可执行文件命名为 `video-compare`
+- 可执行文件命名为 `PlayerX`
 - 打包后生成 DMG 镜像文件
 
 ## 目录结构

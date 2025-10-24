@@ -13,10 +13,15 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('exe-log', (event, data) => {
       callback(data)
     })
-  }
+  },
+
+  // 新增：手动检查更新
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates')
 })
 
 contextBridge.exposeInMainWorld('menu', {
   onSelectLeft: (cb) => ipcRenderer.on('menu-select-left', cb),
   onSelectRight: (cb) => ipcRenderer.on('menu-select-right', cb),
+  // 新增：菜单触发手动检查更新
+  onCheckUpdate: (cb) => ipcRenderer.on('menu-check-update', cb),
 })

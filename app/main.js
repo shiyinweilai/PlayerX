@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const https = require('https')
 let win
 
 function createWindow() {
@@ -89,6 +90,8 @@ function buildAppMenu() {
       label: '帮助',
       submenu: [
         { label: '使用说明', click: showHelp }, { type: 'separator' },
+        { label: '检查更新…', click: () => { if (win) win.webContents.send('menu-check-update') } },
+        { type: 'separator' },
         { label: '更多说明', click: () => shell.openExternal('https://iwiki.woa.com/p/4016316239 PlayerX使用说明') },
         {
           label: '关于我们', click: () => dialog.showMessageBox({
@@ -464,6 +467,202 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
       reject(`执行ffprobe出错: ${error.message}`)
     }
   })
+})
+
+// 增强：支持拉取远程版本JSON进行对比（UPDATE_JSON_URL 优先；若 UPDATE_URL 以 .json 结尾也视为清单），并按平台选择下载链接
+ipcMain.handle('check-for-updates', async () => {
+  const currentVersion = app.getVersion()
+  // 优先使用环境变量，可在本地或打包环境通过环境变量注入清单地址或自定义头
+  const defaultManifest = "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/latest.json"
+  const manifestUrl = process.env.UPDATE_JSON_URL || defaultManifest
+  const headerEnv = process.env.UPDATE_JSON_HEADERS || process.env.PRIVATE_TOKEN || ''
+
+  // 将可选的自定义 headers 从 JSON 字符串解析（例如：{"Authorization":"Bearer ..."}），或从 PRIVATE_TOKEN 环境变量转换为 PRIVATE-TOKEN
+  let extraHeaders = {}
+  if (headerEnv) {
+    try {
+      // 如果是单个 token 字符串（PRIVATE_TOKEN），则设置 PRIVATE-TOKEN
+      if (!headerEnv.trim().startsWith('{')) {
+        extraHeaders['PRIVATE-TOKEN'] = headerEnv.trim()
+      } else {
+        extraHeaders = JSON.parse(headerEnv)
+      }
+    } catch (e) {
+      console.warn('解析 UPDATE_JSON_HEADERS 失败，将忽略自定义头:', e.message)
+      extraHeaders = {}
+    }
+  }
+
+  if (!manifestUrl) {
+    await dialog.showMessageBox({
+      type: 'info',
+      title: '检查更新',
+      message: `当前版本：${currentVersion}`,
+      detail: '未配置更新源。请设置环境变量 UPDATE_JSON_URL 指向版本清单 JSON\n例如：UPDATE_JSON_URL=https://your-domain.com/playerx/latest.json',
+      buttons: ['我知道了']
+    })
+    return { status: 'no-source', currentVersion }
+  }
+
+  // 数字分段版本比较：1.2.10 > 1.2.3
+  const cmp = (a, b) => {
+    const pa = String(a).split('.').map(n => parseInt(n || '0', 10))
+    const pb = String(b).split('.').map(n => parseInt(n || '0', 10))
+    const len = Math.max(pa.length, pb.length)
+    for (let i = 0; i < len; i++) {
+      const x = pa[i] || 0; const y = pb[i] || 0
+      if (x > y) return 1
+      if (x < y) return -1
+    }
+    return 0
+  }
+
+  // 帮助函数：保存响应到 cache/latest.json 以便排查（异步不阻塞主流程）
+  const saveCache = (content) => {
+    try {
+      const cacheDir = path.join(__dirname, '..', 'cache')
+      if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
+      fs.writeFileSync(path.join(cacheDir, 'latest.json'), content, 'utf8')
+    } catch (e) {
+      console.warn('写入缓存失败:', e.message)
+    }
+  }
+
+  try {
+    let data = ''
+
+    // 支持 file:// 或 本地路径
+    if (manifestUrl.startsWith('file://') || /^[a-zA-Z]:\\/.test(manifestUrl)) {
+      let localPath = manifestUrl
+n
+      if (manifestUrl.startsWith('file://')) {
+        localPath = manifestUrl.replace('file://', '')
+      }
+      try {
+        data = fs.readFileSync(localPath, 'utf8')
+      } catch (err) {
+        throw new Error('读取本地清单失败: ' + err.message)
+      }
+    } else {
+      // 网络请求，支持最多 5 次重定向
+      data = await new Promise((resolve, reject) => {
+        try {
+          const urlObj = new URL(manifestUrl)
+          const maxRedirects = 5
+          let redirects = 0
+
+          const doGet = (urlToGet) => {
+            const opts = {
+              method: 'GET',
+              timeout: 10000,
+              headers: Object.assign({ 'Accept': 'application/json', 'User-Agent': `${app.name}/${app.getVersion()}` }, extraHeaders)
+            }
+            const lib = urlToGet.startsWith('https:') ? require('https') : require('http')
+            const req = lib.get(urlToGet, opts, (res) => {
+              // 处理重定向
+              if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                if (redirects++ >= maxRedirects) {
+                  reject(new Error('重定向次数过多'))
+                  return
+                }
+                // 相对跳转处理
+                const next = new URL(res.headers.location, urlToGet).toString()
+                res.resume()
+                doGet(next)
+                return
+              }
+
+              if (res.statusCode && res.statusCode >= 400) {
+                reject(new Error(`HTTP 错误 ${res.statusCode}`))
+                return
+              }
+
+              let buf = ''
+              res.setEncoding('utf8')
+              res.on('data', (chunk) => buf += chunk)
+              res.on('end', () => {
+                // 如果响应为空但 Content-Length 显示非 0，还是交给上层处理（可能是服务器 HEAD/GET 行为差异）
+                resolve(buf)
+              })
+            })
+
+            req.on('error', (err) => reject(err))
+            req.on('timeout', () => {
+              req.destroy()
+              reject(new Error('请求超时'))
+            })
+          }
+
+          doGet(urlObj.toString())
+        } catch (err) {
+          reject(err)
+        }
+      })
+    }
+
+    // 保存缓存供调试
+    try { saveCache(data) } catch (e) {}
+
+    if (!data || data.trim().length === 0) throw new Error('远程返回内容为空，可能是需要鉴权或返回了空响应')
+
+    // 解析 JSON：要求至少有 version 字段，下载链接可在不同位置（优先平台字段）
+    let json
+    try { json = JSON.parse(data) } catch (e) { throw new Error('JSON 解析失败: ' + e.message + '\n响应预览:' + data.slice(0, 200)) }
+
+    const latestVersion = json.version || json.latest || json.tag || ''
+
+    // 获取下载链接：优先检查 platforms 字段（按 process.platform），其次检查通用 url 字段
+    let downloadUrl = ''
+    if (json.platforms && typeof json.platforms === 'object') {
+      const platformKey = process.platform
+      downloadUrl = json.platforms[platformKey] || json.platforms[platformKey.replace('darwin', 'mac')] || json.platforms[platformKey.replace('win32', 'win')]
+      if (!downloadUrl) {
+        const p = json.platforms[platformKey] || json.platforms['win32'] || json.platforms['darwin'] || json.platforms['mac'] || json.platforms['win']
+        if (p && typeof p === 'object') downloadUrl = p.url || p.download || p.downloadUrl || ''
+      }
+    }
+    if (!downloadUrl) downloadUrl = json.url || json.download || json.downloadUrl || ''
+
+    if (!latestVersion) {
+      throw new Error('清单缺少版本字段：version')
+    }
+
+    const rel = cmp(latestVersion, currentVersion)
+    if (rel > 0) {
+      const btn = await dialog.showMessageBox({
+        type: 'info',
+        title: '发现新版本',
+        message: `当前版本：${currentVersion}，最新版本：${latestVersion}`,
+        detail: (json.notes || json.changelog || '是否前往下载新版本？'),
+        buttons: downloadUrl ? ['前往下载', '稍后'] : ['好的'],
+        defaultId: 0,
+        cancelId: 1
+      })
+      if (downloadUrl && btn.response === 0) {
+        await shell.openExternal(downloadUrl)
+        return { status: 'opened', currentVersion, latestVersion, updateUrl: downloadUrl }
+      }
+      return { status: 'update-available', currentVersion, latestVersion, updateUrl: downloadUrl }
+    }
+
+    await dialog.showMessageBox({
+      type: 'info',
+      title: '已是最新版本',
+      message: `当前版本：${currentVersion}`,
+      detail: `最新版本：${latestVersion}`,
+      buttons: ['好的']
+    })
+    return { status: 'uptodate', currentVersion, latestVersion }
+  } catch (e) {
+    await dialog.showMessageBox({
+      type: 'error',
+      title: '检查更新失败',
+      message: '无法获取远程版本信息',
+      detail: e.message,
+      buttons: ['关闭']
+    })
+    return { status: 'error', error: e.message }
+  }
 })
 
 app.on('window-all-closed', () => {
