@@ -76,6 +76,36 @@ function buildAppMenu() {
       ]
     },
 
+    // 编辑菜单（新增，支持快捷键）
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        ...(isMac ? [
+          { role: 'pasteAndMatchStyle', label: '粘贴并匹配样式' },
+          { role: 'delete', label: '删除' },
+          { role: 'selectAll', label: '全选' },
+          { type: 'separator' },
+          {
+            label: '语音',
+            submenu: [
+              { role: 'startSpeaking', label: '开始朗读' },
+              { role: 'stopSpeaking', label: '停止朗读' }
+            ]
+          }
+        ] : [
+          { role: 'delete', label: '删除' },
+          { type: 'separator' },
+          { role: 'selectAll', label: '全选' }
+        ])
+      ]
+    },
+
     // 视图菜单（显式中文定义：便于增删）
     {
       label: '视图',
@@ -366,36 +396,56 @@ function getFfprobePath() {
 
 // 处理视频信息探测请求
 ipcMain.handle('probe-video-info', async (event, filePath) => {
-  return new Promise((resolve, reject) => {
-    const ffprobePath = getFfprobePath()
+  const ffprobePath = getFfprobePath()
+  console.log('ffprobe路径:', ffprobePath)
+  console.log('探测视频文件:', filePath)
 
-    console.log('ffprobe路径:', ffprobePath)
-    console.log('探测视频文件:', filePath)
+  // 简单判断是否为 URL
+  const isUrl = filePath.match(/^(http|https|rtmp|rtsp):\/\//)
 
-    // 检查文件是否存在
-    if (!fs.existsSync(filePath)) {
-      return reject(`视频文件不存在: ${filePath}`)
-    }
+  // 检查文件是否存在（仅本地文件）
+  if (!isUrl && !fs.existsSync(filePath)) {
+    throw new Error(`视频文件不存在: ${filePath}`)
+  }
 
-    // 检查ffprobe是否存在
-    if (!fs.existsSync(ffprobePath)) {
-      return reject(`ffprobe工具不存在: ${ffprobePath}`)
-    }
+  // 检查ffprobe是否存在
+  if (!fs.existsSync(ffprobePath)) {
+    throw new Error(`ffprobe工具不存在: ${ffprobePath}`)
+  }
 
-    const { spawn } = require('child_process')
+  const { spawn } = require('child_process')
 
-    try {
-      // 使用ffprobe探测视频信息
-      const ffprobe = spawn(ffprobePath, [
+  // 定义探测函数，支持超时
+  const probe = async () => {
+    return new Promise((resolve, reject) => {
+      const args = [
         '-v', 'quiet',
         '-print_format', 'json',
         '-show_format',
-        '-show_streams',
-        filePath
-      ])
+        '-show_streams'
+      ]
+      
+      // 针对 URL 优化探测参数，减少等待时间
+      if (isUrl) {
+        args.push('-analyzeduration', '10000000') // 10秒
+        args.push('-probesize', '10000000') // 10MB
+      }
+      
+      args.push(filePath)
 
+      const ffprobe = spawn(ffprobePath, args)
+      
       let stdoutData = ''
       let stderrData = ''
+      let isTimeout = false
+
+      // 设置超时 (URL 15秒，本地 5秒)
+      const timeoutMs = isUrl ? 15000 : 5000
+      const timer = setTimeout(() => {
+        isTimeout = true
+        ffprobe.kill()
+        reject(new Error(`探测超时 (${timeoutMs}ms)`))
+      }, timeoutMs)
 
       ffprobe.stdout.on('data', (data) => {
         stdoutData += data.toString()
@@ -406,6 +456,9 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
       })
 
       ffprobe.on('close', (code) => {
+        clearTimeout(timer)
+        if (isTimeout) return
+
         if (code === 0) {
           try {
             const videoInfo = JSON.parse(stdoutData)
@@ -452,23 +505,38 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
 
             resolve(info)
           } catch (parseError) {
-            reject(`解析ffprobe输出失败: ${parseError.message}`)
+            reject(new Error(`解析ffprobe输出失败: ${parseError.message}`))
           }
         } else {
-          reject(`ffprobe执行失败，退出码: ${code}\n错误信息: ${stderrData}`)
+          reject(new Error(`ffprobe执行失败，退出码: ${code}\n错误信息: ${stderrData}`))
         }
       })
 
       ffprobe.on('error', (error) => {
-        reject(`启动ffprobe失败: ${error.message}`)
+        clearTimeout(timer)
+        if (!isTimeout) {
+          reject(new Error(`启动ffprobe失败: ${error.message}`))
+        }
       })
+    })
+  }
 
-    } catch (error) {
-      reject(`执行ffprobe出错: ${error.message}`)
+  // 重试逻辑
+  const maxRetries = isUrl ? 1 : 0
+  let lastError
+  
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      if (i > 0) console.log(`重试探测 (${i}/${maxRetries}): ${filePath}`)
+      return await probe()
+    } catch (err) {
+      lastError = err
+      console.warn(`探测尝试 ${i + 1} 失败: ${err.message}`)
     }
-  })
+  }
+  
+  throw lastError
 })
-
 // 增强：支持拉取远程版本JSON进行对比（UPDATE_JSON_URL 优先；若 UPDATE_URL 以 .json 结尾也视为清单），并按平台选择下载链接
 ipcMain.handle('check-for-updates', async () => {
   const currentVersion = app.getVersion()

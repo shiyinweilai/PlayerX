@@ -180,6 +180,7 @@
       border: 1px solid #e9ecef;
       align-items: flex-start;
       padding: 10px;
+      padding-right: 50px; /* 留出 URL 按钮空间 */
       min-height: 45px;
       background: #fff;
       transform: none;
@@ -191,6 +192,53 @@
     .video-info.has-file:hover {
       border-color: #667eea;
       background: #f8f9fa;
+    }
+
+    .url-trigger {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #667eea;
+      cursor: pointer;
+      padding: 6px 16px;
+      background: rgba(102, 126, 234, 0.1);
+      border-radius: 20px;
+      transition: all 0.2s ease;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      z-index: 5;
+    }
+
+    .url-trigger:hover {
+      background: #667eea;
+      color: white;
+      transform: translateY(-1px);
+    }
+
+    .video-info.has-file .url-trigger {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      margin-top: 0;
+      padding: 8px;
+      border-radius: 50%;
+      width: 34px;
+      height: 34px;
+      justify-content: center;
+      background: transparent;
+      color: #adb5bd;
+    }
+
+    .video-info.has-file .url-trigger:hover {
+      background: #e3f2fd;
+      color: #667eea;
+      transform: translateY(-50%);
+    }
+
+    .video-info.has-file .url-trigger span {
+      display: none;
     }
 
     .info-label {
@@ -538,6 +586,142 @@
       transform: translateY(-1px);
       box-shadow: 0 3px 8px rgba(102, 126, 234, 0.4);
     }
+
+    /* Modal Styles */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .modal-overlay.show {
+      display: flex;
+      opacity: 1;
+    }
+
+    .modal-content {
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      width: 400px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+      transform: translateY(-20px);
+      transition: transform 0.3s ease;
+    }
+
+    .modal-overlay.show .modal-content {
+      transform: translateY(0);
+    }
+
+    .modal-content h3 {
+      margin-bottom: 15px;
+      color: #333;
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .input-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      align-items: center;
+    }
+
+    .modal-content input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .paste-btn {
+      padding: 0;
+      width: 40px;
+      height: 38px;
+      background: #f8f9fa;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      color: #5f6368;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .paste-btn:hover {
+      background: #e8eaed;
+      color: #333;
+      border-color: #ccc;
+    }
+
+    .modal-content input:focus {
+      border-color: #667eea;
+    }
+
+    .modal-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .modal-btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .modal-btn.cancel {
+      background: #f1f3f4;
+      border: 1px solid transparent;
+      color: #5f6368;
+    }
+
+    .modal-btn.cancel:hover {
+      background: #e8eaed;
+    }
+
+    .modal-btn.confirm {
+      background: #667eea;
+      border: 1px solid transparent;
+      color: white;
+    }
+
+    .modal-btn.confirm:hover {
+      background: #5a6fd6;
+      box-shadow: 0 2px 6px rgba(102, 126, 234, 0.3);
+    }
+
+    /* Loading Spinner */
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #667eea;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 20px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -580,7 +764,16 @@
             </svg>
           </div>
           <div class="info-label">当前选中视频：</div>
-          <div class="info-content" id="videoName1">点击选择或拖拽视频到此处</div>
+          <div class="info-content" id="videoName1">点击选择或拖拽（本地）视频到此处</div>
+          
+          <div class="url-trigger" id="urlBtn1" title="输入网络视频 URL">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+            <span>输入 URL</span>
+          </div>
+
           <!-- 新增：详细视频信息 -->
           <div class="video-details" id="videoDetails1">
             <div class="detail-item"><span class="detail-label">时长：</span><span id="duration1">-</span></div>
@@ -609,7 +802,16 @@
             </svg>
           </div>
           <div class="info-label">当前选中视频：</div>
-          <div class="info-content" id="videoName2">点击选择或拖拽视频到此处</div>
+          <div class="info-content" id="videoName2">点击选择或拖拽（本地）视频到此处</div>
+          
+          <div class="url-trigger" id="urlBtn2" title="输入网络视频 URL">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+            <span>输入 URL</span>
+          </div>
+
           <!-- 新增：详细视频信息 -->
           <div class="video-details" id="videoDetails2">
             <div class="detail-item"><span class="detail-label">时长：</span><span id="duration2">-</span></div>
@@ -630,6 +832,36 @@
     <div class="output-section">
       <div class="output-label">执行状态</div>
       <div class="output-box" id="output">等待操作...</div>
+    </div>
+  </div>
+
+  <!-- Loading Modal -->
+  <div id="loadingModal" class="modal-overlay">
+    <div class="modal-content" style="text-align: center; width: 300px;">
+      <div class="spinner"></div>
+      <h3 style="margin-bottom: 10px;">正在缓冲...</h3>
+      <p style="color: #666; font-size: 14px;">检测到网络视频，请耐心等待加载</p>
+    </div>
+  </div>
+
+  <!-- URL Input Modal -->
+  <div id="urlModal" class="modal-overlay">
+    <div class="modal-content">
+      <h3>输入视频 URL</h3>
+      <div class="input-group">
+        <input type="text" id="urlInput" placeholder="请输入视频地址 (http://, rtmp://, etc.)">
+        <button id="uploadBtn" class="paste-btn" title="上传 URL 列表文件">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-buttons">
+        <button id="urlCancelBtn" class="modal-btn cancel">取消</button>
+        <button id="urlConfirmBtn" class="modal-btn confirm">确定</button>
+      </div>
     </div>
   </div>
 
@@ -670,6 +902,12 @@
           return false
         }
         
+        // 检查是否为 URL (支持常见流媒体协议)
+        if (filePath.match(/^(http|https|rtmp|rtsp|udp|tcp|ftp):\/\//i)) {
+          console.log('检测到网络视频 URL:', filePath)
+          return true
+        }
+        
         const ext = filePath.toLowerCase().substring(filePath.lastIndexOf('.')).toLowerCase()
         console.log('文件扩展名:', ext)
         
@@ -677,6 +915,55 @@
         console.log('文件是否有效:', isValid)
         
         return isValid
+      }
+
+      // Modal elements
+      const urlModal = document.getElementById('urlModal')
+      const urlInput = document.getElementById('urlInput')
+      const uploadBtn = document.getElementById('uploadBtn')
+      const urlConfirmBtn = document.getElementById('urlConfirmBtn')
+      const urlCancelBtn = document.getElementById('urlCancelBtn')
+      let currentUrlPanelIndex = 1
+
+      // 上传功能（待实现）
+      uploadBtn.onclick = () => {
+        console.log('上传功能待实现')
+        // TODO: 实现文件读取和 URL 提取
+      }
+
+      function showUrlModal(panelIndex) {
+        currentUrlPanelIndex = panelIndex
+        urlInput.value = ''
+        urlModal.classList.add('show')
+        setTimeout(() => urlInput.focus(), 50)
+      }
+
+      function hideUrlModal() {
+        urlModal.classList.remove('show')
+      }
+
+      function handleUrlSubmit() {
+        const url = urlInput.value.trim()
+        if (url) {
+          handleFiles([url], currentUrlPanelIndex)
+        }
+        hideUrlModal()
+      }
+
+      urlConfirmBtn.onclick = handleUrlSubmit
+      urlCancelBtn.onclick = hideUrlModal
+      
+      urlModal.onclick = (e) => {
+        if (e.target === urlModal) hideUrlModal()
+      }
+
+      urlInput.onkeydown = (e) => {
+        if (e.key === 'Enter') handleUrlSubmit()
+        if (e.key === 'Escape') hideUrlModal()
+      }
+
+      function inputUrl(panelIndex) {
+        showUrlModal(panelIndex)
       }
 
       function renderFileList(fileListElement, files, panelIndex) {
@@ -720,7 +1007,7 @@
           // 探测视频信息
           probeVideoInfo(filePath, panelIndex)
         } else {
-          videoNameElement.textContent = '点击选择或拖拽视频到此处'
+          videoNameElement.textContent = '点击选择或拖拽（本地）视频到此处'
           videoNameElement.title = ''
           videoInfoElement.classList.add('empty')
           videoInfoElement.classList.remove('has-file')
@@ -734,8 +1021,24 @@
       }
 
       // 绑定点击事件
-      videoInfo1.addEventListener('click', () => openFilesAndHandle(1))
-      videoInfo2.addEventListener('click', () => openFilesAndHandle(2))
+      videoInfo1.addEventListener('click', (e) => {
+        if (e.target.closest('.url-trigger')) return
+        openFilesAndHandle(1)
+      })
+      videoInfo2.addEventListener('click', (e) => {
+        if (e.target.closest('.url-trigger')) return
+        openFilesAndHandle(2)
+      })
+
+      // 绑定 URL 按钮点击事件
+      document.getElementById('urlBtn1').addEventListener('click', (e) => {
+        e.stopPropagation()
+        inputUrl(1)
+      })
+      document.getElementById('urlBtn2').addEventListener('click', (e) => {
+        e.stopPropagation()
+        inputUrl(2)
+      })
 
       // 新增：重置视频详细信息
       function resetVideoDetails(panelIndex) {
@@ -1064,21 +1367,48 @@
         console.log('文件2:', file2Path)
         console.log('自定义参数:', customInput)
         
-        output.textContent = '正在启动视频对比工具...'
+        // 检查是否包含 URL
+        const isUrl = (path) => path && path.match(/^(http|https|rtmp|rtsp|udp|tcp|ftp):\/\//i)
+        const hasUrl = isUrl(file1Path) || isUrl(file2Path)
+        
+        const loadingModal = document.getElementById('loadingModal')
+        
+        if (hasUrl) {
+          output.textContent = '正在启动视频对比工具 (检测到网络视频，正在缓冲，请耐心等待)...'
+          if (loadingModal) loadingModal.classList.add('show')
+        } else {
+          output.textContent = '正在启动视频对比工具...'
+        }
+        
         output.className = 'output-box running'
         runBtn.disabled = true
+        
+        // 给UI一点时间渲染
+        await new Promise(resolve => setTimeout(resolve, 100))
 
+        let isSuccess = false
         try {
           const result = await window.api.runExe(file1Path, file2Path, selectedMode, customInput)
           console.log('启动结果:', result)
           output.textContent = '✅ ' + result
           output.className = 'output-box success'
+          isSuccess = true
         } catch (e) {
           console.error('启动失败:', e)
           output.textContent = '❌ ' + e
           output.className = 'output-box error'
         } finally {
           runBtn.disabled = false
+          if (loadingModal) {
+            if (hasUrl && isSuccess) {
+              // URL 模式下延迟关闭，给 video-compare 缓冲的时间
+              setTimeout(() => {
+                loadingModal.classList.remove('show')
+              }, 10000)
+            } else {
+              loadingModal.classList.remove('show')
+            }
+          }
         }
       }
 
