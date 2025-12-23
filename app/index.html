@@ -1046,6 +1046,12 @@
         })
       })
 
+      // 图标常量
+      const ICONS = {
+        local: `<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`,
+        url: `<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`
+      }
+
       function updatePanelUI(panelIndex) {
         const mode = panelModes[panelIndex]
         const videoNameElement = panelIndex === 1 ? videoName1 : videoName2
@@ -1057,31 +1063,9 @@
         
         // 如果当前没有文件，更新提示文字和图标
         if (!videoInfoElement.classList.contains('has-file')) {
-          if (mode === 'local') {
-            videoNameElement.textContent = '点击选择或拖拽（本地）视频到此处'
-            // 恢复本地视频图标
-            const iconContainer = videoInfoElement.querySelector('.upload-icon')
-            if (iconContainer) {
-              iconContainer.innerHTML = `
-                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>`
-            }
-          } else {
-            videoNameElement.textContent = '点击输入网络视频 URL'
-            // 切换为网络视频图标
-            const iconContainer = videoInfoElement.querySelector('.upload-icon')
-            if (iconContainer) {
-              iconContainer.innerHTML = `
-                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <line x1="2" y1="12" x2="22" y2="12"></line>
-                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-                </svg>`
-            }
-          }
+          videoNameElement.textContent = mode === 'local' ? '点击选择或拖拽（本地）视频到此处' : '点击输入网络视频 URL'
+          const iconContainer = videoInfoElement.querySelector('.upload-icon')
+          if (iconContainer) iconContainer.innerHTML = ICONS[mode]
         }
       }
 
@@ -1090,18 +1074,13 @@
       let currentImportPanelIndex = 1
 
       // 绑定导入按钮事件
-      document.getElementById('importBtn1').addEventListener('click', (e) => {
-        e.stopPropagation()
-        currentImportPanelIndex = 1
-        urlFileInput.value = '' // 重置，允许重复选择同一文件
-        urlFileInput.click()
-      })
-
-      document.getElementById('importBtn2').addEventListener('click', (e) => {
-        e.stopPropagation()
-        currentImportPanelIndex = 2
-        urlFileInput.value = ''
-        urlFileInput.click()
+      ;[1, 2].forEach(idx => {
+        document.getElementById(`importBtn${idx}`).addEventListener('click', (e) => {
+          e.stopPropagation()
+          currentImportPanelIndex = idx
+          urlFileInput.value = ''
+          urlFileInput.click()
+        })
       })
 
       // 处理文件选择
@@ -1267,46 +1246,26 @@
       }
 
       // 绑定点击事件
-      videoInfo1.addEventListener('click', (e) => {
-        if (e.target.closest('.url-trigger') || e.target.closest('.import-trigger')) return
-        if (panelModes[1] === 'local') {
-          openFilesAndHandle(1)
-        } else {
-          inputUrl(1)
-        }
+      ;[1, 2].forEach(idx => {
+        const videoInfo = document.getElementById(`videoInfo${idx}`)
+        videoInfo.addEventListener('click', (e) => {
+          if (e.target.closest('.url-trigger') || e.target.closest('.import-trigger')) return
+          if (panelModes[idx] === 'local') {
+            openFilesAndHandle(idx)
+          } else {
+            inputUrl(idx)
+          }
+        })
       })
-      videoInfo2.addEventListener('click', (e) => {
-        if (e.target.closest('.url-trigger') || e.target.closest('.import-trigger')) return
-        if (panelModes[2] === 'local') {
-          openFilesAndHandle(2)
-        } else {
-          inputUrl(2)
-        }
-      })
-
-      // 移除旧的 URL 按钮点击事件绑定（已通过 Tab 切换替代）
-      /*
-      document.getElementById('urlBtn1').addEventListener('click', (e) => {
-        e.stopPropagation()
-        inputUrl(1)
-      })
-      document.getElementById('urlBtn2').addEventListener('click', (e) => {
-        e.stopPropagation()
-        inputUrl(2)
-      })
-      */
 
       // 新增：重置视频详细信息
       function resetVideoDetails(panelIndex) {
         const suffix = panelIndex === 1 ? '1' : '2'
-        document.getElementById(`duration${suffix}`).textContent = '-'
-        document.getElementById(`size${suffix}`).textContent = '-'
-        document.getElementById(`format${suffix}`).textContent = '-'
-        document.getElementById(`resolution${suffix}`).textContent = '-'
-        document.getElementById(`videoCodec${suffix}`).textContent = '-'
-        document.getElementById(`audioCodec${suffix}`).textContent = '-'
-        document.getElementById(`pixelFormat${suffix}`).textContent = '-'
-        document.getElementById(`colorSpace${suffix}`).textContent = '-'
+        const fields = ['duration', 'size', 'format', 'resolution', 'videoCodec', 'audioCodec', 'pixelFormat', 'colorSpace']
+        fields.forEach(field => {
+          const el = document.getElementById(`${field}${suffix}`)
+          if (el) el.textContent = '-'
+        })
       }
 
       // 新增：探测视频信息
@@ -1330,14 +1289,11 @@
           console.error(`视频信息探测失败:`, error)
           
           // 显示错误信息
-          document.getElementById(`duration${suffix}`).textContent = '探测失败'
-          document.getElementById(`size${suffix}`).textContent = '探测失败'
-          document.getElementById(`format${suffix}`).textContent = '探测失败'
-          document.getElementById(`resolution${suffix}`).textContent = '探测失败'
-          document.getElementById(`videoCodec${suffix}`).textContent = '探测失败'
-          document.getElementById(`audioCodec${suffix}`).textContent = '探测失败'
-          document.getElementById(`pixelFormat${suffix}`).textContent = '探测失败'
-          document.getElementById(`colorSpace${suffix}`).textContent = '探测失败'
+          const fields = ['duration', 'size', 'format', 'resolution', 'videoCodec', 'audioCodec', 'pixelFormat', 'colorSpace']
+          fields.forEach(field => {
+            const el = document.getElementById(`${field}${suffix}`)
+            if (el) el.textContent = '探测失败'
+          })
           
           // 在输出框中显示错误
           output.textContent = `❌ 视频信息探测失败: ${error}`
@@ -1399,14 +1355,21 @@
         }
         
         // 更新显示
-        document.getElementById(`duration${suffix}`).textContent = durationText;
-        document.getElementById(`size${suffix}`).textContent = sizeText;
-        document.getElementById(`format${suffix}`).textContent = videoInfo.format || '-';
-        document.getElementById(`resolution${suffix}`).textContent = resolution;
-        document.getElementById(`videoCodec${suffix}`).textContent = videoCodec;
-        document.getElementById(`audioCodec${suffix}`).textContent = audioCodec;
-        document.getElementById(`pixelFormat${suffix}`).textContent = pixelFormat;
-        document.getElementById(`colorSpace${suffix}`).textContent = colorSpace;
+        const updates = {
+          duration: durationText,
+          size: sizeText,
+          format: videoInfo.format || '-',
+          resolution: resolution,
+          videoCodec: videoCodec,
+          audioCodec: audioCodec,
+          pixelFormat: pixelFormat,
+          colorSpace: colorSpace
+        }
+        
+        for (const [key, value] of Object.entries(updates)) {
+          const el = document.getElementById(`${key}${suffix}`)
+          if (el) el.textContent = value
+        }
         
         console.log(`面板${panelIndex}视频信息显示完成`);
       }
