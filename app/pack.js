@@ -17,17 +17,20 @@ function checkRequiredFiles(platform) {
   const innerDir = platform === 'win32' ? 'win-inner' : 'mac-inner';
   const requiredFiles = getRequiredFiles(platform);
   
+  // 修正路径：文件现在位于 src/external 下
+  const externalDir = path.join(__dirname, 'src', 'external', innerDir);
+  
   console.log(`检查${innerDir}目录下的必要文件是否存在...`);
   
   const missingFiles = [];
   if (platform === 'darwin') {
-    const appBundleExists = fs.existsSync(path.join(__dirname, innerDir, 'video-compare'));
+    const appBundleExists = fs.existsSync(path.join(externalDir, 'video-compare'));
     if (!appBundleExists) {
       missingFiles.push('video-compare (.app 应用包)');
     }
   } else {
     requiredFiles.forEach(file => {
-      if (!fs.existsSync(path.join(__dirname, innerDir, file))) {
+      if (!fs.existsSync(path.join(externalDir, file))) {
         missingFiles.push(file);
       }
     });
@@ -35,7 +38,7 @@ function checkRequiredFiles(platform) {
   
   if (missingFiles.length > 0) {
     console.error(`以下必要文件缺失: ${missingFiles.join(', ')}`);
-    console.log(`请将${platform}平台的视频比较工具放入${innerDir}目录。`);
+    console.log(`请将${platform}平台的视频比较工具放入 src/external/${innerDir} 目录。`);
     return false;
   }
   
@@ -65,7 +68,7 @@ function main() {
   // 验证平台参数有效性
   const validPlatforms = ['win32', 'darwin'];
   if (!validPlatforms.includes(platform)) {
-    console.error(`错误：无效的平台参数 "${platform}"`);
+    console.error(`错误：无效的平台参数 \"${platform}\"`);
     console.error(`有效平台：${validPlatforms.join(', ')}`);
     process.exit(1);
   }
@@ -86,11 +89,12 @@ function main() {
     appId: 'com.playerx.app',
     productName: 'PlayerX',
     asar: true,
-    asarUnpack: [isMac ? 'mac-inner/**' : 'win-inner/**'],
-    files: ['**/*', '!dist/**'],
+    // 排除 src/external，避免打入 asar
+    files: ['**/*', '!dist/**', '!src/external/**'],
+    // 使用 extraResources 将外部文件复制到 Resources 目录
     extraResources: isMac
-      ? [{ from: 'mac-inner', to: 'mac-inner' }]
-      : [{ from: 'win-inner', to: 'win-inner' }],
+      ? [{ from: 'src/external/mac-inner', to: 'mac-inner' }]
+      : [{ from: 'src/external/win-inner', to: 'win-inner' }],
     mac: {
       hardenedRuntime: false,
       gatekeeperAssess: false,
@@ -103,7 +107,6 @@ function main() {
     },
     dmg: { sign: false }
   };
-
   const cfgPath = path.join(__dirname, 'electron-builder.temp.json');
   fs.writeFileSync(cfgPath, JSON.stringify(builderConfig, null, 2));
 

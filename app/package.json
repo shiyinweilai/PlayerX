@@ -33,12 +33,19 @@
     },
     "files": [
       "src/**",
-      "win-inner/**",
-      "mac-inner/**"
+      "!src/external/**"
     ],
-    "asarUnpack": [
-      "win-inner/**",
-      "mac-inner/**"
+    "extraResources": [
+      {
+        "from": "src/external/win-inner",
+        "to": "win-inner",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "src/external/mac-inner",
+        "to": "mac-inner",
+        "filter": ["**/*"]
+      }
     ],
     "copyright": "Copyright © 2025 PlayerX",
     "mac": {

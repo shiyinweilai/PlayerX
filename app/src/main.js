@@ -266,12 +266,12 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
     let exePath
 
     if (app.isPackaged) {
-      // 打包后，可执行文件在 app.asar.unpacked 目录中
-      exePath = path.join(process.resourcesPath, 'app.asar.unpacked', exeDirName, exeName)
+      // 打包后，可执行文件在 Resources 目录中 (通过 extraResources 复制)
+      exePath = path.join(process.resourcesPath, exeDirName, exeName)
     } else {
-      // 开发环境，可执行文件在项目目录下的对应平台子目录
-      // 使用 path.resolve 确保路径正确
-      exePath = path.resolve(__dirname, '..', exeDirName, exeName)
+      // 开发环境，可执行文件在 src/external 下的对应平台子目录
+      // __dirname 是 src 目录
+      exePath = path.resolve(__dirname, 'external', exeDirName, exeName)
     }
 
     console.log('当前平台:', os.platform())
@@ -292,11 +292,11 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
 
         // 尝试其他可能的路径
         const altPath1 = path.resolve(process.cwd(), exeDirName, exeName)
-        const altPath2 = path.resolve(__dirname, '..', exeDirName, exeName)
+        const altPath2 = path.resolve(__dirname, 'external', exeDirName, exeName)
         console.log('备选路径1:', altPath1)
         console.log('备选路径2:', altPath2)
 
-        return reject(`找不到可执行文件: ${exePath}\n请确认已将 ${exeName} 和相关依赖文件放入 ${exeDirName} 目录，且在打包配置中包含并 asarUnpack。`)
+        return reject(`找不到可执行文件: ${exePath}\n请确认已将 ${exeName} 和相关依赖文件放入 src/external/${exeDirName} 目录，且在打包配置中正确配置 extraResources。`)
       }
 
       const exeCwd = path.dirname(exePath)
@@ -386,9 +386,9 @@ function getFfprobePath() {
 
   let ffprobePath
   if (app.isPackaged) {
-    ffprobePath = path.join(process.resourcesPath, 'app.asar.unpacked', ffprobeDirName, ffprobeName)
+    ffprobePath = path.join(process.resourcesPath, ffprobeDirName, ffprobeName)
   } else {
-    ffprobePath = path.resolve(__dirname, '..', ffprobeDirName, ffprobeName)
+    ffprobePath = path.resolve(__dirname, 'external', ffprobeDirName, ffprobeName)
   }
 
   return ffprobePath
