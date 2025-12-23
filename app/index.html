@@ -336,10 +336,43 @@
       font-size: 11px;
       color: #666;
       line-height: 1.3;
+      position: relative;
+      z-index: 1;
     }
 
     .video-details.show {
       display: block;
+    }
+
+    /* 新增：点击提示样式 */
+    .click-hint {
+      display: none;
+      position: absolute;
+      right: 60px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 36px;
+      font-weight: 800;
+      color: rgba(0, 0, 0, 0.04);
+      pointer-events: none;
+      user-select: none;
+      white-space: nowrap;
+      z-index: 0;
+      transition: color 0.3s ease;
+      font-family: 'Segoe UI', sans-serif;
+    }
+
+    .video-info.has-file .click-hint {
+      display: block;
+    }
+
+    .video-info.has-file:hover .click-hint {
+      color: rgba(102, 126, 234, 0.15);
+    }
+
+    .info-content, .info-label {
+      position: relative;
+      z-index: 1;
     }
 
     .detail-item {
@@ -825,6 +858,8 @@
             <div class="detail-item"><span class="detail-label">像素格式：</span><span id="pixelFormat1">-</span></div>
             <div class="detail-item"><span class="detail-label">颜色空间：</span><span id="colorSpace1">-</span></div>
           </div>
+          
+          <div class="click-hint">点击继续添加</div>
         </div>
         
         <div class="file-list" id="fileList1"></div>
@@ -869,6 +904,8 @@
             <div class="detail-item"><span class="detail-label">像素格式：</span><span id="pixelFormat2">-</span></div>
             <div class="detail-item"><span class="detail-label">颜色空间：</span><span id="colorSpace2">-</span></div>
           </div>
+          
+          <div class="click-hint">点击继续添加</div>
         </div>
         
         <div class="file-list" id="fileList2"></div>
@@ -895,14 +932,7 @@
     <div class="modal-content">
       <h3>输入视频 URL</h3>
       <div class="input-group">
-        <input type="text" id="urlInput" placeholder="请输入视频地址 (http://, rtmp://, etc.)">
-        <button id="uploadBtn" class="paste-btn" title="上传 URL 列表文件">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-            <polyline points="17 8 12 3 7 8"></polyline>
-            <line x1="12" y1="3" x2="12" y2="15"></line>
-          </svg>
-        </button>
+        <input type="text" id="urlInput" placeholder="请输入视频地址，多个地址请用分号(;)隔开">
       </div>
       <div class="modal-buttons">
         <button id="urlCancelBtn" class="modal-btn cancel">取消</button>
@@ -1036,16 +1066,9 @@
       // Modal elements
       const urlModal = document.getElementById('urlModal')
       const urlInput = document.getElementById('urlInput')
-      const uploadBtn = document.getElementById('uploadBtn')
       const urlConfirmBtn = document.getElementById('urlConfirmBtn')
       const urlCancelBtn = document.getElementById('urlCancelBtn')
       let currentUrlPanelIndex = 1
-
-      // 上传功能（待实现）
-      uploadBtn.onclick = () => {
-        console.log('上传功能待实现')
-        // TODO: 实现文件读取和 URL 提取
-      }
 
       function showUrlModal(panelIndex) {
         currentUrlPanelIndex = panelIndex
@@ -1059,9 +1082,13 @@
       }
 
       function handleUrlSubmit() {
-        const url = urlInput.value.trim()
-        if (url) {
-          handleFiles([url], currentUrlPanelIndex)
+        const inputVal = urlInput.value.trim()
+        if (inputVal) {
+          // 支持分号(中英文)分隔多个 URL
+          const urls = inputVal.split(/;|；/).map(u => u.trim()).filter(u => u.length > 0)
+          if (urls.length > 0) {
+            handleFiles(urls, currentUrlPanelIndex)
+          }
         }
         hideUrlModal()
       }
