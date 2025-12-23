@@ -72,6 +72,12 @@
       border-color: #28a745;
     }
 
+    .video-panel.drag-over {
+      border-color: #28a745 !important;
+      background: #f0fff4 !important;
+      box-shadow: 0 0 15px rgba(40, 167, 69, 0.2);
+    }
+
     .panel-header {
       display: flex;
       align-items: center;
@@ -140,23 +146,51 @@
       display: none;
     }
 
-    .video-panel.left .file-list {
-      margin-top: 15px;
-      border-radius: 6px;
-      border: 2px solid #e9ecef;
-    }
-
     /* // 新增：视频信息显示区域样式 */
     .video-info {
       background: #fff;
-      border: 2px solid #e9ecef;
-      border-radius: 6px;
-      padding: 10px;
-      margin: 10px 0;
-      min-height: 45px;
+      border: none;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 0;
+      flex: 1;
+      width: 100%;
       display: flex;
       flex-direction: column;
       justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      position: relative;
+    }
+
+    .video-info:hover {
+      background: #f8f9ff;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+
+    .video-panel.drag-over .video-info {
+      background: transparent;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .video-info.has-file {
+      border: 1px solid #e9ecef;
+      align-items: flex-start;
+      padding: 10px;
+      min-height: 45px;
+      background: #fff;
+      transform: none;
+      box-shadow: none;
+      flex: 0 0 auto;
+      margin-bottom: 10px;
+    }
+
+    .video-info.has-file:hover {
+      border-color: #667eea;
+      background: #f8f9fa;
     }
 
     .info-label {
@@ -164,17 +198,48 @@
       color: #6c757d;
       font-weight: 500;
       margin-bottom: 3px;
+      display: none;
+    }
+
+    .video-info.has-file .info-label {
+      display: block;
+    }
+
+    .upload-icon {
+      margin-bottom: 20px;
+      color: #cbd5e0;
+      transition: all 0.3s ease;
+    }
+
+    .video-info:hover .upload-icon {
+      color: #667eea;
+      transform: translateY(-5px);
+    }
+
+    .video-info.has-file .upload-icon {
+      display: none;
     }
 
     .info-content {
-      font-size: 13px;
-      color: #333;
-      font-weight: 600;
-      font-family: 'Courier New', monospace;
+      font-size: 18px;
+      color: #6c757d;
+      font-weight: 500;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       word-break: break-all;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      width: 100%;
+      text-align: center;
+    }
+
+    .video-info.has-file .info-content {
+      font-size: 13px;
+      color: #333;
+      font-weight: 600;
+      font-family: 'Courier New', monospace;
+      direction: rtl;
+      text-align: left;
     }
 
     .video-info.empty .info-content {
@@ -216,6 +281,8 @@
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 100%;
+      direction: rtl;
+      text-align: left;
     }
 
     .file-item:hover {
@@ -502,14 +569,18 @@
 
     <div class="comparison-layout">
       <div class="video-panel left">
-        <div class="panel-header">
-          <button class="select-btn large-btn" id="selectBtn1">添加左侧视频</button>
-        </div>
         
         <!-- 新增：视频信息显示区域 -->
         <div class="video-info" id="videoInfo1">
+          <div class="upload-icon">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
           <div class="info-label">当前选中视频：</div>
-          <div class="info-content" id="videoName1">未选择</div>
+          <div class="info-content" id="videoName1">点击选择或拖拽视频到此处</div>
           <!-- 新增：详细视频信息 -->
           <div class="video-details" id="videoDetails1">
             <div class="detail-item"><span class="detail-label">时长：</span><span id="duration1">-</span></div>
@@ -527,14 +598,18 @@
       </div>
 
       <div class="video-panel right">
-        <div class="panel-header">
-          <button class="select-btn large-btn" id="selectBtn2">添加右侧视频</button>
-        </div>
         
         <!-- 新增：视频信息显示区域 -->
         <div class="video-info" id="videoInfo2">
+          <div class="upload-icon">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
           <div class="info-label">当前选中视频：</div>
-          <div class="info-content" id="videoName2">未选择</div>
+          <div class="info-content" id="videoName2">点击选择或拖拽视频到此处</div>
           <!-- 新增：详细视频信息 -->
           <div class="video-details" id="videoDetails2">
             <div class="detail-item"><span class="detail-label">时长：</span><span id="duration2">-</span></div>
@@ -564,8 +639,8 @@
       const fileList2 = document.getElementById('fileList2')
       const runBtn = document.getElementById('runBtn')
       const output = document.getElementById('output')
-      const selectBtn1 = document.getElementById('selectBtn1')
-      const selectBtn2 = document.getElementById('selectBtn2')
+      const panel1 = document.querySelector('.video-panel.left')
+      const panel2 = document.querySelector('.video-panel.right')
       const modeSelect = document.getElementById('modeSelect')
       const videoName1 = document.getElementById('videoName1')
       const videoName2 = document.getElementById('videoName2')
@@ -637,6 +712,7 @@
           videoNameElement.textContent = fileName
           videoNameElement.title = filePath // 添加完整路径提示
           videoInfoElement.classList.remove('empty')
+          videoInfoElement.classList.add('has-file')
           
           // 显示详细视频信息区域
           videoDetailsElement.classList.add('show')
@@ -644,9 +720,10 @@
           // 探测视频信息
           probeVideoInfo(filePath, panelIndex)
         } else {
-          videoNameElement.textContent = '未选择'
+          videoNameElement.textContent = '点击选择或拖拽视频到此处'
           videoNameElement.title = ''
           videoInfoElement.classList.add('empty')
+          videoInfoElement.classList.remove('has-file')
           
           // 隐藏详细视频信息区域
           videoDetailsElement.classList.remove('show')
@@ -655,6 +732,10 @@
           resetVideoDetails(panelIndex)
         }
       }
+
+      // 绑定点击事件
+      videoInfo1.addEventListener('click', () => openFilesAndHandle(1))
+      videoInfo2.addEventListener('click', () => openFilesAndHandle(2))
 
       // 新增：重置视频详细信息
       function resetVideoDetails(panelIndex) {
@@ -838,57 +919,90 @@
         }
       }
 
-      // 通过按钮进行文件选择
-      selectBtn1.addEventListener('click', async () => {
-        console.log('选择按钮1被点击')
-        console.log('window.api:', window.api)
-        console.log('window.api.openFiles:', window.api ? window.api.openFiles : 'undefined')
-        
+      // 拖拽支持
+      function setupDragDrop(panel, panelIndex) {
+        // 拖拽进入
+        panel.addEventListener('dragenter', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          panel.classList.add('drag-over')
+        })
+
+        // 拖拽悬停
+        panel.addEventListener('dragover', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          panel.classList.add('drag-over')
+          e.dataTransfer.dropEffect = 'copy'
+        })
+
+        // 拖拽离开
+        panel.addEventListener('dragleave', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          // 只有当鼠标真正离开 panel 时才移除样式
+          if (!panel.contains(e.relatedTarget)) {
+            panel.classList.remove('drag-over')
+          }
+        })
+
+        // 放置处理
+        panel.addEventListener('drop', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          panel.classList.remove('drag-over')
+          
+          const files = []
+          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            for (let i = 0; i < e.dataTransfer.files.length; i++) {
+              const file = e.dataTransfer.files[i]
+              // 尝试通过 API 获取路径（Electron 安全策略限制直接访问 path）
+              const path = window.api && window.api.getFilePath ? window.api.getFilePath(file) : file.path
+              if (path) {
+                files.push(path)
+              }
+            }
+          }
+          
+          if (files.length > 0) {
+            handleFiles(files, panelIndex)
+          } else {
+            const output = document.getElementById('output')
+            if (output) {
+              output.textContent = '❌ 拖拽无效：无法获取文件路径或未检测到文件。请尝试点击选择。'
+              output.className = 'output-box error'
+            }
+            console.error('未检测到有效的文件路径')
+          }
+        })
+      }
+
+      setupDragDrop(panel1, 1)
+      setupDragDrop(panel2, 2)
+
+      // 封装文件选择逻辑
+      async function openFilesAndHandle(panelIndex) {
         try {
           const files = await window.api.openFiles()
-          console.log('API返回的文件列表:', files)
           if (files && files.length > 0) {
-            handleFiles(files, 1)
-          } else {
-            console.log('没有选择文件或选择被取消')
+            handleFiles(files, panelIndex)
           }
         } catch (error) {
           console.error('选择文件失败:', error)
           output.textContent = '选择文件失败: ' + error.message
           output.className = 'output-box error'
         }
-      })
+      }
 
-      selectBtn2.addEventListener('click', async () => {
-        console.log('选择按钮2被点击')
-        console.log('window.api:', window.api)
-        console.log('window.api.openFiles:', window.api ? window.api.openFiles : 'undefined')
-        
-        try {
-          const files = await window.api.openFiles()
-          console.log('API返回的文件列表:', files)
-          if (files && files.length > 0) {
-            handleFiles(files, 2)
-          } else {
-            console.log('没有选择文件或选择被取消')
-          }
-        } catch (error) {
-          console.error('选择文件失败:', error)
-          output.textContent = '选择文件失败: ' + error.message
-          output.className = 'output-box error'
-        }
-      })
-
-      // 新增：菜单事件绑定（从应用菜单触发与按钮一致的行为）
+      // 新增：菜单事件绑定
       if (window.menu && typeof window.menu.onSelectLeft === 'function') {
         window.menu.onSelectLeft(() => {
-          // 复用现有按钮逻辑，确保行为一致
-          selectBtn1.click()
+          openFilesAndHandle(1)
         })
       }
       if (window.menu && typeof window.menu.onSelectRight === 'function') {
         window.menu.onSelectRight(() => {
-          selectBtn2.click()
+          openFilesAndHandle(2)
         })
       }
 

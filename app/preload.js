@@ -1,8 +1,10 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('api', {
   openFiles: () => ipcRenderer.invoke('open-files'),
   scanFolder: (folderPath) => ipcRenderer.invoke('scan-folder', folderPath),
+  // 新增：获取文件路径（解决拖拽时 path 属性丢失问题）
+  getFilePath: (file) => webUtils.getPathForFile(file),
   runExe: (file1, file2, mode, customArgs) => ipcRenderer.invoke('run-exe', file1, file2, mode, customArgs),
   
   // 添加视频信息探测API
