@@ -275,6 +275,35 @@
       display: none;
     }
 
+    /* 新增：导入文件按钮样式 */
+    .import-trigger {
+      display: none;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #28a745;
+      cursor: pointer;
+      padding: 6px 16px;
+      background: rgba(40, 167, 69, 0.1);
+      border-radius: 20px;
+      transition: all 0.2s ease;
+      font-weight: 500;
+      align-items: center;
+      gap: 6px;
+      z-index: 5;
+      position: relative;
+    }
+
+    .import-trigger:hover {
+      background: #28a745;
+      color: white;
+      transform: translateY(-1px);
+    }
+
+    /* 仅在 URL 模式且无文件时显示 */
+    .video-info.mode-url:not(.has-file) .import-trigger {
+      display: flex;
+    }
+
     .info-label {
       font-size: 11px;
       color: #6c757d;
@@ -839,6 +868,15 @@
           <div class="info-label">当前选中视频：</div>
           <div class="info-content" id="videoName1">点击选择或拖拽（本地）视频到此处</div>
           
+          <div class="import-trigger" id="importBtn1" title="导入包含 URL 的文件">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span>导入 URL 文件</span>
+          </div>
+
           <div class="url-trigger" id="urlBtn1" title="输入网络视频 URL">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
@@ -885,6 +923,15 @@
           <div class="info-label">当前选中视频：</div>
           <div class="info-content" id="videoName2">点击选择或拖拽（本地）视频到此处</div>
           
+          <div class="import-trigger" id="importBtn2" title="导入包含 URL 的文件">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span>导入 URL 文件</span>
+          </div>
+
           <div class="url-trigger" id="urlBtn2" title="输入网络视频 URL">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
@@ -940,6 +987,9 @@
       </div>
     </div>
   </div>
+
+  <!-- Hidden File Input for URL Import -->
+  <input type="file" id="urlFileInput" accept=".txt,.m3u,.m3u8,.log,.csv,.json,.xml" style="display: none;" />
 
   <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -1001,6 +1051,10 @@
         const videoNameElement = panelIndex === 1 ? videoName1 : videoName2
         const videoInfoElement = panelIndex === 1 ? videoInfo1 : videoInfo2
         
+        // 更新模式 class
+        videoInfoElement.classList.remove('mode-local', 'mode-url')
+        videoInfoElement.classList.add('mode-' + mode)
+        
         // 如果当前没有文件，更新提示文字和图标
         if (!videoInfoElement.classList.contains('has-file')) {
           if (mode === 'local') {
@@ -1030,6 +1084,55 @@
           }
         }
       }
+
+      // URL 文件导入逻辑
+      const urlFileInput = document.getElementById('urlFileInput')
+      let currentImportPanelIndex = 1
+
+      // 绑定导入按钮事件
+      document.getElementById('importBtn1').addEventListener('click', (e) => {
+        e.stopPropagation()
+        currentImportPanelIndex = 1
+        urlFileInput.value = '' // 重置，允许重复选择同一文件
+        urlFileInput.click()
+      })
+
+      document.getElementById('importBtn2').addEventListener('click', (e) => {
+        e.stopPropagation()
+        currentImportPanelIndex = 2
+        urlFileInput.value = ''
+        urlFileInput.click()
+      })
+
+      // 处理文件选择
+      urlFileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0]
+        if (!file) return
+
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          const content = event.target.result
+          // 提取 URL (支持 http, https, rtmp, rtsp, udp, tcp, ftp)
+          // 排除末尾可能的标点符号或引号
+          const urlRegex = /(?:https?|rtmp|rtsp|udp|tcp|ftp):\/\/[^\s"';,<>]+/gi
+          const urls = content.match(urlRegex)
+          
+          if (urls && urls.length > 0) {
+            // 去重
+            const uniqueUrls = [...new Set(urls)]
+            console.log(`从文件中提取到 ${uniqueUrls.length} 个 URL`)
+            handleFiles(uniqueUrls, currentImportPanelIndex)
+          } else {
+            output.textContent = '❌ 未在文件中找到有效的视频 URL'
+            output.className = 'output-box error'
+          }
+        }
+        reader.onerror = () => {
+          output.textContent = '❌ 读取文件失败'
+          output.className = 'output-box error'
+        }
+        reader.readAsText(file)
+      })
 
       // 视频文件扩展名 - 更全面的支持
       const videoExtensions = [
@@ -1165,7 +1268,7 @@
 
       // 绑定点击事件
       videoInfo1.addEventListener('click', (e) => {
-        if (e.target.closest('.url-trigger')) return
+        if (e.target.closest('.url-trigger') || e.target.closest('.import-trigger')) return
         if (panelModes[1] === 'local') {
           openFilesAndHandle(1)
         } else {
@@ -1173,7 +1276,7 @@
         }
       })
       videoInfo2.addEventListener('click', (e) => {
-        if (e.target.closest('.url-trigger')) return
+        if (e.target.closest('.url-trigger') || e.target.closest('.import-trigger')) return
         if (panelModes[2] === 'local') {
           openFilesAndHandle(2)
         } else {
