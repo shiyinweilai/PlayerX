@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>视频对比工具</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🎬 视频对比工具</h1>
+      <p>选择两个视频文件进行对比分析</p>
+    </div>
+
+    <!-- 新增：控制区域移到上方 -->
+    <div class="control-section">
+      <div class="control-layout">
+        <div class="control-left">
+          <button class="run-btn" id="runBtn" disabled>开始对比</button>
+        </div>
+        <!-- 新增：中间区域放置键入框 -->
+        <div class="control-middle">
+          <input type="text" class="input-field" id="customInput" placeholder="自定义参数: -w 960x540 -l format=gray,crop=iw:ih-240 -r format=gray（更多请看帮助） " />
+        </div>
+        <div class="control-right">
+          <select class="mode-dropdown" id="modeSelect">
+            <option value="split">滑动模式</option>
+            <option value="hstack">水平分屏</option>
+            <option value="vstack">垂直分屏</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="comparison-layout">
+      <div class="video-panel left">
+        
+        <!-- 新增：模式切换 Tabs -->
+        <div class="panel-tabs">
+          <button class="tab-btn active" data-panel="1" data-mode="local">本地文件</button>
+          <button class="tab-btn" data-panel="1" data-mode="url">网络视频</button>
+        </div>
+
+        <!-- 新增：视频信息显示区域 -->
+        <div class="video-info" id="videoInfo1">
+          <div class="upload-icon">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <div class="info-label">当前选中视频：</div>
+          <div class="info-content" id="videoName1">点击选择或拖拽（本地）视频到此处</div>
+          
+          <div class="import-trigger" id="importBtn1" title="导入包含 URL 的文件">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span>导入 URL 文件</span>
+          </div>
+
+          <div class="url-trigger" id="urlBtn1" title="输入网络视频 URL">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+            <span>输入 URL</span>
+          </div>
+
+          <!-- 新增：详细视频信息 -->
+          <div class="video-details" id="videoDetails1">
+            <div class="detail-item"><span class="detail-label">时长：</span><span id="duration1">-</span></div>
+            <div class="detail-item"><span class="detail-label">大小：</span><span id="size1">-</span></div>
+            <div class="detail-item"><span class="detail-label">格式：</span><span id="format1">-</span></div>
+            <div class="detail-item"><span class="detail-label">分辨率：</span><span id="resolution1">-</span></div>
+            <div class="detail-item"><span class="detail-label">视频编码：</span><span id="videoCodec1">-</span></div>
+            <div class="detail-item"><span class="detail-label">音频编码：</span><span id="audioCodec1">-</span></div>
+            <div class="detail-item"><span class="detail-label">像素格式：</span><span id="pixelFormat1">-</span></div>
+            <div class="detail-item"><span class="detail-label">颜色空间：</span><span id="colorSpace1">-</span></div>
+          </div>
+          
+          <div class="click-hint">点击继续添加</div>
+        </div>
+        
+        <div class="file-list" id="fileList1"></div>
+      </div>
+
+      <div class="video-panel right">
+        
+        <!-- 新增：模式切换 Tabs -->
+        <div class="panel-tabs">
+          <button class="tab-btn active" data-panel="2" data-mode="local">本地文件</button>
+          <button class="tab-btn" data-panel="2" data-mode="url">网络视频</button>
+        </div>
+
+        <!-- 新增：视频信息显示区域 -->
+        <div class="video-info" id="videoInfo2">
+          <div class="upload-icon">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <div class="info-label">当前选中视频：</div>
+          <div class="info-content" id="videoName2">点击选择或拖拽（本地）视频到此处</div>
+          
+          <div class="import-trigger" id="importBtn2" title="导入包含 URL 的文件">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span>导入 URL 文件</span>
+          </div>
+
+          <div class="url-trigger" id="urlBtn2" title="输入网络视频 URL">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+            <span>输入 URL</span>
+          </div>
+
+          <!-- 新增：详细视频信息 -->
+          <div class="video-details" id="videoDetails2">
+            <div class="detail-item"><span class="detail-label">时长：</span><span id="duration2">-</span></div>
+            <div class="detail-item"><span class="detail-label">大小：</span><span id="size2">-</span></div>
+            <div class="detail-item"><span class="detail-label">格式：</span><span id="format2">-</span></div>
+            <div class="detail-item"><span class="detail-label">分辨率：</span><span id="resolution2">-</span></div>
+            <div class="detail-item"><span class="detail-label">视频编码：</span><span id="videoCodec2">-</span></div>
+            <div class="detail-item"><span class="detail-label">音频编码：</span><span id="audioCodec2">-</span></div>
+            <div class="detail-item"><span class="detail-label">像素格式：</span><span id="pixelFormat2">-</span></div>
+            <div class="detail-item"><span class="detail-label">颜色空间：</span><span id="colorSpace2">-</span></div>
+          </div>
+          
+          <div class="click-hint">点击继续添加</div>
+        </div>
+        
+        <div class="file-list" id="fileList2"></div>
+      </div>
+    </div>
+
+    <div class="output-section">
+      <div class="output-label">执行状态</div>
+      <div class="output-box" id="output">等待操作...</div>
+    </div>
+  </div>
+
+  <!-- Loading Modal -->
+  <div id="loadingModal" class="modal-overlay">
+    <div class="modal-content" style="text-align: center; width: 300px;">
+      <div class="spinner"></div>
+      <h3 style="margin-bottom: 10px;">正在缓冲...</h3>
+      <p style="color: #666; font-size: 14px;">检测到网络视频，请耐心等待加载</p>
+    </div>
+  </div>
+
+  <!-- URL Input Modal -->
+  <div id="urlModal" class="modal-overlay">
+    <div class="modal-content">
+      <h3>输入视频 URL</h3>
+      <div class="input-group">
+        <input type="text" id="urlInput" placeholder="请输入视频地址，多个地址请用分号(;)隔开">
+      </div>
+      <div class="modal-buttons">
+        <button id="urlCancelBtn" class="modal-btn cancel">取消</button>
+        <button id="urlConfirmBtn" class="modal-btn confirm">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden File Input for URL Import -->
+  <input type="file" id="urlFileInput" accept=".txt,.m3u,.m3u8,.log,.csv,.json,.xml" style="display: none;" />
+
+  <script type="module" src="js/index.js"></script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 {
   "name": "playerx",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "src/main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "electron .",
@@ -32,9 +32,7 @@
       "output": "dist"
     },
     "files": [
-      "main.js",
-      "index.html",
-      "preload.js",
+      "src/**",
       "win-inner/**",
       "mac-inner/**"
     ],

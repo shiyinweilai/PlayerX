@@ -16,7 +16,7 @@ function createWindow() {
     }
   })
 
-  win.loadFile('index.html')
+  win.loadFile(path.join(__dirname, 'index.html'))
 
   // 监听窗口关闭事件，正确清理win变量
   win.on('closed', () => {
@@ -271,7 +271,7 @@ ipcMain.handle('run-exe', async (event, file1, file2, mode, customArgs = '') => 
     } else {
       // 开发环境，可执行文件在项目目录下的对应平台子目录
       // 使用 path.resolve 确保路径正确
-      exePath = path.resolve(__dirname, exeDirName, exeName)
+      exePath = path.resolve(__dirname, '..', exeDirName, exeName)
     }
 
     console.log('当前平台:', os.platform())
@@ -388,7 +388,7 @@ function getFfprobePath() {
   if (app.isPackaged) {
     ffprobePath = path.join(process.resourcesPath, 'app.asar.unpacked', ffprobeDirName, ffprobeName)
   } else {
-    ffprobePath = path.resolve(__dirname, ffprobeDirName, ffprobeName)
+    ffprobePath = path.resolve(__dirname, '..', ffprobeDirName, ffprobeName)
   }
 
   return ffprobePath
@@ -588,7 +588,7 @@ ipcMain.handle('check-for-updates', async () => {
   // 帮助函数：保存响应到 cache/latest.json 以便排查（异步不阻塞主流程）
   const saveCache = (content) => {
     try {
-      const cacheDir = path.join(__dirname, '..', 'cache')
+      const cacheDir = path.join(__dirname, '..', '..', 'cache')
       if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
       fs.writeFileSync(path.join(cacheDir, 'latest.json'), content, 'utf8')
     } catch (e) {
