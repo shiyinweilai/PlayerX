@@ -78,6 +78,40 @@
       box-shadow: 0 0 15px rgba(40, 167, 69, 0.2);
     }
 
+    /* 新增：面板顶部 Tab 切换样式 */
+    .panel-tabs {
+      display: flex;
+      background: #f1f3f5;
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 15px;
+      flex-shrink: 0;
+    }
+
+    .tab-btn {
+      flex: 1;
+      border: none;
+      background: transparent;
+      padding: 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      color: #6c757d;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover {
+      color: #495057;
+      background: rgba(255,255,255,0.5);
+    }
+
+    .tab-btn.active {
+      background: white;
+      color: #667eea;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+
     .panel-header {
       display: flex;
       align-items: center;
@@ -204,7 +238,7 @@
       border-radius: 20px;
       transition: all 0.2s ease;
       font-weight: 500;
-      display: inline-flex;
+      display: none; /* 隐藏旧的 URL 按钮 */
       align-items: center;
       gap: 6px;
       z-index: 5;
@@ -754,6 +788,12 @@
     <div class="comparison-layout">
       <div class="video-panel left">
         
+        <!-- 新增：模式切换 Tabs -->
+        <div class="panel-tabs">
+          <button class="tab-btn active" data-panel="1" data-mode="local">本地文件</button>
+          <button class="tab-btn" data-panel="1" data-mode="url">网络视频</button>
+        </div>
+
         <!-- 新增：视频信息显示区域 -->
         <div class="video-info" id="videoInfo1">
           <div class="upload-icon">
@@ -792,6 +832,12 @@
 
       <div class="video-panel right">
         
+        <!-- 新增：模式切换 Tabs -->
+        <div class="panel-tabs">
+          <button class="tab-btn active" data-panel="2" data-mode="local">本地文件</button>
+          <button class="tab-btn" data-panel="2" data-mode="url">网络视频</button>
+        </div>
+
         <!-- 新增：视频信息显示区域 -->
         <div class="video-info" id="videoInfo2">
           <div class="upload-icon">
@@ -879,11 +925,81 @@
       const videoInfo1 = document.getElementById('videoInfo1')
       const videoInfo2 = document.getElementById('videoInfo2')
 
+      // 面板模式状态
+      const panelModes = { 1: 'local', 2: 'local' }
+
       let file1Path = null
       let file2Path = null
       let files1 = []
       let files2 = []
       let selectedMode = 'hstack' // 默认模式
+
+      // 初始化 Tab 切换逻辑
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const panelIndex = parseInt(btn.dataset.panel)
+          const mode = btn.dataset.mode
+          
+          // 更新 Tab 样式
+          const tabs = btn.parentElement.querySelectorAll('.tab-btn')
+          tabs.forEach(t => t.classList.remove('active'))
+          btn.classList.add('active')
+          
+          // 更新模式
+          panelModes[panelIndex] = mode
+          
+          // 清空当前选择（切换模式时重置）
+          if (panelIndex === 1) {
+            file1Path = null
+            files1 = []
+            renderFileList(fileList1, [], 1)
+            updateVideoInfo(1, null)
+          } else {
+            file2Path = null
+            files2 = []
+            renderFileList(fileList2, [], 2)
+            updateVideoInfo(2, null)
+          }
+          
+          updateRunButton()
+          updatePanelUI(panelIndex)
+        })
+      })
+
+      function updatePanelUI(panelIndex) {
+        const mode = panelModes[panelIndex]
+        const videoNameElement = panelIndex === 1 ? videoName1 : videoName2
+        const videoInfoElement = panelIndex === 1 ? videoInfo1 : videoInfo2
+        
+        // 如果当前没有文件，更新提示文字和图标
+        if (!videoInfoElement.classList.contains('has-file')) {
+          if (mode === 'local') {
+            videoNameElement.textContent = '点击选择或拖拽（本地）视频到此处'
+            // 恢复本地视频图标
+            const iconContainer = videoInfoElement.querySelector('.upload-icon')
+            if (iconContainer) {
+              iconContainer.innerHTML = `
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>`
+            }
+          } else {
+            videoNameElement.textContent = '点击输入网络视频 URL'
+            // 切换为网络视频图标
+            const iconContainer = videoInfoElement.querySelector('.upload-icon')
+            if (iconContainer) {
+              iconContainer.innerHTML = `
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="2" y1="12" x2="22" y2="12"></line>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>`
+            }
+          }
+        }
+      }
 
       // 视频文件扩展名 - 更全面的支持
       const videoExtensions = [
@@ -1023,14 +1139,23 @@
       // 绑定点击事件
       videoInfo1.addEventListener('click', (e) => {
         if (e.target.closest('.url-trigger')) return
-        openFilesAndHandle(1)
+        if (panelModes[1] === 'local') {
+          openFilesAndHandle(1)
+        } else {
+          inputUrl(1)
+        }
       })
       videoInfo2.addEventListener('click', (e) => {
         if (e.target.closest('.url-trigger')) return
-        openFilesAndHandle(2)
+        if (panelModes[2] === 'local') {
+          openFilesAndHandle(2)
+        } else {
+          inputUrl(2)
+        }
       })
 
-      // 绑定 URL 按钮点击事件
+      // 移除旧的 URL 按钮点击事件绑定（已通过 Tab 切换替代）
+      /*
       document.getElementById('urlBtn1').addEventListener('click', (e) => {
         e.stopPropagation()
         inputUrl(1)
@@ -1039,6 +1164,7 @@
         e.stopPropagation()
         inputUrl(2)
       })
+      */
 
       // 新增：重置视频详细信息
       function resetVideoDetails(panelIndex) {
@@ -1255,6 +1381,13 @@
           e.stopPropagation()
           panel.classList.remove('drag-over')
           
+          // 如果当前是 URL 模式，自动切换到本地模式
+          if (panelModes[panelIndex] === 'url') {
+            console.log(`检测到拖拽操作，自动切换面板 ${panelIndex} 到本地模式`)
+            const tabBtn = panel.querySelector('.tab-btn[data-mode="local"]')
+            if (tabBtn) tabBtn.click()
+          }
+
           const files = []
           if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
             for (let i = 0; i < e.dataTransfer.files.length; i++) {
