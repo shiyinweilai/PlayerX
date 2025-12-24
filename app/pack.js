@@ -117,7 +117,7 @@ function main() {
       createStartMenuShortcut: true,
       shortcutName: 'PlayerX',
       menuCategory: 'Video Tools',
-      runAfterFinish: false,
+      runAfterFinish: true,
       deleteAppDataOnUninstall: false
     },
     dmg: { sign: false }
