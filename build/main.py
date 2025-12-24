@@ -13,10 +13,46 @@ if __name__ == "__main__":
     cmd_video_compare = f"python3 build_tools.py --target video_compare -s ../video-compare -p {args.platform} -m static"
     start_time = time.time()
     print(f"\033[33m>>>> 开始构建...\033[0m")
-    os.system(cmd_sdl)
-    os.system(cmd_sdl_ttf)
+    # os.system(cmd_sdl)
+    # os.system(cmd_sdl_ttf)
     os.system(cmd_ffmpeg)
     os.system(cmd_video_compare)
+
+    # 自动复制构建产物到 src/external
+    import shutil
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    
+    if args.platform == 'windows':
+        vc_src = os.path.join(script_dir, 'video_compare', 'install_win', 'bin', 'video-compare.exe')
+        vc_dst_dir = os.path.join(project_root, 'src', 'external', 'win-inner')
+        ff_src = os.path.join(script_dir, 'ffmpeg', 'install_win', 'bin', 'ffprobe.exe')
+        
+        if os.path.exists(vc_src):
+            os.makedirs(vc_dst_dir, exist_ok=True)
+            shutil.copy2(vc_src, vc_dst_dir)
+            print(f"\033[32m>>>> 已复制 video-compare.exe 到 {vc_dst_dir}\033[0m")
+        
+        if os.path.exists(ff_src):
+            os.makedirs(vc_dst_dir, exist_ok=True)
+            shutil.copy2(ff_src, vc_dst_dir)
+            print(f"\033[32m>>>> 已复制 ffprobe.exe 到 {vc_dst_dir}\033[0m")
+
+    elif args.platform == 'macos':
+        vc_src = os.path.join(script_dir, 'video_compare', 'install', 'bin', 'video-compare')
+        vc_dst_dir = os.path.join(project_root, 'src', 'external', 'mac-inner')
+        ff_src = os.path.join(script_dir, 'ffmpeg', 'install', 'bin', 'ffprobe')
+        
+        if os.path.exists(vc_src):
+            os.makedirs(vc_dst_dir, exist_ok=True)
+            shutil.copy2(vc_src, vc_dst_dir)
+            print(f"\033[32m>>>> 已复制 video-compare 到 {vc_dst_dir}\033[0m")
+            
+        if os.path.exists(ff_src):
+            os.makedirs(vc_dst_dir, exist_ok=True)
+            shutil.copy2(ff_src, vc_dst_dir)
+            print(f"\033[32m>>>> 已复制 ffprobe 到 {vc_dst_dir}\033[0m")
+
     print(f"\033[33m>>>> 所有构建完成!\033[0m")
     end_time = time.time()
     elapsed_time = end_time - start_time

@@ -78,12 +78,12 @@ def build_ffmpeg(args, log_file=None):
         ]
         # 在 Windows 下禁用会引入额外系统库依赖的特性，避免后续链接 video-compare 时出现未解析符号
         # - mediafoundation: 避免 mfenc.o 需要 IID_ICodecAPI/mfplat/mfuuid/strmiids
-        # - schannel 以及 tls/https 协议：避免 ncrypt/crypt32/Cert* 等依赖
+        # - schannel 以及 tls/https 协议：启用以支持 HTTPS
         cmake_args += [
             '--disable-mediafoundation',
-            '--disable-schannel',
-            '--disable-protocol=tls',
-            '--disable-protocol=https',
+            '--enable-schannel',
+            '--enable-protocol=tls',
+            '--enable-protocol=https',
             '--disable-dxva2',
             '--disable-d3d11va',
             '--disable-indev=dshow',
