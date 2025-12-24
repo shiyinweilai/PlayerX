@@ -1,8 +1,11 @@
 {
   "version": "1.0.1",
-  "platforms": {
-    "win32": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX%20Setup%201.0.1.exe",
+  "author": "rbyang",
+  "copyright": "Copyright © 2025 PlayerX",
+  "notes": "URL模式会有网关问题，第一次可以允许访问后推出软件重新进入，后续可以正常使用，有时候缓冲会卡住，稍等即可。实在不行，可以下载到本地，使用本地模式",
+  "downloads": {
+    "win-install": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX%20Setup%201.0.1.exe",
+    "win-portable": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-1.0.1-portable.exe",
     "darwin": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-1.0.1-arm64-mac.zip"
-  },
-  "notes": "更新说明: 1.0.1 版本发布"
+  }
 }

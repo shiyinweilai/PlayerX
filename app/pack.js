@@ -57,12 +57,22 @@ function main() {
   
   // 获取平台参数（必须通过环境变量指定）
   const platform = process.env.PLATFORM;
+  const isPortable = process.env.PORTABLE === 'true';
+  
   if (!platform) {
     console.error('错误：必须通过环境变量 PLATFORM 指定目标平台');
     console.error('使用方法：');
     console.error('  npm run pack:win    # Windows平台');
     console.error('  npm run pack:mac    # macOS平台');
+    console.error('  npm run pack:win:portable    # Windows便携版');
+    console.error('  npm run pack:mac:portable    # macOS便携版');
     process.exit(1);
+  }
+  
+  if (isPortable) {
+    console.log('打包模式：便携版（独立运行，无需安装）');
+  } else {
+    console.log('打包模式：安装版');
   }
   
   // 验证平台参数有效性
@@ -99,14 +109,17 @@ function main() {
       hardenedRuntime: false,
       gatekeeperAssess: false,
       category: 'public.app-category.video',
-      // 构建 arm64 的 zip 和 dmg（未签名），zip 更适合私发使用
-      target: [
-        { target: 'zip', arch: ['arm64'] },
-        { target: 'dmg', arch: ['arm64'] }
-      ]
+      // 便携版：直接生成.app文件；安装版：生成zip和dmg
+      target: isPortable 
+        ? [{ target: 'dir', arch: ['arm64'] }]
+        : [
+            { target: 'zip', arch: ['arm64'] },
+            { target: 'dmg', arch: ['arm64'] }
+          ]
     },
     win: {
-      target: 'nsis',
+      // 便携版：生成portable版本；安装版：生成nsis安装包
+      target: isPortable ? 'portable' : 'nsis',
       executableName: 'PlayerX'
     },
     nsis: {
@@ -119,6 +132,9 @@ function main() {
       menuCategory: 'Video Tools',
       runAfterFinish: true,
       deleteAppDataOnUninstall: false
+    },
+    portable: {
+      artifactName: '${productName}-${version}-portable.${ext}'
     },
     dmg: { sign: false }
   };

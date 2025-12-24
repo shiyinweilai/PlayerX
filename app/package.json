@@ -9,6 +9,8 @@
     "dist": "npm run build",
     "pack:win": "cross-env PLATFORM=win32 node pack.js",
     "pack:mac": "cross-env PLATFORM=darwin node pack.js",
+    "pack:win:portable": "cross-env PLATFORM=win32 PORTABLE=true node pack.js",
+    "pack:mac:portable": "cross-env PLATFORM=darwin PORTABLE=true node pack.js",
     "bump": "node bump-version.js"
   },
   "keywords": [
