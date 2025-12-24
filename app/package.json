@@ -55,8 +55,18 @@
     },
     "win": {
       "target": "nsis",
-      "executableName": "PlayerX",
-      "icon": "icon.ico"
+      "executableName": "PlayerX"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PlayerX",
+      "menuCategory": "Video Tools",
+      "runAfterFinish": false,
+      "deleteAppDataOnUninstall": false
     }
   }
 }

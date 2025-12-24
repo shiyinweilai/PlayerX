@@ -105,6 +105,21 @@ function main() {
         { target: 'dmg', arch: ['arm64'] }
       ]
     },
+    win: {
+      target: 'nsis',
+      executableName: 'PlayerX'
+    },
+    nsis: {
+      oneClick: false,
+      allowToChangeInstallationDirectory: true,
+      allowElevation: true,
+      createDesktopShortcut: true,
+      createStartMenuShortcut: true,
+      shortcutName: 'PlayerX',
+      menuCategory: 'Video Tools',
+      runAfterFinish: false,
+      deleteAppDataOnUninstall: false
+    },
     dmg: { sign: false }
   };
   const cfgPath = path.join(__dirname, 'electron-builder.temp.json');
