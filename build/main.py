@@ -15,17 +15,17 @@ if __name__ == "__main__":
     print(f"\033[33m>>>> 开始构建...\033[0m")
     # os.system(cmd_sdl)
     # os.system(cmd_sdl_ttf)
-    os.system(cmd_ffmpeg)
-    os.system(cmd_video_compare)
+    # os.system(cmd_ffmpeg)
+    # os.system(cmd_video_compare)
 
     # 自动复制构建产物到 src/external
     import shutil
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
+    project_root = os.path.join(os.path.dirname(script_dir), "app", "src", "external")
     
     if args.platform == 'windows':
         vc_src = os.path.join(script_dir, 'video_compare', 'install_win', 'bin', 'video-compare.exe')
-        vc_dst_dir = os.path.join(project_root, 'src', 'external', 'win-inner')
+        vc_dst_dir = os.path.join(project_root, 'win-inner')
         ff_src = os.path.join(script_dir, 'ffmpeg', 'install_win', 'bin', 'ffprobe.exe')
         
         if os.path.exists(vc_src):
@@ -40,7 +40,7 @@ if __name__ == "__main__":
 
     elif args.platform == 'macos':
         vc_src = os.path.join(script_dir, 'video_compare', 'install', 'bin', 'video-compare')
-        vc_dst_dir = os.path.join(project_root, 'src', 'external', 'mac-inner')
+        vc_dst_dir = os.path.join(project_root, 'mac-inner')
         ff_src = os.path.join(script_dir, 'ffmpeg', 'install', 'bin', 'ffprobe')
         
         if os.path.exists(vc_src):
