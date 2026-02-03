@@ -7,8 +7,8 @@ build/*/obj
 build/__pycache__
 
 .vscode
-sdl
-ffmpeg
-sdl_ttf
-video-compare
+# sdl
+# ffmpeg
+# sdl_ttf
+# video-compare
 

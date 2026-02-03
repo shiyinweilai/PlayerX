@@ -1,0 +1,14 @@
+prefix=/Users/rbyang/Documents/UGit/private/PlayerX/build/ffmpeg/install
+exec_prefix=${prefix}
+libdir=/Users/rbyang/Documents/UGit/private/PlayerX/build/ffmpeg/install/lib
+includedir=/Users/rbyang/Documents/UGit/private/PlayerX/build/ffmpeg/install/include
+
+Name: libswscale
+Description: FFmpeg image rescaling library
+Version: 9.1.100
+Requires: libavutil >= 60.8.100
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lswscale -lm
+Libs.private: 
+Cflags: -I${includedir}

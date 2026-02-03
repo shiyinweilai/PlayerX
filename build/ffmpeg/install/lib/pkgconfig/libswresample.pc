@@ -1,0 +1,14 @@
+prefix=/Users/rbyang/Documents/UGit/private/PlayerX/build/ffmpeg/install
+exec_prefix=${prefix}
+libdir=/Users/rbyang/Documents/UGit/private/PlayerX/build/ffmpeg/install/lib
+includedir=/Users/rbyang/Documents/UGit/private/PlayerX/build/ffmpeg/install/include
+
+Name: libswresample
+Description: FFmpeg audio resampling library
+Version: 6.1.100
+Requires: libavutil >= 60.8.100
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lswresample -lm
+Libs.private: 
+Cflags: -I${includedir}
