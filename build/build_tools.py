@@ -163,7 +163,7 @@ def build_sdl(args, log_file=None):
 
 
 def build_video_compare(args, log_file=None):
-    shutil.copy(f"{script_dir}/config/CMakeLists.txt", f"{source_dir}/CMakeLists.txt")
+    # shutil.copy(f"{script_dir}/config/CMakeLists.txt", f"{source_dir}/CMakeLists.txt")
     # shutil.copy(f"{script_dir}/config/display.cpp", f"{source_dir}/display.cpp")
     ffmpeg_install_dir = os.path.join(script_dir, 'ffmpeg/install')
     sdl_ttf_install_dir = os.path.join(script_dir, 'sdl2_ttf/install')
