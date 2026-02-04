@@ -4,6 +4,7 @@ app/dist
 app/package-lock.json
 
 build/*/obj
+build/*/obj_win
 build/__pycache__
 
 .vscode
