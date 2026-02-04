@@ -13,3 +13,4 @@ build/__pycache__
 # sdl_ttf
 # video-compare
 
+build/ffmpeg/install_win/share
