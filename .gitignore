@@ -14,3 +14,4 @@ build/__pycache__
 # video-compare
 
 build/ffmpeg/install_win/share
+build/ffmpeg/install_win/lib
