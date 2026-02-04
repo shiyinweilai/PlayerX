@@ -15,7 +15,7 @@ if __name__ == "__main__":
     print(f"\033[33m>>>> 开始构建...\033[0m")
     # os.system(cmd_sdl)
     # os.system(cmd_sdl_ttf)
-    os.system(cmd_ffmpeg)
+    # os.system(cmd_ffmpeg)
     os.system(cmd_video_compare)
 
     # 自动复制构建产物到 src/external
