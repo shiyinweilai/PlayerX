@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage } = require('electron')
 
 // 设置应用名称
-app.setName('Player X')
+app.setName('PlayerX')
 
 const path = require('path')
 const fs = require('fs')

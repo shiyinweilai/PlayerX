@@ -97,7 +97,7 @@ function main() {
   const isMac = platform === 'darwin'
   const builderConfig = {
     appId: 'com.playerx.app',
-    productName: 'Player X',
+    productName: 'PlayerX',
     asar: true,
     // 排除 src/external，避免打入 asar
     files: ['**/*', '!dist/**', '!src/external/**'],
