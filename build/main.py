@@ -13,9 +13,9 @@ if __name__ == "__main__":
     cmd_video_compare = f"python3 build_tools.py --target video_compare -s ../video-compare -p {args.platform} -m static"
     start_time = time.time()
     print(f"\033[33m>>>> 开始构建...\033[0m")
-    # os.system(cmd_sdl)
-    # os.system(cmd_sdl_ttf)
-    # os.system(cmd_ffmpeg)
+    os.system(cmd_sdl)
+    os.system(cmd_sdl_ttf)
+    os.system(cmd_ffmpeg)
     os.system(cmd_video_compare)
 
     # 自动复制构建产物到 src/external

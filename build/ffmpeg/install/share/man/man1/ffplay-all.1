@@ -33776,27 +33776,6 @@ The command accepts the same syntax of the corresponding option.
 .Sp
 If the specified expression is not valid, it is kept at its current
 value.
-.SS "scale_vt"
-.IX Subsection "scale_vt"
-Scale and convert the color parameters using VTPixelTransferSession.
-.PP
-The filter accepts the following options:
-.IP "\fBw\fR" 4
-.IX Item "w"
-.PD 0
-.IP "\fBh\fR" 4
-.IX Item "h"
-.PD
-Set the output video dimension expression. Default value is the input dimension.
-.IP "\fBcolor_matrix\fR" 4
-.IX Item "color_matrix"
-Set the output colorspace matrix.
-.IP "\fBcolor_primaries\fR" 4
-.IX Item "color_primaries"
-Set the output color primaries.
-.IP "\fBcolor_transfer\fR" 4
-.IX Item "color_transfer"
-Set the output transfer characteristics.
 .SS "scharr"
 .IX Subsection "scharr"
 Apply scharr operator to input video stream.
@@ -41789,6 +41768,102 @@ Draw a 2\-pixel red 2.40:1 mask:
 .Vb 1
 \&        drawbox=x=\-t:y=0.5*(ih\-iw/2.4)\-t:w=iw+t*2:h=iw/2.4+t*2:t=2:c=red
 .Ve
+.SH "VIDEOTOOLBOX VIDEO FILTERS"
+.IX Header "VIDEOTOOLBOX VIDEO FILTERS"
+Below is a description of the currently available VideoToolbox video filters.
+.PP
+VideoToolbox filter depends on VideoToolbox framework, and is auto detected
+when building ffmpeg for an Apple platform such as macOS. Add
+\&\f(CW\*(C`\-\-enable\-videotoolbox\*(C'\fR to configure if autodetect is disabled.
+.SS "scale_vt"
+.IX Subsection "scale_vt"
+Scale and convert the color parameters using VTPixelTransferSession.
+.PP
+The filter accepts the following options:
+.IP "\fBw\fR" 4
+.IX Item "w"
+.PD 0
+.IP "\fBh\fR" 4
+.IX Item "h"
+.PD
+Set the output video dimension expression. Default value is the input dimension.
+.IP "\fBcolor_matrix\fR" 4
+.IX Item "color_matrix"
+Set the output colorspace matrix.
+.IP "\fBcolor_primaries\fR" 4
+.IX Item "color_primaries"
+Set the output color primaries.
+.IP "\fBcolor_transfer\fR" 4
+.IX Item "color_transfer"
+Set the output transfer characteristics.
+.PP
+\fIExamples\fR
+.IX Subsection "Examples"
+.IP "\(bu" 4
+Perform \s-1HDR\s0 to \s-1SDR\s0 conversion, and scale to half size of input
+.Sp
+.Vb 10
+\&        ffmpeg \-hwaccel videotoolbox \e
+\&                \-hwaccel_output_format videotoolbox_vld \e
+\&                \-i hdr.mov \e
+\&                \-c:v hevc_videotoolbox \e
+\&                \-profile:v main \e
+\&                \-b:v 3M \e
+\&                \-vf scale_vt=w=iw/2:h=ih/2:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709 \e
+\&                \-c:a copy \e
+\&                \-tag:v hvc1 \e
+\&                sdr.mp4
+.Ve
+.SS "transpose_vt"
+.IX Subsection "transpose_vt"
+Transpose rows with columns in the input video and optionally flip it.
+For more in depth examples see the \fBtranspose\fR video filter, which shares mostly the same options.
+.PP
+It accepts the following parameters:
+.IP "\fBdir\fR" 4
+.IX Item "dir"
+Specify the transposition direction.
+.Sp
+Can assume the following values:
+.RS 4
+.IP "\fBcclock_flip\fR" 4
+.IX Item "cclock_flip"
+Rotate by 90 degrees counterclockwise and vertically flip. (default)
+.IP "\fBclock\fR" 4
+.IX Item "clock"
+Rotate by 90 degrees clockwise.
+.IP "\fBcclock\fR" 4
+.IX Item "cclock"
+Rotate by 90 degrees counterclockwise.
+.IP "\fBclock_flip\fR" 4
+.IX Item "clock_flip"
+Rotate by 90 degrees clockwise and vertically flip.
+.IP "\fBhflip\fR" 4
+.IX Item "hflip"
+Flip the input video horizontally.
+.IP "\fBvflip\fR" 4
+.IX Item "vflip"
+Flip the input video vertically.
+.RE
+.RS 4
+.RE
+.IP "\fBpassthrough\fR" 4
+.IX Item "passthrough"
+Do not apply the transposition if the input geometry matches the one
+specified by the specified value. It accepts the following values:
+.RS 4
+.IP "\fBnone\fR" 4
+.IX Item "none"
+Always apply transposition. (default)
+.IP "\fBportrait\fR" 4
+.IX Item "portrait"
+Preserve portrait geometry (when \fIheight\fR >= \fIwidth\fR).
+.IP "\fBlandscape\fR" 4
+.IX Item "landscape"
+Preserve landscape geometry (when \fIwidth\fR >= \fIheight\fR).
+.RE
+.RS 4
+.RE
 .SH "VULKAN VIDEO FILTERS"
 .IX Header "VULKAN VIDEO FILTERS"
 Below is a description of the currently available Vulkan video filters.
@@ -42086,56 +42161,6 @@ Default value is \f(CW0\fR.
 .IX Item "y"
 Set the y coordinate of the overlaid video on the main video.
 Default value is \f(CW0\fR.
-.SS "transpose_vt"
-.IX Subsection "transpose_vt"
-Transpose rows with columns in the input video and optionally flip it.
-For more in depth examples see the \fBtranspose\fR video filter, which shares mostly the same options.
-.PP
-It accepts the following parameters:
-.IP "\fBdir\fR" 4
-.IX Item "dir"
-Specify the transposition direction.
-.Sp
-Can assume the following values:
-.RS 4
-.IP "\fBcclock_flip\fR" 4
-.IX Item "cclock_flip"
-Rotate by 90 degrees counterclockwise and vertically flip. (default)
-.IP "\fBclock\fR" 4
-.IX Item "clock"
-Rotate by 90 degrees clockwise.
-.IP "\fBcclock\fR" 4
-.IX Item "cclock"
-Rotate by 90 degrees counterclockwise.
-.IP "\fBclock_flip\fR" 4
-.IX Item "clock_flip"
-Rotate by 90 degrees clockwise and vertically flip.
-.IP "\fBhflip\fR" 4
-.IX Item "hflip"
-Flip the input video horizontally.
-.IP "\fBvflip\fR" 4
-.IX Item "vflip"
-Flip the input video vertically.
-.RE
-.RS 4
-.RE
-.IP "\fBpassthrough\fR" 4
-.IX Item "passthrough"
-Do not apply the transposition if the input geometry matches the one
-specified by the specified value. It accepts the following values:
-.RS 4
-.IP "\fBnone\fR" 4
-.IX Item "none"
-Always apply transposition. (default)
-.IP "\fBportrait\fR" 4
-.IX Item "portrait"
-Preserve portrait geometry (when \fIheight\fR >= \fIwidth\fR).
-.IP "\fBlandscape\fR" 4
-.IX Item "landscape"
-Preserve landscape geometry (when \fIwidth\fR >= \fIheight\fR).
-.RE
-.RS 4
-.RE
 .SS "transpose_vulkan"
 .IX Subsection "transpose_vulkan"
 Transpose rows with columns in the input video and optionally flip it.
