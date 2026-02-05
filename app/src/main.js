@@ -1,14 +1,33 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage } = require('electron')
+
+// 设置应用名称
+app.setName('Player X')
+
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
 const https = require('https')
 let win
 
+// 默认更新检查地址（请修改此处为你自己的 URL）
+const UPDATE_MANIFEST_URL = "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/latest.json"
+
 function createWindow() {
+  // 尝试加载应用图标
+  let appIcon = null
+  try {
+    const iconPath = path.join(__dirname, 'update-icon.png')
+    if (fs.existsSync(iconPath)) {
+      appIcon = nativeImage.createFromPath(iconPath)
+    }
+  } catch (e) {
+    // 忽略图标加载错误
+  }
+
   win = new BrowserWindow({
     width: 1200,
     height: 800,
+    icon: appIcon, // 设置窗口图标
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -154,8 +173,25 @@ if (!gotLock) {
 
   // 修改：应用就绪后创建窗口并安装菜单
   app.whenReady().then(() => {
+    // macOS: 设置 Dock 图标
+    if (process.platform === 'darwin' && app.dock) {
+      try {
+        const iconPath = path.join(__dirname, 'update-icon.png')
+        if (fs.existsSync(iconPath)) {
+          const icon = nativeImage.createFromPath(iconPath)
+          app.dock.setIcon(icon)
+        }
+      } catch (e) {
+        console.error('设置 Dock 图标失败:', e)
+      }
+    }
+
     createWindow()
     buildAppMenu()
+    // 启动3秒后自动检查更新
+    setTimeout(() => {
+      checkForUpdates(false).catch(e => console.log('Auto update check failed:', e))
+    }, 3000)
   })
 
   // macOS: 当点击 Dock 图标且没有窗口时，重新创建；有窗口时恢复并聚焦
@@ -537,12 +573,14 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
   
   throw lastError
 })
-// 增强：支持拉取远程版本JSON进行对比（UPDATE_JSON_URL 优先；若 UPDATE_URL 以 .json 结尾也视为清单），并按平台选择下载链接
-ipcMain.handle('check-for-updates', async () => {
+/**
+ * 检查更新
+ * @param {boolean} interactive - 是否为交互模式（手动触发）
+ */
+async function checkForUpdates(interactive = false) {
   const currentVersion = app.getVersion()
   // 优先使用环境变量，可在本地或打包环境通过环境变量注入清单地址或自定义头
-  const defaultManifest = "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/latest.json"
-  const manifestUrl = process.env.UPDATE_JSON_URL || defaultManifest
+  const manifestUrl = process.env.UPDATE_JSON_URL || UPDATE_MANIFEST_URL
   const headerEnv = process.env.UPDATE_JSON_HEADERS || process.env.PRIVATE_TOKEN || ''
 
   // 将可选的自定义 headers 从 JSON 字符串解析（例如：{"Authorization":"Bearer ..."}），或从 PRIVATE_TOKEN 环境变量转换为 PRIVATE-TOKEN
@@ -562,13 +600,15 @@ ipcMain.handle('check-for-updates', async () => {
   }
 
   if (!manifestUrl) {
-    await dialog.showMessageBox({
-      type: 'info',
-      title: '检查更新',
-      message: `当前版本：${currentVersion}`,
-      detail: '未配置更新源。请设置环境变量 UPDATE_JSON_URL 指向版本清单 JSON\n例如：UPDATE_JSON_URL=https://your-domain.com/playerx/latest.json',
-      buttons: ['我知道了']
-    })
+    if (interactive) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: '检查更新',
+        message: `当前版本：${currentVersion}`,
+        detail: '未配置更新源。请设置环境变量 UPDATE_JSON_URL 指向版本清单 JSON\n例如：UPDATE_JSON_URL=https://your-domain.com/playerx/latest.json',
+        buttons: ['我知道了']
+      })
+    }
     return { status: 'no-source', currentVersion }
   }
 
@@ -695,11 +735,24 @@ n
       throw new Error('清单缺少版本字段：version')
     }
 
+    // 尝试加载自定义更新图标
+    let updateIcon = null
+    try {
+      // 尝试从当前目录(src)加载 update-icon.png
+      const iconPath = path.join(__dirname, 'update-icon.png')
+      if (fs.existsSync(iconPath)) {
+        updateIcon = nativeImage.createFromPath(iconPath)
+      }
+    } catch (e) {
+      // 忽略图标加载错误
+    }
+
     const rel = cmp(latestVersion, currentVersion)
     if (rel > 0) {
       const btn = await dialog.showMessageBox({
         type: 'info',
         title: '发现新版本',
+        icon: updateIcon,
         message: `当前版本：${currentVersion}，最新版本：${latestVersion}`,
         detail: (json.notes || json.changelog || '是否前往下载新版本？'),
         buttons: downloadUrl ? ['前往下载', '稍后'] : ['好的'],
@@ -713,24 +766,36 @@ n
       return { status: 'update-available', currentVersion, latestVersion, updateUrl: downloadUrl }
     }
 
-    await dialog.showMessageBox({
-      type: 'info',
-      title: '已是最新版本',
-      message: `当前版本：${currentVersion}`,
-      detail: `最新版本：${latestVersion}`,
-      buttons: ['好的']
-    })
+    if (interactive) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: '已是最新版本',
+        icon: updateIcon,
+        message: `当前版本：${currentVersion}`,
+        detail: `最新版本：${latestVersion}`,
+        buttons: ['好的']
+      })
+    }
     return { status: 'uptodate', currentVersion, latestVersion }
   } catch (e) {
-    await dialog.showMessageBox({
-      type: 'error',
-      title: '检查更新失败',
-      message: '无法获取远程版本信息',
-      detail: e.message,
-      buttons: ['关闭']
-    })
+    if (interactive) {
+      await dialog.showMessageBox({
+        type: 'error',
+        title: '检查更新失败',
+        message: '无法获取远程版本信息',
+        detail: e.message,
+        buttons: ['关闭']
+      })
+    } else {
+      console.error('自动更新检查失败:', e.message)
+    }
     return { status: 'error', error: e.message }
   }
+}
+
+// 注册 IPC 处理程序
+ipcMain.handle('check-for-updates', async () => {
+  return await checkForUpdates(true)
 })
 
 app.on('window-all-closed', () => {

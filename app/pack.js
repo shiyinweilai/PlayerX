@@ -97,7 +97,7 @@ function main() {
   const isMac = platform === 'darwin'
   const builderConfig = {
     appId: 'com.playerx.app',
-    productName: 'PlayerX',
+    productName: 'Player X',
     asar: true,
     // 排除 src/external，避免打入 asar
     files: ['**/*', '!dist/**', '!src/external/**'],
@@ -106,6 +106,7 @@ function main() {
       ? [{ from: 'src/external/mac-inner', to: 'mac-inner' }]
       : [{ from: 'src/external/win-inner', to: 'win-inner' }],
     mac: {
+      icon: 'src/update-icon.png',
       hardenedRuntime: false,
       gatekeeperAssess: false,
       category: 'public.app-category.video',
