@@ -1,7 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage, net } = require('electron')
 
 // 设置应用名称
-app.setName('PlayerX')
+app.setName('Player X')
 
 const path = require('path')
 const fs = require('fs')
@@ -573,6 +573,304 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
   
   throw lastError
 })
+// 自动下载并安装更新
+function downloadAndInstallUpdate(downloadUrl) {
+  if (!win) return
+
+  const tempDir = app.getPath('temp')
+  // 尝试从 URL 获取文件名，如果失败则使用默认名
+  let fileName = 'update-package'
+  try {
+    const urlObj = new URL(downloadUrl)
+    fileName = path.basename(urlObj.pathname) || 'update-package'
+  } catch (e) {}
+
+  // 简单的后缀补全
+  if (!path.extname(fileName)) {
+    fileName += process.platform === 'win32' ? '.exe' : '.zip'
+  }
+
+  const savePath = path.join(tempDir, fileName)
+
+  // 显示下载进度窗口（点击“自动下载更新”即视为用户已同意，无需后续确认）
+  const progressWin = createUpdateProgressWindow()
+  const updateProgressUI = (percent, subText) => {
+    if (!win) return
+    try {
+      if (typeof percent === 'number' && percent >= 0 && percent <= 1) {
+        win.setProgressBar(percent)
+      }
+      if (progressWin && !progressWin.isDestroyed()) {
+        const pct = typeof percent === 'number' && percent >= 0 ? Math.min(100, Math.floor(percent * 100)) : 0
+        const safeText = String(subText || '').replace(/\\/g, '\\\\').replace(/`/g, '\\`')
+        progressWin.webContents.executeJavaScript(
+          `window.__setUpdateProgress && window.__setUpdateProgress(${pct}, \`${safeText}\`)`
+        ).catch(() => {})
+      }
+    } catch (e) {}
+  }
+
+  const closeProgressUI = () => {
+    try { win && win.setProgressBar(-1) } catch (e) {}
+    try {
+      if (progressWin && !progressWin.isDestroyed()) progressWin.close()
+    } catch (e) {}
+  }
+
+  try {
+    const file = fs.createWriteStream(savePath)
+    const request = net.request(downloadUrl)
+
+    request.on('response', (response) => {
+      // 处理重定向
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        closeProgressUI()
+        downloadAndInstallUpdate(response.headers.location)
+        return
+      }
+
+      const totalBytes = parseInt(response.headers['content-length'], 10)
+      let receivedBytes = 0
+
+      const startAt = Date.now()
+      let lastTickAt = startAt
+      let lastTickBytes = 0
+
+      const formatBytes = (bytes) => {
+        if (!bytes || bytes < 0) return '0 B'
+        const units = ['B', 'KB', 'MB', 'GB']
+        let v = bytes
+        let i = 0
+        while (v >= 1024 && i < units.length - 1) {
+          v /= 1024
+          i++
+        }
+        return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+      }
+
+      const formatSeconds = (sec) => {
+        if (!isFinite(sec) || sec < 0) return '--'
+        const s = Math.floor(sec)
+        const m = Math.floor(s / 60)
+        const r = s % 60
+        return m > 0 ? `${m}分${r}秒` : `${r}秒`
+      }
+
+      updateProgressUI(0, '正在下载更新包...')
+
+      response.on('data', (chunk) => {
+        receivedBytes += chunk.length
+        file.write(chunk)
+
+        if (totalBytes > 0) {
+          const progress = receivedBytes / totalBytes
+
+          const now = Date.now()
+          if (now - lastTickAt >= 250) {
+            const deltaBytes = receivedBytes - lastTickBytes
+            const deltaSec = (now - lastTickAt) / 1000
+            const speed = deltaSec > 0 ? (deltaBytes / deltaSec) : 0
+            const remainBytes = totalBytes - receivedBytes
+            const eta = speed > 0 ? (remainBytes / speed) : Infinity
+
+            updateProgressUI(
+              progress,
+              `已下载 ${formatBytes(receivedBytes)} / ${formatBytes(totalBytes)}  ·  速度 ${formatBytes(speed)}/s  ·  剩余 ${formatSeconds(eta)}`
+            )
+
+            lastTickAt = now
+            lastTickBytes = receivedBytes
+          } else {
+            updateProgressUI(progress, '')
+          }
+        } else {
+          // 无 content-length：只能显示已下载大小
+          updateProgressUI(0, `已下载 ${formatBytes(receivedBytes)}（服务器未返回总大小）`)
+        }
+      })
+
+      response.on('end', () => {
+        file.end()
+        updateProgressUI(1, '下载完成，正在准备安装...')
+
+        // 给 UI 一个短暂时间刷新，然后开始安装
+        setTimeout(() => {
+          closeProgressUI()
+          if (process.platform === 'darwin') {
+            installMacUpdate(savePath)
+          } else {
+            installWindowsUpdate(savePath)
+          }
+        }, 300)
+      })
+
+      response.on('error', (err) => {
+        file.close()
+        fs.unlink(savePath, () => {}) // 删除未完成的文件
+        closeProgressUI()
+        dialog.showErrorBox('下载失败', '更新下载出错: ' + err.message)
+      })
+    })
+
+    request.on('error', (err) => {
+      closeProgressUI()
+      dialog.showErrorBox('请求失败', '无法连接更新服务器: ' + err.message)
+    })
+
+    request.end()
+  } catch (e) {
+    closeProgressUI()
+    dialog.showErrorBox('错误', '启动下载失败: ' + e.message)
+  }
+}
+
+function createUpdateProgressWindow() {
+  if (!win) return null
+
+  const progressWin = new BrowserWindow({
+    parent: win,
+    modal: true,
+    show: false,
+    width: 560,
+    height: 200,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: '正在下载更新',
+    backgroundColor: '#1f1f1f',
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  })
+
+  const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>正在下载更新</title>
+<style>
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:#2b2b2b;color:#fff;}
+  .wrap{padding:18px 18px 14px 18px;}
+  .title{font-size:18px;font-weight:700;margin-bottom:10px;}
+  .bar{height:14px;background:rgba(255,255,255,.18);border-radius:8px;overflow:hidden;}
+  .bar>div{height:100%;width:0;background:#0a84ff;border-radius:8px;transition:width .12s linear;}
+  .row{display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:12px;}
+  .pct{font-size:14px;opacity:.95;white-space:nowrap;}
+  .sub{font-size:13px;opacity:.85;line-height:1.4;margin-top:10px;min-height:18px;}
+  .hint{font-size:12px;opacity:.65;margin-top:10px;}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">正在后台下载更新包，请稍候…</div>
+    <div class="bar"><div id="fill"></div></div>
+    <div class="row">
+      <div class="pct" id="pct">0%</div>
+    </div>
+    <div class="sub" id="sub"></div>
+    <div class="hint">下载完成后将自动解压、处理权限并重启完成更新</div>
+  </div>
+
+  <script>
+    window.__setUpdateProgress = function(pct, text){
+      try{
+        var p = Math.max(0, Math.min(100, Number(pct)||0));
+        document.getElementById('fill').style.width = p + '%';
+        document.getElementById('pct').textContent = p + '%';
+        if (text){ document.getElementById('sub').textContent = text; }
+      }catch(e){}
+    }
+  </script>
+</body>
+</html>`
+
+  progressWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+  progressWin.once('ready-to-show', () => progressWin.show())
+  return progressWin
+}
+
+function installMacUpdate(filePath) {
+  // 1. 解压
+  const unzipDir = path.join(path.dirname(filePath), 'PlayerX_Update')
+  // 清理旧目录
+  fs.rmSync(unzipDir, { recursive: true, force: true })
+  fs.mkdirSync(unzipDir)
+
+  const { exec } = require('child_process')
+
+  // 使用系统 unzip 命令
+  exec(`unzip -o "${filePath}" -d "${unzipDir}"`, (err, stdout, stderr) => {
+    if (err) {
+      dialog.showErrorBox('更新失败', `解压失败: ${err.message}\n${stderr}`)
+      return
+    }
+
+    // 2. 找到 .app
+    const files = fs.readdirSync(unzipDir)
+    const appName = files.find(f => f.endsWith('.app'))
+    if (!appName) {
+      dialog.showErrorBox('更新失败', '更新包中未找到 .app 应用文件')
+      return
+    }
+
+    const newAppPath = path.join(unzipDir, appName)
+
+    // 3. 移除隔离属性 (Gatekeeper)
+    exec(`xattr -r -d com.apple.quarantine "${newAppPath}"`, (err) => {
+      // 忽略 xattr 错误
+
+      // 4. 准备替换和重启（点击“自动下载更新”即视为用户已同意，无需再确认）
+      const currentAppPath = path.resolve(process.execPath, '../../..')
+
+      if (!currentAppPath.endsWith('.app')) {
+        dialog.showErrorBox('更新提示', `无法自动替换，请手动将新版本移动到应用程序目录。\n新版本位置: ${newAppPath}`)
+        shell.showItemInFolder(newAppPath)
+        return
+      }
+
+      // 生成更新脚本：替换后自动重启
+      const scriptPath = path.join(app.getPath('temp'), 'update_script.sh')
+      const scriptContent = `#!/bin/bash
+sleep 2
+rm -rf "${currentAppPath}"
+mv "${newAppPath}" "${currentAppPath}"
+open "${currentAppPath}"
+`
+      fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 })
+
+      // 运行脚本
+      const child = require('child_process').spawn('/bin/bash', [scriptPath], {
+        detached: true,
+        stdio: 'ignore'
+      })
+      child.unref()
+
+      // 退出应用
+      app.quit()
+    })
+  })
+}
+
+function installWindowsUpdate(filePath) {
+  if (filePath.endsWith('.exe')) {
+    // 安装包：点击“自动下载更新”即视为用户已同意，直接运行并退出
+    shell.openPath(filePath)
+    app.quit()
+  } else {
+    // 便携版或其他：自动打开所在目录并提示用户手动解压覆盖
+    shell.showItemInFolder(filePath)
+    dialog.showMessageBox(win, {
+      type: 'info',
+      title: '下载完成',
+      message: '新版本已下载。请解压后覆盖当前版本，然后重新打开应用。',
+      buttons: ['好的']
+    })
+  }
+}
+
 /**
  * 检查更新
  * @param {boolean} interactive - 是否为交互模式（手动触发）
@@ -642,7 +940,7 @@ async function checkForUpdates(interactive = false) {
     // 支持 file:// 或 本地路径
     if (manifestUrl.startsWith('file://') || /^[a-zA-Z]:\\/.test(manifestUrl)) {
       let localPath = manifestUrl
-n
+
       if (manifestUrl.startsWith('file://')) {
         localPath = manifestUrl.replace('file://', '')
       }
@@ -721,28 +1019,31 @@ n
 
     // 获取下载链接：优先检查 platforms/downloads 字段（按 process.platform），其次检查通用 url 字段
     let downloadUrl = ''
-    const platformsObj = json.platforms || json.downloads
-    
-    if (platformsObj && typeof platformsObj === 'object') {
+
+    // 1) 兼容旧结构：platforms
+    if (json.platforms && typeof json.platforms === 'object') {
       const platformKey = process.platform
-      // 尝试多种平台键名匹配
-      downloadUrl = platformsObj[platformKey] 
-        || platformsObj[platformKey.replace('darwin', 'mac')] 
-        || platformsObj[platformKey.replace('win32', 'win')]
-        || platformsObj['darwin']  // macOS 通用
-        || platformsObj['mac']     // macOS 别名
-        || platformsObj['win32']   // Windows 通用
-        || platformsObj['win']     // Windows 别名
-        || platformsObj['win-install'] // Windows 安装版
-        || platformsObj['win-portable'] // Windows 便携版
-      
-      // 如果找到的是对象，尝试提取 url 字段
-      if (downloadUrl && typeof downloadUrl === 'object') {
-        downloadUrl = downloadUrl.url || downloadUrl.download || downloadUrl.downloadUrl || ''
+      downloadUrl = json.platforms[platformKey] || json.platforms[platformKey.replace('darwin', 'mac')] || json.platforms[platformKey.replace('win32', 'win')]
+      if (!downloadUrl) {
+        const p = json.platforms[platformKey] || json.platforms['win32'] || json.platforms['darwin'] || json.platforms['mac'] || json.platforms['win']
+        if (p && typeof p === 'object') downloadUrl = p.url || p.download || p.downloadUrl || ''
       }
     }
-    
-    // 兜底：检查通用 url 字段
+
+    // 2) 兼容当前 latest.json：downloads
+    if (!downloadUrl && json.downloads && typeof json.downloads === 'object') {
+      if (process.platform === 'darwin') {
+        downloadUrl = json.downloads.darwin || json.downloads.mac || json.downloads.macos || ''
+      } else if (process.platform === 'win32') {
+        // 优先安装版，其次便携版
+        downloadUrl = json.downloads['win-install'] || json.downloads.winInstall || json.downloads.win32 || json.downloads.win || json.downloads['win-portable'] || json.downloads.winPortable || ''
+      } else {
+        // 其他平台：尽力找一个通用字段
+        downloadUrl = json.downloads[process.platform] || json.downloads.linux || ''
+      }
+    }
+
+    // 3) 兜底：通用字段
     if (!downloadUrl) downloadUrl = json.url || json.download || json.downloadUrl || ''
 
     if (!latestVersion) {
@@ -764,18 +1065,28 @@ n
     const rel = cmp(latestVersion, currentVersion)
     if (rel > 0) {
       const btn = await dialog.showMessageBox({
-        type: 'info',
+        type: 'question',
         title: '发现新版本',
         icon: updateIcon,
         message: `当前版本：${currentVersion}，最新版本：${latestVersion}`,
-        detail: (json.notes || json.changelog || '是否前往下载新版本？'),
-        buttons: downloadUrl ? ['前往下载', '稍后'] : ['好的'],
+        detail: downloadUrl
+          ? '点击“自动下载更新”后，将在后台下载更新包；下载完成后会自动解压、移除 macOS 隔离属性并提示重启完成更新。'
+          : (json.notes || json.changelog || '暂无可用下载链接，请稍后重试。'),
+        buttons: downloadUrl ? ['自动下载更新', '浏览器下载', '稍后'] : ['好的'],
         defaultId: 0,
-        cancelId: 1
+        cancelId: downloadUrl ? 2 : 0
       })
-      if (downloadUrl && btn.response === 0) {
-        await shell.openExternal(downloadUrl)
-        return { status: 'opened', currentVersion, latestVersion, updateUrl: downloadUrl }
+      
+      if (downloadUrl) {
+        if (btn.response === 0) {
+          // 自动下载
+          downloadAndInstallUpdate(downloadUrl)
+          return { status: 'downloading', currentVersion, latestVersion }
+        } else if (btn.response === 1) {
+          // 浏览器下载
+          await shell.openExternal(downloadUrl)
+          return { status: 'opened', currentVersion, latestVersion, updateUrl: downloadUrl }
+        }
       }
       return { status: 'update-available', currentVersion, latestVersion, updateUrl: downloadUrl }
     }

@@ -98,7 +98,6 @@ function main() {
   const builderConfig = {
     appId: 'com.playerx.app',
     productName: 'PlayerX',
-    artifactName: '${productName}-${version}-${os}-${arch}.${ext}',
     asar: true,
     // 排除 src/external，避免打入 asar
     files: ['**/*', '!dist/**', '!src/external/**'],
@@ -111,7 +110,6 @@ function main() {
       hardenedRuntime: false,
       gatekeeperAssess: false,
       category: 'public.app-category.video',
-      artifactName: '${productName}-${version}-${arch}-mac.${ext}',
       // 便携版：直接生成.app文件；安装版：生成zip和dmg
       target: isPortable 
         ? [{ target: 'dir', arch: ['arm64'] }]
@@ -120,19 +118,10 @@ function main() {
             { target: 'dmg', arch: ['arm64'] }
           ]
     },
-    dmg: { 
-      sign: false,
-      artifactName: '${productName}-${version}-${arch}.${ext}'
-    },
     win: {
       // 便携版：生成portable版本；安装版：生成nsis安装包
-      target: isPortable 
-        ? [{ target: 'portable', arch: ['x64'] }]
-        : [{ target: 'nsis', arch: ['x64'] }],
-      executableName: 'PlayerX',
-      artifactName: isPortable 
-        ? '${productName}-${version}-portable.${ext}'
-        : '${productName}-Setup-${version}.${ext}'
+      target: isPortable ? 'portable' : 'nsis',
+      executableName: 'PlayerX'
     },
     nsis: {
       oneClick: false,
@@ -144,7 +133,11 @@ function main() {
       menuCategory: 'Video Tools',
       runAfterFinish: true,
       deleteAppDataOnUninstall: false
-    }
+    },
+    portable: {
+      artifactName: '${productName}-${version}-portable.${ext}'
+    },
+    dmg: { sign: false }
   };
   const cfgPath = path.join(__dirname, 'electron-builder.temp.json');
   fs.writeFileSync(cfgPath, JSON.stringify(builderConfig, null, 2));
