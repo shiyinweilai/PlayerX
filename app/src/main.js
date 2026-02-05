@@ -719,16 +719,30 @@ n
 
     const latestVersion = json.version || json.latest || json.tag || ''
 
-    // 获取下载链接：优先检查 platforms 字段（按 process.platform），其次检查通用 url 字段
+    // 获取下载链接：优先检查 platforms/downloads 字段（按 process.platform），其次检查通用 url 字段
     let downloadUrl = ''
-    if (json.platforms && typeof json.platforms === 'object') {
+    const platformsObj = json.platforms || json.downloads
+    
+    if (platformsObj && typeof platformsObj === 'object') {
       const platformKey = process.platform
-      downloadUrl = json.platforms[platformKey] || json.platforms[platformKey.replace('darwin', 'mac')] || json.platforms[platformKey.replace('win32', 'win')]
-      if (!downloadUrl) {
-        const p = json.platforms[platformKey] || json.platforms['win32'] || json.platforms['darwin'] || json.platforms['mac'] || json.platforms['win']
-        if (p && typeof p === 'object') downloadUrl = p.url || p.download || p.downloadUrl || ''
+      // 尝试多种平台键名匹配
+      downloadUrl = platformsObj[platformKey] 
+        || platformsObj[platformKey.replace('darwin', 'mac')] 
+        || platformsObj[platformKey.replace('win32', 'win')]
+        || platformsObj['darwin']  // macOS 通用
+        || platformsObj['mac']     // macOS 别名
+        || platformsObj['win32']   // Windows 通用
+        || platformsObj['win']     // Windows 别名
+        || platformsObj['win-install'] // Windows 安装版
+        || platformsObj['win-portable'] // Windows 便携版
+      
+      // 如果找到的是对象，尝试提取 url 字段
+      if (downloadUrl && typeof downloadUrl === 'object') {
+        downloadUrl = downloadUrl.url || downloadUrl.download || downloadUrl.downloadUrl || ''
       }
     }
+    
+    // 兜底：检查通用 url 字段
     if (!downloadUrl) downloadUrl = json.url || json.download || json.downloadUrl || ''
 
     if (!latestVersion) {
