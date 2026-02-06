@@ -696,11 +696,8 @@ function downloadAndInstallUpdate(downloadUrl) {
         // 给 UI 一个短暂时间刷新，然后开始安装
         setTimeout(() => {
           closeProgressUI()
-          if (process.platform === 'darwin') {
-            installMacUpdate(savePath)
-          } else {
-            installWindowsUpdate(savePath)
-          }
+          // 仅 macOS 支持“自动下载并自动安装/替换”
+          installMacUpdate(savePath)
         }, 300)
       })
 
@@ -854,22 +851,7 @@ open "${currentAppPath}"
   })
 }
 
-function installWindowsUpdate(filePath) {
-  if (filePath.endsWith('.exe')) {
-    // 安装包：点击“自动下载更新”即视为用户已同意，直接运行并退出
-    shell.openPath(filePath)
-    app.quit()
-  } else {
-    // 便携版或其他：自动打开所在目录并提示用户手动解压覆盖
-    shell.showItemInFolder(filePath)
-    dialog.showMessageBox(win, {
-      type: 'info',
-      title: '下载完成',
-      message: '新版本已下载。请解压后覆盖当前版本，然后重新打开应用。',
-      buttons: ['好的']
-    })
-  }
-}
+
 
 /**
  * 检查更新
@@ -1035,8 +1017,8 @@ async function checkForUpdates(interactive = false) {
       if (process.platform === 'darwin') {
         downloadUrl = json.downloads.darwin || json.downloads.mac || json.downloads.macos || ''
       } else if (process.platform === 'win32') {
-        // 优先安装版，其次便携版
-        downloadUrl = json.downloads['win-install'] || json.downloads.winInstall || json.downloads.win32 || json.downloads.win || json.downloads['win-portable'] || json.downloads.winPortable || ''
+        // Windows 更新：只提供“浏览器下载”，默认优先便携版，其次安装版（安装版仅保留打包功能）
+        downloadUrl = json.downloads['win-portable'] || json.downloads.winPortable || json.downloads.win32 || json.downloads.win || json.downloads['win-install'] || json.downloads.winInstall || ''
       } else {
         // 其他平台：尽力找一个通用字段
         downloadUrl = json.downloads[process.platform] || json.downloads.linux || ''
@@ -1064,30 +1046,54 @@ async function checkForUpdates(interactive = false) {
 
     const rel = cmp(latestVersion, currentVersion)
     if (rel > 0) {
+      const isMac = process.platform === 'darwin'
+      const isWin = process.platform === 'win32'
+
+      const buttons = downloadUrl
+        ? (isMac ? ['自动下载更新', '浏览器下载', '稍后'] : ['浏览器下载', '稍后'])
+        : ['好的']
+
+      const cancelId = downloadUrl
+        ? (isMac ? 2 : 1)
+        : 0
+
+      const detailText = downloadUrl
+        ? (isMac
+          ? '点击“自动下载更新”后，将在后台下载更新包；下载完成后会自动解压、移除 macOS 隔离属性并提示重启完成更新。'
+          : 'Windows 端暂不提供安装版自动更新：将通过浏览器下载便携版更新包；下载完成后请手动解压覆盖并重新打开应用。')
+        : (json.notes || json.changelog || '暂无可用下载链接，请稍后重试。')
+
       const btn = await dialog.showMessageBox({
         type: 'question',
         title: '发现新版本',
         icon: updateIcon,
         message: `当前版本：${currentVersion}，最新版本：${latestVersion}`,
-        detail: downloadUrl
-          ? '点击“自动下载更新”后，将在后台下载更新包；下载完成后会自动解压、移除 macOS 隔离属性并提示重启完成更新。'
-          : (json.notes || json.changelog || '暂无可用下载链接，请稍后重试。'),
-        buttons: downloadUrl ? ['自动下载更新', '浏览器下载', '稍后'] : ['好的'],
+        detail: detailText,
+        buttons,
         defaultId: 0,
-        cancelId: downloadUrl ? 2 : 0
+        cancelId
       })
-      
+
       if (downloadUrl) {
-        if (btn.response === 0) {
-          // 自动下载
-          downloadAndInstallUpdate(downloadUrl)
-          return { status: 'downloading', currentVersion, latestVersion }
-        } else if (btn.response === 1) {
-          // 浏览器下载
-          await shell.openExternal(downloadUrl)
-          return { status: 'opened', currentVersion, latestVersion, updateUrl: downloadUrl }
+        if (isMac) {
+          if (btn.response === 0) {
+            // 自动下载（仅 macOS）
+            downloadAndInstallUpdate(downloadUrl)
+            return { status: 'downloading', currentVersion, latestVersion }
+          } else if (btn.response === 1) {
+            // 浏览器下载
+            await shell.openExternal(downloadUrl)
+            return { status: 'opened', currentVersion, latestVersion, updateUrl: downloadUrl }
+          }
+        } else {
+          // Windows / 其他平台：只保留浏览器下载
+          if (btn.response === 0) {
+            await shell.openExternal(downloadUrl)
+            return { status: 'opened', currentVersion, latestVersion, updateUrl: downloadUrl }
+          }
         }
       }
+
       return { status: 'update-available', currentVersion, latestVersion, updateUrl: downloadUrl }
     }
 
