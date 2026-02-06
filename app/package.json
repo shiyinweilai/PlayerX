@@ -57,7 +57,8 @@
     },
     "win": {
       "target": "nsis",
-      "executableName": "PlayerX"
+      "executableName": "PlayerX",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

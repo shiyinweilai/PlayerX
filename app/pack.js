@@ -121,7 +121,9 @@ function main() {
     win: {
       // 便携版：生成portable版本；安装版：生成nsis安装包
       target: isPortable ? 'portable' : 'nsis',
-      executableName: 'PlayerX'
+      executableName: 'PlayerX',
+      // 避免产物文件名包含空格（默认会是 "PlayerX Setup 1.0.2.exe"）
+      artifactName: '${productName}-Setup-${version}.${ext}'
     },
     nsis: {
       oneClick: false,
