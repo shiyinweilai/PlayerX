@@ -3,7 +3,7 @@ import time
 import argparse
 
 if __name__ == "__main__":
-    print("\033c", end="")
+    print("\033c")
     parser = argparse.ArgumentParser(description="构建工具")
     parser.add_argument('-p','--platform', choices=['windows', 'macos', 'linux'], required=True, help='目标平台')
     args = parser.parse_args()

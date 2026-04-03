@@ -24,19 +24,22 @@ npm start
 ## 打包发布
 
 ### 版本号更新
+
 手动指定版本：npm run bump -- 1.0.1
 直接使用 Node：node bump-version.js 1.0.1
 
 ### 指定平台打包
+
 ```bash
 # Windows
-npm run pack:win
+npm run pack:win:portable
 
 # macOS
 npm run pack:mac
 ```
 
 ### 直接使用 electron-builder
+
 ```bash
 npm run build
 ```
@@ -44,10 +47,12 @@ npm run build
 ## 跨平台支持说明
 
 ### Windows 平台
+
 - 将 `PlayerX.exe` 和相关 DLL 文件放入 `win-inner` 目录
 - 打包后生成 NSIS 安装包
 
 ### macOS 平台
+
 - 将 macOS 版本的视频比较工具放入 `mac-inner` 目录
 - 可执行文件命名为 `PlayerX`
 - 打包后生成 DMG 镜像文件
