@@ -436,6 +436,74 @@
       border-bottom: none;
     }
 
+    /* 文件过滤框 */
+    .file-filter {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      background: #f1f3f5;
+      border: 1px solid #e9ecef;
+      border-bottom: none;
+      border-radius: 5px 5px 0 0;
+    }
+
+    .filter-input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-size: 11px;
+      font-family: 'Courier New', monospace;
+      color: #333;
+      outline: none;
+      padding: 2px 0;
+    }
+
+    .filter-input::placeholder {
+      color: #adb5bd;
+    }
+
+    .filter-count {
+      font-size: 10px;
+      color: #adb5bd;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* 排序按钮 */
+    .sort-btn {
+      flex-shrink: 0;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      font-size: 10px;
+      font-family: 'Segoe UI', sans-serif;
+      color: #6c757d;
+      padding: 1px 5px;
+      height: 20px;
+      line-height: 1;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+
+    .sort-btn:hover {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+
+    .sort-btn.active {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+
+    .file-filter + .file-list {
+      border-radius: 0 0 5px 5px;
+      margin-top: 0;
+    }
+
     .control-section {
       margin-bottom: 10px;
       flex-shrink: 0;
@@ -456,6 +524,86 @@
     .control-left {
       flex: 0 0 auto;
       min-width: 120px;
+    }
+
+    /* 运行按钮 + 上下组导航 */
+    .run-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .nav-btns {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .nav-btn {
+      width: 28px;
+      height: 22px;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      font-size: 12px;
+      color: #495057;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+      line-height: 1;
+    }
+
+    .nav-btn:hover:not(:disabled) {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+
+    .nav-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    /* 运行按钮 + 上下组导航 */
+    .run-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .nav-btns {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .nav-btn {
+      width: 28px;
+      height: 22px;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      font-size: 12px;
+      color: #495057;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+      line-height: 1;
+    }
+
+    .nav-btn:hover:not(:disabled) {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+
+    .nav-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
     }
 
     .control-middle {

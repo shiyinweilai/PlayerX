@@ -16,11 +16,17 @@
     <div class="control-section">
       <div class="control-layout">
         <div class="control-left">
-          <button class="run-btn" id="runBtn" disabled>开始对比</button>
+          <div class="run-group">
+            <button class="run-btn" id="runBtn" disabled>开始对比</button>
+            <div class="nav-btns">
+              <button class="nav-btn" id="prevGroupBtn" title="上一组" disabled>&#8593;</button>
+              <button class="nav-btn" id="nextGroupBtn" title="下一组" disabled>&#8595;</button>
+            </div>
+          </div>
         </div>
-        <!-- 新增：中间区域放置键入框 -->
+        <!-- 中间区域放置键入框 -->
         <div class="control-middle">
-          <input type="text" class="input-field" id="customInput" placeholder="自定义参数: -w 960x540 -l format=gray,crop=iw:ih-240 -r format=gray（更多请看帮助） " />
+          <input type="text" class="input-field" id="customInput" placeholder="自定义参数（如 -w 1280x720）" />
         </div>
         <div class="control-right">
           <select class="mode-dropdown" id="modeSelect">
@@ -85,6 +91,11 @@
           <div class="click-hint">点击继续添加</div>
         </div>
         
+        <div class="file-filter" id="fileFilter1" style="display:none">
+          <input type="text" class="filter-input" id="filterInput1" placeholder="过滤文件名，如 _a" />
+          <span class="filter-count" id="filterCount1"></span>
+          <button class="sort-btn" id="sortBtn1" title="排序方式">A↑</button>
+        </div>
         <div class="file-list" id="fileList1"></div>
       </div>
 
@@ -140,6 +151,11 @@
           <div class="click-hint">点击继续添加</div>
         </div>
         
+        <div class="file-filter" id="fileFilter2" style="display:none">
+          <input type="text" class="filter-input" id="filterInput2" placeholder="过滤文件名，如 _b" />
+          <span class="filter-count" id="filterCount2"></span>
+          <button class="sort-btn" id="sortBtn2" title="排序方式">A↑</button>
+        </div>
         <div class="file-list" id="fileList2"></div>
       </div>
     </div>

@@ -136,17 +136,35 @@ export function setProbeStatus(panelIndex, status) {
   if (elSize) elSize.textContent = status;
 }
 
-export function renderFileList(fileListElement, files, panelIndex, onSelectFile) {
+export function renderFileList(fileListElement, files, panelIndex, onSelectFile, filterKeyword = '') {
   fileListElement.innerHTML = '';
-  
+
+  const filterEl = getEl(`fileFilter${panelIndex}`);
+  const filterCountEl = getEl(`filterCount${panelIndex}`);
+
   if (files.length === 0) {
     fileListElement.style.display = 'none';
+    if (filterEl) filterEl.style.display = 'none';
     return;
   }
-  
+
+  // 过滤
+  const keyword = filterKeyword.trim().toLowerCase();
+  const filtered = keyword
+    ? files.filter(f => f.toLowerCase().includes(keyword))
+    : files;
+
+  // 显示过滤框
+  if (filterEl) filterEl.style.display = 'flex';
+  if (filterCountEl) {
+    filterCountEl.textContent = keyword
+      ? `${filtered.length}/${files.length}`
+      : `${files.length}`;
+  }
+
   fileListElement.style.display = 'block';
-  
-  files.forEach((file, index) => {
+
+  filtered.forEach((file) => {
     const fileItem = document.createElement('div');
     fileItem.className = 'file-item';
     fileItem.innerHTML = `<span class="selected-file-path">${file}</span>`;

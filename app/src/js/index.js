@@ -23,6 +23,102 @@ document.addEventListener('DOMContentLoaded', function() {
   let currentImportPanelIndex = 1;
   let currentUrlPanelIndex = 1;
 
+  // 过滤关键词
+  const filterKeywords = { 1: '', 2: '' };
+  // 排序状态: 'default' | 'asc' | 'desc'
+  const sortOrders = { 1: 'default', 2: 'default' };
+  // 排序标签循环
+  const sortLabels = { default: 'A\u2191', asc: 'A\u2191', desc: 'A\u2193' };
+  const sortCycle  = { default: 'asc', asc: 'desc', desc: 'default' };
+
+  // 获取排序后的文件列表
+  function getSortedFiles(files, panelIndex) {
+    const order = sortOrders[panelIndex];
+    if (order === 'default') return files;
+    const sorted = [...files].sort((a, b) => {
+      const na = a.split(/[\/]/).pop().toLowerCase();
+      const nb = b.split(/[\/]/).pop().toLowerCase();
+      return order === 'asc' ? na.localeCompare(nb) : nb.localeCompare(na);
+    });
+    return sorted;
+  }
+
+  // 获取排序+过滤后的文件列表（与 UI 显示完全一致）
+  function getVisibleFiles(panelIndex) {
+    const files = panelIndex === 1 ? files1 : files2;
+    const sorted = getSortedFiles(files, panelIndex);
+    const kw = filterKeywords[panelIndex].trim().toLowerCase();
+    return kw ? sorted.filter(f => f.toLowerCase().includes(kw)) : sorted;
+  }
+  // 统一渲染（含排序+过滤）
+  function refreshFileList(panelIndex) {
+    const fileList = panelIndex === 1 ? fileList1 : fileList2;
+    const files = panelIndex === 1 ? files1 : files2;
+    const sorted = getSortedFiles(files, panelIndex);
+    UI.renderFileList(fileList, sorted, panelIndex, selectFile, filterKeywords[panelIndex]);
+    const currentPath = panelIndex === 1 ? file1Path : file2Path;
+    if (currentPath) UI.updateFileListSelection(fileList, currentPath);
+  }
+
+  // 绑定排序按钮
+  [1, 2].forEach(idx => {
+    const btn = document.getElementById(`sortBtn${idx}`);
+    if (!btn) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sortOrders[idx] = sortCycle[sortOrders[idx]];
+      const order = sortOrders[idx];
+      btn.textContent = order === 'desc' ? 'A\u2193' : 'A\u2191';
+      btn.classList.toggle('active', order !== 'default');
+      refreshFileList(idx);
+    });
+    btn.closest('.file-filter').addEventListener('click', e => e.stopPropagation());
+  });
+
+  // 绑定过滤输入框
+  [1, 2].forEach(idx => {
+    const input = document.getElementById(`filterInput${idx}`);
+    if (!input) return;
+    input.addEventListener('input', (e) => {
+      filterKeywords[idx] = e.target.value;
+      refreshFileList(idx);
+    });
+    input.closest('.file-filter').addEventListener('click', e => e.stopPropagation());
+  });
+
+  // 上一组 / 下一组
+  const prevGroupBtn = document.getElementById('prevGroupBtn');
+  const nextGroupBtn = document.getElementById('nextGroupBtn');
+
+  function updateNavButtons() {
+    const visible1 = getVisibleFiles(1);
+    const visible2 = getVisibleFiles(2);
+    const idx1 = file1Path ? visible1.indexOf(file1Path) : -1;
+    const idx2 = file2Path ? visible2.indexOf(file2Path) : -1;
+    const canPrev = (idx1 > 0) || (idx2 > 0);
+    const canNext = (visible1.length > 0 && idx1 < visible1.length - 1) ||
+                    (visible2.length > 0 && idx2 < visible2.length - 1);
+    if (prevGroupBtn) prevGroupBtn.disabled = !canPrev;
+    if (nextGroupBtn) nextGroupBtn.disabled = !canNext;
+  }
+
+  function navigateGroup(dir) {
+    // dir: -1 上一组, +1 下一组，基于过滤后的可见列表
+    [1, 2].forEach(idx => {
+      const visible = getVisibleFiles(idx);
+      const currentPath = idx === 1 ? file1Path : file2Path;
+      if (visible.length === 0) return;
+      const cur = currentPath ? visible.indexOf(currentPath) : -1;
+      const next = Math.max(0, Math.min(visible.length - 1, cur + dir));
+      if (visible[next] && visible[next] !== currentPath) {
+        selectFile(visible[next], idx);
+      }
+    });
+  }
+
+  if (prevGroupBtn) prevGroupBtn.addEventListener('click', () => navigateGroup(-1));
+  if (nextGroupBtn) nextGroupBtn.addEventListener('click', () => navigateGroup(1));
+
   // 初始化 Tab 切换逻辑
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -41,14 +137,27 @@ document.addEventListener('DOMContentLoaded', function() {
       if (panelIndex === 1) {
         file1Path = null;
         files1 = [];
-        UI.renderFileList(fileList1, [], 1, selectFile);
+        filterKeywords[1] = '';
+        sortOrders[1] = 'default';
+        const fi1 = document.getElementById('filterInput1');
+        if (fi1) fi1.value = '';
+        const sb1 = document.getElementById('sortBtn1');
+        if (sb1) { sb1.textContent = 'A\u2191'; sb1.classList.remove('active'); }
+        refreshFileList(1);
         UI.setVideoFileUI(1, null);
       } else {
         file2Path = null;
         files2 = [];
-        UI.renderFileList(fileList2, [], 2, selectFile);
+        filterKeywords[2] = '';
+        sortOrders[2] = 'default';
+        const fi2 = document.getElementById('filterInput2');
+        if (fi2) fi2.value = '';
+        const sb2 = document.getElementById('sortBtn2');
+        if (sb2) { sb2.textContent = 'A\u2191'; sb2.classList.remove('active'); }
+        refreshFileList(2);
         UI.setVideoFileUI(2, null);
       }
+      updateNavButtons();
       
       updateRunButton();
       UI.updatePanelUI(panelIndex, mode);
@@ -167,19 +276,16 @@ document.addEventListener('DOMContentLoaded', function() {
   function selectFile(filePath, panelIndex) {
     console.log(`选择文件: 面板${panelIndex}, 路径: ${filePath}`);
     
-    if (panelIndex === 1) {
-      file1Path = filePath;
-      UI.updateFileListSelection(fileList1, filePath);
-      UI.setVideoFileUI(1, filePath);
-      if (filePath) probeVideoInfo(filePath, 1);
-    } else {
-      file2Path = filePath;
-      UI.updateFileListSelection(fileList2, filePath);
-      UI.setVideoFileUI(2, filePath);
-      if (filePath) probeVideoInfo(filePath, 2);
-    }
-    
+    if (panelIndex === 1) file1Path = filePath;
+    else file2Path = filePath;
+
+    const fileList = panelIndex === 1 ? fileList1 : fileList2;
+    UI.updateFileListSelection(fileList, filePath);
+    UI.setVideoFileUI(panelIndex, filePath);
+    if (filePath) probeVideoInfo(filePath, panelIndex);
+
     updateRunButton();
+    updateNavButtons();
   }
 
   function handleFiles(filePaths, panelIndex) {
@@ -204,16 +310,14 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (panelIndex === 1) {
       files1 = [...new Set([...files1, ...videoFiles])];
-      UI.renderFileList(fileList1, files1, 1, selectFile);
-      if (files1.length > 0 && !file1Path) {
-        selectFile(files1[0], 1);
-      }
+      refreshFileList(1);
+      const first1 = getVisibleFiles(1)[0];
+      if (first1) selectFile(first1, 1);
     } else {
       files2 = [...new Set([...files2, ...videoFiles])];
-      UI.renderFileList(fileList2, files2, 2, selectFile);
-      if (files2.length > 0 && !file2Path) {
-        selectFile(files2[0], 2);
-      }
+      refreshFileList(2);
+      const first2 = getVisibleFiles(2)[0];
+      if (first2) selectFile(first2, 2);
     }
     
     if (videoFiles.length > 0) {
@@ -483,4 +587,5 @@ document.addEventListener('DOMContentLoaded', function() {
   fileList1.style.display = 'none';
   fileList2.style.display = 'none';
   updateRunButton();
+  updateNavButtons();
 });
