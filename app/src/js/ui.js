@@ -209,27 +209,38 @@ export function getUrlInputValue() {
   return urlInput.value.trim();
 }
 
+let toastTimer = null
+
+function updateToast(text, type) {
+  const toast = getEl('statusToast')
+  const icon = getEl('statusToastIcon')
+  if (!toast) return
+  toast.querySelector('#output').textContent = text
+  toast.className = 'status-toast visible ' + (type || '')
+  if (icon) {
+    if (type === 'running') icon.textContent = '⏳'
+    else if (type === 'success') icon.textContent = '✅'
+    else if (type === 'error') icon.textContent = '❌'
+    else icon.textContent = 'ℹ️'
+  }
+  // 非 running 状态 4 秒后自动淡出
+  if (toastTimer) clearTimeout(toastTimer)
+  if (type !== 'running') {
+    toastTimer = setTimeout(() => {
+      toast.classList.remove('visible')
+    }, 4000)
+  }
+}
+
 export function showOutput(message, type = 'normal') {
-  const output = getEl('output');
-  output.textContent = message;
-  if (type === 'error') output.className = 'output-box error';
-  else if (type === 'success') output.className = 'output-box success';
-  else if (type === 'running') output.className = 'output-box running';
-  else output.className = 'output-box';
+  updateToast(message, type)
 }
 
 export function appendOutput(message, type) {
-  const output = getEl('output');
-  output.textContent += message;
-  output.scrollTop = output.scrollHeight;
-  
-  if (type === 'stderr') {
-    output.className = 'output-box error';
-  } else if (type === 'close') {
-    output.className = message.includes('代码: 0') ? 'output-box success' : 'output-box error';
-  } else {
-    output.className = 'output-box running';
-  }
+  let toastType = 'running'
+  if (type === 'stderr') toastType = 'error'
+  else if (type === 'close') toastType = message.includes('代码: 0') ? 'success' : 'error'
+  updateToast(message.trim(), toastType)
 }
 
 export function showLoadingModal(show) {
