@@ -138,15 +138,9 @@ function buildAppMenu() {
     {
       label: '帮助',
       submenu: [
-        { label: '使用说明', click: showHelp }, { type: 'separator' },
         { label: '检查更新…', click: () => { if (win) win.webContents.send('menu-check-update') } },
         { type: 'separator' },
-        { label: '更多说明', click: () => shell.openExternal('https://iwiki.woa.com/p/4016316239 PlayerX使用说明') },
-        {
-          label: '关于我们', click: () => dialog.showMessageBox({
-            type: 'info', title: '关于我们', message: '视频对比工具 v1.0\n作者：rbyang'
-          })
-        },
+        { label: '关于我们', click: () => shell.openExternal('https://iwiki.woa.com/p/4016316239') },
       ]
     }
   ]
@@ -585,8 +579,12 @@ ipcMain.handle('probe-video-info', async (event, filePath) => {
   throw lastError
 })
 // 自动下载并安装更新
+// 全局更新锁：防止下载/安装期间重复触发更新检查，避免弹窗叠加导致 app.quit() 时崩溃
+let _isUpdating = false
+
 function downloadAndInstallUpdate(downloadUrl) {
   if (!win) return
+  // 注意：_isUpdating 已在 checkForUpdates 弹窗弹出前设置，此处无需重复设置
 
   const tempDir = app.getPath('temp')
   // 尝试从 URL 获取文件名，如果失败则使用默认名
@@ -716,18 +714,21 @@ function downloadAndInstallUpdate(downloadUrl) {
         file.close()
         fs.unlink(savePath, () => {}) // 删除未完成的文件
         closeProgressUI()
+        _isUpdating = false
         dialog.showErrorBox('下载失败', '更新下载出错: ' + err.message)
       })
     })
 
     request.on('error', (err) => {
       closeProgressUI()
+      _isUpdating = false
       dialog.showErrorBox('请求失败', '无法连接更新服务器: ' + err.message)
     })
 
     request.end()
   } catch (e) {
     closeProgressUI()
+    _isUpdating = false
     dialog.showErrorBox('错误', '启动下载失败: ' + e.message)
   }
 }
@@ -803,15 +804,20 @@ function createUpdateProgressWindow() {
 function installMacUpdate(filePath) {
   // 1. 解压
   const unzipDir = path.join(path.dirname(filePath), 'PlayerX_Update')
-  // 清理旧目录
-  fs.rmSync(unzipDir, { recursive: true, force: true })
-  fs.mkdirSync(unzipDir)
 
-  const { exec } = require('child_process')
+  const { exec, execSync } = require('child_process')
 
-  // 使用系统 unzip 命令
-  exec(`unzip -o "${filePath}" -d "${unzipDir}"`, (err, stdout, stderr) => {
+  // 清理旧目录：必须用 shell rm -rf 而非 fs.rmSync
+  // 原因：Electron 主进程中 Node.js 的 asar 虚拟文件系统会拦截 fs 调用，
+  // 将 .app 包内的 app.asar 文件误识别为目录，导致 rmdir 抛出 ENOTDIR 错误
+  try { execSync(`rm -rf "${unzipDir}"`) } catch (e) { /* 忽略，目录不存在时正常 */ }
+  fs.mkdirSync(unzipDir, { recursive: true })
+
+  // 使用 ditto 解压：原生支持 macOS .app 包内的符号链接、资源分支和扩展属性
+  // unzip 不支持符号链接，会导致 Electron Framework 等文件解压失败
+  exec(`ditto -x -k --sequesterRsrc "${filePath}" "${unzipDir}"`, (err, stdout, stderr) => {
     if (err) {
+      _isUpdating = false
       dialog.showErrorBox('更新失败', `解压失败: ${err.message}\n${stderr}`)
       return
     }
@@ -820,6 +826,7 @@ function installMacUpdate(filePath) {
     const files = fs.readdirSync(unzipDir)
     const appName = files.find(f => f.endsWith('.app'))
     if (!appName) {
+      _isUpdating = false
       dialog.showErrorBox('更新失败', '更新包中未找到 .app 应用文件')
       return
     }
@@ -830,15 +837,15 @@ function installMacUpdate(filePath) {
     exec(`xattr -r -d com.apple.quarantine "${newAppPath}"`, (err) => {
       // 忽略 xattr 错误
 
-      // 4. 准备替换和重启（点击“自动下载更新”即视为用户已同意，无需再确认）
+      // 4. 准备替换和重启（点击"自动下载更新"即视为用户已同意，无需再确认）
       const currentAppPath = path.resolve(process.execPath, '../../..')
 
       if (!currentAppPath.endsWith('.app')) {
+        _isUpdating = false
         dialog.showErrorBox('更新提示', `无法自动替换，请手动将新版本移动到应用程序目录。\n新版本位置: ${newAppPath}`)
         shell.showItemInFolder(newAppPath)
         return
       }
-
       // 生成更新脚本：替换后自动重启
       const scriptPath = path.join(app.getPath('temp'), 'update_script.sh')
       const scriptContent = `#!/bin/bash
@@ -869,6 +876,19 @@ open "${currentAppPath}"
  * @param {boolean} interactive - 是否为交互模式（手动触发）
  */
 async function checkForUpdates(interactive = false) {
+  // 下载/安装进行中时，静默检查直接跳过；手动触发时给出提示
+  if (_isUpdating) {
+    if (interactive) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: '正在更新',
+        message: '更新包正在下载或安装中，请稍候…',
+        buttons: ['好的']
+      })
+    }
+    return { status: 'updating' }
+  }
+
   const currentVersion = app.getVersion()
   // 优先使用环境变量，可在本地或打包环境通过环境变量注入清单地址或自定义头
   const manifestUrl = process.env.UPDATE_JSON_URL || UPDATE_MANIFEST_URL
@@ -943,56 +963,49 @@ async function checkForUpdates(interactive = false) {
         throw new Error('读取本地清单失败: ' + err.message)
       }
     } else {
-      // 网络请求，支持最多 5 次重定向
+      // 使用 Electron net 模块发起请求，避免 macOS 打包后 hardened-runtime 拦截原生 https TLS 连接
       data = await new Promise((resolve, reject) => {
         try {
-          const urlObj = new URL(manifestUrl)
-          const maxRedirects = 5
-          let redirects = 0
+          const request = net.request({
+            url: manifestUrl,
+            method: 'GET',
+            redirect: 'follow'
+          })
+          const reqHeaders = Object.assign(
+            { 'Accept': 'application/json', 'User-Agent': `${app.name}/${app.getVersion()}` },
+            extraHeaders
+          )
+          Object.entries(reqHeaders).forEach(([k, v]) => request.setHeader(k, v))
 
-          const doGet = (urlToGet) => {
-            const opts = {
-              method: 'GET',
-              timeout: 10000,
-              headers: Object.assign({ 'Accept': 'application/json', 'User-Agent': `${app.name}/${app.getVersion()}` }, extraHeaders)
+          let buf = ''
+          const timer = setTimeout(() => {
+            request.abort()
+            reject(new Error('请求超时'))
+          }, 10000)
+
+          request.on('response', (res) => {
+            if (res.statusCode && res.statusCode >= 400) {
+              clearTimeout(timer)
+              reject(new Error(`HTTP 错误 ${res.statusCode}`))
+              return
             }
-            const lib = urlToGet.startsWith('https:') ? require('https') : require('http')
-            const req = lib.get(urlToGet, opts, (res) => {
-              // 处理重定向
-              if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                if (redirects++ >= maxRedirects) {
-                  reject(new Error('重定向次数过多'))
-                  return
-                }
-                // 相对跳转处理
-                const next = new URL(res.headers.location, urlToGet).toString()
-                res.resume()
-                doGet(next)
-                return
-              }
-
-              if (res.statusCode && res.statusCode >= 400) {
-                reject(new Error(`HTTP 错误 ${res.statusCode}`))
-                return
-              }
-
-              let buf = ''
-              res.setEncoding('utf8')
-              res.on('data', (chunk) => buf += chunk)
-              res.on('end', () => {
-                // 如果响应为空但 Content-Length 显示非 0，还是交给上层处理（可能是服务器 HEAD/GET 行为差异）
-                resolve(buf)
-              })
+            res.on('data', (chunk) => { buf += chunk.toString('utf8') })
+            res.on('end', () => {
+              clearTimeout(timer)
+              resolve(buf)
             })
-
-            req.on('error', (err) => reject(err))
-            req.on('timeout', () => {
-              req.destroy()
-              reject(new Error('请求超时'))
+            res.on('error', (err) => {
+              clearTimeout(timer)
+              reject(err)
             })
-          }
+          })
 
-          doGet(urlObj.toString())
+          request.on('error', (err) => {
+            clearTimeout(timer)
+            reject(err)
+          })
+
+          request.end()
         } catch (err) {
           reject(err)
         }
@@ -1060,6 +1073,9 @@ async function checkForUpdates(interactive = false) {
       const isMac = process.platform === 'darwin'
       const isWin = process.platform === 'win32'
 
+      // 弹窗弹出前加锁，防止弹窗期间再次触发检查弹出第二个弹窗
+      _isUpdating = true
+
       const buttons = downloadUrl
         ? (isMac ? ['自动下载更新', '浏览器下载', '稍后'] : ['浏览器下载', '稍后'])
         : ['好的']
@@ -1088,21 +1104,32 @@ async function checkForUpdates(interactive = false) {
       if (downloadUrl) {
         if (isMac) {
           if (btn.response === 0) {
-            // 自动下载（仅 macOS）
+            // 自动下载（仅 macOS）：锁保持，下载/安装完成或失败时才释放
             downloadAndInstallUpdate(downloadUrl)
             return { status: 'downloading', currentVersion, latestVersion }
           } else if (btn.response === 1) {
-            // 浏览器下载
+            // 浏览器下载：弹窗已关闭，释放锁
+            _isUpdating = false
             await shell.openExternal(downloadUrl)
             return { status: 'opened', currentVersion, latestVersion, updateUrl: downloadUrl }
+          } else {
+            // 稍后：释放锁
+            _isUpdating = false
           }
         } else {
           // Windows / 其他平台：只保留浏览器下载
           if (btn.response === 0) {
+            _isUpdating = false
             await shell.openExternal(downloadUrl)
             return { status: 'opened', currentVersion, latestVersion, updateUrl: downloadUrl }
+          } else {
+            // 稍后：释放锁
+            _isUpdating = false
           }
         }
+      } else {
+        // 无下载链接，弹窗关闭后释放锁
+        _isUpdating = false
       }
 
       return { status: 'update-available', currentVersion, latestVersion, updateUrl: downloadUrl }
