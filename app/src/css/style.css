@@ -499,6 +499,29 @@
       border-color: #667eea;
     }
 
+    /* 清空列表按钮 */
+    .clear-btn {
+      flex-shrink: 0;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: 'Segoe UI', sans-serif;
+      color: #adb5bd;
+      padding: 0 5px;
+      height: 20px;
+      line-height: 1;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+
+    .clear-btn:hover {
+      background: #dc3545;
+      color: white;
+      border-color: #dc3545;
+    }
+
     .file-filter + .file-list {
       border-radius: 0 0 5px 5px;
       margin-top: 0;

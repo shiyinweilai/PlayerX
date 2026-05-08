@@ -177,11 +177,18 @@ export function renderFileList(fileListElement, files, panelIndex, onSelectFile,
 }
 
 export function updateFileListSelection(fileListElement, selectedFilePath) {
+  let selectedItem = null;
   Array.from(fileListElement.children).forEach((item) => {
     const pathSpan = item.querySelector('.selected-file-path');
     const path = pathSpan ? pathSpan.textContent : '';
-    item.classList.toggle('selected', path === selectedFilePath);
+    const isSelected = path === selectedFilePath;
+    item.classList.toggle('selected', isSelected);
+    if (isSelected) selectedItem = item;
   });
+  // 滚动到选中项，使其在可视区域内居中
+  if (selectedItem) {
+    selectedItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
 }
 
 // Modal related

@@ -82,8 +82,34 @@ document.addEventListener('DOMContentLoaded', function() {
     input.addEventListener('input', (e) => {
       filterKeywords[idx] = e.target.value;
       refreshFileList(idx);
+      // 过滤变化后，自动选中过滤结果的第一个
+      const first = getVisibleFiles(idx)[0];
+      if (first) selectFile(first, idx);
+      updateNavButtons();
     });
     input.closest('.file-filter').addEventListener('click', e => e.stopPropagation());
+  });
+
+  // 绑定清空按钮
+  [1, 2].forEach(idx => {
+    const btn = document.getElementById(`clearBtn${idx}`);
+    if (!btn) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // 清空文件列表、选中状态、过滤词、排序
+      if (idx === 1) { files1 = []; file1Path = null; }
+      else           { files2 = []; file2Path = null; }
+      filterKeywords[idx] = '';
+      sortOrders[idx] = 'default';
+      const fi = document.getElementById(`filterInput${idx}`);
+      if (fi) fi.value = '';
+      const sb = document.getElementById(`sortBtn${idx}`);
+      if (sb) { sb.textContent = 'A↑'; sb.classList.remove('active'); }
+      refreshFileList(idx);
+      UI.setVideoFileUI(idx, null);
+      updateRunButton();
+      updateNavButtons();
+    });
   });
 
   // 上一组 / 下一组
@@ -124,6 +150,9 @@ document.addEventListener('DOMContentLoaded', function() {
     btn.addEventListener('click', (e) => {
       const panelIndex = parseInt(btn.dataset.panel);
       const mode = btn.dataset.mode;
+
+      // 若已是当前模式，不做任何重置，直接返回
+      if (panelModes[panelIndex] === mode) return;
       
       // 更新 Tab 样式
       const tabs = btn.parentElement.querySelectorAll('.tab-btn');
