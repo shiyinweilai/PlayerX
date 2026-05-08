@@ -223,10 +223,7 @@ ipcMain.handle('open-file', async () => {
 
 ipcMain.handle('open-files', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
-    properties: ['openFile', 'multiSelections'],
-    filters: [
-      { name: 'Video', extensions: ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm'] }
-    ]
+    properties: ['openFile', 'openDirectory', 'multiSelections']
   })
   if (canceled || !filePaths || filePaths.length === 0) {
     return null
@@ -271,6 +268,14 @@ ipcMain.handle('scan-folder', async (event, folderPath) => {
 
   scanDirectory(folderPath)
   return videoFiles
+})
+
+ipcMain.handle('is-directory', async (event, p) => {
+  try {
+    return fs.statSync(p).isDirectory()
+  } catch (e) {
+    return false
+  }
 })
 
 // 根据平台获取可执行文件路径和名称

@@ -253,7 +253,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // 放置处理
-    panel.addEventListener('drop', (e) => {
+    panel.addEventListener('drop', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       panel.classList.remove('drag-over');
@@ -265,20 +265,47 @@ document.addEventListener('DOMContentLoaded', function() {
         if (tabBtn) tabBtn.click();
       }
 
-      const files = [];
+      const filePaths = [];
+      const folderPaths = [];
+
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
         for (let i = 0; i < e.dataTransfer.files.length; i++) {
           const file = e.dataTransfer.files[i];
-          // 尝试通过 API 获取路径（Electron 安全策略限制直接访问 path）
-          const path = window.api && window.api.getFilePath ? window.api.getFilePath(file) : file.path;
-          if (path) {
-            files.push(path);
+          // 通过 API 获取路径（Electron 安全策略限制直接访问 path）
+          const p = window.api && window.api.getFilePath ? window.api.getFilePath(file) : file.path;
+          if (!p) continue;
+
+          // 判断是否为文件夹：文件夹拖入时 file.type 为空且 file.size 为 0
+          const isFolder = (file.type === '' && file.size === 0);
+          if (isFolder) {
+            folderPaths.push(p);
+          } else {
+            filePaths.push(p);
           }
         }
       }
-      
-      if (files.length > 0) {
-        handleFiles(files, panelIndex);
+
+      // 扫描所有文件夹，收集视频文件
+      if (folderPaths.length > 0) {
+        UI.showOutput(`正在扫描文件夹，请稍候...`, 'running');
+        try {
+          const scanResults = await Promise.all(
+            folderPaths.map(fp => window.api.scanFolder(fp))
+          );
+          for (const result of scanResults) {
+            if (result && result.length > 0) {
+              filePaths.push(...result);
+            }
+          }
+        } catch (err) {
+          console.error('扫描文件夹失败:', err);
+          UI.showOutput(`❌ 扫描文件夹失败: ${err.message || err}`, 'error');
+          return;
+        }
+      }
+
+      if (filePaths.length > 0) {
+        handleFiles(filePaths, panelIndex);
       } else {
         UI.showOutput('❌ 拖拽无效：无法获取文件路径或未检测到文件。请尝试点击选择。', 'error');
         console.error('未检测到有效的文件路径');
@@ -294,9 +321,43 @@ document.addEventListener('DOMContentLoaded', function() {
   // 封装文件选择逻辑
   async function openFilesAndHandle(panelIndex) {
     try {
-      const files = await window.api.openFiles();
-      if (files && files.length > 0) {
-        handleFiles(files, panelIndex);
+      const selected = await window.api.openFiles();
+      if (!selected || selected.length === 0) return;
+
+      const filePaths = [];
+      const folderPaths = [];
+
+      for (const p of selected) {
+        // 通过 API 判断是否为文件夹
+        const isDir = await window.api.isDirectory(p);
+        if (isDir) {
+          folderPaths.push(p);
+        } else {
+          filePaths.push(p);
+        }
+      }
+
+      // 扫描文件夹
+      if (folderPaths.length > 0) {
+        UI.showOutput(`正在扫描文件夹，请稍候...`, 'running');
+        try {
+          const scanResults = await Promise.all(
+            folderPaths.map(fp => window.api.scanFolder(fp))
+          );
+          for (const result of scanResults) {
+            if (result && result.length > 0) {
+              filePaths.push(...result);
+            }
+          }
+        } catch (err) {
+          console.error('扫描文件夹失败:', err);
+          UI.showOutput(`❌ 扫描文件夹失败: ${err.message || err}`, 'error');
+          return;
+        }
+      }
+
+      if (filePaths.length > 0) {
+        handleFiles(filePaths, panelIndex);
       }
     } catch (error) {
       console.error('选择文件失败:', error);
