@@ -209,38 +209,14 @@ export function getUrlInputValue() {
   return urlInput.value.trim();
 }
 
-let toastTimer = null
-
-function updateToast(text, type) {
-  const toast = getEl('statusToast')
-  const icon = getEl('statusToastIcon')
-  if (!toast) return
-  toast.querySelector('#output').textContent = text
-  toast.className = 'status-toast visible ' + (type || '')
-  if (icon) {
-    if (type === 'running') icon.textContent = '⏳'
-    else if (type === 'success') icon.textContent = '✅'
-    else if (type === 'error') icon.textContent = '❌'
-    else icon.textContent = 'ℹ️'
-  }
-  // 非 running 状态 4 秒后自动淡出
-  if (toastTimer) clearTimeout(toastTimer)
-  if (type !== 'running') {
-    toastTimer = setTimeout(() => {
-      toast.classList.remove('visible')
-    }, 4000)
-  }
-}
-
 export function showOutput(message, type = 'normal') {
-  updateToast(message, type)
+  // Toast 已禁用，仅输出到控制台
+  console.log(`[${type}] ${message}`)
 }
 
 export function appendOutput(message, type) {
-  let toastType = 'running'
-  if (type === 'stderr') toastType = 'error'
-  else if (type === 'close') toastType = message.includes('代码: 0') ? 'success' : 'error'
-  updateToast(message.trim(), toastType)
+  // Toast 已禁用，仅输出到控制台
+  console.log(`[${type}] ${message.trim()}`)
 }
 
 export function showLoadingModal(show) {

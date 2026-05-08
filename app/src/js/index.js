@@ -606,7 +606,9 @@ document.addEventListener('DOMContentLoaded', function() {
   window.api.onExeLog((data) => {
     console.log('收到日志:', data);
     const timestamp = new Date().toLocaleTimeString();
-    const prefix = data.type === 'stderr' ? '[错误] ' : data.type === 'close' ? '[结束] ' : '';
+    const lower = (data.message || '').toLowerCase();
+    const isRealError = lower.includes('error') || lower.includes('failed') || lower.includes('fatal') || lower.includes('无法') || lower.includes('失败');
+    const prefix = (data.type === 'stderr' && isRealError) ? '[错误] ' : data.type === 'close' ? '[结束] ' : '';
     const logEntry = `[${timestamp}] ${prefix}${data.message}\n`;
     
     UI.appendOutput(logEntry, data.type);
