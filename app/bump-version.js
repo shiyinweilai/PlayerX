@@ -26,7 +26,8 @@ function writeJson(filePath, obj) {
 }
 
 function bump() {
-  const version = process.argv[2]
+  // 优先从命令行参数读取，其次从环境变量 VERSION 读取
+  const version = process.argv[2] || process.env.VERSION
   if (!version) {
     console.error('错误：未提供版本号参数')
     usage()
@@ -56,45 +57,40 @@ function bump() {
   const oldPkgVersion = pkg.version
   const oldLatestVersion = latest.version
 
-  // 更新版本字段
-  pkg.version = version
-  latest.version = version
-
-  // 可选：如果 platforms 的链接中包含旧版本号片段，则替换为新版本号
-  if (latest.platforms && typeof latest.platforms === 'object') {
-    for (const key of Object.keys(latest.platforms)) {
-      const val = latest.platforms[key]
-      if (typeof val === 'string') {
-        // 尝试替换常见文件名中的版本片段（例如 PlayerX-1.0.0 或 Setup 1.0.0）
-        let replaced = val
-        if (oldLatestVersion && oldLatestVersion !== version) {
-          replaced = replaced.replaceAll(oldLatestVersion, version)
-          // 兼容空格分隔的版本片段
-          replaced = replaced.replaceAll(` ${oldLatestVersion}`, ` ${version}`)
-          replaced = replaced.replaceAll(`-${oldLatestVersion}`, `-${version}`)
-        }
-        latest.platforms[key] = replaced
-      } else if (typeof val === 'object' && val) {
-        // 支持 { url: "..." } 结构
-        if (typeof val.url === 'string' && oldLatestVersion && oldLatestVersion !== version) {
-          val.url = val.url
-            .replaceAll(oldLatestVersion, version)
-            .replaceAll(` ${oldLatestVersion}`, ` ${version}`)
-            .replaceAll(`-${oldLatestVersion}`, `-${version}`)
-        }
+  // 递归替换对象中所有字符串值里的旧版本号
+  function replaceVersionInObj(obj, oldVer, newVer) {
+    if (!oldVer || oldVer === newVer) return obj
+    if (typeof obj === 'string') return obj.replaceAll(oldVer, newVer)
+    if (Array.isArray(obj)) return obj.map(item => replaceVersionInObj(item, oldVer, newVer))
+    if (obj && typeof obj === 'object') {
+      const result = {}
+      for (const key of Object.keys(obj)) {
+        result[key] = replaceVersionInObj(obj[key], oldVer, newVer)
       }
+      return result
     }
+    return obj
   }
 
+  // 更新 package.json 版本
+  pkg.version = version
+
+  // 更新 latest.json：先递归替换所有字段中的旧版本号，再设置 version 字段
+  const updatedLatest = replaceVersionInObj(latest, oldLatestVersion, version)
+  updatedLatest.version = version
+
   writeJson(pkgPath, pkg)
-  writeJson(latestPath, latest)
+  writeJson(latestPath, updatedLatest)
 
   console.log('版本更新完成：')
-  console.log(`  package.json: ${oldPkgVersion} -> ${pkg.version}`)
-  console.log(`  latest.json : ${oldLatestVersion} -> ${latest.version}`)
-
-  // 显示重要提示
-  console.log('\n提示：如需同时更新下载链接，请确保 latest.json 的 platforms 中的链接包含旧版本号片段，本脚本会自动替换；否则请手动调整。')
+  console.log(`  package.json : ${oldPkgVersion} -> ${pkg.version}`)
+  console.log(`  latest.json  : ${oldLatestVersion} -> ${updatedLatest.version}`)
+  if (updatedLatest.downloads) {
+    console.log('  downloads 链接已同步更新：')
+    for (const [k, v] of Object.entries(updatedLatest.downloads)) {
+      console.log(`    ${k}: ${v}`)
+    }
+  }
 }
 
 try {
