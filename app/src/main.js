@@ -223,12 +223,7 @@ ipcMain.handle('open-file', async () => {
 
 ipcMain.handle('open-files', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
-    // 注意：Windows 原生对话框不支持同时选文件和文件夹
-    // 移除 openDirectory，文件夹通过拖拽支持
-    properties: ['openFile', 'multiSelections'],
-    filters: [
-      { name: 'Video', extensions: ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'ts', 'mts'] }
-    ]
+    properties: ['openFile', 'openDirectory', 'multiSelections']
   })
   if (canceled || !filePaths || filePaths.length === 0) {
     return null
