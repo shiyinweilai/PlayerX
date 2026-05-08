@@ -54,7 +54,29 @@ function safeRm(target) {
 // 主函数
 function main() {
   console.log('开始打包准备...');
-  
+
+  // ── 自动 bump 版本号 ──────────────────────────────────────────────
+  // 支持两种方式传入版本号（优先级：命令行参数 > VERSION 环境变量）：
+  //   1. npm run pack:mac -- 2.0.3
+  //   2. VERSION=2.0.3 npm run pack:mac
+  // 若两者均未提供，则不改版本号，直接使用 package.json 现有版本打包。
+  const versionArg = process.argv.find(a => /^\d+\.\d+\.\d+/.test(a))
+  const newVersion = versionArg || process.env.VERSION
+  if (newVersion) {
+    console.log(`\n检测到版本号 ${newVersion}（来源：${versionArg ? '命令行参数' : 'VERSION 环境变量'}），自动执行版本号更新...`)
+    try {
+      execSync(`node "${path.join(__dirname, 'bump-version.js')}" ${newVersion}`, {
+        stdio: 'inherit',
+        env: { ...process.env }
+      })
+    } catch (e) {
+      console.error('版本号更新失败，打包中止')
+      process.exit(1)
+    }
+    console.log()
+  }
+  // ─────────────────────────────────────────────────────────────────
+
   // 获取平台参数（必须通过环境变量指定）
   const platform = process.env.PLATFORM;
   const isPortable = process.env.PORTABLE === 'true';
