@@ -33,9 +33,10 @@ npm start
 ```bash
 # Windows
 npm run pack:win:portable
-
+npm run pack:win:portable -- 2.0.3
 # macOS
 npm run pack:mac
+npm run pack:mac --2.0.3
 ```
 
 ### 直接使用 electron-builder
