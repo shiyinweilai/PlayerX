@@ -358,39 +358,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
-  // Windows 下选择上传方式的简单对话框（文件 or 文件夹）
-  function showPickModeDialog() {
-    return new Promise((resolve) => {
-      // 复用已有的 modal 样式，动态创建一个轻量提示框
-      const overlay = document.createElement('div');
-      overlay.className = 'modal-overlay';
-      overlay.style.cssText = 'display:flex;';
-
-      overlay.innerHTML = `
-        <div class="modal-content" style="width:280px;text-align:center;">
-          <h3 style="margin-bottom:16px;">选择上传方式</h3>
-          <div style="display:flex;gap:12px;justify-content:center;">
-            <button id="_pickFile" class="modal-btn confirm" style="flex:1;">选择文件</button>
-            <button id="_pickFolder" class="modal-btn confirm" style="flex:1;">选择文件夹</button>
-          </div>
-          <div style="margin-top:10px;">
-            <button id="_pickCancel" class="modal-btn cancel" style="width:100%;">取消</button>
-          </div>
-        </div>`;
-
-      document.body.appendChild(overlay);
-
-      const cleanup = (result) => {
-        document.body.removeChild(overlay);
-        resolve(result);
-      };
-
-      overlay.querySelector('#_pickFile').addEventListener('click', () => cleanup('file'));
-      overlay.querySelector('#_pickFolder').addEventListener('click', () => cleanup('folder'));
-      overlay.querySelector('#_pickCancel').addEventListener('click', () => cleanup(null));
-    });
-  }
-
   // 拖拽支持
   function setupDragDrop(panel, panelIndex) {
     // 拖拽进入
@@ -487,27 +454,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // 封装文件选择逻辑
   async function openFilesAndHandle(panelIndex) {
     try {
-      let selected = [];
-
-      // 获取平台，Windows 下需要分开选文件和文件夹
-      const platform = window.api.getPlatform ? await window.api.getPlatform() : 'darwin';
-      const isWindows = platform === 'win32';
-
-      if (isWindows) {
-        // Windows：弹出选择方式提示
-        const choice = await showPickModeDialog();
-        if (!choice) return; // 用户取消
-
-        if (choice === 'file') {
-          selected = await window.api.openFiles();
-        } else {
-          selected = await window.api.openFolder();
-        }
-      } else {
-        // macOS / Linux：原生对话框同时支持文件和文件夹
-        selected = await window.api.openFiles();
-      }
-
+      const selected = await window.api.openFiles();
       if (!selected || selected.length === 0) return;
 
       const filePaths = [];
