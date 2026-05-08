@@ -408,8 +408,8 @@ document.addEventListener('DOMContentLoaded', function() {
           const p = window.api && window.api.getFilePath ? window.api.getFilePath(file) : file.path;
           if (!p) continue;
 
-          // 判断是否为文件夹：文件夹拖入时 file.type 为空且 file.size 为 0
-          const isFolder = (file.type === '' && file.size === 0);
+          // 通过 isDirectory API 可靠判断是否为文件夹
+          const isFolder = window.api.isDirectory ? await window.api.isDirectory(p) : (file.type === '' && file.size === 0);
           if (isFolder) {
             folderPaths.push(p);
           } else {
