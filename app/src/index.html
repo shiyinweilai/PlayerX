@@ -10,6 +10,7 @@
     <div class="header">
       <h1>🎬 视频对比工具</h1>
       <p>选择两个视频文件进行对比分析</p>
+      <button class="help-btn" id="helpBtn" title="使用说明">?</button>
     </div>
 
     <!-- 新增：控制区域移到上方 -->
@@ -193,6 +194,94 @@
 
   <!-- Hidden File Input for URL Import -->
   <input type="file" id="urlFileInput" accept=".txt,.m3u,.m3u8,.log,.csv,.json,.xml" style="display: none;" />
+
+  <!-- Guide Modal -->
+  <div id="guideModal" class="modal-overlay">
+    <div class="modal-content guide-modal-content">
+      <div class="guide-header">
+        <span class="guide-title">📖 使用说明</span>
+        <button class="guide-close" id="guideCloseBtn">✕</button>
+      </div>
+
+      <div class="guide-body">
+        <!-- 文件管理 -->
+        <div class="guide-section">
+          <div class="guide-section-title">📁 文件管理</div>
+          <div class="guide-cards">
+            <div class="guide-card">
+              <div class="guide-card-icon">🖱️</div>
+              <div class="guide-card-text">点击面板区域<br><span class="guide-sub">弹出文件选择对话框</span></div>
+            </div>
+            <div class="guide-card">
+              <div class="guide-card-icon">📂</div>
+              <div class="guide-card-text">拖入文件夹<br><span class="guide-sub">自动扫描全部视频</span></div>
+            </div>
+            <div class="guide-card">
+              <div class="guide-card-icon">🎞️</div>
+              <div class="guide-card-text">拖入单个/多个文件<br><span class="guide-sub">直接添加到列表</span></div>
+            </div>
+            <div class="guide-card">
+              <div class="guide-card-icon">🔍</div>
+              <div class="guide-card-text">过滤框<br><span class="guide-sub">输入关键词筛选文件名</span></div>
+            </div>
+            <div class="guide-card">
+              <div class="guide-card-icon">↕️</div>
+              <div class="guide-card-text">排序按钮<br><span class="guide-sub">A↑ 升序 / A↓ 降序 / 默认</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 分组导航 -->
+        <div class="guide-section">
+          <div class="guide-section-title">⏭️ 分组导航</div>
+          <div class="guide-cards">
+            <div class="guide-card">
+              <div class="guide-card-icon">⬆</div>
+              <div class="guide-card-text">上一组按钮<br><span class="guide-sub">左右面板同时切换到上一对视频</span></div>
+            </div>
+            <div class="guide-card">
+              <div class="guide-card-icon">⬇</div>
+              <div class="guide-card-text">下一组按钮<br><span class="guide-sub">左右面板同时切换到下一对视频</span></div>
+            </div>
+          </div>
+          <div class="guide-tip">💡 分组基于<strong>过滤后</strong>的文件列表，左右各自独立过滤后按序配对</div>
+        </div>
+
+        <!-- 播放器快捷键 -->
+        <div class="guide-section">
+          <div class="guide-section-title">⌨️ 播放器快捷键</div>
+          <div class="guide-keys">
+            <div class="guide-key-row">
+              <kbd>Space</kbd>
+              <span>暂停 / 继续播放</span>
+            </div>
+            <div class="guide-key-row">
+              <kbd>←</kbd>
+              <span>快退到上一个I帧</span>
+            </div>
+            <div class="guide-key-row">
+              <kbd>→</kbd>
+              <span>快进到下一个I帧</span>
+            </div>
+            <div class="guide-key-row">
+              <kbd>Esc</kbd>
+              <span>退出播放器 / 退出全屏</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="guide-footer">
+        <label class="guide-no-show">
+          <input type="checkbox" id="guideNoShow" /> 不再自动显示
+        </label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="modal-btn cancel guide-doc-btn" id="guideDocBtn">📄 查看完整教程</button>
+          <button class="modal-btn confirm" id="guideOkBtn">知道了</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="js/index.js"></script>
 </body>

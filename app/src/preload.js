@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('api', {
   openFiles: () => ipcRenderer.invoke('open-files'),
+  openFolder: () => ipcRenderer.invoke('open-folder'),
+  getPlatform: () => ipcRenderer.invoke('get-platform'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
   scanFolder: (folderPath) => ipcRenderer.invoke('scan-folder', folderPath),
   isDirectory: (p) => ipcRenderer.invoke('is-directory', p),
   // 新增：获取文件路径（解决拖拽时 path 属性丢失问题）

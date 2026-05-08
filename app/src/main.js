@@ -278,6 +278,12 @@ ipcMain.handle('is-directory', async (event, p) => {
   }
 })
 
+ipcMain.handle('get-platform', () => process.platform)
+
+ipcMain.handle('open-external', async (event, url) => {
+  await shell.openExternal(url)
+})
+
 // 根据平台获取可执行文件路径和名称
 
 function getExecutableInfo() {

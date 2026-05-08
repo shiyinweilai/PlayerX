@@ -617,4 +617,43 @@ document.addEventListener('DOMContentLoaded', function() {
   fileList2.style.display = 'none';
   updateRunButton();
   updateNavButtons();
+
+  // ===== 引导弹窗 =====
+  const guideModal   = document.getElementById('guideModal');
+  const guideCloseBtn = document.getElementById('guideCloseBtn');
+  const guideOkBtn   = document.getElementById('guideOkBtn');
+  const guideNoShow  = document.getElementById('guideNoShow');
+  const guideDocBtn  = document.getElementById('guideDocBtn');
+  const helpBtn      = document.getElementById('helpBtn');
+
+  function openGuide() {
+    guideModal.style.display = 'flex';
+    requestAnimationFrame(() => guideModal.classList.add('show'));
+  }
+
+  function closeGuide() {
+    guideModal.classList.remove('show');
+    guideModal.addEventListener('transitionend', () => {
+      guideModal.style.display = 'none';
+    }, { once: true });
+    if (guideNoShow.checked) {
+      localStorage.setItem('playerx_guide_hidden', '1');
+    }
+  }
+
+  guideCloseBtn.addEventListener('click', closeGuide);
+  guideOkBtn.addEventListener('click', closeGuide);
+  guideDocBtn.addEventListener('click', () => {
+    window.api.openExternal('https://iwiki.woa.com/p/4016316239');
+  });
+  guideModal.addEventListener('click', (e) => {
+    if (e.target === guideModal) closeGuide();
+  });
+
+  helpBtn.addEventListener('click', openGuide);
+
+  // 首次启动自动弹出
+  if (!localStorage.getItem('playerx_guide_hidden')) {
+    setTimeout(openGuide, 400);
+  }
 });
