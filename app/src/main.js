@@ -222,12 +222,12 @@ ipcMain.handle('open-file', async () => {
 })
 
 ipcMain.handle('open-files', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog({
-    properties: ['openFile', 'openDirectory', 'multiSelections']
-  })
-  if (canceled || !filePaths || filePaths.length === 0) {
-    return null
-  }
+  // macOS 支持同时选文件和文件夹；Windows 不支持混选，仅选文件（文件夹通过拖拽支持）
+  const properties = process.platform === 'darwin'
+    ? ['openFile', 'openDirectory', 'multiSelections']
+    : ['openFile', 'multiSelections']
+  const { canceled, filePaths } = await dialog.showOpenDialog({ properties })
+  if (canceled || !filePaths || filePaths.length === 0) return null
   return filePaths
 })
 
