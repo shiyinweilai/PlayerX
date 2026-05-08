@@ -222,19 +222,36 @@ ipcMain.handle('open-file', async () => {
 })
 
 ipcMain.handle('open-files', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog({
-    // 注意：Windows 原生对话框不支持同时选文件和文件夹
-    // 移除 openDirectory，文件夹通过拖拽支持
-    properties: ['openFile', 'multiSelections'],
-    filters: [
+  // macOS 支持同时选文件和文件夹；Windows 原生对话框不支持两者共存，只选文件
+  const isMac = process.platform === 'darwin'
+  const properties = isMac
+    ? ['openFile', 'openDirectory', 'multiSelections']
+    : ['openFile', 'multiSelections']
+  const options = { properties }
+  if (!isMac) {
+    options.filters = [
       { name: 'Video', extensions: ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'ts', 'mts'] }
     ]
+  }
+  const { canceled, filePaths } = await dialog.showOpenDialog(options)
+  if (canceled || !filePaths || filePaths.length === 0) {
+    return null
+  }
+  return filePaths
+})
+
+ipcMain.handle('open-folder', async () => {
+  // 专门用于选择文件夹（Windows 下点击上传时提供文件夹选项）
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openDirectory', 'multiSelections']
   })
   if (canceled || !filePaths || filePaths.length === 0) {
     return null
   }
   return filePaths
 })
+
+ipcMain.handle('get-platform', () => process.platform)
 
 ipcMain.handle('scan-folder', async (event, folderPath) => {
   const videoExtensions = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm']
