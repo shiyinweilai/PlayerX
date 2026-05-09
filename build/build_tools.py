@@ -206,6 +206,16 @@ def build_video_compare(args, log_file=None):
         # 精简符号，尽可能去除未使用引用
         cmake_args += ['-DCMAKE_EXE_LINKER_FLAGS=-Wl,-dead_strip']
     make(cmake_args, log_file)
+    # Windows 构建完成后执行 strip 去除调试符号，大幅减小体积
+    if args.platform == 'windows':
+        exe_path = os.path.join(install_dir, 'bin', 'video-compare.exe')
+        if os.path.exists(exe_path):
+            strip_cmd = 'x86_64-w64-mingw32-strip'
+            result = subprocess.run([strip_cmd, exe_path], capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"\033[32m>>>> strip 完成: {exe_path}\033[0m")
+            else:
+                print(f"\033[33m>>>> strip 失败（可忽略）: {result.stderr}\033[0m")
     # subprocess.run("git restore . && git clean -fdx", check=True, cwd=source_dir, shell=True)
 
 def main():
