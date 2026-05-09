@@ -58,7 +58,7 @@ build_player() {
     
     # 编译player
     print_info "编译player..."
-    make -j$(nproc)
+    make -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
     
     # 安装player
     print_info "安装player..."
