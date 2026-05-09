@@ -19,3 +19,4 @@ build/sdl_ttf
 build/freetype
 build/video_compare
 cache
+build/player

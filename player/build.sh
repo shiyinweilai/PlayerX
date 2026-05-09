@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # PlayerX构建脚本
-# 自动构建video-compare和player项目
+# 自动构建video_compare和player项目
 
 set -e
 
@@ -54,7 +54,7 @@ build_player() {
         -DFFMPEG_INSTALL_DIR="$BUILD_DIR/ffmpeg/install" \
         -DSDL2_INSTALL_DIR="$BUILD_DIR/sdl2/install" \
         -DSDL2_TTF_INSTALL_DIR="$BUILD_DIR/sdl2_ttf/install" \
-        -DVIDEO_COMPARE_EXECUTABLE="$BUILD_DIR/video-compare/install/bin/video-compare"
+        -DVIDEO_COMPARE_EXECUTABLE="$BUILD_DIR/video_compare/install/bin/video-compare"
     
     # 编译player
     print_info "编译player..."
@@ -64,10 +64,10 @@ build_player() {
     print_info "安装player..."
     make install
     
-    # 复制video-compare可执行文件
-    if [ -f "$BUILD_DIR/video-compare/install/bin/video-compare" ]; then
-        cp "$BUILD_DIR/video-compare/install/bin/video-compare" "$build_dir/install/bin/"
-        print_success "已复制video-compare可执行文件"
+    # 复制video_compare可执行文件
+    if [ -f "$BUILD_DIR/video_compare/install/bin/video-compare" ]; then
+        cp "$BUILD_DIR/video_compare/install/bin/video-compare" "$build_dir/install/bin/"
+        print_success "已复制video_compare可执行文件"
     fi
     
     print_success "player构建完成"
@@ -82,10 +82,10 @@ clean_build() {
         print_success "清理player构建文件"
     fi
     
-    if [ -d "$BUILD_DIR/video_compare" ]; then
-        rm -rf "$BUILD_DIR/video_compare"
-        print_success "清理video-compare构建文件"
-    fi
+    # if [ -d "$BUILD_DIR/video_compare" ]; then
+    #     rm -rf "$BUILD_DIR/video_compare"
+    #     print_success "清理video_compare构建文件"
+    # fi
     
     print_success "清理完成"
 }
