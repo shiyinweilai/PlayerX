@@ -67,6 +67,8 @@ build_player() {
     # 复制video_compare可执行文件
     if [ -f "$BUILD_DIR/video_compare/install/bin/video-compare" ]; then
         cp "$BUILD_DIR/video_compare/install/bin/video-compare" "$build_dir/install/bin/"
+        # macOS 要求可执行文件必须有有效代码签名，否则 dyld 会以 SIGKILL 拒绝加载
+        codesign --sign - --force --preserve-metadata=entitlements "$build_dir/install/bin/video-compare" 2>/dev/null || true
         print_success "已复制video_compare可执行文件"
     fi
     
