@@ -93,6 +93,9 @@ public:
     AVCodecParameters* rbAudioCodecPar() const;
     AVRational         rbVideoTimeBase() const;
     AVRational         rbAudioTimeBase() const;
+    // 视频流帧率：r_frame_rate 优先（无丢帧封装下最准），回退 avg_frame_rate。
+    // 用于上层估算单帧时长（帧步进 / 帧级 seek）。
+    AVRational         rbVideoFrameRate() const;
 
     // 包队列（解码器从这里取包）
     RBPacketQueue& rbVideoQueue() { return m_videoQueue; }

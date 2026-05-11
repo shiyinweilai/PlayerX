@@ -287,6 +287,96 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
 int RBVideoPlayer::rbWidth()  const { return m_decoder->rbWidth(); }
 int RBVideoPlayer::rbHeight() const { return m_decoder->rbHeight(); }
 
+double RBVideoPlayer::rbFrameDuration() const {
+    if (!m_demuxer) return 1.0 / 30.0;
+    AVRational r = m_demuxer->rbVideoFrameRate();
+    if (r.num > 0 && r.den > 0) {
+        double fps = av_q2d(r);
+        if (fps > 0.0 && fps < 1000.0) return 1.0 / fps;
+    }
+    // 回退到 time_base 的倒数（部分容器流的 time_base 即为帧率倒数）
+    if (m_videoTimeBase.num > 0 && m_videoTimeBase.den > 0) {
+        double tb = av_q2d(m_videoTimeBase);
+        if (tb > 0.0 && tb < 1.0) return tb;
+    }
+    return 1.0 / 30.0;
+}
+
+void RBVideoPlayer::rbStepFrame(int n) {
+    auto s = m_state.load();
+    if (s == RBPlayerState::Idle || s == RBPlayerState::Error) return;
+    if (n == 0) return;
+
+    // 帧步进语义：暂停画面下让用户逐帧观察。
+    // 播放中先 pause，与系统播放器（如 macOS QuickTime / Windows 系统播放器）一致。
+    if (s == RBPlayerState::Playing) {
+        m_state.store(RBPlayerState::Paused);
+    }
+
+    const double fd  = rbFrameDuration();
+    const double cur = m_currentTime.load();
+
+    // 关键技巧：底层 av_seek_frame 走 BACKWARD 关键帧，rbRefreshPausedFrame
+    // 已经实现"丢弃 PTS + 0.5s < target 的前置帧"。我们把 seek 目标直接打在
+    //   target = cur + n * fd
+    // 即"目标帧 PTS"附近：
+    //   - 目标帧 PTS 与 target 的差远小于 0.5s（30fps 单帧 0.033s），
+    //     所以丢帧逻辑只会丢掉 keyframe 到 (target - 0.5s) 间的真前置帧，
+    //     而把命中目标帧 / 目标帧±一帧 的帧保留下来用于显示。
+    //   - 配合 rbRefreshPausedFrame 立即把首个有效帧装入 m_currentFrame，
+    //     用户视觉上看到精确推进一帧。
+    // 边界：clamp 到 [0, duration]，避免越界 seek。
+    const double target = std::max(0.0, std::min(cur + n * fd, m_duration));
+    rbSeekTo(target);
+    // 用“帧级”精确阈值丢帧：避免 0.5s 默认容差在高帧率/关键帧间隔小的场景下误认关键帧为目标帧。
+    rbRefreshPausedFrameExact(target, fd, 500);
+}
+
+bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, int timeoutMs) {
+    auto s = m_state.load();
+    if (s == RBPlayerState::Idle || s == RBPlayerState::Error || s == RBPlayerState::Playing) {
+        return false;
+    }
+    using clock = std::chrono::steady_clock;
+    auto deadline = clock::now() + std::chrono::milliseconds(timeoutMs);
+
+    // 丢帧阈值：PTS < target - frameDur/2 认为是 keyframe 表的“前置帧”，
+    // 这样只留下 PTS 距目标不超过 0.5 帧的帧，即目标帧本身（或与其重合的邀近帧）。
+    const double dropThresh = target - frameDur * 0.5;
+
+    while (clock::now() < deadline) {
+        AVFrame* peek = m_frameQueue->rbPeek();
+        if (peek) {
+            int64_t rawPts = (peek->best_effort_timestamp != AV_NOPTS_VALUE)
+                           ? peek->best_effort_timestamp
+                           : peek->pts;
+            double framePts = (rawPts != AV_NOPTS_VALUE)
+                ? rawPts * av_q2d(m_videoTimeBase)
+                : 0.0;
+
+            if (m_seekPending && framePts < dropThresh) {
+                AVFrame* drop = m_frameQueue->rbPop();
+                if (drop) av_frame_free(&drop);
+                continue;
+            }
+
+            AVFrame* f = m_frameQueue->rbPop();
+            if (f) {
+                rbReleaseCurrentFrame();
+                m_currentFrame    = f;
+                m_currentFramePts = framePts;
+                m_playStartPts      = framePts;
+                m_playStartWallTime = rbWallTime();
+                m_currentTime.store(framePts);
+                m_seekPending       = false;
+                return true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
 bool RBVideoPlayer::rbRefreshPausedFrame(int timeoutMs) {
     // 仅对已加载且非播放状态的视频生效（Ready/Paused/Ended）
     auto s = m_state.load();

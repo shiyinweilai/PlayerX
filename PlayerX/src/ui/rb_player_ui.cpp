@@ -491,6 +491,25 @@ void RBPlayerUI::rbSyncSeek(double seconds) {
     }
 }
 
+void RBPlayerUI::rbSyncSeekDelta(double deltaSec) {
+    for (auto& p : m_players) {
+        if (p->rbState() == RBPlayerState::Idle) continue;
+        double t = p->rbCurrentTime() + deltaSec;
+        t = std::max(0.0, std::min(t, p->rbDuration()));
+        p->rbSeekTo(t);
+    }
+}
+
+void RBPlayerUI::rbSyncStepFrame(int n) {
+    // 所有有效路同步走 n 帧。每路自身的 fps 可能不同，rbStepFrame 内部按各自
+    // 帧率推进，因此严格意义上不是"所有路落到同一个时间戳"，而是"每路推进 n 帧"。
+    // 这与帧步进的语义完全一致（用户希望逐帧观察），跨路时间偏差最多一帧。
+    for (auto& p : m_players) {
+        if (p->rbState() == RBPlayerState::Idle) continue;
+        p->rbStepFrame(n);
+    }
+}
+
 void RBPlayerUI::rbSyncReset() {
     // 将所有有效播放器回到 0 并暂停，便于用户随后统一从头开始播放
     for (auto& p : m_players) {
@@ -683,6 +702,39 @@ void RBPlayerUI::rbRenderToolbar() {
         rbDrawTextCentered("Slider", sliderBtn,
                            enabled ? kUIText : SDL_Color{100,110,130,180}, m_font);
     }
+    bx -= m_tbPad;
+
+    // ─── 全局跳转按钮 << < > >>（Slider 左侧）────────────────────────
+    // 与 cell 内同名按钮等价，但同时作用于所有有效路（同步 5s / 同步单帧步进）。
+    // Slider 模式下也可用：内部最终调用 rbSyncSeekDelta / rbSyncStepFrame，
+    // 它们对每路 player 操作，slider view 自动反映两路当前帧。
+    {
+        bool anyActive = false;
+        for (auto& p : m_players) {
+            if (p && p->rbState() != RBPlayerState::Idle) { anyActive = true; break; }
+        }
+        // 单按钮宽度比常规按钮窄，整体占 4 * sw + 3 * pad/2 ≈ 一个常规按钮 + 一些空间
+        int sw  = static_cast<int>(std::round(36 * m_dpiScale));
+        int sgp = static_cast<int>(std::round(2  * m_dpiScale));
+        static const char* kSeekLabel[4] = {
+            "\xe2\x80\xb9\xe2\x80\xb9", "\xe2\x80\xb9",
+            "\xe2\x80\xba",             "\xe2\x80\xba\xe2\x80\xba",
+        };
+        // 从右向左排：>>, >, <, <<（绘制时按 i=3..0 顺序）
+        for (int i = 3; i >= 0; --i) {
+            bx -= sw;
+            SDL_Rect r = { bx, (m_tbH - m_tbBtnH) / 2, sw, m_tbBtnH };
+            bool hover = anyActive && rbPointInRect(m_mouseX, m_mouseY, r);
+            SDL_Color col = !anyActive ? SDL_Color{40,50,65,180}
+                                       : (hover ? kUIBtnHover : kUIBtn);
+            rbFillRect(r, col);
+            rbDrawRect(r, {80, 100, 130, 255});
+            rbDrawTextCentered(kSeekLabel[i], r,
+                               anyActive ? kUIText : SDL_Color{100,110,130,180},
+                               m_font);
+            if (i > 0) bx -= sgp;
+        }
+    }
 }
 
 void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
@@ -867,6 +919,30 @@ void RBPlayerUI::rbHandleToolbarClick(int x, int y) {
     if (rbPointInRect(x, y, sliderBtn)) {
         rbToggleSliderMode();
         return;
+    }
+    bx -= m_tbPad;
+
+    // 全局跳转按钮 << < > >>（Slider 左侧）：保持与 rbRenderToolbar 一致的几何
+    {
+        bool anyActive = false;
+        for (auto& p : m_players) {
+            if (p && p->rbState() != RBPlayerState::Idle) { anyActive = true; break; }
+        }
+        int sw  = static_cast<int>(std::round(36 * m_dpiScale));
+        int sgp = static_cast<int>(std::round(2  * m_dpiScale));
+        for (int i = 3; i >= 0; --i) {
+            bx -= sw;
+            SDL_Rect r = { bx, (m_tbH - m_tbBtnH) / 2, sw, m_tbBtnH };
+            if (rbPointInRect(x, y, r)) {
+                if (!anyActive) return;
+                if      (i == 0) rbSyncSeekDelta(-5.0);
+                else if (i == 3) rbSyncSeekDelta(+5.0);
+                else if (i == 1) rbSyncStepFrame(-1);
+                else             rbSyncStepFrame(+1);
+                return;
+            }
+            if (i > 0) bx -= sgp;
+        }
     }
 }
 

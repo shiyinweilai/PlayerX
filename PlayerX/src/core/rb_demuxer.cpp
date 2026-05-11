@@ -187,6 +187,16 @@ AVRational RBDemuxer::rbAudioTimeBase() const {
     return m_fmtCtx->streams[m_audioStreamIdx]->time_base;
 }
 
+AVRational RBDemuxer::rbVideoFrameRate() const {
+    if (!m_fmtCtx || m_videoStreamIdx < 0) return {0, 1};
+    AVStream* st = m_fmtCtx->streams[m_videoStreamIdx];
+    // r_frame_rate 描述"基准帧率"（最大可能的帧时间间隔的倒数），
+    // CFR 文件就是真实帧率；avg_frame_rate 在 VFR / 容器统计准确时也可用。
+    if (st->r_frame_rate.num > 0 && st->r_frame_rate.den > 0) return st->r_frame_rate;
+    if (st->avg_frame_rate.num > 0 && st->avg_frame_rate.den > 0) return st->avg_frame_rate;
+    return {0, 1};
+}
+
 void RBDemuxer::readLoop() {
     AVPacket* pkt = av_packet_alloc();
 

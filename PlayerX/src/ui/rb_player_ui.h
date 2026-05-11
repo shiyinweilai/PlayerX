@@ -66,6 +66,10 @@ public:
     void rbSyncPause();
     void rbSyncToggle();
     void rbSyncSeek(double seconds);
+    // 全局同步：所有有效路相对当前位置偏移 deltaSec 秒（用于工具栏 << / >> 5s 跳转）
+    void rbSyncSeekDelta(double deltaSec);
+    // 全局同步：所有有效路同步前进/后退 n 帧（用于工具栏 < / > 单帧步进）
+    void rbSyncStepFrame(int n);
     // 全局同步：将所有 Cell seek 到 0 并暂停，便于从头开始统一播放
     void rbSyncReset();
 

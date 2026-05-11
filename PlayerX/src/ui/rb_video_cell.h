@@ -87,6 +87,9 @@ private:
     // 控制条按钮区域
     SDL_Rect rbPlayBtnRect()   const;
     SDL_Rect rbOpenBtnRect()   const;
+    // 4 个跳转按钮：<<（5s 后退）、<（前一帧）、>（下一帧）、>>（5s 前进）
+    // 仅作用于本 cell 的 player，不影响其他路。位于 Open 按钮右侧。
+    SDL_Rect rbSeekBtnRect(int idx) const;  // idx: 0=<<, 1=<, 2=>, 3=>>
     SDL_Rect rbProgressRect()  const;
 
     // 工具

@@ -135,13 +135,29 @@ SDL_Rect RBVideoCell::rbOpenBtnRect() const {
     return { ctrl.x + pad + btnW + gap, y, btnW, btnH };
 }
 
-SDL_Rect RBVideoCell::rbProgressRect() const {
+// 4 个跳转按钮：<<  <  >  >>
+// idx: 0=<<(5s back), 1=<(prev frame), 2=>(next frame), 3=>>(5s fwd)
+// 单按钮窄一点（kSeekBtnWLogical），4 个连排，整体放在 Open 右侧。
+SDL_Rect RBVideoCell::rbSeekBtnRect(int idx) const {
     auto ctrl  = rbControlArea();
     auto open  = rbOpenBtnRect();
+    int btnH   = rbScaleI(m_dpiScale, kBtnHLogical);
+    int pad    = rbScaleI(m_dpiScale, kPaddingLogical);
+    int gap    = rbScaleI(m_dpiScale, 4);
+    // 单箭头按钮宽度比常规按钮窄，给进度条让出空间
+    int sw     = rbScaleI(m_dpiScale, 32);
+    int y      = ctrl.y + (ctrl.h - btnH) / 2;
+    int xStart = open.x + open.w + pad;
+    return { xStart + idx * (sw + gap), y, sw, btnH };
+}
+
+SDL_Rect RBVideoCell::rbProgressRect() const {
+    auto ctrl  = rbControlArea();
+    auto last  = rbSeekBtnRect(3);  // 最右一个跳转按钮
     int pad    = rbScaleI(m_dpiScale, kPaddingLogical);
     // 时间标签宽度约 100 逻辑像素，按 dpi 同步放大
     int timeW  = rbScaleI(m_dpiScale, 100);
-    int x      = open.x + open.w + pad;
+    int x      = last.x + last.w + pad;
     int w      = ctrl.x + ctrl.w - x - timeW - pad;
     int h      = rbScaleI(m_dpiScale, 8);
     int y      = ctrl.y + (ctrl.h - h) / 2;
@@ -426,6 +442,32 @@ void RBVideoCell::rbRenderControlBar(int mouseX, int mouseY) {
     rbDrawRect(openBtn, {100, 120, 150, 255});
     rbDrawTextCentered("Open", openBtn, kColText, m_smallFont ? m_smallFont : m_font);
 
+    // ─── 跳转按钮 << < > >> ────────────────────────────────────────────
+    // 行为：只作用于该 cell（与全局 ←/→ 同步 5s 区分）。
+    //  <<  / >>  ：5 秒粗粒度跳转（与左右键单 cell 化等价）
+    //  <   / >   ：单帧步进（暂停下解码到目标帧，画面立即更新）
+    static const char* kSeekLabel[4] = {
+        "\xe2\x80\xb9\xe2\x80\xb9",  // ‹‹
+        "\xe2\x80\xb9",              // ‹
+        "\xe2\x80\xba",              // ›
+        "\xe2\x80\xba\xe2\x80\xba",  // ››
+    };
+    bool hasPlayer = (m_player && m_player->rbState() != RBPlayerState::Idle);
+    for (int i = 0; i < 4; ++i) {
+        SDL_Rect r = rbSeekBtnRect(i);
+        // 进度条会被压缩到 0 时不再绘制按钮，避免溢出到时间标签上
+        if (r.x + r.w >= m_rect.x + m_rect.w) break;
+        bool hover = hasPlayer && (mouseX >= r.x && mouseX < r.x + r.w &&
+                                   mouseY >= r.y && mouseY < r.y + r.h);
+        SDL_Color col = !hasPlayer ? SDL_Color{40,55,75,180}
+                                   : (hover ? kColBtnHover : kColBtn);
+        rbFillRect(r, col);
+        rbDrawRect(r, {100, 120, 150, 255});
+        rbDrawTextCentered(kSeekLabel[i], r,
+                           hasPlayer ? kColText : SDL_Color{120,130,150,200},
+                           m_smallFont ? m_smallFont : m_font);
+    }
+
     // ─── 进度条 ───────────────────────────────────────────────────────────
     rbRenderProgressBar(rbProgressRect(), mouseX, mouseY);
 
@@ -504,6 +546,28 @@ void RBVideoCell::rbOnMouseDown(int x, int y, int clicks) {
         y >= openBtn.y && y < openBtn.y + openBtn.h) {
         if (m_openFileCb) m_openFileCb(this);
         return;
+    }
+
+    // 跳转按钮 << < > >>（只作用于本 cell）
+    // 0:<< -5s, 1:< 上一帧, 2:> 下一帧, 3:>> +5s
+    if (m_player && m_player->rbState() != RBPlayerState::Idle) {
+        for (int i = 0; i < 4; ++i) {
+            SDL_Rect r = rbSeekBtnRect(i);
+            if (x >= r.x && x < r.x + r.w &&
+                y >= r.y && y < r.y + r.h) {
+                if (i == 0) {
+                    m_player->rbSeekTo(std::max(0.0, m_player->rbCurrentTime() - 5.0));
+                } else if (i == 3) {
+                    m_player->rbSeekTo(std::min(m_player->rbDuration(),
+                                                 m_player->rbCurrentTime() + 5.0));
+                } else if (i == 1) {
+                    m_player->rbStepFrame(-1);
+                } else {
+                    m_player->rbStepFrame(+1);
+                }
+                return;
+            }
+        }
     }
 
     // 进度条点击
