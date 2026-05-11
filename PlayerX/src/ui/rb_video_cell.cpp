@@ -555,11 +555,18 @@ void RBVideoCell::rbOnMouseDown(int x, int y, int clicks) {
             SDL_Rect r = rbSeekBtnRect(i);
             if (x >= r.x && x < r.x + r.w &&
                 y >= r.y && y < r.y + r.h) {
-                if (i == 0) {
-                    m_player->rbSeekTo(std::max(0.0, m_player->rbCurrentTime() - 5.0));
-                } else if (i == 3) {
-                    m_player->rbSeekTo(std::min(m_player->rbDuration(),
-                                                 m_player->rbCurrentTime() + 5.0));
+                if (i == 0 || i == 3) {
+                    // 5s 跳转：暂停下 rbSeekTo 只会通知解码线程，但播放线程不会
+                    // pop 队列里的目标帧，画面看起来"没动"。这里在非播放态主动
+                    // refresh 一次，把目标帧立即设为当前显示帧（与 rbStepFrame
+                    // 思路一致，但 5s 粒度无需 0.5 帧的精确丢帧，沿用 0.5s 容差）。
+                    double t = (i == 0)
+                        ? std::max(0.0, m_player->rbCurrentTime() - 5.0)
+                        : std::min(m_player->rbDuration(), m_player->rbCurrentTime() + 5.0);
+                    m_player->rbSeekTo(t);
+                    if (m_player->rbState() != RBPlayerState::Playing) {
+                        m_player->rbRefreshPausedFrame(500);
+                    }
                 } else if (i == 1) {
                     m_player->rbStepFrame(-1);
                 } else {
@@ -583,6 +590,11 @@ void RBVideoCell::rbOnMouseDown(int x, int y, int clicks) {
         if (m_player) {
             double target = ratio * m_player->rbDuration();
             m_player->rbSeekTo(target);
+            // 暂停态主动刷新到目标帧，否则播放线程不会 pop 解码队列，
+            // 画面停在原位（与 5s 跳转、帧步进的处理一致）。
+            if (m_player->rbState() != RBPlayerState::Playing) {
+                m_player->rbRefreshPausedFrame(500);
+            }
         }
         return;
     }
@@ -616,6 +628,11 @@ void RBVideoCell::rbOnMouseMove(int x, int y) {
     double ratio = static_cast<double>(x - prog.x) / prog.w;
     ratio = std::max(0.0, std::min(1.0, ratio));
     m_player->rbSeekTo(ratio * m_player->rbDuration());
+    // 暂停态拖动时每次移动都要刷新，画面跟随鼠标实时更新；
+    // 播放态由播放线程自己 pop 队列，无需介入。
+    if (m_player->rbState() != RBPlayerState::Playing) {
+        m_player->rbRefreshPausedFrame(500);
+    }
 }
 
 } // namespace rb

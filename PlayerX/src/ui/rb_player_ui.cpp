@@ -497,6 +497,11 @@ void RBPlayerUI::rbSyncSeekDelta(double deltaSec) {
         double t = p->rbCurrentTime() + deltaSec;
         t = std::max(0.0, std::min(t, p->rbDuration()));
         p->rbSeekTo(t);
+        // 暂停态主动刷新到目标帧，否则画面不会立即跳过去（播放线程暂停时
+        // 不会 pop 解码队列）。沿用 0.5s 容差版即可，5s 粒度足够。
+        if (p->rbState() != RBPlayerState::Playing) {
+            p->rbRefreshPausedFrame(500);
+        }
     }
 }
 
@@ -996,18 +1001,12 @@ void RBPlayerUI::rbHandleKeyDown(const SDL_Keysym& key) {
         rbSyncToggle();
         break;
     case SDLK_LEFT:
-        // 同步后退 5 秒
-        for (auto& p : m_players) {
-            if (p->rbState() != RBPlayerState::Idle)
-                p->rbSeekTo(std::max(0.0, p->rbCurrentTime() - 5.0));
-        }
+        // 同步后退 5 秒（暂停态会自动刷新到目标帧）
+        rbSyncSeekDelta(-5.0);
         break;
     case SDLK_RIGHT:
-        // 同步前进 5 秒
-        for (auto& p : m_players) {
-            if (p->rbState() != RBPlayerState::Idle)
-                p->rbSeekTo(std::min(p->rbDuration(), p->rbCurrentTime() + 5.0));
-        }
+        // 同步前进 5 秒（暂停态会自动刷新到目标帧）
+        rbSyncSeekDelta(+5.0);
         break;
     // R 键：同步重置所有通路到头（便于从头播放）
     case SDLK_r:
