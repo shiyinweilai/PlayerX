@@ -64,10 +64,19 @@ public:
     using OpenFileCallback = std::function<void(RBVideoCell*)>;
     void rbSetOpenFileCallback(OpenFileCallback cb) { m_openFileCb = std::move(cb); }
 
+    // 关闭（删除该 Cell）回调：右上角 × 按钮触发，由 RBPlayerUI 设置
+    using CloseCallback = std::function<void(RBVideoCell*)>;
+    void rbSetCloseCallback(CloseCallback cb) { m_closeCb = std::move(cb); }
+
+    // 是否显示右上角的 × 关闭按钮（最后一路也允许关闭，由 UI 层控制）
+    void rbSetClosable(bool b) { m_closable = b; }
+    bool rbIsClosable() const { return m_closable; }
+
 private:
     // 子区域计算
     SDL_Rect rbVideoArea()   const; // 视频显示区（去掉控制条）
     SDL_Rect rbControlArea() const; // 控制条区域
+    SDL_Rect rbCloseBtnRect() const; // 右上角 × 关闭按钮
 
     // 渲染子函数
     void rbRenderVideo();
@@ -118,7 +127,11 @@ private:
     // 进度条拖拽状态
     bool                m_draggingProgress{false};
 
+    // 是否显示并响应右上角 × 关闭按钮
+    bool                m_closable{true};
+
     OpenFileCallback    m_openFileCb;
+    CloseCallback       m_closeCb;
 };
 
 } // namespace rb

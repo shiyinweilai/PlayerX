@@ -51,6 +51,10 @@ public:
     // 动态增加一路视频（最多 9 路）
     void rbAddCell();
 
+    // 删除指定 Cell（索引起始 0），后续路数会整体前移。
+    // 允许删空（剩余 0 路）。
+    void rbRemoveCell(int idx);
+
     // Solo 模式：只显示第 idx 路（-1 = 显示全部）
     void rbSetSoloCell(int idx);
 

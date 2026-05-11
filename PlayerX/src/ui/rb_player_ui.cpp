@@ -111,8 +111,8 @@ void RBPlayerUI::rbShutdown() {
     SDL_Quit();
 }
 
-// ─── 内部：创建一个新 Cell+Player 并追加 ─────────────────────────────────────
-static void rbMakeCellPlayer(RBPlayerUI* ui, SDL_Renderer* renderer,
+// ─── 内部：创建一个新 Cell+Player 并追加 ────────────────────────────
+static void rbMakeCellPlayer(RBPlayerUI* /*ui*/, SDL_Renderer* renderer,
                               TTF_Font* font, TTF_Font* smallFont,
                               std::vector<std::unique_ptr<RBVideoCell>>& cells,
                               std::vector<std::unique_ptr<RBVideoPlayer>>& players) {
@@ -120,21 +120,37 @@ static void rbMakeCellPlayer(RBPlayerUI* ui, SDL_Renderer* renderer,
     auto cell   = std::make_unique<RBVideoCell>();
     cell->rbInit(renderer, font, smallFont);
     cell->rbSetPlayer(player.get());
-
-    int idx = static_cast<int>(cells.size());
-    cell->rbSetTitle("Ch." + std::to_string(idx + 1));
-
-    cell->rbSetOpenFileCallback([ui, idx](RBVideoCell*) {
-        rbOpenFileDialog([ui, idx](const std::string& path) {
-            if (!path.empty()) ui->rbOpenFileForCell(idx, path);
-        });
-    });
-
+    // 标题与回调统一由 rbRebindCellCallbacks() 按当前索引设置，
+    // 避免闭包捕获 idx 后、删除某路导致后续索引错位。
     players.push_back(std::move(player));
     cells.push_back(std::move(cell));
 }
 
-// ─── 布局 ─────────────────────────────────────────────────────────────────────
+// 重新绑定所有 cell 的标题 / open 回调 / close 回调，及 closable 状态。
+// 由于闭包按值捕获了 idx，在 rbAddCell / rbRemoveCell 后必须调用本函数重建，
+// 以保证各 cell 的回调使用的是它在 m_cells 中的最新位置。
+static void rbRebindCellCallbacks(RBPlayerUI* ui,
+                                   std::vector<std::unique_ptr<RBVideoCell>>& cells,
+                                   int activeCount) {
+    int total = static_cast<int>(cells.size());
+    for (int i = 0; i < total; ++i) {
+        auto* cell = cells[i].get();
+        if (!cell) continue;
+        cell->rbSetTitle("Ch." + std::to_string(i + 1));
+        cell->rbSetOpenFileCallback([ui, i](RBVideoCell*) {
+            rbOpenFileDialog([ui, i](const std::string& path) {
+                if (!path.empty()) ui->rbOpenFileForCell(i, path);
+            });
+        });
+        cell->rbSetCloseCallback([ui, i](RBVideoCell*) {
+            ui->rbRemoveCell(i);
+        });
+        // 只有处于激活范围内的 cell 才会被渲染并需要 × 按钮
+        cell->rbSetClosable(i < activeCount);
+    }
+    (void)activeCount;
+}
+// ─── 布局 ──────────────────────────────────────────────────────────────
 void RBPlayerUI::rbSetLayout(RBLayoutMode mode) {
     int n = static_cast<int>(mode);
     m_layout = mode;
@@ -146,6 +162,7 @@ void RBPlayerUI::rbSetLayout(RBLayoutMode mode) {
         rbMakeCellPlayer(this, m_renderer, m_font, m_smallFont, m_cells, m_players);
     }
 
+    rbRebindCellCallbacks(this, m_cells, m_activeCellCount);
     rbRelayout();
 }
 
@@ -161,11 +178,50 @@ void RBPlayerUI::rbAddCell() {
 
     // 同步 layout 枚举
     m_layout = static_cast<RBLayoutMode>(m_activeCellCount);
+    rbRebindCellCallbacks(this, m_cells, m_activeCellCount);
     rbRelayout();
 }
 
-void RBPlayerUI::rbSetSoloCell(int idx) {
+void RBPlayerUI::rbRemoveCell(int idx) {
     if (idx < 0 || idx >= m_activeCellCount) return;
+    if (idx >= static_cast<int>(m_cells.size())) return;
+
+    // 1) 如果处于 Slider 模式，先退出（删除后路数变化，两路绑定不再成立）
+    if (m_sliderMode) {
+        if (m_sliderView) m_sliderView->rbSetPlayers(nullptr, nullptr);
+        m_sliderMode = false;
+        m_sliderLastPath0.clear();
+        m_sliderLastPath1.clear();
+    }
+
+    // 2) 关闭并销毁该 cell/player
+    if (m_cells[idx]) {
+        m_cells[idx]->rbSetPlayer(nullptr);
+    }
+    if (m_players[idx]) {
+        m_players[idx]->rbClose();
+    }
+    m_cells.erase(m_cells.begin() + idx);
+    m_players.erase(m_players.begin() + idx);
+
+    // 3) 同步路数/布局枚举
+    m_activeCellCount = std::max(0, m_activeCellCount - 1);
+    if (m_activeCellCount >= 1) {
+        m_layout = static_cast<RBLayoutMode>(m_activeCellCount);
+    } else {
+        m_layout = RBLayoutMode::Single;  // 枚举仅作叠加创建时参考，路数以 m_activeCellCount 为准
+    }
+
+    // 4) 退出 Solo（如果删的正是 Solo 路或后面的路）
+    m_soloCell = -1;
+
+    // 5) 重建所有剩余 cell 的标题/回调（闭包里的 idx 需以新位置为准）
+    rbRebindCellCallbacks(this, m_cells, m_activeCellCount);
+
+    rbRelayout();
+}
+
+void RBPlayerUI::rbSetSoloCell(int idx) {    if (idx < 0 || idx >= m_activeCellCount) return;
     if (m_soloCell == idx) {
         // 再次点击同一路 → 退出 solo，恢复多路显示
         m_soloCell = -1;
@@ -359,6 +415,11 @@ void RBPlayerUI::rbRenderFrame() {
         SDL_Rect sliderRect = { 0, m_tbH, m_drawableW, m_drawableH - m_tbH };
         m_sliderView->rbSetRect(sliderRect);
         m_sliderView->rbRender(m_mouseX, m_mouseY);
+    } else if (m_activeCellCount == 0) {
+        // 空状态：所有路都被关闭。提示用户用 ＋ 添加新通路
+        SDL_Rect area = { 0, m_tbH, m_drawableW, m_drawableH - m_tbH };
+        rbDrawTextCentered("No channels. Click  +  in the toolbar to add one.",
+                           area, {150, 155, 165, 255}, m_font);
     } else if (m_soloCell >= 0 && m_soloCell < static_cast<int>(m_cells.size())) {
         // Solo 模式只渲染焦点路
         m_cells[m_soloCell]->rbRender(m_mouseX, m_mouseY);

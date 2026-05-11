@@ -121,6 +121,15 @@ SDL_Rect RBVideoCell::rbProgressRect() const {
     return { x, y, std::max(w, 0), h };
 }
 
+SDL_Rect RBVideoCell::rbCloseBtnRect() const {
+    // 右上角 × 关闭按钮：正方形，边长与控制条按钮高保持一致、并距边一个 pad
+    int sz  = rbScaleI(m_dpiScale, kBtnHLogical);
+    int pad = rbScaleI(m_dpiScale, 6);
+    int x   = m_rect.x + m_rect.w - pad - sz;
+    int y   = m_rect.y + pad;
+    return { x, y, sz, sz };
+}
+
 // ─── 工具绘制 ─────────────────────────────────────────────────────────────────
 void RBVideoCell::rbFillRect(const SDL_Rect& r, SDL_Color c) {
     SDL_SetRenderDrawColor(m_renderer, c.r, c.g, c.b, c.a);
@@ -177,6 +186,19 @@ void RBVideoCell::rbRender(int mouseX, int mouseY) {
     if (!m_title.empty()) {
         int pad = rbScaleI(m_dpiScale, kPaddingLogical);
         rbDrawText(m_title, m_rect.x + pad, m_rect.y + pad, kColSubText, m_smallFont);
+    }
+
+    // 右上角 × 关闭按钮（低调背景 + hover 高亮）
+    if (m_closable) {
+        auto cb = rbCloseBtnRect();
+        bool hover = (mouseX >= cb.x && mouseX < cb.x + cb.w &&
+                      mouseY >= cb.y && mouseY < cb.y + cb.h);
+        SDL_Color bg = hover ? SDL_Color{200, 70, 80, 220}
+                             : SDL_Color{0, 0, 0, 120};
+        rbFillRect(cb, bg);
+        rbDrawRect(cb, hover ? SDL_Color{240, 200, 200, 255}
+                             : SDL_Color{120, 130, 145, 200});
+        rbDrawTextCentered("\xc3\x97", cb, kColText, m_font);  // U+00D7 乘号
     }
 }
 
@@ -426,11 +448,20 @@ void RBVideoCell::rbRenderProgressBar(const SDL_Rect& barRect, int mouseX, int m
     }
 }
 
-// ─── 鼠标事件 ─────────────────────────────────────────────────────────────────
+// ─── 鼠标事件 ─────────────────────────────────────────────────────
 void RBVideoCell::rbOnMouseDown(int x, int y, int clicks) {
+    // 右上角 × 关闭按钮（优先级最高，避免与选中/双击冲突）
+    if (m_closable) {
+        auto cb = rbCloseBtnRect();
+        if (x >= cb.x && x < cb.x + cb.w &&
+            y >= cb.y && y < cb.y + cb.h) {
+            if (m_closeCb) m_closeCb(this);
+            return;
+        }
+    }
+
     // 播放/暂停按钮
-    auto playBtn = rbPlayBtnRect();
-    if (x >= playBtn.x && x < playBtn.x + playBtn.w &&
+    auto playBtn = rbPlayBtnRect();    if (x >= playBtn.x && x < playBtn.x + playBtn.w &&
         y >= playBtn.y && y < playBtn.y + playBtn.h) {
         if (m_player) {
             if (m_player->rbIsEnded()) {
