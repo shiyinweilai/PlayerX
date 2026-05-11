@@ -416,7 +416,8 @@ void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
                     // 选中该 Cell
                     for (auto& c : m_cells) c->rbSetSelected(false);
                     m_cells[i]->rbSetSelected(true);
-                    m_cells[i]->rbOnMouseDown(x, y);
+                    // 透传 SDL 双击计数（常规播放器：双击视频画面切换播放/暂停）
+                    m_cells[i]->rbOnMouseDown(x, y, e.button.clicks);
                     break;
                 }
             }

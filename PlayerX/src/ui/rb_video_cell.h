@@ -42,7 +42,8 @@ public:
     void rbRender(int mouseX, int mouseY);
 
     // 鼠标事件（由 RBPlayerUI 分发）
-    void rbOnMouseDown(int x, int y);
+    // clicks: SDL 提供的连击计数，1=单击，2=双击（双击视频画面切换播放/暂停）
+    void rbOnMouseDown(int x, int y, int clicks = 1);
     void rbOnMouseUp(int x, int y);
     void rbOnMouseMove(int x, int y);
 

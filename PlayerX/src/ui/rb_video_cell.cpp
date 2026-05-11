@@ -288,8 +288,8 @@ void RBVideoCell::rbRenderProgressBar(const SDL_Rect& barRect, int mouseX, int m
 }
 
 // ─── 鼠标事件 ─────────────────────────────────────────────────────────────────
-void RBVideoCell::rbOnMouseDown(int x, int y) {
-    // 播放/暂停
+void RBVideoCell::rbOnMouseDown(int x, int y, int clicks) {
+    // 播放/暂停按钮
     auto playBtn = rbPlayBtnRect();
     if (x >= playBtn.x && x < playBtn.x + playBtn.w &&
         y >= playBtn.y && y < playBtn.y + playBtn.h) {
@@ -324,6 +324,23 @@ void RBVideoCell::rbOnMouseDown(int x, int y) {
             double target = ratio * m_player->rbDuration();
             m_player->rbSeekTo(target);
         }
+        return;
+    }
+
+    // 视频画面区域：双击切换播放/暂停（常规视频播放器交互）
+    auto vid = rbVideoArea();
+    if (clicks >= 2 &&
+        x >= vid.x && x < vid.x + vid.w &&
+        y >= vid.y && y < vid.y + vid.h) {
+        if (m_player && m_player->rbState() != RBPlayerState::Idle) {
+            if (m_player->rbIsEnded()) {
+                m_player->rbSeekTo(0.0);
+                m_player->rbPlay();
+            } else {
+                m_player->rbTogglePause();
+            }
+        }
+        return;
     }
 }
 
