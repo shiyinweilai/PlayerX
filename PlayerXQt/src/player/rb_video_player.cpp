@@ -314,21 +314,64 @@ void RBVideoPlayer::rbStepFrame(int n) {
     }
 
     const double fd  = rbFrameDuration();
-    const double cur = m_currentTime.load();
+    const double cur = m_currentFramePts > 0.0 ? m_currentFramePts : m_currentTime.load();
 
-    // 关键技巧：底层 av_seek_frame 走 BACKWARD 关键帧，rbRefreshPausedFrame
-    // 已经实现"丢弃 PTS + 0.5s < target 的前置帧"。我们把 seek 目标直接打在
-    //   target = cur + n * fd
-    // 即"目标帧 PTS"附近：
-    //   - 目标帧 PTS 与 target 的差远小于 0.5s（30fps 单帧 0.033s），
-    //     所以丢帧逻辑只会丢掉 keyframe 到 (target - 0.5s) 间的真前置帧，
-    //     而把命中目标帧 / 目标帧±一帧 的帧保留下来用于显示。
-    //   - 配合 rbRefreshPausedFrame 立即把首个有效帧装入 m_currentFrame，
-    //     用户视觉上看到精确推进一帧。
-    // 边界：clamp 到 [0, duration]，避免越界 seek。
+    // ─── 快路径：前进若干帧（≤3）时直接从 frameQueue 顺序消费 ─────────────
+    // 解码线程在播放/暂停态都会持续把后续帧 push 进队列（kCapacity=8），
+    // 因此连按"前进一帧"时，队列里通常已经存在 PTS > 当前 PTS 的下一帧。
+    // 走"pop 即换帧"的路径，完全不触发 av_seek_frame / 线程同步，几乎零开销。
+    // 仅在以下情况 fallback 到 seek 慢路径：
+    //   - n < 0（后退）：解码线程不能反向产帧，必须 seek
+    //   - |n| > 3：避免一次连吞过多帧导致队列见底再阻塞
+    //   - 队列没有 PTS > 当前 PTS 的帧（已到末端或刚 seek 过）
+    if (n > 0 && n <= 3) {
+        bool ok = true;
+        for (int i = 0; i < n && ok; ++i) {
+            ok = false;
+            // 持续 pop 直到找到 PTS > 当前 PTS 的帧（队列里可能有重复或较旧的帧）
+            // 大多数情况下第一个 peek 就是下一帧。
+            while (true) {
+                AVFrame* peek = m_frameQueue->rbPeek();
+                if (!peek) break; // 队列空，退出本次步进的 fast path
+                int64_t rawPts = (peek->best_effort_timestamp != AV_NOPTS_VALUE)
+                                ? peek->best_effort_timestamp
+                                : peek->pts;
+                double framePts = (rawPts != AV_NOPTS_VALUE)
+                    ? rawPts * av_q2d(m_videoTimeBase)
+                    : m_currentFramePts + fd;
+
+                if (framePts <= m_currentFramePts + fd * 0.25) {
+                    // 旧帧/重复帧：丢掉继续找
+                    AVFrame* drop = m_frameQueue->rbPop();
+                    if (drop) av_frame_free(&drop);
+                    continue;
+                }
+
+                // 命中下一帧：替换 currentFrame
+                AVFrame* f = m_frameQueue->rbPop();
+                if (f) {
+                    rbReleaseCurrentFrame();
+                    m_currentFrame      = f;
+                    m_currentFramePts   = framePts;
+                    m_playStartPts      = framePts;
+                    m_playStartWallTime = rbWallTime();
+                    m_currentTime.store(framePts);
+                    m_seekPending       = false;
+                    ok = true;
+                }
+                break;
+            }
+            if (!ok) break;
+        }
+        if (ok) return; // 快路径成功，结束
+        // 快路径失败（队列空/见底），落到下方 seek 慢路径
+    }
+
+    // ─── 慢路径：seek 到目标帧 PTS 附近，再用帧级阈值丢前置帧 ─────────────
+    // 关键技巧：底层 av_seek_frame 走 BACKWARD 关键帧，rbRefreshPausedFrameExact
+    // 用 fd/2 作为丢弃阈值，能精确停在目标帧上而非关键帧。
     const double target = std::max(0.0, std::min(cur + n * fd, m_duration));
     rbSeekTo(target);
-    // 用“帧级”精确阈值丢帧：避免 0.5s 默认容差在高帧率/关键帧间隔小的场景下误认关键帧为目标帧。
     rbRefreshPausedFrameExact(target, fd, 500);
 }
 

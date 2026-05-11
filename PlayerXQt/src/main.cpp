@@ -1,33 +1,38 @@
 /**
  * main.cpp — PlayerXQt Qt+QML 应用入口
  *
- * 第 1 阶段最小目标：
- *   - 启动 QGuiApplication，加载 qrc 中的 Main.qml
- *   - QML 中通过 VideoFrameProvider QML 类型显示视频
+ * 第 2 阶段：注册 EngineBridge 单例给 QML，使所有视频窗共享同一引擎。
  */
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QQuickStyle>
 #include <QIcon>
+
+#include "qt/EngineBridge.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
 }
 
 int main(int argc, char* argv[]) {
-    // 高 DPI 在 Qt 6 默认开启，无需 setAttribute
     QGuiApplication app(argc, argv);
     app.setApplicationName("PlayerXQt");
     app.setOrganizationName("PlayerX");
 
-    // 选用现代风格的 Quick Controls 样式（Mac/Win 都可用）
     QQuickStyle::setStyle("Fusion");
 
-    // FFmpeg 全局初始化（4.0+ 不再需要 av_register_all，但 network init 仍需要）
     avformat_network_init();
 
+    // EngineBridge 必须先于 engine.load 创建，且生命周期 >= QML 引擎
+    rbqt::EngineBridge engineBridge;
+
     QQmlApplicationEngine engine;
+
+    // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
+    engine.rootContext()->setContextProperty("Engine", &engineBridge);
+
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,
         []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);

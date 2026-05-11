@@ -42,8 +42,10 @@ qt_add_executable(PlayerXQt
     src/core/rb_decoder.cpp
     src/core/rb_frame_queue.cpp
     src/player/rb_video_player.cpp
+    src/player/rb_player_engine.cpp
     # Qt 桥接层
     src/qt/VideoFrameProvider.cpp
+    src/qt/EngineBridge.cpp
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
