@@ -108,6 +108,10 @@ private:
     // ─── Slider 模式（双视频滑动比较，仅在激活路数==2时可进入）──────────
     bool                            m_sliderMode{false};
     std::unique_ptr<RBSliderView>   m_sliderView;
+    // 记录上次进入 Slider 模式时两路视频的文件路径，用来判断"是否需要重新
+    // reset 到 0"。若再次进入时两路文件未变，则不触发 reset，实现无缝切换。
+    std::string                     m_sliderLastPath0;
+    std::string                     m_sliderLastPath1;
 
     bool            m_running{false};
     int             m_mouseX{-1}, m_mouseY{-1};   // 已转换为 drawable 像素坐标

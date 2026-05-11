@@ -635,12 +635,22 @@ void RBPlayerUI::rbHandleToolbarClick(int x, int y) {
         if (!enabled && !m_sliderMode) return;  // 不满足条件且当前不在 slider，禁用
         m_sliderMode = !m_sliderMode;
         if (m_sliderMode) {
-            // 进入滑动模式：先 reset 两路到 0 并暂停，避免当前播放进度
-            // 不同造成左右画面错位，确保比较起点同步。用户可按空格统一从头播放。
-            rbSyncReset();
-            // 绑定前两路 player
+            // 取前两路 player
             RBVideoPlayer* p0 = (m_players.size() > 0) ? m_players[0].get() : nullptr;
             RBVideoPlayer* p1 = (m_players.size() > 1) ? m_players[1].get() : nullptr;
+            const std::string path0 = p0 ? p0->rbFilePath() : std::string();
+            const std::string path1 = p1 ? p1->rbFilePath() : std::string();
+
+            // 仅当两路视频与"上次进入 Slider 时"不一致时才 reset，
+            // 这样首次进入会同步到 0:00，再次来回切换则保持当前播放位置无缝衔接。
+            const bool needReset =
+                (path0 != m_sliderLastPath0) || (path1 != m_sliderLastPath1);
+            if (needReset) {
+                rbSyncReset();
+                m_sliderLastPath0 = path0;
+                m_sliderLastPath1 = path1;
+            }
+
             if (m_sliderView) m_sliderView->rbSetPlayers(p0, p1);
         } else {
             if (m_sliderView) m_sliderView->rbSetPlayers(nullptr, nullptr);
