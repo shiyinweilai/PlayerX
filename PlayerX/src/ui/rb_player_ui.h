@@ -18,12 +18,17 @@ namespace rb {
 class RBVideoCell;
 class RBVideoPlayer;
 
-// 布局模式
+// 布局模式（路数即枚举值，最多 9 路）
 enum class RBLayoutMode {
     Single  = 1,  // 1 路
-    Dual    = 2,  // 左右 2 路
-    Triple  = 3,  // 上2下1（或自定义）
+    Dual    = 2,  // 1行2列
+    Triple  = 3,  // 1行3列
     Quad    = 4,  // 2×2 四宫格
+    Five    = 5,  // 2行3列
+    Six     = 6,  // 2行3列
+    Seven   = 7,  // 3行3列
+    Eight   = 8,  // 3行3列
+    Nine    = 9,  // 3行3列
 };
 
 class RBPlayerUI {
@@ -41,6 +46,12 @@ public:
     // 布局切换（可在运行时调用）
     void rbSetLayout(RBLayoutMode mode);
     RBLayoutMode rbLayout() const { return m_layout; }
+
+    // 动态增加一路视频（最多 9 路）
+    void rbAddCell();
+
+    // Solo 模式：只显示第 idx 路（-1 = 显示全部）
+    void rbSetSoloCell(int idx);
 
     // 为指定 Cell 加载视频（0-based index）
     void rbOpenFileForCell(int cellIndex, const std::string& filePath);
@@ -84,6 +95,9 @@ private:
     // Cell 和 Player 的生命周期均由 UI 管理
     std::vector<std::unique_ptr<RBVideoCell>>   m_cells;
     std::vector<std::unique_ptr<RBVideoPlayer>> m_players;
+
+    int             m_activeCellCount{1};  // 当前激活的路数（1~9）
+    int             m_soloCell{-1};        // -1=显示全部, >=0=只显示该路
 
     bool            m_running{false};
     int             m_mouseX{-1}, m_mouseY{-1};

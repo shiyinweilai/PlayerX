@@ -16,9 +16,10 @@ static constexpr SDL_Color kUIBtnHover  = {75,  145, 235, 255};
 static constexpr SDL_Color kUIBtnActive = {40,  90,  160, 255};
 
 // ─── 工具栏按钮布局 ───────────────────────────────────────────────────────────
-static constexpr int kTBBtnW = 60;
-static constexpr int kTBBtnH = 28;
-static constexpr int kTBPad  = 8;
+static constexpr int kTBBtnW    = 60;   // 普通按钮宽
+static constexpr int kTBBtnH    = 28;
+static constexpr int kTBPad     = 8;
+static constexpr int kTBNumBtnW = 36;   // 序号按钮宽（紧凑）
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RBPlayerUI
@@ -83,33 +84,67 @@ void RBPlayerUI::rbShutdown() {
     SDL_Quit();
 }
 
+// ─── 内部：创建一个新 Cell+Player 并追加 ─────────────────────────────────────
+static void rbMakeCellPlayer(RBPlayerUI* ui, SDL_Renderer* renderer,
+                              TTF_Font* font, TTF_Font* smallFont,
+                              std::vector<std::unique_ptr<RBVideoCell>>& cells,
+                              std::vector<std::unique_ptr<RBVideoPlayer>>& players) {
+    auto player = std::make_unique<RBVideoPlayer>();
+    auto cell   = std::make_unique<RBVideoCell>();
+    cell->rbInit(renderer, font, smallFont);
+    cell->rbSetPlayer(player.get());
+
+    int idx = static_cast<int>(cells.size());
+    cell->rbSetTitle("Ch." + std::to_string(idx + 1));
+
+    cell->rbSetOpenFileCallback([ui, idx](RBVideoCell*) {
+        rbOpenFileDialog([ui, idx](const std::string& path) {
+            if (!path.empty()) ui->rbOpenFileForCell(idx, path);
+        });
+    });
+
+    players.push_back(std::move(player));
+    cells.push_back(std::move(cell));
+}
+
 // ─── 布局 ─────────────────────────────────────────────────────────────────────
 void RBPlayerUI::rbSetLayout(RBLayoutMode mode) {
     int n = static_cast<int>(mode);
     m_layout = mode;
+    m_activeCellCount = n;
+    m_soloCell = -1;  // 切换布局时退出 solo 模式
 
     // 扩展 Cell 和 Player 数量（只增不减，保留已有播放器）
     while (static_cast<int>(m_players.size()) < n) {
-        auto player = std::make_unique<RBVideoPlayer>();
-        auto cell   = std::make_unique<RBVideoCell>();
-        cell->rbInit(m_renderer, m_font, m_smallFont);
-        cell->rbSetPlayer(player.get());
-
-        int idx = static_cast<int>(m_cells.size());
-        cell->rbSetTitle("Ch." + std::to_string(idx + 1));
-
-        // 文件选择回调：通过 SDL 事件推回主线程，记录 cellIndex
-        cell->rbSetOpenFileCallback([this, idx](RBVideoCell*) {
-            rbOpenFileDialog([this, idx](const std::string& path) {
-                // 此回调已在主线程（SDL 事件处理中）执行
-                if (!path.empty()) rbOpenFileForCell(idx, path);
-            });
-        });
-
-        m_players.push_back(std::move(player));
-        m_cells.push_back(std::move(cell));
+        rbMakeCellPlayer(this, m_renderer, m_font, m_smallFont, m_cells, m_players);
     }
 
+    rbRelayout();
+}
+
+void RBPlayerUI::rbAddCell() {
+    if (m_activeCellCount >= 9) return;
+    m_activeCellCount++;
+    m_soloCell = -1;  // 退出 solo 模式
+
+    // 按需创建新 Cell
+    while (static_cast<int>(m_players.size()) < m_activeCellCount) {
+        rbMakeCellPlayer(this, m_renderer, m_font, m_smallFont, m_cells, m_players);
+    }
+
+    // 同步 layout 枚举
+    m_layout = static_cast<RBLayoutMode>(m_activeCellCount);
+    rbRelayout();
+}
+
+void RBPlayerUI::rbSetSoloCell(int idx) {
+    if (idx < 0 || idx >= m_activeCellCount) return;
+    if (m_soloCell == idx) {
+        // 再次点击同一路 → 退出 solo，恢复多路显示
+        m_soloCell = -1;
+    } else {
+        m_soloCell = idx;
+    }
     rbRelayout();
 }
 
@@ -128,39 +163,66 @@ void RBPlayerUI::rbRelayout() {
         }
     };
 
-    switch (m_layout) {
-    case RBLayoutMode::Single:
-        setCell(0, 0, contentY, contentW, contentH);
-        break;
-
-    case RBLayoutMode::Dual: {
-        int cw = (contentW - kGap) / 2;
-        setCell(0, 0,        contentY, cw, contentH);
-        setCell(1, cw + kGap, contentY, contentW - cw - kGap, contentH);
-        break;
+    // Solo 模式：只显示一路，全屏
+    if (m_soloCell >= 0 && m_soloCell < m_activeCellCount) {
+        setCell(m_soloCell, 0, contentY, contentW, contentH);
+        return;
     }
 
-    case RBLayoutMode::Triple: {
-        // 上方两个，下方一个居中
-        int topH = (contentH - kGap) / 2;
-        int botH = contentH - topH - kGap;
-        int cw   = (contentW - kGap) / 2;
-        setCell(0, 0,         contentY,           cw, topH);
-        setCell(1, cw + kGap, contentY,           contentW - cw - kGap, topH);
-        int botW = contentW / 2;
-        setCell(2, (contentW - botW) / 2, contentY + topH + kGap, botW, botH);
-        break;
-    }
+    int n = m_activeCellCount;
 
-    case RBLayoutMode::Quad: {
-        int cw = (contentW - kGap) / 2;
-        int ch = (contentH - kGap) / 2;
-        setCell(0, 0,         contentY,           cw, ch);
-        setCell(1, cw + kGap, contentY,           contentW - cw - kGap, ch);
-        setCell(2, 0,         contentY + ch + kGap, cw, contentH - ch - kGap);
-        setCell(3, cw + kGap, contentY + ch + kGap, contentW - cw - kGap, contentH - ch - kGap);
-        break;
-    }
+    // 确定行列数
+    //  1       → 1×1
+    //  2       → 1×2
+    //  3       → 1×3
+    //  4       → 2×2
+    //  5~6     → 2×3
+    //  7~9     → 3×3
+    int cols, rows;
+    if      (n == 1)            { cols = 1; rows = 1; }
+    else if (n == 2)            { cols = 2; rows = 1; }
+    else if (n == 3)            { cols = 3; rows = 1; }
+    else if (n == 4)            { cols = 2; rows = 2; }
+    else if (n <= 6)            { cols = 3; rows = 2; }
+    else                        { cols = 3; rows = 3; }
+
+    // 计算每格宽高（均分，最后一列/行吸收余数）
+    // 列宽：(contentW - (cols-1)*kGap) / cols
+    // 行高：(contentH - (rows-1)*kGap) / rows
+    auto colX = [&](int c) -> int {
+        int totalGap = (cols - 1) * kGap;
+        int baseW    = (contentW - totalGap) / cols;
+        int extra    = (contentW - totalGap) - baseW * cols;  // 余数像素
+        // 前 extra 列各宽 1px
+        int x = 0;
+        for (int i = 0; i < c; ++i) x += baseW + (i < extra ? 1 : 0) + kGap;
+        return x;
+    };
+    auto colW = [&](int c) -> int {
+        int totalGap = (cols - 1) * kGap;
+        int baseW    = (contentW - totalGap) / cols;
+        int extra    = (contentW - totalGap) - baseW * cols;
+        return baseW + (c < extra ? 1 : 0);
+    };
+    auto rowY = [&](int r) -> int {
+        int totalGap = (rows - 1) * kGap;
+        int baseH    = (contentH - totalGap) / rows;
+        int extra    = (contentH - totalGap) - baseH * rows;
+        int y = contentY;
+        for (int i = 0; i < r; ++i) y += baseH + (i < extra ? 1 : 0) + kGap;
+        return y;
+    };
+    auto rowH = [&](int r) -> int {
+        int totalGap = (rows - 1) * kGap;
+        int baseH    = (contentH - totalGap) / rows;
+        int extra    = (contentH - totalGap) - baseH * rows;
+        return baseH + (r < extra ? 1 : 0);
+    };
+
+    for (int i = 0; i < n; ++i) {
+        int r = i / cols;
+        int c = i % cols;
+        setCell(i, colX(c), rowY(r), colW(c), rowH(r));
     }
 }
 
@@ -237,10 +299,13 @@ void RBPlayerUI::rbRenderFrame() {
     SDL_SetRenderDrawColor(m_renderer, kUIBg.r, kUIBg.g, kUIBg.b, 255);
     SDL_RenderClear(m_renderer);
 
-    // 渲染所有 Cell（只渲染当前 layout 数量的 Cell）
-    int cellCount = static_cast<int>(m_layout);
-    for (int i = 0; i < cellCount && i < static_cast<int>(m_cells.size()); ++i) {
-        m_cells[i]->rbRender(m_mouseX, m_mouseY);
+    // 渲染 Cell：solo 模式只渲染焦点路，否则渲染全部激活路
+    if (m_soloCell >= 0 && m_soloCell < static_cast<int>(m_cells.size())) {
+        m_cells[m_soloCell]->rbRender(m_mouseX, m_mouseY);
+    } else {
+        for (int i = 0; i < m_activeCellCount && i < static_cast<int>(m_cells.size()); ++i) {
+            m_cells[i]->rbRender(m_mouseX, m_mouseY);
+        }
     }
 
     // 渲染工具栏
@@ -260,37 +325,59 @@ void RBPlayerUI::rbRenderToolbar() {
     // 标题
     rbDrawText("PlayerX", kTBPad, (kToolbarH - 20) / 2, kUIText, m_titleFont ? m_titleFont : m_font);
 
-    // 布局切换按钮（右侧）
-    struct LayoutBtn { const char* label; RBLayoutMode mode; };
-    static const LayoutBtn kBtns[] = {
-        {"1",  RBLayoutMode::Single},
-        {"2",  RBLayoutMode::Dual},
-        {"3",  RBLayoutMode::Triple},
-        {"4",  RBLayoutMode::Quad},
-    };
+    // ── 右侧按钮区，从右向左排列 ──────────────────────────────────────────
+    int bx = ww - kTBPad;
 
-    int bx = ww - (kTBBtnW + kTBPad) * 4 - kTBPad;
-    for (const auto& b : kBtns) {
-        SDL_Rect r = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
-        bool active = (m_layout == b.mode);
-        bool hover  = rbPointInRect(m_mouseX, m_mouseY, r);
-        SDL_Color c = active ? kUIBtnActive : (hover ? kUIBtnHover : kUIBtn);
+    // ＋ 按钮（最右）
+    bx -= kTBBtnW;
+    SDL_Rect addBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    bool addDisabled = (m_activeCellCount >= 9);
+    bool addHover    = !addDisabled && rbPointInRect(m_mouseX, m_mouseY, addBtn);
+    SDL_Color addCol = addDisabled ? SDL_Color{40,50,65,180} : (addHover ? kUIBtnHover : kUIBtn);
+    rbFillRect(addBtn, addCol);
+    rbDrawRect(addBtn, {80, 100, 130, 255});
+    rbDrawTextCentered("+", addBtn, addDisabled ? SDL_Color{100,110,130,180} : kUIText, m_font);
+    bx -= kTBPad;
+
+    // 序号按钮（从右向左：N, N-1, ..., 1），使用紧凑宽度
+    for (int i = m_activeCellCount - 1; i >= 0; --i) {
+        bx -= kTBNumBtnW;
+        SDL_Rect r = { bx, (kToolbarH - kTBBtnH) / 2, kTBNumBtnW, kTBBtnH };
+        bool isSolo  = (m_soloCell == i);
+        bool hover   = rbPointInRect(m_mouseX, m_mouseY, r);
+        SDL_Color c  = isSolo ? kUIBtnActive : (hover ? kUIBtnHover : kUIBtn);
         rbFillRect(r, c);
         rbDrawRect(r, {80, 100, 130, 255});
-        rbDrawTextCentered(b.label, r, kUIText, m_font);
-        bx += kTBBtnW + kTBPad;
+        rbDrawTextCentered(std::to_string(i + 1), r, kUIText, m_font);
+        bx -= kTBPad;
     }
 
-    // 同步播放按钮
-    int syncX = ww - (kTBBtnW + kTBPad) * 4 - kTBPad - kTBBtnW * 2 - kTBPad * 2;
-    SDL_Rect syncBtn = { syncX, (kToolbarH - kTBBtnH) / 2, kTBBtnW * 2, kTBBtnH };
-    bool syncHover = rbPointInRect(m_mouseX, m_mouseY, syncBtn);
-    rbFillRect(syncBtn, syncHover ? kUIBtnHover : kUIBtn);
-    rbDrawRect(syncBtn, {80, 100, 130, 255});
-    rbDrawTextCentered("Sync All", syncBtn, kUIText, m_font);
-}
+    // Multi 按钮（序号左侧）：退出 Solo 回到多路视图
+    bx -= kTBBtnW;
+    SDL_Rect multiBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    {
+        bool inSolo = (m_soloCell >= 0);
+        bool hover  = rbPointInRect(m_mouseX, m_mouseY, multiBtn);
+        SDL_Color c = inSolo ? kUIBtnActive : (hover ? kUIBtnHover : kUIBtn);
+        rbFillRect(multiBtn, c);
+        rbDrawRect(multiBtn, {80, 100, 130, 255});
+        rbDrawTextCentered("Multi", multiBtn, kUIText, m_font);
+    }
+    bx -= kTBPad;
 
-// ─── 事件处理 ─────────────────────────────────────────────────────────────────
+    // Sync 按钮（Multi 左侧）：播放中显示 "Pause"，暂停时显示 "Play"
+    bx -= kTBBtnW;
+    SDL_Rect syncBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    {
+        bool anyPlaying = false;
+        for (auto& p : m_players) { if (p->rbIsPlaying()) { anyPlaying = true; break; } }
+        bool hover = rbPointInRect(m_mouseX, m_mouseY, syncBtn);
+        rbFillRect(syncBtn, hover ? kUIBtnHover : kUIBtn);
+        rbDrawRect(syncBtn, {80, 100, 130, 255});
+        rbDrawTextCentered(anyPlaying ? "Pause" : "Play", syncBtn, kUIText, m_font);
+    }
+}
+// ─── 事件处理// ─── 事件处理 ─────────────────────────────────────────────────────────────────
 void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
     switch (e.type) {
     case SDL_QUIT:
@@ -322,7 +409,7 @@ void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
             }
 
             // 分发给 Cell
-            int n = static_cast<int>(m_layout);
+            int n = m_activeCellCount;
             for (int i = 0; i < n && i < static_cast<int>(m_cells.size()); ++i) {
                 auto& r = m_cells[i]->rbRect();
                 if (rbPointInRect(x, y, r)) {
@@ -361,30 +448,47 @@ void RBPlayerUI::rbHandleToolbarClick(int x, int y) {
     SDL_GetWindowSize(m_window, &ww, &wh);
     (void)wh;
 
-    // 布局按钮
-    struct LayoutBtn { RBLayoutMode mode; };
-    static const LayoutBtn kBtns[] = {
-        {RBLayoutMode::Single},
-        {RBLayoutMode::Dual},
-        {RBLayoutMode::Triple},
-        {RBLayoutMode::Quad},
-    };
-    int bx = ww - (kTBBtnW + kTBPad) * 4 - kTBPad;
-    for (const auto& b : kBtns) {
-        SDL_Rect r = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    // 与 rbRenderToolbar 保持完全相同的布局计算
+    int bx = ww - kTBPad;
+
+    // ＋ 按钮
+    bx -= kTBBtnW;
+    SDL_Rect addBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    if (rbPointInRect(x, y, addBtn)) {
+        rbAddCell();
+        return;
+    }
+    bx -= kTBPad;
+
+    // 序号按钮（从右向左：N, N-1, ..., 1），使用紧凑宽度
+    for (int i = m_activeCellCount - 1; i >= 0; --i) {
+        bx -= kTBNumBtnW;
+        SDL_Rect r = { bx, (kToolbarH - kTBBtnH) / 2, kTBNumBtnW, kTBBtnH };
         if (rbPointInRect(x, y, r)) {
-            rbSetLayout(b.mode);
+            rbSetSoloCell(i);
             return;
         }
-        bx += kTBBtnW + kTBPad;
+        bx -= kTBPad;
     }
 
+    // Multi 按钮：退出 Solo，回到多路视图
+    bx -= kTBBtnW;
+    SDL_Rect multiBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    if (rbPointInRect(x, y, multiBtn)) {
+        m_soloCell = -1;
+        rbRelayout();
+        return;
+    }
+    bx -= kTBPad;
+
     // Sync 按钮
-    int syncX = ww - (kTBBtnW + kTBPad) * 4 - kTBPad - kTBBtnW * 2 - kTBPad * 2;
-    SDL_Rect syncBtn = { syncX, (kToolbarH - kTBBtnH) / 2, kTBBtnW * 2, kTBBtnH };
+    bx -= kTBBtnW;
+    SDL_Rect syncBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
     if (rbPointInRect(x, y, syncBtn)) {
         rbSyncToggle();
+        return;
     }
+
 }
 
 void RBPlayerUI::rbHandleKeyDown(const SDL_Keysym& key) {
@@ -409,10 +513,16 @@ void RBPlayerUI::rbHandleKeyDown(const SDL_Keysym& key) {
                 p->rbSeekTo(std::min(p->rbDuration(), p->rbCurrentTime() + 5.0));
         }
         break;
-    case SDLK_1: rbSetLayout(RBLayoutMode::Single); break;
-    case SDLK_2: rbSetLayout(RBLayoutMode::Dual);   break;
-    case SDLK_3: rbSetLayout(RBLayoutMode::Triple); break;
-    case SDLK_4: rbSetLayout(RBLayoutMode::Quad);   break;
+    // 数字键：切换 solo 模式（1~9 对应各路）
+    case SDLK_1: rbSetSoloCell(0); break;
+    case SDLK_2: rbSetSoloCell(1); break;
+    case SDLK_3: rbSetSoloCell(2); break;
+    case SDLK_4: rbSetSoloCell(3); break;
+    case SDLK_5: rbSetSoloCell(4); break;
+    case SDLK_6: rbSetSoloCell(5); break;
+    case SDLK_7: rbSetSoloCell(6); break;
+    case SDLK_8: rbSetSoloCell(7); break;
+    case SDLK_9: rbSetSoloCell(8); break;
     }
 }
 
