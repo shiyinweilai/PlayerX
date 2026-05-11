@@ -69,6 +69,14 @@ public:
     // 全局同步：将所有 Cell seek 到 0 并暂停，便于从头开始统一播放
     void rbSyncReset();
 
+    // ─── 文件对话框守卫（暂停所有正在播放的路 / 之后恢复）──────────────
+    // 弹出系统文件对话框时，主事件循环会被原生 runloop 接管，
+    // 解码线程持续推进，墙钟也不停，导致对话框关闭后画面"快进"。
+    // 通过在弹框前后冻结/解冻所有 Playing 路的播放状态，可保证用户体验：
+    // 对话框期间画面静止，确认/取消后从原位置继续。
+    void rbBeginFileDialogGuard();
+    void rbEndFileDialogGuard();
+
 private:
     // 布局计算：根据窗口大小和 layout 模式，更新每个 Cell 的 rect
     void rbRelayout();
@@ -108,6 +116,11 @@ private:
 
     int             m_activeCellCount{1};  // 当前激活的路数（1~9）
     int             m_soloCell{-1};        // -1=显示全部, >=0=只显示该路
+
+    // 文件对话框守卫：记录在弹框前被自动暂停的路索引，
+    // 对话框结束（无论是确认还是取消）后据此恢复其 Playing 状态。
+    std::vector<int> m_dialogPausedCells;
+    int              m_dialogGuardDepth{0};  // 计数避免嵌套时提前恢复
 
     // ─── Slider 模式（双视频滑动比较，仅在激活路数==2时可进入）──────────
     bool                            m_sliderMode{false};

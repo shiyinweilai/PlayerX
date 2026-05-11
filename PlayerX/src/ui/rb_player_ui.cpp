@@ -138,8 +138,13 @@ static void rbRebindCellCallbacks(RBPlayerUI* ui,
         if (!cell) continue;
         cell->rbSetTitle("Ch." + std::to_string(i + 1));
         cell->rbSetOpenFileCallback([ui, i](RBVideoCell*) {
+            // 弹框前暂停所有正在播放的路，避免对话框期间墙钟流逝
+            // 导致关闭时画面瞬间快进。
+            ui->rbBeginFileDialogGuard();
             rbOpenFileDialog([ui, i](const std::string& path) {
                 if (!path.empty()) ui->rbOpenFileForCell(i, path);
+                // 无论是否选中文件，都要恢复其它路的播放状态。
+                ui->rbEndFileDialogGuard();
             });
         });
         cell->rbSetCloseCallback([ui, i](RBVideoCell*) {
@@ -382,6 +387,40 @@ void RBPlayerUI::rbSyncReset() {
         if (p->rbState() == RBPlayerState::Idle) continue;
         p->rbRefreshPausedFrame();
     }
+}
+
+// ─── 文件对话框守卫 ────────────────────────────────────────────────
+void RBPlayerUI::rbBeginFileDialogGuard() {
+    // 允许嵌套（理论上不会，但防抱一）：只有第一层守卫才生效。
+    if (m_dialogGuardDepth++ > 0) return;
+
+    m_dialogPausedCells.clear();
+    for (size_t i = 0; i < m_players.size(); ++i) {
+        auto* p = m_players[i].get();
+        if (!p) continue;
+        if (p->rbIsPlaying()) {
+            p->rbPause();
+            m_dialogPausedCells.push_back(static_cast<int>(i));
+        }
+    }
+}
+
+void RBPlayerUI::rbEndFileDialogGuard() {
+    if (m_dialogGuardDepth <= 0) return;          // 未配对调用，忽略
+    if (--m_dialogGuardDepth > 0) return;         // 仍有更外层守卫，不恢复
+
+    for (int idx : m_dialogPausedCells) {
+        if (idx < 0 || idx >= static_cast<int>(m_players.size())) continue;
+        auto* p = m_players[idx].get();
+        if (!p) continue;
+        // 如果该路仍处于暂停（没有被用户手动改动过状态）才恢复。
+        // rbPlay 在处于 Paused 的路上会重置墙钟起点 = now，PTS 起点 = currentTime，
+        // 不会产生跳变，后续帧从原位置无缝继续。
+        if (p->rbIsPaused()) {
+            p->rbPlay();
+        }
+    }
+    m_dialogPausedCells.clear();
 }
 
 // ─── 主循环 ───────────────────────────────────────────────────────────────────
