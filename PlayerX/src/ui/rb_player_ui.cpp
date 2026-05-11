@@ -273,6 +273,15 @@ void RBPlayerUI::rbSyncSeek(double seconds) {
     }
 }
 
+void RBPlayerUI::rbSyncReset() {
+    // 将所有有效播放器回到 0 并暂停，便于用户随后统一从头开始播放
+    for (auto& p : m_players) {
+        if (p->rbState() == RBPlayerState::Idle) continue;
+        p->rbPause();
+        p->rbSeekTo(0.0);
+    }
+}
+
 // ─── 主循环 ───────────────────────────────────────────────────────────────────
 void RBPlayerUI::rbRunLoop() {
     m_running = true;
@@ -375,6 +384,17 @@ void RBPlayerUI::rbRenderToolbar() {
         rbFillRect(syncBtn, hover ? kUIBtnHover : kUIBtn);
         rbDrawRect(syncBtn, {80, 100, 130, 255});
         rbDrawTextCentered(anyPlaying ? "Pause" : "Play", syncBtn, kUIText, m_font);
+    }
+    bx -= kTBPad;
+
+    // Reset 按钮（Sync 左侧）：所有通路同步回到 0，便于从头播放
+    bx -= kTBBtnW;
+    SDL_Rect resetBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    {
+        bool hover = rbPointInRect(m_mouseX, m_mouseY, resetBtn);
+        rbFillRect(resetBtn, hover ? kUIBtnHover : kUIBtn);
+        rbDrawRect(resetBtn, {80, 100, 130, 255});
+        rbDrawTextCentered("Reset", resetBtn, kUIText, m_font);
     }
 }
 // ─── 事件处理// ─── 事件处理 ─────────────────────────────────────────────────────────────────
@@ -489,7 +509,15 @@ void RBPlayerUI::rbHandleToolbarClick(int x, int y) {
         rbSyncToggle();
         return;
     }
+    bx -= kTBPad;
 
+    // Reset 按钮（Sync 左侧）
+    bx -= kTBBtnW;
+    SDL_Rect resetBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    if (rbPointInRect(x, y, resetBtn)) {
+        rbSyncReset();
+        return;
+    }
 }
 
 void RBPlayerUI::rbHandleKeyDown(const SDL_Keysym& key) {
@@ -513,6 +541,10 @@ void RBPlayerUI::rbHandleKeyDown(const SDL_Keysym& key) {
             if (p->rbState() != RBPlayerState::Idle)
                 p->rbSeekTo(std::min(p->rbDuration(), p->rbCurrentTime() + 5.0));
         }
+        break;
+    // R 键：同步重置所有通路到头（便于从头播放）
+    case SDLK_r:
+        rbSyncReset();
         break;
     // 数字键：切换 solo 模式（1~9 对应各路）
     case SDLK_1: rbSetSoloCell(0); break;

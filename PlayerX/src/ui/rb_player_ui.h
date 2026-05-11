@@ -61,6 +61,8 @@ public:
     void rbSyncPause();
     void rbSyncToggle();
     void rbSyncSeek(double seconds);
+    // 全局同步：将所有 Cell seek 到 0 并暂停，便于从头开始统一播放
+    void rbSyncReset();
 
 private:
     // 布局计算：根据窗口大小和 layout 模式，更新每个 Cell 的 rect
