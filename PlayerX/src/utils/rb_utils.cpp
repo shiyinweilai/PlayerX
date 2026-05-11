@@ -1,4 +1,5 @@
 #include "rb_utils.h"
+#include "rb_file_dialog.h"
 #include <SDL2/SDL_ttf.h>
 #include <iostream>
 #include <sstream>
@@ -14,10 +15,6 @@
 #else
 #  include <unistd.h>
 #  include <limits.h>
-#  include <sys/types.h>
-#  include <sys/wait.h>
-#  include <signal.h>
-#  include <fcntl.h>
 #  ifdef __APPLE__
 #    include <mach-o/dyld.h>
 #  endif
@@ -113,15 +110,12 @@ TTF_Font* rbLoadFont(int ptSize) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 文件选择对话框（SDL 自定义事件方案）
+// 文件选择对话框（跨平台分发：macOS=NSOpenPanel / Windows=GetOpenFileNameW）
 // ═══════════════════════════════════════════════════════════════════════════
 
 static Uint32             s_fileDialogEventType = static_cast<Uint32>(-1);
-static std::atomic<bool>  s_dialogOpen{false};   // 防重复打开
+static std::atomic<bool>  s_dialogOpen{false};       // 防重复打开
 static std::atomic<bool>  s_dialogShutdown{false};
-#ifndef _WIN32
-static std::atomic<pid_t> s_dialogPid{-1};        // 当前 osascript 子进程 PID
-#endif
 static std::mutex         s_dialogThreadMtx;
 static std::thread        s_dialogThread;
 
@@ -149,53 +143,10 @@ void rbOpenFileDialog(const RBFileCallback& callback) {
         std::lock_guard<std::mutex> lk(s_dialogThreadMtx);
         if (s_dialogThread.joinable()) s_dialogThread.join();
         s_dialogThread = std::thread([callback]() {
-            std::string result;
-
-#ifdef __APPLE__
-            // ── fork + execlp 启动 osascript，保留 PID 以便退出时 kill ──
-            int pipefd[2];
-            if (pipe(pipefd) != 0) {
-                s_dialogOpen.store(false);
-                return;
-            }
-            pid_t pid = fork();
-            if (pid == 0) {
-                // 子进程：把 stdout 重定向到 pipe 写端，exec osascript
-                close(pipefd[0]);
-                dup2(pipefd[1], STDOUT_FILENO);
-                close(pipefd[1]);
-                execlp("osascript", "osascript", "-e",
-                       "POSIX path of (choose file with prompt \"Select Video File\")",
-                       (char*)nullptr);
-                _exit(127); // exec 失败
-            } else if (pid > 0) {
-                close(pipefd[1]);
-                s_dialogPid.store(pid);
-
-                // 读取子进程输出
-                char buf[4096];
-                ssize_t n;
-                while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
-                    result.append(buf, buf + n);
-                }
-                close(pipefd[0]);
-
-                // 等待子进程退出
-                int status = 0;
-                waitpid(pid, &status, 0);
-                s_dialogPid.store(-1);
-            } else {
-                close(pipefd[0]);
-                close(pipefd[1]);
-            }
-            // 去掉末尾换行
-            while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
-                result.pop_back();
-#else
-            // 非 macOS：简单命令行输入（后续可替换为 zenity/kdialog）
-            std::cout << "[rbOpenFileDialog] Enter video file path: " << std::flush;
-            std::getline(std::cin, result);
-#endif
+            // 调用平台原生对话框（同步阻塞）
+            //   macOS  : NSOpenPanel（内部自动 dispatch 到主线程）
+            //   Windows: GetOpenFileNameW（在本工作线程中运行）
+            std::string result = rbShowOpenFileDialogNative();
 
             // 主进程已在退出流程，则不再 push 事件
             if (s_dialogShutdown.load()) {
@@ -218,23 +169,11 @@ void rbOpenFileDialog(const RBFileCallback& callback) {
     }
 }
 
-// 主程序退出时调用：kill 子进程、join 后台线程，避免 osascript 窗口残留
+// 主程序退出时调用：通知原生层关闭对话框（macOS）并 join 后台线程。
 void rbShutdownFileDialog() {
     s_dialogShutdown.store(true);
-#ifndef _WIN32
-    pid_t pid = s_dialogPid.load();
-    if (pid > 0) {
-        // 先 SIGTERM，必要时 SIGKILL
-        kill(pid, SIGTERM);
-        // 给子进程 200ms 退出
-        for (int i = 0; i < 20 && s_dialogPid.load() > 0; ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        if (s_dialogPid.load() > 0) {
-            kill(pid, SIGKILL);
-        }
-    }
-#endif
+    // 通知原生层关闭可能仍在显示的 Panel（macOS 关闭 NSOpenPanel；Windows 空实现）
+    rbCancelOpenFileDialogNative();
     std::lock_guard<std::mutex> lk(s_dialogThreadMtx);
     if (s_dialogThread.joinable()) s_dialogThread.join();
 }

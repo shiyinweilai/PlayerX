@@ -238,10 +238,26 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
             : m_currentFramePts + av_q2d(m_videoTimeBase);
 
         if (m_seekPending && !gotFrame) {
-            // seek 后第一帧到达：对齐时钟到该帧的 PTS，避免第一帧被跳过
+            // seek 后第一帧到达：
+            //   av_seek_frame(AVSEEK_FLAG_BACKWARD) 会落到 ≤ 目标时间的
+            //   最近关键帧，因此队列前面会有一段 PTS < 目标时间 的"前置
+            //   帧"（仅用于解码连续性，不应显示）。
+            //
+            //   策略：丢弃 PTS 明显早于目标时间（>0.5s）的帧，直到遇到
+            //   PTS ≥ 目标时间附近的帧再对齐时钟。这样进度条不会从用户
+            //   点击的位置"弹回"到关键帧位置。
+            double target = m_playStartPts; // rbSeekTo 中设置为目标时间
+            if (framePts + 0.5 < target) {
+                // 前置帧：直接丢弃
+                AVFrame* drop = m_frameQueue->rbPop();
+                if (drop) av_frame_free(&drop);
+                continue;
+            }
+            // 找到目标位置的帧，对齐时钟
             m_playStartPts      = framePts;
             m_playStartWallTime = wallNow;
             playTime            = framePts;
+            m_currentTime.store(framePts);
             m_seekPending       = false;
         }
 

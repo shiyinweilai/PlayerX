@@ -37,6 +37,16 @@ add_executable(PlayerX
     src/utils/rb_utils.cpp
 )
 
+# ─── 平台原生文件对话框（macOS=NSOpenPanel / Windows=GetOpenFileNameW）───────
+if(APPLE)
+    target_sources(PlayerX PRIVATE src/utils/rb_file_dialog_mac.mm)
+    # 仅为 .mm 启用 ARC（其他 .cpp 不受影响）
+    set_source_files_properties(src/utils/rb_file_dialog_mac.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+elseif(WIN32)
+    target_sources(PlayerX PRIVATE src/utils/rb_file_dialog_win.cpp)
+endif()
+
 # ─── 包含目录（头文件与 cpp 同目录，各子目录均加入）─────────────────────────
 target_include_directories(PlayerX PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -81,6 +91,7 @@ if(APPLE)
     find_library(APPLICATIONSERVICES_LIB  ApplicationServices  REQUIRED)
     find_library(COREIMAGE_LIB            CoreImage            REQUIRED)
     find_library(OPENGL_LIB               OpenGL               REQUIRED)
+    find_library(UTTYPE_LIB               UniformTypeIdentifiers REQUIRED)
 
     set(APPLE_FRAMEWORKS
         ${COCOA_LIB} ${COREFOUNDATION_LIB} ${COREGRAPHICS_LIB}
@@ -89,7 +100,7 @@ if(APPLE)
         ${AUDIOTOOLBOX_LIB} ${COREAUDIO_LIB} ${GAMECONTROLLER_LIB}
         ${COREHAPTICS_LIB} ${AVFOUNDATION_LIB} ${VIDEOTOOLBOX_LIB}
         ${SECURITY_LIB} ${FOUNDATION_LIB} ${APPLICATIONSERVICES_LIB}
-        ${COREIMAGE_LIB} ${OPENGL_LIB}
+        ${COREIMAGE_LIB} ${OPENGL_LIB} ${UTTYPE_LIB}
     )
 endif()
 
@@ -108,6 +119,9 @@ target_link_libraries(PlayerX PRIVATE
     $<$<BOOL:${APPLE}>:-liconv>
     $<$<BOOL:${APPLE}>:-lz>
     $<$<BOOL:${APPLE}>:-lbz2>
+    # Windows 文件对话框依赖
+    $<$<BOOL:${WIN32}>:comdlg32>
+    $<$<BOOL:${WIN32}>:ole32>
     # Linux
     $<$<PLATFORM_ID:Linux>:pthread>
     $<$<PLATFORM_ID:Linux>:dl>

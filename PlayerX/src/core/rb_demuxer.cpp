@@ -152,14 +152,19 @@ void RBDemuxer::rbStopReading() {
 }
 
 void RBDemuxer::rbDoSeek(double seconds) {
-    // 在主线程直接执行 seek（readLoop 已处于 idle 状态）
+    // 在主线程直接执行 seek（readLoop 已处于 idle 状态）。
+    //
+    // 历史 bug：原先使用
+    //     avformat_seek_file(ctx, -1, INT64_MIN, ts, ts, 0);
+    // 等价于"目标必须 ≤ ts"的严格区间。当 ts 处于两个关键帧之间、
+    // 或文件 index 不全（典型的 mp4 mdat 在前 / 流式封装），FFmpeg 会
+    // 因找不到满足约束的关键帧而返回失败，fallback 路径再退到一个
+    // 极早的关键帧，表现为"右键快进无效甚至跳回开头"。
+    //
+    // 改用与 video-compare 一致的实现：av_seek_frame + AVSEEK_FLAG_BACKWARD，
+    // 语义为"落到 ≤ ts 的最近关键帧"，对正向快进 / 反向快退均正确。
     int64_t ts = static_cast<int64_t>(seconds * AV_TIME_BASE);
-    // 先尝试精确 seek
-    int ret = avformat_seek_file(m_fmtCtx, -1, INT64_MIN, ts, ts, 0);
-    if (ret < 0) {
-        // 回退：向后找最近关键帧
-        av_seek_frame(m_fmtCtx, -1, ts, AVSEEK_FLAG_BACKWARD);
-    }
+    av_seek_frame(m_fmtCtx, -1, ts, AVSEEK_FLAG_BACKWARD);
 }
 
 AVCodecParameters* RBDemuxer::rbVideoCodecPar() const {
