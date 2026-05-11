@@ -21,3 +21,4 @@ build/video_compare
 cache
 build/player
 PlayerX/build
+PlayerXQt/__pycache__

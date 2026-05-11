@@ -1,0 +1,8 @@
+# PlayerXQt 编译产物
+build/
+
+# IDE / 系统
+.DS_Store
+.idea/
+.vscode/
+*.user
