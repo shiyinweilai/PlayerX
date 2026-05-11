@@ -38,13 +38,13 @@ class EngineBridge : public QObject {
 
 public:
     // 与 QML 同步的 layout 枚举
+    // 注意：Single 模式仍保留（数字键 1-9 第二次按下时使用），但默认布局是 SideBySide。
     enum LayoutMode {
         LayoutSingle      = 0, // 只显示 activeIndex 这一路
-        LayoutSideBySide  = 1, // 1x2 横排
-        LayoutGrid2x2     = 2, // 2x2
-        LayoutGrid1x3     = 3, // 1x3
-        LayoutGrid2x3     = 4, // 2x3 (最多 6 路)
-        LayoutCompare     = 5, // 两路 Compare（占位，本轮先按 SideBySide 显示）
+        LayoutSideBySide  = 1, // 横排自适应（最多 9 路）— 默认
+        LayoutGrid2x2     = 2, // 2x2（最多 4 路）
+        LayoutGrid2x3     = 3, // 2x3（最多 6 路）
+        LayoutGrid3x3     = 4, // 3x3（最多 9 路）
     };
     Q_ENUM(LayoutMode)
 
@@ -110,7 +110,7 @@ private:
     std::unique_ptr<rb::RBPlayerEngine> m_engine;
     QTimer  m_timer;
     int     m_activeIndex{0};
-    int     m_layoutMode{LayoutSingle};
+    int     m_layoutMode{LayoutSideBySide};
 
     // 缓存上次广播值，避免每帧 emit
     bool    m_lastPlaying{false};

@@ -4,9 +4,8 @@
 //   - 顶部工具栏：Open（支持多选）/ Add / 播放暂停 / 帧步进 / Layout 切换 / 时间
 //   - 视频区根据 Engine.layoutMode 与 Engine.fileCount 自动布局
 //   - 每路视频窗口：序号徽标、单击聚焦（蓝边框 = activeIndex）、双击切换该路暂停
-//   - 全局快捷键：Space 全局暂停 / ←→ 全局 ±5s / , . 全局帧步进 / F 全屏 / S 切 layout
-//                  数字键 1..9 切换 activeIndex
-//   - 底部进度条作用于全局主时钟
+//   - 全局快捷键：Space 全局暂停 / ←→ 全局 ±5s / , . 全局帧步进 / F 全局 / S 切多路 layout
+//                  数字键 1..9 切到 Single 模式并聚焦该路（只显示该请求序号的请求）//   - 底部进度条作用于全局主时钟
 //
 // 注意：仍保留 Engine 为 contextProperty（C++ 端 setContextProperty）。
 
@@ -36,7 +35,16 @@ ApplicationWindow {
     }
 
     // Layout 名称：与 EngineBridge::LayoutMode 同序
-    readonly property var layoutNames: ["Single", "SideBySide", "2x2", "1x3", "2x3", "Compare"]
+    //   0 = Single、1 = SideBySide(1×N 横排，默认)、2 = 2x2、3 = 2x3、4 = 3x3
+    // Single 模式不在 ComboBox 里选择（通过数字键 1..9 进入）。
+    readonly property var layoutNames: ["Single", "1×N 横排", "2×2", "2×3", "3×3"]
+    // ComboBox 限定选项（不包含 Single）
+    readonly property var multiLayoutNames: ["1×N 横排", "2×2", "2×3", "3×3"]
+    readonly property var multiLayoutValues: [1, 2, 3, 4]
+
+    // 记住上一次使用的“多路布局”，让按下 0 键可以准确回到该布局。
+    // 默认 SideBySide=1。仅在 ComboBox 交互、S 键循环、打开多个文件后同步。
+    property int lastMultiLayout: 1
 
     // ─── 文件选择 ────────────────────────────────────────────────────────
     FileDialog {
@@ -131,9 +139,18 @@ ApplicationWindow {
             Label { text: "布局:"; color: "#bbb" }
             ComboBox {
                 id: layoutCombo
-                model: root.layoutNames
-                currentIndex: Engine.layoutMode
-                onActivated: Engine.layoutMode = currentIndex
+                model: root.multiLayoutNames
+                // 根据当前 Engine.layoutMode 反查在 multiLayoutValues 中的位置；
+                // Single 模式不在下拉列表，此时展示“进入 Single 之前”的布局。
+                currentIndex: {
+                    var idx = root.multiLayoutValues.indexOf(Engine.layoutMode)
+                    return idx >= 0 ? idx : 0
+                }
+                onActivated: {
+                    var v = root.multiLayoutValues[currentIndex]
+                    Engine.layoutMode = v
+                    root.lastMultiLayout = v
+                }
                 Layout.preferredWidth: 130
             }
 
@@ -176,23 +193,50 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "S"; context: Qt.ApplicationShortcut
-        onActivated: Engine.layoutMode = (Engine.layoutMode + 1) % root.layoutNames.length
+        // 在多路布局之间循环切换（不包含 Single）
+        onActivated: {
+            var arr = root.multiLayoutValues
+            var i = arr.indexOf(Engine.layoutMode)
+            if (i < 0) i = 0
+            var v = arr[(i + 1) % arr.length]
+            Engine.layoutMode = v
+            root.lastMultiLayout = v
+        }
     }
     Shortcut {
         sequence: "R"; context: Qt.ApplicationShortcut
         onActivated: Engine.seek(0)
     }
-    // 数字键 1..9：切换 activeIndex
-    Repeater {
-        model: 9
-        Shortcut {
-            sequence: (index + 1).toString()
-            context: Qt.ApplicationShortcut
-            onActivated: {
-                if (index < Engine.fileCount) Engine.activeIndex = index
-            }
+    // 数字键 1..9：toggle 单路/多路。
+    //   - 当前不是 Single，或 activeIndex != n-1：进入 Single 并显示对应窗口
+    //   - 当前已经是 Single 且 activeIndex == n-1（再次按下相同数字）：
+    //     切回上一次使用的多路布局（lastMultiLayout，默认 1×N）
+    //
+    // 注意：原先用 Repeater { Shortcut {...} } 并不会工作 —— Repeater 的
+    // delegate 必须是 Item/可视类型，非可视的 Shortcut 不会被实例化，所以
+    // 数字键根本不会触发。改成展开 9 个独立的 Shortcut。
+    function _toggleOne(idx) {
+        if (idx < 0 || idx >= Engine.fileCount) return
+        // 已经在该单路视图：再次按下 -> 回多路
+        if (Engine.layoutMode === 0 && Engine.activeIndex === idx) {
+            var v = root.lastMultiLayout
+            if (v === 0) v = 1   // 保险：永远不会回到 Single
+            Engine.layoutMode = v
+            return
         }
+        // 否则进入 Single 并聚焦到该窗口
+        Engine.activeIndex = idx
+        Engine.layoutMode  = 0  // LayoutSingle
     }
+    Shortcut { sequence: "1"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(0) }
+    Shortcut { sequence: "2"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(1) }
+    Shortcut { sequence: "3"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(2) }
+    Shortcut { sequence: "4"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(3) }
+    Shortcut { sequence: "5"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(4) }
+    Shortcut { sequence: "6"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(5) }
+    Shortcut { sequence: "7"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(6) }
+    Shortcut { sequence: "8"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(7) }
+    Shortcut { sequence: "9"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(8) }
 
     // ─── 视频网格容器 ────────────────────────────────────────────────────
     Item {
@@ -205,32 +249,31 @@ ApplicationWindow {
         focus: true
 
         // ── Grid 计算行列 ──
+        // SideBySide = 单行 N 列（1×N 横排）；其他是固定网格。
         function gridCols() {
-            if (Engine.fileCount <= 0) return 1
+            var n = videoArea.visibleCount()
+            if (n <= 0) return 1
             switch (Engine.layoutMode) {
             case 0: return 1                          // Single
-            case 1: return Engine.fileCount           // SideBySide
+            case 1: return n                          // SideBySide = 1×N
             case 2: return 2                          // 2x2
-            case 3: return 3                          // 1x3
-            case 4: return 3                          // 2x3
-            case 5: return 2                          // Compare
+            case 3: return 3                          // 2x3
+            case 4: return 3                          // 3x3
             }
             return 1
         }
         function gridRows() {
-            if (Engine.fileCount <= 0) return 1
             var c = gridCols()
-            return Math.ceil(visibleCount() / c)
+            return Math.max(1, Math.ceil(visibleCount() / c))
         }
         function visibleCount() {
             if (Engine.fileCount <= 0) return 0
             switch (Engine.layoutMode) {
             case 0: return 1                                     // Single
-            case 1: return Engine.fileCount                      // SideBySide
+            case 1: return Math.min(9, Engine.fileCount)         // SideBySide (1×N)
             case 2: return Math.min(4, Engine.fileCount)         // 2x2
-            case 3: return Math.min(3, Engine.fileCount)         // 1x3
-            case 4: return Math.min(6, Engine.fileCount)         // 2x3
-            case 5: return Math.min(2, Engine.fileCount)         // Compare
+            case 3: return Math.min(6, Engine.fileCount)         // 2x3
+            case 4: return Math.min(9, Engine.fileCount)         // 3x3
             }
             return Engine.fileCount
         }
