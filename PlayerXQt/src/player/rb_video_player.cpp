@@ -292,13 +292,13 @@ double RBVideoPlayer::rbFrameDuration() const {
     AVRational r = m_demuxer->rbVideoFrameRate();
     if (r.num > 0 && r.den > 0) {
         double fps = av_q2d(r);
-        if (fps > 0.0 && fps < 1000.0) return 1.0 / fps;
+        // 真实视频帧率范围大致在 [1, 240]（含 24/25/29.97/30/50/59.94/60/120/240）。
+        // 超出这个范围多半是容器元数据异常（如 10000fps / 90000fps），直接丢弃。
+        if (fps >= 1.0 && fps <= 240.0) return 1.0 / fps;
     }
-    // 回退到 time_base 的倒数（部分容器流的 time_base 即为帧率倒数）
-    if (m_videoTimeBase.num > 0 && m_videoTimeBase.den > 0) {
-        double tb = av_q2d(m_videoTimeBase);
-        if (tb > 0.0 && tb < 1.0) return tb;
-    }
+    // 注意：不能用 m_videoTimeBase 做 fallback —— MP4 等容器的 time_base
+    // 常是 1/10000 或 1/90000，与实际帧率无关；旧实现据此返回 0.0001s，
+    // 会让多路帧步进算出 target≈cur，第二路帧画面永远不动。
     return 1.0 / 30.0;
 }
 
@@ -392,8 +392,8 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
     using clock = std::chrono::steady_clock;
     auto deadline = clock::now() + std::chrono::milliseconds(timeoutMs);
 
-    // 丢帧阈值：PTS < target - frameDur/2 认为是 keyframe 表的“前置帧”，
-    // 这样只留下 PTS 距目标不超过 0.5 帧的帧，即目标帧本身（或与其重合的邀近帧）。
+    // 丢帧阈值：PTS < target - frameDur/2 认为是 keyframe 表的"前置帧"。
+    // 只留下 PTS 距目标不超过 0.5 帧的帧，即目标帧本身（或与其重合的临近帧）。
     const double dropThresh = target - frameDur * 0.5;
 
     while (clock::now() < deadline) {
@@ -402,11 +402,16 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
             int64_t rawPts = (peek->best_effort_timestamp != AV_NOPTS_VALUE)
                            ? peek->best_effort_timestamp
                            : peek->pts;
-            double framePts = (rawPts != AV_NOPTS_VALUE)
-                ? rawPts * av_q2d(m_videoTimeBase)
-                : 0.0;
+            // 关键：rawPts 为 AV_NOPTS_VALUE 时绝不能当 0 处理，否则永远满足
+            // framePts < dropThresh，帧被一路丢光，500ms timeout 后
+            // m_currentFrame 没换，多路下表现为"只第一路画面更新"。
+            // 解码顺序里无 PTS 的帧，按"上一帧 PTS + frameDur"估算；这种帧
+            // 直接当作目标帧命中，不再参与丢帧判断。
+            bool   noPts = (rawPts == AV_NOPTS_VALUE);
+            double framePts = noPts ? (m_currentFramePts + frameDur)
+                                    : rawPts * av_q2d(m_videoTimeBase);
 
-            if (m_seekPending && framePts < dropThresh) {
+            if (m_seekPending && !noPts && framePts < dropThresh) {
                 AVFrame* drop = m_frameQueue->rbPop();
                 if (drop) av_frame_free(&drop);
                 continue;
