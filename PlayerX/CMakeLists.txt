@@ -53,6 +53,20 @@ elseif(WIN32)
         src/utils/rb_file_dialog_win.cpp
         src/utils/rb_macos_silence_win.cpp
     )
+
+    # ── 嵌入 Windows 资源（含 Per-Monitor V2 DPI Aware manifest）──────────────
+    # 让 Windows 在 PE 加载阶段就识别本进程为 DPI Aware，避免 DWM 对窗口做
+    # bilinear 二次拉伸（→ 视频帧/字体被磨毛边）。
+    # 必须显式启用 RC 语言 + 用 windres/llvm-rc 编译资源脚本。
+    # windres 默认会在 .rc 文件所在目录查找 #include 与资源引用（PlayerX.manifest），
+    # 因此不需要额外的 -I 选项。
+    enable_language(RC)
+    target_sources(PlayerX PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/res/win/PlayerX.rc
+    )
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/res/win/PlayerX.rc
+        PROPERTIES LANGUAGE RC)
 endif()
 
 # ─── 包含目录（头文件与 cpp 同目录，各子目录均加入）─────────────────────────

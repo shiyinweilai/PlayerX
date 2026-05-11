@@ -7,10 +7,37 @@
 
 extern "C" {
 #include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
 #include <libswscale/swscale.h>
 }
 
 namespace rb {
+
+// 把 frame 的色彩空间/范围信息应用到 SwsContext。
+// 不调用此函数时 sws 默认用 BT.601 + limited range，对 BT.709 / full-range
+// (AVCOL_RANGE_JPEG，常见于手机/相机视频) 视频会产生轻微色偏与对比度压缩，
+// 高对比边缘（白字幕/黑背景）灰阶过渡曲线偏移 → 笔画粗细不均 → 视觉上的"毛边"。
+// 与 video-compare/format_converter.cpp 的 sws_setColorspaceDetails 行为对齐。
+static void rbSwsApplyColorspace(SwsContext* ctx, const AVFrame* frame) {
+    if (!ctx || !frame) return;
+    int sws_cs = SWS_CS_ITU601;
+    switch (frame->colorspace) {
+        case AVCOL_SPC_BT709:        sws_cs = SWS_CS_ITU709;    break;
+        case AVCOL_SPC_FCC:          sws_cs = SWS_CS_FCC;       break;
+        case AVCOL_SPC_SMPTE170M:    sws_cs = SWS_CS_SMPTE170M; break;
+        case AVCOL_SPC_SMPTE240M:    sws_cs = SWS_CS_SMPTE240M; break;
+        case AVCOL_SPC_BT2020_CL:
+        case AVCOL_SPC_BT2020_NCL:   sws_cs = SWS_CS_BT2020;    break;
+        default: break;
+    }
+    const int* coeffs = sws_getCoefficients(sws_cs);
+    const int src_range = (frame->color_range == AVCOL_RANGE_JPEG) ? 1 : 0;
+    constexpr int FIXED_1_0 = (1 << 16);
+    sws_setColorspaceDetails(ctx,
+        coeffs, src_range,        // src
+        coeffs, 1,                // dst：RGB 输出永远 full-range（PC range）
+        0, FIXED_1_0, FIXED_1_0);
+}
 
 // ─── 颜色常量 ─────────────────────────────────────────────────────────────────
 static constexpr SDL_Color kColBg         = {28,  32,  38,  255};
@@ -277,89 +304,86 @@ void RBVideoCell::rbRenderVideo() {
         }
     }
 
-    // 等比缩放居中显示
+    // 等比缩放居中显示。
+    // 关键：dst 尺寸/位置必须四舍五入到整数像素，否则截断会导致：
+    //  1) sws_scale 的目标尺寸与屏幕实际渲染纹理像素错位（亚像素偏差）
+    //  2) nearest 上屏时边缘像素采样发生 0~0.999 像素偏移 → 字幕等高对比边缘出现毛边/锯齿
+    // 与 video-compare 行为完全一致（display.cpp 的 std::round 路径）。
     auto area = rbVideoArea();
     float scaleX = static_cast<float>(area.w) / fw;
     float scaleY = static_cast<float>(area.h) / fh;
     float scale  = std::min(scaleX, scaleY);
-    int dw = static_cast<int>(fw * scale);
-    int dh = static_cast<int>(fh * scale);
+    int dw = static_cast<int>(std::round(fw * scale));
+    int dh = static_cast<int>(std::round(fh * scale));
     SDL_Rect dst = {
-        area.x + (area.w - dw) / 2,
-        area.y + (area.h - dh) / 2,
+        area.x + static_cast<int>(std::round((area.w - dw) / 2.0f)),
+        area.y + static_cast<int>(std::round((area.h - dh) / 2.0f)),
         dw, dh
     };
 
-    bool isDownscale = (dw < fw) || (dh < fh);
+    bool needHQResample = (dw != fw) || (dh != fh);
 
-    if (isDownscale && dw > 0 && dh > 0) {
-        // ── 高质量缩小：libswscale BICUBIC 离屏 YUV→YUV 缩放到 dst 尺寸，
-        //     再上传到目标尺寸 IYUV nearest 纹理 1:1 渲染。
-        //     从根源消除 SDL 缩小时的网格/摩尔纹伪影（与 video-compare 一致思路）。
-        AVPixelFormat srcFmt = (fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P)
-                               ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_YUV420P;
-
+    if (needHQResample && dw > 0 && dh > 0) {
+        // ── 高质量缩放（缩小或放大）：libswscale LANCZOS 离屏缩放到 dst 尺寸的
+        //     RGB24，再上传到目标尺寸 RGB24 nearest 纹理 1:1 渲染。
+        //
+        // 为什么不走 SDL 自带缩放（IYUV + linear）：
+        //   1) Windows D3D11 后端的 IYUV 纹理走专用 YUV→RGB shader，其内部
+        //      采样器可能不响应 SDL_HINT_RENDER_SCALE_QUALITY，导致 nearest
+        //      hint 在 Windows 上不一定生效（macOS Metal 后端则 100% 生效）——
+        //      这就是图中"macOS 锐利、Windows 有毛边"的根因。
+        //   2) D3D11 硬件 bilinear 在非整数比例放大时（如窗口 1.3× / 1.7×）
+        //      会让中文字幕这类高频边缘出现轻微"油腻感"。
+        //
+        // 改为：CPU 端 LANCZOS（Lanczos3，6×6 采样、带负瓣 → 锐边保持最好，
+        // mpv 默认 sws_flags）一次性把 YUV 帧重采样到 dst 物理像素的 RGB24，
+        // 然后 SDL 仅做 1:1 nearest 上屏 → 跨平台行为一致，物理像素级别清晰。
+        //
+        // 同时使用 RGB24 全分辨率链路，避免 YUV→YUV 缩放时色度被二次子采样
+        // 在白字幕/黑背景这类高对比边缘出现的彩色毛边（chroma fringing）。
+        //
         // 重建 SwsContext（源尺寸/目标尺寸/格式有任一变化时）
         SwsContext* ctx = static_cast<SwsContext*>(m_swsDown);
         if (!ctx ||
             m_swsSrcW != fw || m_swsSrcH != fh ||
             m_swsDstW != dw || m_swsDstH != dh ||
-            m_swsSrcFmt != static_cast<int>(srcFmt)) {
+            m_swsSrcFmt != static_cast<int>(fmt)) {
             if (ctx) sws_freeContext(ctx);
             ctx = sws_getContext(
-                fw, fh, srcFmt,
-                dw, dh, AV_PIX_FMT_YUV420P,
-                SWS_BICUBIC | SWS_FULL_CHR_H_INT | SWS_ACCURATE_RND,
+                fw, fh, fmt,
+                dw, dh, AV_PIX_FMT_RGB24,
+                SWS_LANCZOS | SWS_FULL_CHR_H_INT | SWS_ACCURATE_RND,
                 nullptr, nullptr, nullptr);
             m_swsDown    = ctx;
             m_swsSrcW    = fw;  m_swsSrcH = fh;
             m_swsDstW    = dw;  m_swsDstH = dh;
-            m_swsSrcFmt  = static_cast<int>(srcFmt);
+            m_swsSrcFmt  = static_cast<int>(fmt);
         }
+        // 每帧应用色彩空间/范围（开销极小，且 frame 的 colorspace/range
+        // 可能动态变化，保持与当前帧严格匹配）
+        rbSwsApplyColorspace(ctx, frame);
 
-        // 重建目标尺寸纹理（nearest 1:1 渲染，避免任何 SDL 端缩放）
+        // 重建目标尺寸 RGB24 纹理（nearest 1:1 渲染，避免任何 SDL 端缩放）
         if (!m_videoTexDown || m_texDownW != dw || m_texDownH != dh) {
             if (m_videoTexDown) SDL_DestroyTexture(m_videoTexDown);
             SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
             m_videoTexDown = SDL_CreateTexture(m_renderer,
-                SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, dw, dh);
+                SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, dw, dh);
             m_texDownW = dw;  m_texDownH = dh;
         }
 
         if (ctx && m_videoTexDown) {
-            // 取已上传到 m_videoTexLinear 的源数据并不现实；直接对原 frame（已确保为 YUV420P 兼容）做 sws_scale。
-            // 这里复用上面 sws 路径已转换成 YUV420P 后的纹理数据是不必要的——
-            // 我们直接对原 frame（YUV420P 或 YUVJ420P）做 sws_scale 到目标尺寸缓冲再上传。
+            // BICUBIC 缩放到 RGB24 缓冲（按 32B 对齐，避免 sws 内部慢路径）
             AVFrame* dstFrame = av_frame_alloc();
-            dstFrame->format = AV_PIX_FMT_YUV420P;
+            dstFrame->format = AV_PIX_FMT_RGB24;
             dstFrame->width  = dw;
             dstFrame->height = dh;
-            if (av_frame_get_buffer(dstFrame, 0) == 0) {
-                if (fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P) {
-                    sws_scale(ctx, frame->data, frame->linesize, 0, fh,
-                              dstFrame->data, dstFrame->linesize);
-                } else {
-                    // 罕见格式：先转成 YUV420P（与上方 m_videoTexLinear 路径一致），再缩放
-                    SwsContext* tmp = sws_getContext(fw, fh, fmt,
-                                                     fw, fh, AV_PIX_FMT_YUV420P,
-                                                     SWS_BILINEAR, nullptr, nullptr, nullptr);
-                    if (tmp) {
-                        AVFrame* mid = av_frame_alloc();
-                        mid->format = AV_PIX_FMT_YUV420P;
-                        mid->width  = fw; mid->height = fh;
-                        av_frame_get_buffer(mid, 0);
-                        sws_scale(tmp, frame->data, frame->linesize, 0, fh,
-                                  mid->data, mid->linesize);
-                        sws_scale(ctx, mid->data, mid->linesize, 0, fh,
-                                  dstFrame->data, dstFrame->linesize);
-                        av_frame_free(&mid);
-                        sws_freeContext(tmp);
-                    }
-                }
-                SDL_UpdateYUVTexture(m_videoTexDown, nullptr,
-                    dstFrame->data[0], dstFrame->linesize[0],
-                    dstFrame->data[1], dstFrame->linesize[1],
-                    dstFrame->data[2], dstFrame->linesize[2]);
+            if (av_frame_get_buffer(dstFrame, 32) == 0) {
+                sws_scale(ctx, frame->data, frame->linesize, 0, fh,
+                          dstFrame->data, dstFrame->linesize);
+                SDL_UpdateTexture(m_videoTexDown, nullptr,
+                                  dstFrame->data[0], dstFrame->linesize[0]);
+                // 整数 dst rect 上屏，nearest 1:1 渲染
                 SDL_RenderCopy(m_renderer, m_videoTexDown, nullptr, &dst);
                 av_frame_free(&dstFrame);
                 return;

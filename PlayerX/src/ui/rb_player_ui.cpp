@@ -7,6 +7,16 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
+
 namespace rb {
 
 // ─── 颜色 ─────────────────────────────────────────────────────────────────────
@@ -34,6 +44,52 @@ RBPlayerUI::~RBPlayerUI() {
 }
 
 bool RBPlayerUI::rbInit(const std::string& title, int w, int h) {
+    // ── HighDPI：在 SDL_Init 之前设置 hint，必须保证生效 ─────────────────────────
+    // macOS 由系统自动给窗口提供 backing scale；Windows 必须显式声明 DPI awareness，
+    // 否则 SDL_GetWindowSize == SDL_GL_GetDrawableSize（dpiScale=1），字体光栅化
+    // 仍按 16/22/13pt，再被 DWM 的 DPI virtualization 二次拉伸 → 文字模糊。
+    //
+    // 主线声明：通过 PE manifest 在加载阶段固化 PerMonitorV2（见 res/win/PlayerX.rc），
+    // 这是最可靠的方式，不存在运行期 API 时序问题。
+    //
+    // 这里仅做兜底 hint：
+    //   SDL_HINT_WINDOWS_DPI_AWARENESS = "permonitorv2"
+    //   告诉 SDL 在 Windows 上同步使用 PerMonitorV2（SDL2 ≥ 2.24 支持）。
+    //
+    // 注意：**不**设置 SDL_HINT_WINDOWS_DPI_SCALING：当 manifest 已声明 DPI aware
+    // 时，开启 DPI_SCALING 会让 SDL 在 ALLOW_HIGHDPI 之上再叠一层逻辑→物理映射，
+    // 引发"双重缩放"导致 RenderCopy 的目标 rect 被乘到 dpiScale²，最终被 GPU 缩
+    // 回窗口区域 → 视频/字体出现 bilinear 二次重采样毛边。
+    // 与 macOS 完全一致的路径：manifest + SDL_WINDOW_ALLOW_HIGHDPI，dpiScale
+    // 由 SDL_GL_GetDrawableSize / SDL_GetWindowSize 自然计算得到。
+#if defined(SDL_HINT_WINDOWS_DPI_AWARENESS)
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
+
+#if defined(_WIN32)
+    // 兜底：直接调 Win32 API 声明 Per-Monitor V2，覆盖老版本 SDL 与极个别
+    // hint 不生效的环境。GetProcAddress 动态解析，避免对老 Windows SDK 的链接依赖。
+    {
+        HMODULE user32 = LoadLibraryA("user32.dll");
+        if (user32) {
+            typedef BOOL (WINAPI *PFN_SetProcessDpiAwarenessContext)(HANDLE);
+            // 经 void* 中转，规避 -Wcast-function-type
+            void* sym = reinterpret_cast<void*>(GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+            auto pSetCtx = reinterpret_cast<PFN_SetProcessDpiAwarenessContext>(sym);
+            if (pSetCtx) {
+                // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (HANDLE)-4
+                pSetCtx(reinterpret_cast<HANDLE>(static_cast<intptr_t>(-4)));
+            } else {
+                typedef BOOL (WINAPI *PFN_SetProcessDPIAware)(void);
+                void* sym2 = reinterpret_cast<void*>(GetProcAddress(user32, "SetProcessDPIAware"));
+                auto pSetAware = reinterpret_cast<PFN_SetProcessDPIAware>(sym2);
+                if (pSetAware) pSetAware();
+            }
+            FreeLibrary(user32);
+        }
+    }
+#endif
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         std::cerr << "[RBPlayerUI] SDL_Init 失败: " << SDL_GetError() << std::endl;
         return false;
