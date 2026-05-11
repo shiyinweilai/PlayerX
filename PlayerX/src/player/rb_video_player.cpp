@@ -32,7 +32,10 @@ RBVideoPlayer::~RBVideoPlayer() {
 }
 
 bool RBVideoPlayer::rbOpen(const std::string& filePath) {
-    rbClose();
+    // 注意：调用方（rbOpenFileForCell）已经先调用了 rbClose()，这里不再重复
+    // 防御性再 flush 一次，确保帧队列绝对干净（无旧视频残帧）
+    m_frameQueue->rbFlush();
+    rbReleaseCurrentFrame();
 
     if (!m_demuxer->rbOpen(filePath)) {
         m_state.store(RBPlayerState::Error);
@@ -67,28 +70,38 @@ void RBVideoPlayer::rbClose() {
     // 先把状态设为非 Playing，避免 rbGetCurrentFrame 继续消费
     m_state.store(RBPlayerState::Idle);
 
-    // 1. stop pktQueue：唤醒阻塞在 rbPop 的解码线程
-    m_demuxer->rbVideoQueue().stop();
-    m_demuxer->rbAudioQueue().stop();
+    // ── 严格按依赖关系倒序停止 ───────────────────────────────────────────
+    // 数据流：demuxer → pktQueue → decoder → frameQueue → renderer
+    // 必须先停"上游"，避免下游退出后上游还在生产旧数据进队列。
 
-    // 2. flush frameQueue：唤醒阻塞在 rbPush 的解码线程（帧队列满时）
-    m_frameQueue->rbFlush();
-
-    // 3. 停止解码线程（此时解码线程不再阻塞，可以安全 join）
-    m_decoder->rbStopDecoding();
-
-    // 4. 停止解复用线程
+    // 1. 停止读线程（demuxer）：m_running=false + pktQueue.stop()
+    //    rbStopReading 内部会 join 读线程，并 empty pktQueue 清除残留旧包，
+    //    防止新解码器接收到旧视频的 NALU 导致 PPS/POC 错误。
     m_demuxer->rbStopReading();
 
-    // 5. 清理资源
+    // 2. flush frameQueue：唤醒可能阻塞在 rbPush 的解码线程
+    m_frameQueue->rbFlush();
+
+    // 3. 停止解码线程（此时 pktQueue 已空且 stopped，解码线程不会再产新帧）
+    m_decoder->rbStopDecoding();
+
+    // 4. 解码线程已退出，再做一次 frameQueue flush，
+    //    清掉解码线程退出前 push 进去的最后几帧（避免新视频复用时拿到旧帧）
+    m_frameQueue->rbFlush();
+
+    // 5. 清理资源（释放 codec/format context）
     rbReleaseCurrentFrame();
     m_decoder->rbClose();
     m_demuxer->rbClose();
 
+    // 6. 重置所有时钟相关状态，避免新视频接续旧时间戳
     m_filePath.clear();
-    m_duration = 0.0;
+    m_duration          = 0.0;
     m_currentTime.store(0.0);
-    m_seekPending = false;
+    m_currentFramePts   = 0.0;
+    m_playStartWallTime = 0.0;
+    m_playStartPts      = 0.0;
+    m_seekPending       = false;
 }
 
 void RBVideoPlayer::rbPlay() {

@@ -13,11 +13,13 @@ extern "C" {
 namespace rb {
 
 // ─── 硬件加速像素格式回调 ─────────────────────────────────────────────────────
-static AVPixelFormat s_hwPixFmt = AV_PIX_FMT_NONE;
-
-static AVPixelFormat rbGetHwFormat(AVCodecContext* /*ctx*/, const AVPixelFormat* fmts) {
+// 通过 codecCtx->opaque 传递期望的 hw pix_fmt，避免全局变量在多实例/重复 open 时被污染
+static AVPixelFormat rbGetHwFormat(AVCodecContext* ctx, const AVPixelFormat* fmts) {
+    AVPixelFormat desired = ctx->opaque
+        ? *static_cast<AVPixelFormat*>(ctx->opaque)
+        : AV_PIX_FMT_NONE;
     for (const AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; ++p) {
-        if (*p == s_hwPixFmt) return *p;
+        if (*p == desired) return *p;
     }
     return fmts[0];
 }
@@ -68,7 +70,8 @@ bool RBDecoder::rbInit(AVCodecParameters* codecpar, bool hwAccel) {
             }
             if (m_hwPixFmt != AV_PIX_FMT_NONE) {
                 if (av_hwdevice_ctx_create(&m_hwDeviceCtx, hwType, nullptr, nullptr, 0) >= 0) {
-                    s_hwPixFmt = m_hwPixFmt;
+                    // 通过 opaque 把期望的 hw pix_fmt 传给回调，不使用全局变量
+                    m_codecCtx->opaque        = &m_hwPixFmt;
                     m_codecCtx->hw_device_ctx = av_buffer_ref(m_hwDeviceCtx);
                     m_codecCtx->get_format    = rbGetHwFormat;
                     std::cout << "[RBDecoder] 硬件加速已启用 (VideoToolbox)" << std::endl;

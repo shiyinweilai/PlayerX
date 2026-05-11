@@ -144,6 +144,11 @@ void RBDemuxer::rbStopReading() {
     m_videoQueue.stop();
     m_audioQueue.stop();
     if (m_readThread.joinable()) m_readThread.join();
+    // 读线程已退出，清空包队列里残留的旧视频数据，
+    // 避免下次 rbOpen 后启动的解码线程拿到旧 packet 喂给新解码器，
+    // 导致 HEVC 报 "PPS id out of range" 等错误。
+    m_videoQueue.empty();
+    m_audioQueue.empty();
 }
 
 void RBDemuxer::rbDoSeek(double seconds) {
