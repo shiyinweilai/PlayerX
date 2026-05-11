@@ -113,28 +113,77 @@ if(APPLE)
 endif()
 
 # ─── 链接 ─────────────────────────────────────────────────────────────────────
-target_link_libraries(PlayerX PRIVATE
-    # SDL2_ttf（静态）
-    ${SDL2_TTF_INSTALL_DIR}/lib/libSDL2_ttf.a
-    ${SDL2_TTF_INSTALL_DIR}/lib/libfreetype.a
-    ${SDL2_TTF_INSTALL_DIR}/lib/libharfbuzz.a
-    # SDL2（静态）
-    ${SDL2_INSTALL_DIR}/lib/libSDL2.a
-    # FFmpeg（静态）
-    avformat avcodec avfilter avutil swscale swresample
-    # macOS 框架
-    $<$<BOOL:${APPLE}>:${APPLE_FRAMEWORKS}>
-    $<$<BOOL:${APPLE}>:-liconv>
-    $<$<BOOL:${APPLE}>:-lz>
-    $<$<BOOL:${APPLE}>:-lbz2>
-    # Windows 文件对话框依赖
-    $<$<BOOL:${WIN32}>:comdlg32>
-    $<$<BOOL:${WIN32}>:ole32>
-    # Linux
-    $<$<PLATFORM_ID:Linux>:pthread>
-    $<$<PLATFORM_ID:Linux>:dl>
-    $<$<PLATFORM_ID:Linux>:m>
-)
+# 平台无关核心：FFmpeg（来自 link_directories）。
+# SDL2 / SDL2_ttf 在不同平台用不同链接方式，各自分支处理。
+
+if(APPLE)
+    # macOS：所有依赖均为静态库 .a，直接全路径精确链接，避免与系统同名库冲突。
+    target_link_libraries(PlayerX PRIVATE
+        # SDL2_ttf（静态）+ 它依赖的 freetype/harfbuzz
+        ${SDL2_TTF_INSTALL_DIR}/lib/libSDL2_ttf.a
+        ${SDL2_TTF_INSTALL_DIR}/lib/libfreetype.a
+        ${SDL2_TTF_INSTALL_DIR}/lib/libharfbuzz.a
+        # SDL2（静态）
+        ${SDL2_INSTALL_DIR}/lib/libSDL2.a
+        # FFmpeg（静态）
+        avformat avcodec avfilter avutil swscale swresample
+        # macOS 系统框架
+        ${APPLE_FRAMEWORKS}
+        -liconv
+        -lz
+        -lbz2
+    )
+elseif(WIN32)
+    # Windows (MinGW)：依赖均为 .a 静态库。MinGW 的链接器对 -l<name> 友好，
+    # 由 link_directories 提供查找路径即可。同时探测 sdl2_ttf 附带的可选静态依赖。
+    set(_TTF_LIBDIR ${SDL2_TTF_INSTALL_DIR}/lib)
+    set(_TTF_OPTIONAL_DEPS
+        freetype
+        harfbuzz
+        bz2
+        brotlidec
+        brotlicommon
+        png
+        png16
+        z
+    )
+    set(_WIN_TTF_EXTRA_LIBS "")
+    foreach(_lib ${_TTF_OPTIONAL_DEPS})
+        if(EXISTS ${_TTF_LIBDIR}/lib${_lib}.a)
+            list(APPEND _WIN_TTF_EXTRA_LIBS ${_TTF_LIBDIR}/lib${_lib}.a)
+        endif()
+    endforeach()
+
+    target_link_libraries(PlayerX PRIVATE
+        # SDL2_ttf 主库 + 探测到的可选依赖
+        SDL2_ttf
+        ${_WIN_TTF_EXTRA_LIBS}
+        # SDL2 主库（SDL_MAIN_HANDLED 已定义，无需 SDL2main）
+        SDL2
+        # FFmpeg
+        avformat avcodec avfilter avutil swscale swresample
+        # SDL2 / FFmpeg 在 Windows 下需要的系统库
+        ws2_32 bcrypt secur32 crypt32 ncrypt
+        winmm imm32 setupapi version
+        gdi32 user32 advapi32 shell32 uuid
+        ole32 oleaut32 comdlg32
+    )
+
+    # Release 子系统改为 GUI（双击不弹控制台）；Debug 保留控制台便于查看日志
+    target_link_options(PlayerX PRIVATE
+        $<$<CONFIG:Release>:-mwindows>
+    )
+else()
+    # Linux 等其他平台
+    target_link_libraries(PlayerX PRIVATE
+        ${SDL2_TTF_INSTALL_DIR}/lib/libSDL2_ttf.a
+        ${SDL2_TTF_INSTALL_DIR}/lib/libfreetype.a
+        ${SDL2_TTF_INSTALL_DIR}/lib/libharfbuzz.a
+        ${SDL2_INSTALL_DIR}/lib/libSDL2.a
+        avformat avcodec avfilter avutil swscale swresample
+        pthread dl m
+    )
+endif()
 
 # ─── 编译选项 ─────────────────────────────────────────────────────────────────
 target_compile_options(PlayerX PRIVATE
