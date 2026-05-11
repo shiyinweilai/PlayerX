@@ -102,9 +102,43 @@ bool RBPlayerUI::rbInit(const std::string& title, int w, int h) {
         return false;
     }
 
+    // ── 按主显示器工作区域计算"舒适"默认窗口尺寸（仅在调用方传入"经典默认 1280x720"
+    //    时启用自适应；外部如果显式给了别的尺寸则尊重外部值，避免破坏脚本/测试调用）。
+    //
+    // 策略：取主屏 SDL_GetDisplayUsableBounds（已扣除任务栏 / Dock / 菜单栏）的 ~80%，
+    // 并保持 16:9，限定在 [1280x720, 2560x1440] 之间。
+    // 注意：SDL2 的 SDL_GetDisplayUsableBounds 在 Windows 上返回**逻辑像素**（DPI 缩放后），
+    // 与 SDL_CreateWindow 入参一致，因此无需做 dpiScale 换算；
+    // macOS 上同样返回 points，与 CreateWindow 入参一致。
+    int initW = w, initH = h;
+    if (w == 1280 && h == 720) {
+        SDL_Rect usable;
+        if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.w > 0 && usable.h > 0) {
+            // 80% 工作区，保持 16:9（以宽为基准回算高，再裁回工作区）
+            int targetW = static_cast<int>(usable.w * 0.80f);
+            int targetH = static_cast<int>(usable.h * 0.80f);
+            // 16:9 锁定：以较小一边的等比为准
+            int by_w_h = targetW * 9 / 16;
+            int by_h_w = targetH * 16 / 9;
+            if (by_w_h <= targetH) {
+                initW = targetW;
+                initH = by_w_h;
+            } else {
+                initW = by_h_w;
+                initH = targetH;
+            }
+            // 上下界
+            if (initW < 1280) { initW = 1280; initH = 720; }
+            if (initW > 2560) { initW = 2560; initH = 1440; }
+            // 不超出工作区（窄屏兜底）
+            if (initW > usable.w) initW = usable.w;
+            if (initH > usable.h) initH = usable.h;
+        }
+    }
+
     m_window = SDL_CreateWindow(title.c_str(),
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        w, h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+        initW, initH, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!m_window) {
         std::cerr << "[RBPlayerUI] 创建窗口失败: " << SDL_GetError() << std::endl;
         return false;
