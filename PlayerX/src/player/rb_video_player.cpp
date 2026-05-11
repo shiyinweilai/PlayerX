@@ -4,6 +4,7 @@
 #include "../core/rb_frame_queue.h"
 #include <iostream>
 #include <chrono>
+#include <thread>
 
 extern "C" {
 #include <libavutil/time.h>
@@ -285,6 +286,57 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
 
 int RBVideoPlayer::rbWidth()  const { return m_decoder->rbWidth(); }
 int RBVideoPlayer::rbHeight() const { return m_decoder->rbHeight(); }
+
+bool RBVideoPlayer::rbRefreshPausedFrame(int timeoutMs) {
+    // 仅对已加载且非播放状态的视频生效（Ready/Paused/Ended）
+    auto s = m_state.load();
+    if (s == RBPlayerState::Idle || s == RBPlayerState::Error || s == RBPlayerState::Playing) {
+        return false;
+    }
+
+    // 等待解码线程把 seek 后的帧产出到帧队列
+    using clock = std::chrono::steady_clock;
+    auto deadline = clock::now() + std::chrono::milliseconds(timeoutMs);
+
+    // 目标时间（rbSeekTo 已把 m_playStartPts 设为目标 seek 秒数）
+    const double target = m_playStartPts;
+
+    while (clock::now() < deadline) {
+        AVFrame* peek = m_frameQueue->rbPeek();
+        if (peek) {
+            int64_t rawPts = (peek->best_effort_timestamp != AV_NOPTS_VALUE)
+                           ? peek->best_effort_timestamp
+                           : peek->pts;
+            double framePts = (rawPts != AV_NOPTS_VALUE)
+                ? rawPts * av_q2d(m_videoTimeBase)
+                : 0.0;
+
+            // 与 rbGetCurrentFrame 保持一致：丢弃 seek 关键帧前的"前置帧"
+            if (m_seekPending && framePts + 0.5 < target) {
+                AVFrame* drop = m_frameQueue->rbPop();
+                if (drop) av_frame_free(&drop);
+                continue;
+            }
+
+            // 弹出目标帧作为当前显示帧
+            AVFrame* f = m_frameQueue->rbPop();
+            if (f) {
+                rbReleaseCurrentFrame();
+                m_currentFrame    = f;
+                m_currentFramePts = framePts;
+                // 对齐时钟，但保持暂停状态：清除 seekPending，使 rbGetCurrentFrame
+                // 后续即便切到 Playing 也不会再丢这一帧
+                m_playStartPts      = framePts;
+                m_playStartWallTime = rbWallTime();
+                m_currentTime.store(framePts);
+                m_seekPending       = false;
+                return true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
 
 void RBVideoPlayer::rbReleaseCurrentFrame() {
     if (m_currentFrame) {

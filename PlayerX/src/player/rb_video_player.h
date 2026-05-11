@@ -57,6 +57,12 @@ public:
     // 内部根据 PTS 和时钟决定是否推进
     AVFrame* rbGetCurrentFrame();
 
+    // 暂停状态下主动刷新到 seek/reset 后的首帧。
+    // 用法：rbPause() + rbSeekTo(t) 之后调用本方法，将解码出的目标帧
+    // 替换为 m_currentFrame，使暂停画面立刻显示到 seek 后位置（首帧）。
+    // 内部会等待解码线程产出帧（最长 timeoutMs 毫秒），返回是否成功。
+    bool rbRefreshPausedFrame(int timeoutMs = 300);
+
     // ─── 状态查询 ──────────────────────────────────────────────────────────
     RBPlayerState rbState()       const { return m_state.load(); }
     bool          rbIsPlaying()   const { return m_state.load() == RBPlayerState::Playing; }

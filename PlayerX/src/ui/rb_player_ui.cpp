@@ -320,6 +320,12 @@ void RBPlayerUI::rbSyncReset() {
         p->rbPause();
         p->rbSeekTo(0.0);
     }
+    // seek 后画面仍是旧帧，主动等待解码并刷新到首帧，
+    // 让用户视觉上立即看到"对齐到 0:00 的画面"，而不是等到点 Play 才更新。
+    for (auto& p : m_players) {
+        if (p->rbState() == RBPlayerState::Idle) continue;
+        p->rbRefreshPausedFrame();
+    }
 }
 
 // ─── 主循环 ───────────────────────────────────────────────────────────────────
@@ -629,6 +635,9 @@ void RBPlayerUI::rbHandleToolbarClick(int x, int y) {
         if (!enabled && !m_sliderMode) return;  // 不满足条件且当前不在 slider，禁用
         m_sliderMode = !m_sliderMode;
         if (m_sliderMode) {
+            // 进入滑动模式：先 reset 两路到 0 并暂停，避免当前播放进度
+            // 不同造成左右画面错位，确保比较起点同步。用户可按空格统一从头播放。
+            rbSyncReset();
             // 绑定前两路 player
             RBVideoPlayer* p0 = (m_players.size() > 0) ? m_players[0].get() : nullptr;
             RBVideoPlayer* p1 = (m_players.size() > 1) ? m_players[1].get() : nullptr;
