@@ -92,6 +92,11 @@ private:
     void rbHandleKeyDown(const SDL_Keysym& key);
     void rbHandleToolbarClick(int x, int y);
 
+    // Slider 模式切换（工具栏按钮 / S 快捷键共用）
+    void rbToggleSliderMode();
+    // 全屏切换（F 快捷键），SDL_WINDOW_FULLSCREEN_DESKTOP 路径
+    void rbToggleFullscreen();
+
     // 将当前 m_dpiScale 同步到所有 Cell 与 Slider，使其内部布局以 drawable 像素工作
     void rbSyncDpiToChildren();
 

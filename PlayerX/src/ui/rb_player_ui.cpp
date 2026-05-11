@@ -148,6 +148,22 @@ bool RBPlayerUI::rbInit(const std::string& title, int w, int h) {
     // 在窗口创建之后调用，确保 keyWindow 存在；Windows 下为 no-op。
     rbSilenceSystemBeep();
 
+    // ── Windows IME 拦截字母键修复 ───────────────────────────────────
+    // SDL2 在 Windows 上创建窗口后会**默认启用文本输入**（SDL_StartTextInput），
+    // 当系统输入法处于"中文/合成"状态时，字母键（如 R / Y / P 等）会被 IME
+    // 当成合成首字符吞掉，根本不产生 SDL_KEYDOWN 事件，仅以 SDL_TEXTINPUT
+    // 形式抵达。这就是 Windows 上 R 键无法触发 Reset、而方向键 / 空格 / Esc
+    // 正常的根因（非字符键不走 IME）。
+    // macOS 上不会自动开启文本输入，因此这里调用也无害。
+    // 本应用没有任何文本输入需求，关闭后所有按键都会以 KEYDOWN 直送事件循环。
+#if defined(SDL_HINT_IME_SHOW_UI)
+    SDL_SetHint(SDL_HINT_IME_SHOW_UI, "0");
+#endif
+#if defined(SDL_HINT_IME_INTERNAL_EDITING)
+    SDL_SetHint(SDL_HINT_IME_INTERNAL_EDITING, "1");
+#endif
+    SDL_StopTextInput();
+
     m_renderer = SDL_CreateRenderer(m_window, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!m_renderer) {
@@ -360,6 +376,13 @@ void RBPlayerUI::rbRelayout() {
 
     // Solo 模式：只显示一路，全屏
     if (m_soloCell >= 0 && m_soloCell < m_activeCellCount) {
+        // 关键：把所有非 solo cell 的 rect 清零，避免它们因为残留旧网格 rect
+        // 在鼠标事件分发或后续渲染中被错误命中（例如导致点击全屏 solo 视图时，
+        // 真正接收事件的是隐藏在屏幕背后的另一路 cell）。
+        for (int i = 0; i < m_activeCellCount && i < static_cast<int>(m_cells.size()); ++i) {
+            if (i == m_soloCell) continue;
+            m_cells[i]->rbSetRect({0, 0, 0, 0});
+        }
         setCell(m_soloCell, 0, contentY, contentW, contentH);
         return;
     }
@@ -701,6 +724,10 @@ void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
         m_mouseY = toDrawableY(e.motion.y);
         if (m_sliderMode) {
             if (m_sliderView) m_sliderView->rbOnMouseMove(m_mouseX, m_mouseY);
+        } else if (m_soloCell >= 0 && m_soloCell < m_activeCellCount &&
+                   m_soloCell < static_cast<int>(m_cells.size())) {
+            // Solo 模式：仅当前 cell 在屏，其他 cell rect 已清零、不应再处理 move
+            m_cells[m_soloCell]->rbOnMouseMove(m_mouseX, m_mouseY);
         } else {
             // 分发给 Cell
             for (auto& c : m_cells) c->rbOnMouseMove(m_mouseX, m_mouseY);
@@ -720,6 +747,16 @@ void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
             // Slider 模式：直接转发给 slider view
             if (m_sliderMode) {
                 if (m_sliderView) m_sliderView->rbOnMouseDown(x, y, e.button.clicks);
+                break;
+            }
+
+            // Solo 模式：屏幕上只有 m_soloCell 一路，其他 cell rect 已清零，
+            // 直接把事件路由给它，避免遍历命中带来的潜在歧义。
+            if (m_soloCell >= 0 && m_soloCell < m_activeCellCount &&
+                m_soloCell < static_cast<int>(m_cells.size())) {
+                for (auto& c : m_cells) c->rbSetSelected(false);
+                m_cells[m_soloCell]->rbSetSelected(true);
+                m_cells[m_soloCell]->rbOnMouseDown(x, y, e.button.clicks);
                 break;
             }
 
@@ -743,6 +780,9 @@ void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
         int x = toDrawableX(e.button.x), y = toDrawableY(e.button.y);
         if (m_sliderMode) {
             if (m_sliderView) m_sliderView->rbOnMouseUp(x, y);
+        } else if (m_soloCell >= 0 && m_soloCell < m_activeCellCount &&
+                   m_soloCell < static_cast<int>(m_cells.size())) {
+            m_cells[m_soloCell]->rbOnMouseUp(x, y);
         } else {
             for (auto& c : m_cells) c->rbOnMouseUp(x, y);
         }
@@ -825,33 +865,50 @@ void RBPlayerUI::rbHandleToolbarClick(int x, int y) {
     bx -= m_tbBtnW;
     SDL_Rect sliderBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
     if (rbPointInRect(x, y, sliderBtn)) {
-        bool enabled = (m_activeCellCount == 2);
-        if (!enabled && !m_sliderMode) return;  // 不满足条件且当前不在 slider，禁用
-        m_sliderMode = !m_sliderMode;
-        if (m_sliderMode) {
-            // 取前两路 player
-            RBVideoPlayer* p0 = (m_players.size() > 0) ? m_players[0].get() : nullptr;
-            RBVideoPlayer* p1 = (m_players.size() > 1) ? m_players[1].get() : nullptr;
-            const std::string path0 = p0 ? p0->rbFilePath() : std::string();
-            const std::string path1 = p1 ? p1->rbFilePath() : std::string();
-
-            // 仅当两路视频与"上次进入 Slider 时"不一致时才 reset，
-            // 这样首次进入会同步到 0:00，再次来回切换则保持当前播放位置无缝衔接。
-            const bool needReset =
-                (path0 != m_sliderLastPath0) || (path1 != m_sliderLastPath1);
-            if (needReset) {
-                rbSyncReset();
-                m_sliderLastPath0 = path0;
-                m_sliderLastPath1 = path1;
-            }
-
-            if (m_sliderView) m_sliderView->rbSetPlayers(p0, p1);
-        } else {
-            if (m_sliderView) m_sliderView->rbSetPlayers(nullptr, nullptr);
-            rbRelayout();
-        }
+        rbToggleSliderMode();
         return;
     }
+}
+
+// 抽出 Slider 模式切换逻辑，使工具栏点击与键盘 S 快捷键共用同一实现，
+// 避免两个入口的行为发散（reset 策略、player 绑定/解绑等）。
+void RBPlayerUI::rbToggleSliderMode() {
+    bool enabled = (m_activeCellCount == 2);
+    if (!enabled && !m_sliderMode) return;  // 不满足条件且当前不在 slider，禁用
+    m_sliderMode = !m_sliderMode;
+    if (m_sliderMode) {
+        // 取前两路 player
+        RBVideoPlayer* p0 = (m_players.size() > 0) ? m_players[0].get() : nullptr;
+        RBVideoPlayer* p1 = (m_players.size() > 1) ? m_players[1].get() : nullptr;
+        const std::string path0 = p0 ? p0->rbFilePath() : std::string();
+        const std::string path1 = p1 ? p1->rbFilePath() : std::string();
+
+        // 仅当两路视频与"上次进入 Slider 时"不一致时才 reset，
+        // 这样首次进入会同步到 0:00，再次来回切换则保持当前播放位置无缝衔接。
+        const bool needReset =
+            (path0 != m_sliderLastPath0) || (path1 != m_sliderLastPath1);
+        if (needReset) {
+            rbSyncReset();
+            m_sliderLastPath0 = path0;
+            m_sliderLastPath1 = path1;
+        }
+
+        if (m_sliderView) m_sliderView->rbSetPlayers(p0, p1);
+    } else {
+        if (m_sliderView) m_sliderView->rbSetPlayers(nullptr, nullptr);
+        rbRelayout();
+    }
+}
+
+// F 键：在窗口模式与无边框全屏之间切换。
+// 使用 SDL_WINDOW_FULLSCREEN_DESKTOP（不改分辨率/不抢显示模式），
+// 切换后 SDL 会发出 SIZE_CHANGED 事件，命中已有的 rbRelayout + dpi 重算路径，
+// 所以工具栏几何、cell rect、字体光栅化保持锐利，不破坏其他功能。
+void RBPlayerUI::rbToggleFullscreen() {
+    if (!m_window) return;
+    Uint32 flags = SDL_GetWindowFlags(m_window);
+    bool isFs = (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+    SDL_SetWindowFullscreen(m_window, isFs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
 }
 
 void RBPlayerUI::rbHandleKeyDown(const SDL_Keysym& key) {
@@ -879,6 +936,15 @@ void RBPlayerUI::rbHandleKeyDown(const SDL_Keysym& key) {
     // R 键：同步重置所有通路到头（便于从头播放）
     case SDLK_r:
         rbSyncReset();
+        break;
+    // F 键：切换全屏（无边框桌面全屏，避免分辨率切换闪屏）
+    case SDLK_f:
+        rbToggleFullscreen();
+        break;
+    // S 键：切换 Slider 模式（与工具栏 Slider 按钮等价，受同样的
+    // "激活路数==2"约束保护）
+    case SDLK_s:
+        rbToggleSliderMode();
         break;
     // 数字键：切换 solo 模式（1~9 对应各路）
     case SDLK_1: rbSetSoloCell(0); break;
