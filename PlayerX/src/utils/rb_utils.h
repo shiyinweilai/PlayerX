@@ -38,6 +38,8 @@ void    rbInitFileDialogEvent();
 Uint32  rbFileDialogEventType();
 // 异步弹出对话框，结果通过 SDL 事件推回主线程
 void    rbOpenFileDialog(const RBFileCallback& callback);
+// 应用退出前调用：终止可能残留的对话框子进程并 join 后台线程
+void    rbShutdownFileDialog();
 
 // ─── 时间格式化 ───────────────────────────────────────────────────────────────
 std::string rbFormatTime(double seconds); // "mm:ss" 或 "hh:mm:ss"

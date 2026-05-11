@@ -2,6 +2,7 @@
  * main.cpp — PlayerX 入口
  */
 #include "ui/rb_player_ui.h"
+#include "utils/rb_utils.h"
 #include <iostream>
 
 int main(int argc, char* argv[]) {
@@ -22,5 +23,8 @@ int main(int argc, char* argv[]) {
     }
 
     ui.rbRunLoop();
+
+    // 退出前清理可能残留的文件对话框子进程，避免 osascript 窗口脱离主程序后仍显示
+    rb::rbShutdownFileDialog();
     return 0;
 }
