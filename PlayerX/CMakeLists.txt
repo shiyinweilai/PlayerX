@@ -32,6 +32,7 @@ add_executable(PlayerX
     src/core/rb_frame_queue.cpp
     src/player/rb_video_player.cpp
     src/ui/rb_video_cell.cpp
+    src/ui/rb_slider_view.cpp
     src/ui/rb_player_ui.cpp
     src/utils/rb_utils.cpp
 )

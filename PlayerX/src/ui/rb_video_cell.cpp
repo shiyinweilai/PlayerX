@@ -25,10 +25,17 @@ static constexpr SDL_Color kColProgBg     = {50,  55,  65,  255};
 static constexpr SDL_Color kColProgFill   = {70,  140, 220, 255};
 static constexpr SDL_Color kColProgKnob   = {200, 220, 255, 255};
 
-// ─── 布局常量 ─────────────────────────────────────────────────────────────────
-static constexpr int kBtnW    = 64;
-static constexpr int kBtnH    = 28;
-static constexpr int kPadding = 10;
+// ─── 布局常量（逻辑像素）─────────────────────────────────────────────────────
+// 运行时会乘以 m_dpiScale 转换为 drawable（物理）像素，详见 rbScaleI()。
+static constexpr int kBtnWLogical    = 64;
+static constexpr int kBtnHLogical    = 28;
+static constexpr int kPaddingLogical = 10;
+
+// dpi 缩放辅助（到 drawable 像素）
+static inline int rbScaleI(float s, int v) {
+    int r = static_cast<int>(s * static_cast<float>(v) + 0.5f);
+    return (v > 0 && r < 1) ? 1 : r;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RBVideoCell
@@ -37,7 +44,13 @@ static constexpr int kPadding = 10;
 RBVideoCell::RBVideoCell() = default;
 
 RBVideoCell::~RBVideoCell() {
-    if (m_videoTex) SDL_DestroyTexture(m_videoTex);
+    if (m_videoTexLinear)  SDL_DestroyTexture(m_videoTexLinear);
+    if (m_videoTexNearest) SDL_DestroyTexture(m_videoTexNearest);
+    if (m_videoTexDown)    SDL_DestroyTexture(m_videoTexDown);
+    if (m_swsDown) {
+        sws_freeContext(static_cast<SwsContext*>(m_swsDown));
+        m_swsDown = nullptr;
+    }
 }
 
 void RBVideoCell::rbInit(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* smallFont) {
@@ -48,11 +61,17 @@ void RBVideoCell::rbInit(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* small
 
 void RBVideoCell::rbSetPlayer(RBVideoPlayer* player) {
     m_player = player;
-    if (m_videoTex) {
-        SDL_DestroyTexture(m_videoTex);
-        m_videoTex = nullptr;
-        m_texW = m_texH = 0;
+    if (m_videoTexLinear)  { SDL_DestroyTexture(m_videoTexLinear);  m_videoTexLinear  = nullptr; }
+    if (m_videoTexNearest) { SDL_DestroyTexture(m_videoTexNearest); m_videoTexNearest = nullptr; }
+    if (m_videoTexDown)    { SDL_DestroyTexture(m_videoTexDown);    m_videoTexDown    = nullptr; }
+    if (m_swsDown) {
+        sws_freeContext(static_cast<SwsContext*>(m_swsDown));
+        m_swsDown = nullptr;
     }
+    m_texW = m_texH = 0;
+    m_texDownW = m_texDownH = 0;
+    m_swsSrcW = m_swsSrcH = m_swsDstW = m_swsDstH = 0;
+    m_swsSrcFmt = -1;
 }
 
 void RBVideoCell::rbSetRect(const SDL_Rect& rect) {
@@ -61,33 +80,43 @@ void RBVideoCell::rbSetRect(const SDL_Rect& rect) {
 
 // ─── 子区域 ───────────────────────────────────────────────────────────────────
 SDL_Rect RBVideoCell::rbVideoArea() const {
-    return { m_rect.x, m_rect.y, m_rect.w, m_rect.h - kRBControlBarH };
+    int barH = rbScaleI(m_dpiScale, kRBControlBarH);
+    return { m_rect.x, m_rect.y, m_rect.w, m_rect.h - barH };
 }
 
 SDL_Rect RBVideoCell::rbControlArea() const {
-    return { m_rect.x, m_rect.y + m_rect.h - kRBControlBarH, m_rect.w, kRBControlBarH };
+    int barH = rbScaleI(m_dpiScale, kRBControlBarH);
+    return { m_rect.x, m_rect.y + m_rect.h - barH, m_rect.w, barH };
 }
 
 SDL_Rect RBVideoCell::rbPlayBtnRect() const {
     auto ctrl = rbControlArea();
-    int y = ctrl.y + (ctrl.h - kBtnH) / 2;
-    return { ctrl.x + kPadding, y, kBtnW, kBtnH };
+    int btnW = rbScaleI(m_dpiScale, kBtnWLogical);
+    int btnH = rbScaleI(m_dpiScale, kBtnHLogical);
+    int pad  = rbScaleI(m_dpiScale, kPaddingLogical);
+    int y = ctrl.y + (ctrl.h - btnH) / 2;
+    return { ctrl.x + pad, y, btnW, btnH };
 }
 
 SDL_Rect RBVideoCell::rbOpenBtnRect() const {
     auto ctrl = rbControlArea();
-    int y = ctrl.y + (ctrl.h - kBtnH) / 2;
-    return { ctrl.x + kPadding + kBtnW + 6, y, kBtnW, kBtnH };
+    int btnW = rbScaleI(m_dpiScale, kBtnWLogical);
+    int btnH = rbScaleI(m_dpiScale, kBtnHLogical);
+    int pad  = rbScaleI(m_dpiScale, kPaddingLogical);
+    int gap  = rbScaleI(m_dpiScale, 6);
+    int y = ctrl.y + (ctrl.h - btnH) / 2;
+    return { ctrl.x + pad + btnW + gap, y, btnW, btnH };
 }
 
 SDL_Rect RBVideoCell::rbProgressRect() const {
     auto ctrl  = rbControlArea();
     auto open  = rbOpenBtnRect();
-    // 时间标签宽度约 100px，右侧留 kPadding
-    int timeW  = 100;
-    int x      = open.x + open.w + kPadding;
-    int w      = ctrl.x + ctrl.w - x - timeW - kPadding;
-    int h      = 8;
+    int pad    = rbScaleI(m_dpiScale, kPaddingLogical);
+    // 时间标签宽度约 100 逻辑像素，按 dpi 同步放大
+    int timeW  = rbScaleI(m_dpiScale, 100);
+    int x      = open.x + open.w + pad;
+    int w      = ctrl.x + ctrl.w - x - timeW - pad;
+    int h      = rbScaleI(m_dpiScale, 8);
     int y      = ctrl.y + (ctrl.h - h) / 2;
     return { x, y, std::max(w, 0), h };
 }
@@ -146,7 +175,8 @@ void RBVideoCell::rbRender(int mouseX, int mouseY) {
 
     // 标题（左上角）
     if (!m_title.empty()) {
-        rbDrawText(m_title, m_rect.x + kPadding, m_rect.y + kPadding, kColSubText, m_smallFont);
+        int pad = rbScaleI(m_dpiScale, kPaddingLogical);
+        rbDrawText(m_title, m_rect.x + pad, m_rect.y + pad, kColSubText, m_smallFont);
     }
 }
 
@@ -168,20 +198,34 @@ void RBVideoCell::rbRenderVideo() {
     int fh = frame->height;
     if (fw <= 0 || fh <= 0) { rbRenderPlaceholder(); return; }
 
-    // 创建或重建纹理
-    if (!m_videoTex || m_texW != fw || m_texH != fh) {
-        if (m_videoTex) SDL_DestroyTexture(m_videoTex);
-        m_videoTex = SDL_CreateTexture(m_renderer,
+    // 创建或重建纹理（同时建立 linear / nearest 两份，尺寸格式相同）
+    // SDL2 的过滤模式由 SDL_HINT_RENDER_SCALE_QUALITY 在 SDL_CreateTexture 时决定，
+    // 创建后无法更改，因此必须维护两份纹理。
+    if (!m_videoTexLinear || !m_videoTexNearest || m_texW != fw || m_texH != fh) {
+        if (m_videoTexLinear)  { SDL_DestroyTexture(m_videoTexLinear);  m_videoTexLinear  = nullptr; }
+        if (m_videoTexNearest) { SDL_DestroyTexture(m_videoTexNearest); m_videoTexNearest = nullptr; }
+
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+        m_videoTexLinear = SDL_CreateTexture(m_renderer,
             SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, fw, fh);
+
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+        m_videoTexNearest = SDL_CreateTexture(m_renderer,
+            SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, fw, fh);
+
         m_texW = fw; m_texH = fh;
     }
 
-    if (!m_videoTex) { rbRenderPlaceholder(); return; }
+    if (!m_videoTexLinear || !m_videoTexNearest) { rbRenderPlaceholder(); return; }
 
-    // 上传帧数据（YUV420P 直接上传，其他格式先转换）
+    // 上传帧数据到两份纹理（YUV420P 直接上传，其他格式先转换）
     AVPixelFormat fmt = static_cast<AVPixelFormat>(frame->format);
     if (fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P) {
-        SDL_UpdateYUVTexture(m_videoTex, nullptr,
+        SDL_UpdateYUVTexture(m_videoTexLinear,  nullptr,
+            frame->data[0], frame->linesize[0],
+            frame->data[1], frame->linesize[1],
+            frame->data[2], frame->linesize[2]);
+        SDL_UpdateYUVTexture(m_videoTexNearest, nullptr,
             frame->data[0], frame->linesize[0],
             frame->data[1], frame->linesize[1],
             frame->data[2], frame->linesize[2]);
@@ -198,7 +242,11 @@ void RBVideoCell::rbRenderVideo() {
             av_frame_get_buffer(dst, 0);
             sws_scale(sws, frame->data, frame->linesize, 0, fh,
                       dst->data, dst->linesize);
-            SDL_UpdateYUVTexture(m_videoTex, nullptr,
+            SDL_UpdateYUVTexture(m_videoTexLinear,  nullptr,
+                dst->data[0], dst->linesize[0],
+                dst->data[1], dst->linesize[1],
+                dst->data[2], dst->linesize[2]);
+            SDL_UpdateYUVTexture(m_videoTexNearest, nullptr,
                 dst->data[0], dst->linesize[0],
                 dst->data[1], dst->linesize[1],
                 dst->data[2], dst->linesize[2]);
@@ -219,7 +267,91 @@ void RBVideoCell::rbRenderVideo() {
         area.y + (area.h - dh) / 2,
         dw, dh
     };
-    SDL_RenderCopy(m_renderer, m_videoTex, nullptr, &dst);
+
+    bool isDownscale = (dw < fw) || (dh < fh);
+
+    if (isDownscale && dw > 0 && dh > 0) {
+        // ── 高质量缩小：libswscale BICUBIC 离屏 YUV→YUV 缩放到 dst 尺寸，
+        //     再上传到目标尺寸 IYUV nearest 纹理 1:1 渲染。
+        //     从根源消除 SDL 缩小时的网格/摩尔纹伪影（与 video-compare 一致思路）。
+        AVPixelFormat srcFmt = (fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P)
+                               ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_YUV420P;
+
+        // 重建 SwsContext（源尺寸/目标尺寸/格式有任一变化时）
+        SwsContext* ctx = static_cast<SwsContext*>(m_swsDown);
+        if (!ctx ||
+            m_swsSrcW != fw || m_swsSrcH != fh ||
+            m_swsDstW != dw || m_swsDstH != dh ||
+            m_swsSrcFmt != static_cast<int>(srcFmt)) {
+            if (ctx) sws_freeContext(ctx);
+            ctx = sws_getContext(
+                fw, fh, srcFmt,
+                dw, dh, AV_PIX_FMT_YUV420P,
+                SWS_BICUBIC | SWS_FULL_CHR_H_INT | SWS_ACCURATE_RND,
+                nullptr, nullptr, nullptr);
+            m_swsDown    = ctx;
+            m_swsSrcW    = fw;  m_swsSrcH = fh;
+            m_swsDstW    = dw;  m_swsDstH = dh;
+            m_swsSrcFmt  = static_cast<int>(srcFmt);
+        }
+
+        // 重建目标尺寸纹理（nearest 1:1 渲染，避免任何 SDL 端缩放）
+        if (!m_videoTexDown || m_texDownW != dw || m_texDownH != dh) {
+            if (m_videoTexDown) SDL_DestroyTexture(m_videoTexDown);
+            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+            m_videoTexDown = SDL_CreateTexture(m_renderer,
+                SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, dw, dh);
+            m_texDownW = dw;  m_texDownH = dh;
+        }
+
+        if (ctx && m_videoTexDown) {
+            // 取已上传到 m_videoTexLinear 的源数据并不现实；直接对原 frame（已确保为 YUV420P 兼容）做 sws_scale。
+            // 这里复用上面 sws 路径已转换成 YUV420P 后的纹理数据是不必要的——
+            // 我们直接对原 frame（YUV420P 或 YUVJ420P）做 sws_scale 到目标尺寸缓冲再上传。
+            AVFrame* dstFrame = av_frame_alloc();
+            dstFrame->format = AV_PIX_FMT_YUV420P;
+            dstFrame->width  = dw;
+            dstFrame->height = dh;
+            if (av_frame_get_buffer(dstFrame, 0) == 0) {
+                if (fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P) {
+                    sws_scale(ctx, frame->data, frame->linesize, 0, fh,
+                              dstFrame->data, dstFrame->linesize);
+                } else {
+                    // 罕见格式：先转成 YUV420P（与上方 m_videoTexLinear 路径一致），再缩放
+                    SwsContext* tmp = sws_getContext(fw, fh, fmt,
+                                                     fw, fh, AV_PIX_FMT_YUV420P,
+                                                     SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    if (tmp) {
+                        AVFrame* mid = av_frame_alloc();
+                        mid->format = AV_PIX_FMT_YUV420P;
+                        mid->width  = fw; mid->height = fh;
+                        av_frame_get_buffer(mid, 0);
+                        sws_scale(tmp, frame->data, frame->linesize, 0, fh,
+                                  mid->data, mid->linesize);
+                        sws_scale(ctx, mid->data, mid->linesize, 0, fh,
+                                  dstFrame->data, dstFrame->linesize);
+                        av_frame_free(&mid);
+                        sws_freeContext(tmp);
+                    }
+                }
+                SDL_UpdateYUVTexture(m_videoTexDown, nullptr,
+                    dstFrame->data[0], dstFrame->linesize[0],
+                    dstFrame->data[1], dstFrame->linesize[1],
+                    dstFrame->data[2], dstFrame->linesize[2]);
+                SDL_RenderCopy(m_renderer, m_videoTexDown, nullptr, &dst);
+                av_frame_free(&dstFrame);
+                return;
+            }
+            av_frame_free(&dstFrame);
+        }
+
+        // 兜底：使用 linear 纹理直接缩放渲染
+        SDL_RenderCopy(m_renderer, m_videoTexLinear, nullptr, &dst);
+        return;
+    }
+
+    // 放大或 1:1 → nearest（保持像素锐利，避免 bilinear blur）
+    SDL_RenderCopy(m_renderer, m_videoTexNearest, nullptr, &dst);
 }
 
 void RBVideoCell::rbRenderControlBar(int mouseX, int mouseY) {
@@ -256,8 +388,10 @@ void RBVideoCell::rbRenderControlBar(int mouseX, int mouseY) {
     double cur = m_player ? m_player->rbCurrentTime() : 0.0;
     double dur = m_player ? m_player->rbDuration()    : 0.0;
     std::string timeStr = rbFormatTime(cur) + " / " + rbFormatTime(dur);
-    int tx = progRect.x + progRect.w + kPadding;
-    int ty = ctrl.y + (ctrl.h - 14) / 2;
+    int pad = rbScaleI(m_dpiScale, kPaddingLogical);
+    int tx = progRect.x + progRect.w + pad;
+    int textH = rbScaleI(m_dpiScale, 14);
+    int ty = ctrl.y + (ctrl.h - textH) / 2;
     rbDrawText(timeStr, tx, ty, kColSubText, m_smallFont ? m_smallFont : m_font);
 }
 
@@ -265,7 +399,9 @@ void RBVideoCell::rbRenderProgressBar(const SDL_Rect& barRect, int mouseX, int m
     if (barRect.w <= 0) return;
 
     // 背景轨道（加高方便点击）
-    SDL_Rect track = { barRect.x, barRect.y - 6, barRect.w, barRect.h + 12 };
+    int trackPadV = rbScaleI(m_dpiScale, 6);
+    int trackExtH = rbScaleI(m_dpiScale, 12);
+    SDL_Rect track = { barRect.x, barRect.y - trackPadV, barRect.w, barRect.h + trackExtH };
     rbFillRect(barRect, kColProgBg);
 
     double cur = m_player ? m_player->rbCurrentTime() : 0.0;
@@ -282,7 +418,10 @@ void RBVideoCell::rbRenderProgressBar(const SDL_Rect& barRect, int mouseX, int m
     bool hover = (mouseX >= track.x && mouseX < track.x + track.w &&
                   mouseY >= track.y && mouseY < track.y + track.h);
     if (hover || m_draggingProgress) {
-        SDL_Rect knob = { knobX - 6, barRect.y - 4, 12, barRect.h + 8 };
+        int kw  = rbScaleI(m_dpiScale, 12);
+        int kpv = rbScaleI(m_dpiScale, 4);
+        int kph = rbScaleI(m_dpiScale, 8);
+        SDL_Rect knob = { knobX - kw / 2, barRect.y - kpv, kw, barRect.h + kph };
         rbFillRect(knob, kColProgKnob);
     }
 }
@@ -314,7 +453,9 @@ void RBVideoCell::rbOnMouseDown(int x, int y, int clicks) {
 
     // 进度条点击
     auto prog = rbProgressRect();
-    SDL_Rect track = { prog.x, prog.y - 4, prog.w, prog.h + 8 };
+    int trackPad = rbScaleI(m_dpiScale, 4);
+    int trackExt = rbScaleI(m_dpiScale, 8);
+    SDL_Rect track = { prog.x, prog.y - trackPad, prog.w, prog.h + trackExt };
     if (x >= track.x && x < track.x + track.w &&
         y >= track.y && y < track.y + track.h && prog.w > 0) {
         m_draggingProgress = true;

@@ -17,6 +17,7 @@ namespace rb {
 
 class RBVideoCell;
 class RBVideoPlayer;
+class RBSliderView;
 
 // 布局模式（路数即枚举值，最多 9 路）
 enum class RBLayoutMode {
@@ -79,6 +80,9 @@ private:
     void rbHandleKeyDown(const SDL_Keysym& key);
     void rbHandleToolbarClick(int x, int y);
 
+    // 将当前 m_dpiScale 同步到所有 Cell 与 Slider，使其内部布局以 drawable 像素工作
+    void rbSyncDpiToChildren();
+
     // 工具
     void rbDrawText(const std::string& text, int x, int y, SDL_Color color, TTF_Font* f);
     void rbDrawTextCentered(const std::string& text, const SDL_Rect& area, SDL_Color color, TTF_Font* f);
@@ -101,11 +105,29 @@ private:
     int             m_activeCellCount{1};  // 当前激活的路数（1~9）
     int             m_soloCell{-1};        // -1=显示全部, >=0=只显示该路
 
-    bool            m_running{false};
-    int             m_mouseX{-1}, m_mouseY{-1};
+    // ─── Slider 模式（双视频滑动比较，仅在激活路数==2时可进入）──────────
+    bool                            m_sliderMode{false};
+    std::unique_ptr<RBSliderView>   m_sliderView;
 
-    // 工具栏高度
-    static constexpr int kToolbarH = 44;
+    bool            m_running{false};
+    int             m_mouseX{-1}, m_mouseY{-1};   // 已转换为 drawable 像素坐标
+
+    // ─── HighDPI / drawable 像素 ──────────────────────────────────────────
+    // 与 video-compare 的"config 缩放保持清晰"思路一致：所有 UI 几何与字体
+    // 全部以 drawable（物理像素）为坐标系工作，避免 SDL_RenderSetLogicalSize
+    // 把渲染锁回 window 像素后被合成层二次拉伸导致的模糊。
+    float           m_dpiScale{1.0f};        // drawable / window
+    int             m_drawableW{0}, m_drawableH{0};
+
+    // 工具栏几何（运行时按 m_dpiScale 计算，以 drawable 像素为单位）
+    int             m_tbH{44};
+    int             m_tbBtnW{60};
+    int             m_tbBtnH{28};
+    int             m_tbPad{8};
+    int             m_tbNumBtnW{36};
+
+    // 兼容历史代码：仍提供与原同名的常量入口
+    int rbToolbarH() const { return m_tbH; }
 };
 
 } // namespace rb

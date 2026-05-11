@@ -1,9 +1,11 @@
 #include "rb_player_ui.h"
 #include "rb_video_cell.h"
+#include "rb_slider_view.h"
 #include "../player/rb_video_player.h"
 #include "../utils/rb_utils.h"
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 
 namespace rb {
 
@@ -15,12 +17,12 @@ static constexpr SDL_Color kUIBtn       = {50,  110, 190, 255};
 static constexpr SDL_Color kUIBtnHover  = {75,  145, 235, 255};
 static constexpr SDL_Color kUIBtnActive = {40,  90,  160, 255};
 
-// ─── 工具栏按钮布局 ───────────────────────────────────────────────────────────
-static constexpr int kTBBtnW    = 60;   // 普通按钮宽
-static constexpr int kTBBtnH    = 28;
-static constexpr int kTBPad     = 8;
-static constexpr int kTBNumBtnW = 36;   // 序号按钮宽（紧凑）
-
+// ─── 工具栏按钮布局（逻辑常量，运行时会乘以 DPI 缩放子存于 m_tb*）───────────────────────────────
+static constexpr int kTBBtnWLogical    = 60;
+static constexpr int kTBBtnHLogical    = 28;
+static constexpr int kTBPadLogical     = 8;
+static constexpr int kTBNumBtnWLogical = 36;
+static constexpr int kToolbarHLogical  = 44;
 // ═══════════════════════════════════════════════════════════════════════════
 // RBPlayerUI
 // ═══════════════════════════════════════════════════════════════════════════
@@ -59,9 +61,30 @@ bool RBPlayerUI::rbInit(const std::string& title, int w, int h) {
         return false;
     }
 
-    m_font      = rbLoadFont(16);
-    m_titleFont = rbLoadFont(22);
-    m_smallFont = rbLoadFont(13);
+    // ── HighDPI 适配（与 video-compare 缩放清晰策略一致）──
+    // 1) 取得 drawable（物理像素）尺寸；2) 计算 dpi factor；3) 不调用 SDL_RenderSetLogicalSize，
+    // 让所有渲染直接落在物理像素上；4) 按 factor 放大 UI 几何 + 字体光栅化分辨率。
+    int wW = w, wH = h;
+    SDL_GetWindowSize(m_window, &wW, &wH);
+    SDL_GL_GetDrawableSize(m_window, &m_drawableW, &m_drawableH);
+    if (m_drawableW <= 0) m_drawableW = wW;
+    if (m_drawableH <= 0) m_drawableH = wH;
+    m_dpiScale = (wW > 0) ? static_cast<float>(m_drawableW) / static_cast<float>(wW) : 1.0f;
+
+    // 工具栏与按钮几何按物理像素重新计算
+    m_tbH       = static_cast<int>(std::round(kToolbarHLogical  * m_dpiScale));
+    m_tbBtnW    = static_cast<int>(std::round(kTBBtnWLogical    * m_dpiScale));
+    m_tbBtnH    = static_cast<int>(std::round(kTBBtnHLogical    * m_dpiScale));
+    m_tbPad     = static_cast<int>(std::round(kTBPadLogical     * m_dpiScale));
+    m_tbNumBtnW = static_cast<int>(std::round(kTBNumBtnWLogical * m_dpiScale));
+
+    // 字体 size 直接按物理像素加载，保证文字以原生 DPI 锐利渲染
+    int fontPt      = std::max(8, static_cast<int>(std::round(16 * m_dpiScale)));
+    int titleFontPt = std::max(10, static_cast<int>(std::round(22 * m_dpiScale)));
+    int smallFontPt = std::max(7, static_cast<int>(std::round(13 * m_dpiScale)));
+    m_font      = rbLoadFont(fontPt);
+    m_titleFont = rbLoadFont(titleFontPt);
+    m_smallFont = rbLoadFont(smallFontPt);
     if (!m_font) {
         std::cerr << "[RBPlayerUI] font load failed" << std::endl;
         return false;
@@ -69,6 +92,10 @@ bool RBPlayerUI::rbInit(const std::string& title, int w, int h) {
 
     // 默认单路布局，创建 1 个 Cell
     rbSetLayout(RBLayoutMode::Single);
+
+    // 初始化 Slider 视图（共享 renderer/字体），player 在进入模式时再绑定
+    m_sliderView = std::make_unique<RBSliderView>();
+    m_sliderView->rbInit(m_renderer, m_font, m_smallFont);
     return true;
 }
 
@@ -148,14 +175,27 @@ void RBPlayerUI::rbSetSoloCell(int idx) {
     rbRelayout();
 }
 
-void RBPlayerUI::rbRelayout() {
-    int ww, wh;
-    SDL_GetWindowSize(m_window, &ww, &wh);
+void RBPlayerUI::rbSyncDpiToChildren() {
+    for (auto& c : m_cells) {
+        if (c) c->rbSetDpiScale(m_dpiScale);
+    }
+    if (m_sliderView) m_sliderView->rbSetDpiScale(m_dpiScale);
+}
 
-    int contentY = kToolbarH;
-    int contentH = wh - kToolbarH;
+void RBPlayerUI::rbRelayout() {
+    int ww = m_drawableW, wh = m_drawableH;
+    if (m_window) {
+        SDL_GL_GetDrawableSize(m_window, &ww, &wh);
+        m_drawableW = ww; m_drawableH = wh;
+    }
+
+    // 每次重布局都把 dpi 同步给子组件（新创建的 cell 也能拿到正确缩放）
+    rbSyncDpiToChildren();
+
+    int contentY = m_tbH;
+    int contentH = wh - m_tbH;
     int contentW = ww;
-    static constexpr int kGap = 4;
+    const int kGap = std::max(2, static_cast<int>(std::round(4 * m_dpiScale)));
 
     auto setCell = [&](int i, int x, int y, int w, int h) {
         if (i < static_cast<int>(m_cells.size())) {
@@ -295,21 +335,26 @@ void RBPlayerUI::rbRunLoop() {
     }
 }
 
-// ─── 渲染 ─────────────────────────────────────────────────────────────────────
+// ─── 渲染 ─────────────────────────────────────────────────────────────────────────────────────────────
 void RBPlayerUI::rbRenderFrame() {
-    // 重新布局（窗口可能被 resize）
+    // 同步 drawable 尺寸（窗口可能被 resize）
+    SDL_GL_GetDrawableSize(m_window, &m_drawableW, &m_drawableH);
+
+    // 重新布局（以 drawable 像素为单位）
     rbRelayout();
 
-    // 设置逻辑渲染尺寸与窗口逻辑尺寸一致（修复 HiDPI 坐标偏移）
-    int ww, wh;
-    SDL_GetWindowSize(m_window, &ww, &wh);
-    SDL_RenderSetLogicalSize(m_renderer, ww, wh);
-
+    // 不使用 SDL_RenderSetLogicalSize：避免将逻辑尺寸锁在 window 像素后被合成层二次拉伸。
+    // 所有 UI 几何已转换为 drawable 像素，renderer 直接画在物理像素上。
     SDL_SetRenderDrawColor(m_renderer, kUIBg.r, kUIBg.g, kUIBg.b, 255);
     SDL_RenderClear(m_renderer);
 
-    // 渲染 Cell：solo 模式只渲染焦点路，否则渲染全部激活路
-    if (m_soloCell >= 0 && m_soloCell < static_cast<int>(m_cells.size())) {
+    if (m_sliderMode && m_sliderView) {
+        // Slider 模式：用整个内容区显示双视频比较
+        SDL_Rect sliderRect = { 0, m_tbH, m_drawableW, m_drawableH - m_tbH };
+        m_sliderView->rbSetRect(sliderRect);
+        m_sliderView->rbRender(m_mouseX, m_mouseY);
+    } else if (m_soloCell >= 0 && m_soloCell < static_cast<int>(m_cells.size())) {
+        // Solo 模式只渲染焦点路
         m_cells[m_soloCell]->rbRender(m_mouseX, m_mouseY);
     } else {
         for (int i = 0; i < m_activeCellCount && i < static_cast<int>(m_cells.size()); ++i) {
@@ -324,59 +369,63 @@ void RBPlayerUI::rbRenderFrame() {
 }
 
 void RBPlayerUI::rbRenderToolbar() {
-    int ww, wh;
-    SDL_GetWindowSize(m_window, &ww, &wh);
+    int ww = m_drawableW, wh = m_drawableH;
     (void)wh;
 
-    SDL_Rect toolbar = { 0, 0, ww, kToolbarH };
+    SDL_Rect toolbar = { 0, 0, ww, m_tbH };
     rbFillRect(toolbar, kUIToolbarBg);
 
     // 标题
-    rbDrawText("PlayerX", kTBPad, (kToolbarH - 20) / 2, kUIText, m_titleFont ? m_titleFont : m_font);
+    int titleH = static_cast<int>(std::round(20 * m_dpiScale));
+    rbDrawText("PlayerX", m_tbPad, (m_tbH - titleH) / 2, kUIText, m_titleFont ? m_titleFont : m_font);
 
-    // ── 右侧按钮区，从右向左排列 ──────────────────────────────────────────
-    int bx = ww - kTBPad;
+    // ── 右侧按钮区，从右向左排列 ──────────────────────────────
+    int bx = ww - m_tbPad;
 
     // ＋ 按钮（最右）
-    bx -= kTBBtnW;
-    SDL_Rect addBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
-    bool addDisabled = (m_activeCellCount >= 9);
+    bx -= m_tbBtnW;
+    SDL_Rect addBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
+    bool addDisabled = (m_activeCellCount >= 9) || m_sliderMode;
     bool addHover    = !addDisabled && rbPointInRect(m_mouseX, m_mouseY, addBtn);
     SDL_Color addCol = addDisabled ? SDL_Color{40,50,65,180} : (addHover ? kUIBtnHover : kUIBtn);
     rbFillRect(addBtn, addCol);
     rbDrawRect(addBtn, {80, 100, 130, 255});
     rbDrawTextCentered("+", addBtn, addDisabled ? SDL_Color{100,110,130,180} : kUIText, m_font);
-    bx -= kTBPad;
+    bx -= m_tbPad;
 
     // 序号按钮（从右向左：N, N-1, ..., 1），使用紧凑宽度
     for (int i = m_activeCellCount - 1; i >= 0; --i) {
-        bx -= kTBNumBtnW;
-        SDL_Rect r = { bx, (kToolbarH - kTBBtnH) / 2, kTBNumBtnW, kTBBtnH };
+        bx -= m_tbNumBtnW;
+        SDL_Rect r = { bx, (m_tbH - m_tbBtnH) / 2, m_tbNumBtnW, m_tbBtnH };
         bool isSolo  = (m_soloCell == i);
-        bool hover   = rbPointInRect(m_mouseX, m_mouseY, r);
-        SDL_Color c  = isSolo ? kUIBtnActive : (hover ? kUIBtnHover : kUIBtn);
+        bool hover   = !m_sliderMode && rbPointInRect(m_mouseX, m_mouseY, r);
+        SDL_Color c  = m_sliderMode ? SDL_Color{40,50,65,180}
+                                    : (isSolo ? kUIBtnActive : (hover ? kUIBtnHover : kUIBtn));
         rbFillRect(r, c);
         rbDrawRect(r, {80, 100, 130, 255});
-        rbDrawTextCentered(std::to_string(i + 1), r, kUIText, m_font);
-        bx -= kTBPad;
+        rbDrawTextCentered(std::to_string(i + 1), r,
+                           m_sliderMode ? SDL_Color{100,110,130,180} : kUIText, m_font);
+        bx -= m_tbPad;
     }
 
     // Multi 按钮（序号左侧）：退出 Solo 回到多路视图
-    bx -= kTBBtnW;
-    SDL_Rect multiBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    bx -= m_tbBtnW;
+    SDL_Rect multiBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
     {
         bool inSolo = (m_soloCell >= 0);
-        bool hover  = rbPointInRect(m_mouseX, m_mouseY, multiBtn);
-        SDL_Color c = inSolo ? kUIBtnActive : (hover ? kUIBtnHover : kUIBtn);
+        bool hover  = !m_sliderMode && rbPointInRect(m_mouseX, m_mouseY, multiBtn);
+        SDL_Color c = m_sliderMode ? SDL_Color{40,50,65,180}
+                                   : (inSolo ? kUIBtnActive : (hover ? kUIBtnHover : kUIBtn));
         rbFillRect(multiBtn, c);
         rbDrawRect(multiBtn, {80, 100, 130, 255});
-        rbDrawTextCentered("Multi", multiBtn, kUIText, m_font);
+        rbDrawTextCentered("Multi", multiBtn,
+                           m_sliderMode ? SDL_Color{100,110,130,180} : kUIText, m_font);
     }
-    bx -= kTBPad;
+    bx -= m_tbPad;
 
     // Sync 按钮（Multi 左侧）：播放中显示 "Pause"，暂停时显示 "Play"
-    bx -= kTBBtnW;
-    SDL_Rect syncBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    bx -= m_tbBtnW;
+    SDL_Rect syncBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
     {
         bool anyPlaying = false;
         for (auto& p : m_players) { if (p->rbIsPlaying()) { anyPlaying = true; break; } }
@@ -385,20 +434,39 @@ void RBPlayerUI::rbRenderToolbar() {
         rbDrawRect(syncBtn, {80, 100, 130, 255});
         rbDrawTextCentered(anyPlaying ? "Pause" : "Play", syncBtn, kUIText, m_font);
     }
-    bx -= kTBPad;
+    bx -= m_tbPad;
 
     // Reset 按钮（Sync 左侧）：所有通路同步回到 0，便于从头播放
-    bx -= kTBBtnW;
-    SDL_Rect resetBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    bx -= m_tbBtnW;
+    SDL_Rect resetBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
     {
         bool hover = rbPointInRect(m_mouseX, m_mouseY, resetBtn);
         rbFillRect(resetBtn, hover ? kUIBtnHover : kUIBtn);
         rbDrawRect(resetBtn, {80, 100, 130, 255});
         rbDrawTextCentered("Reset", resetBtn, kUIText, m_font);
     }
+    bx -= m_tbPad;
+
+    // Slider 按钮（Reset 左侧）：仅当激活路数==2 时可点
+    bx -= m_tbBtnW;
+    SDL_Rect sliderBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
+    {
+        bool enabled  = (m_activeCellCount == 2);
+        bool hover    = enabled && rbPointInRect(m_mouseX, m_mouseY, sliderBtn);
+        SDL_Color col = !enabled ? SDL_Color{40,50,65,180}
+                                 : (m_sliderMode ? kUIBtnActive : (hover ? kUIBtnHover : kUIBtn));
+        rbFillRect(sliderBtn, col);
+        rbDrawRect(sliderBtn, {80, 100, 130, 255});
+        rbDrawTextCentered("Slider", sliderBtn,
+                           enabled ? kUIText : SDL_Color{100,110,130,180}, m_font);
+    }
 }
-// ─── 事件处理// ─── 事件处理 ─────────────────────────────────────────────────────────────────
+
 void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
+    // 辅助：将 SDL 事件中的 window 像素坐标转换为 drawable 像素（与 UI 几何一致）
+    auto toDrawableX = [&](int x) { return static_cast<int>(std::round(x * m_dpiScale)); };
+    auto toDrawableY = [&](int y) { return static_cast<int>(std::round(y * m_dpiScale)); };
+
     switch (e.type) {
     case SDL_QUIT:
         m_running = false;
@@ -407,24 +475,51 @@ void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
     case SDL_WINDOWEVENT:
         if (e.window.event == SDL_WINDOWEVENT_RESIZED ||
             e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+            // 同步 drawable 尺寸；同时重算 dpi factor（跨屏拖拽可能变化）
+            int wW = 0, wH = 0;
+            SDL_GetWindowSize(m_window, &wW, &wH);
+            SDL_GL_GetDrawableSize(m_window, &m_drawableW, &m_drawableH);
+            if (wW > 0) {
+                float newScale = static_cast<float>(m_drawableW) / static_cast<float>(wW);
+                if (std::abs(newScale - m_dpiScale) > 0.01f) {
+                    // 跨屏变化：重新按新 dpi 加载字体与重算工具栏几何。
+                    // 为避免复杂化，此处只更新几何，字体保持初始化时的 size。
+                    m_dpiScale  = newScale;
+                    m_tbH       = static_cast<int>(std::round(kToolbarHLogical  * m_dpiScale));
+                    m_tbBtnW    = static_cast<int>(std::round(kTBBtnWLogical    * m_dpiScale));
+                    m_tbBtnH    = static_cast<int>(std::round(kTBBtnHLogical    * m_dpiScale));
+                    m_tbPad     = static_cast<int>(std::round(kTBPadLogical     * m_dpiScale));
+                    m_tbNumBtnW = static_cast<int>(std::round(kTBNumBtnWLogical * m_dpiScale));
+                }
+            }
             rbRelayout();
         }
         break;
 
     case SDL_MOUSEMOTION:
-        m_mouseX = e.motion.x;
-        m_mouseY = e.motion.y;
-        // 分发给 Cell
-        for (auto& c : m_cells) c->rbOnMouseMove(m_mouseX, m_mouseY);
+        m_mouseX = toDrawableX(e.motion.x);
+        m_mouseY = toDrawableY(e.motion.y);
+        if (m_sliderMode) {
+            if (m_sliderView) m_sliderView->rbOnMouseMove(m_mouseX, m_mouseY);
+        } else {
+            // 分发给 Cell
+            for (auto& c : m_cells) c->rbOnMouseMove(m_mouseX, m_mouseY);
+        }
         break;
 
     case SDL_MOUSEBUTTONDOWN:
         if (e.button.button == SDL_BUTTON_LEFT) {
-            int x = e.button.x, y = e.button.y;
+            int x = toDrawableX(e.button.x), y = toDrawableY(e.button.y);
 
             // 工具栏点击
-            if (y < kToolbarH) {
+            if (y < m_tbH) {
                 rbHandleToolbarClick(x, y);
+                break;
+            }
+
+            // Slider 模式：直接转发给 slider view
+            if (m_sliderMode) {
+                if (m_sliderView) m_sliderView->rbOnMouseDown(x, y, e.button.clicks);
                 break;
             }
 
@@ -444,12 +539,17 @@ void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
         }
         break;
 
-    case SDL_MOUSEBUTTONUP:
-        for (auto& c : m_cells) c->rbOnMouseUp(e.button.x, e.button.y);
+    case SDL_MOUSEBUTTONUP: {
+        int x = toDrawableX(e.button.x), y = toDrawableY(e.button.y);
+        if (m_sliderMode) {
+            if (m_sliderView) m_sliderView->rbOnMouseUp(x, y);
+        } else {
+            for (auto& c : m_cells) c->rbOnMouseUp(x, y);
+        }
         break;
+    }
 
-    default:
-        // 文件对话框结果事件（子线程通过 SDL_PushEvent 推回主线程）
+    default:        // 文件对话框结果事件（子线程通过 SDL_PushEvent 推回主线程）
         if (e.type == rbFileDialogEventType()) {
             auto* cb   = static_cast<RBFileCallback*>(e.user.data1);
             auto* path = static_cast<std::string*>(e.user.data2);
@@ -465,57 +565,78 @@ void RBPlayerUI::rbHandleEvent(const SDL_Event& e) {
 }
 
 void RBPlayerUI::rbHandleToolbarClick(int x, int y) {
-    int ww, wh;
-    SDL_GetWindowSize(m_window, &ww, &wh);
-    (void)wh;
+    int ww = m_drawableW;
 
-    // 与 rbRenderToolbar 保持完全相同的布局计算
-    int bx = ww - kTBPad;
+    // 与 rbRenderToolbar 保持完全相同的布局计算（均以 drawable 像素为单位）
+    int bx = ww - m_tbPad;
 
     // ＋ 按钮
-    bx -= kTBBtnW;
-    SDL_Rect addBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    bx -= m_tbBtnW;
+    SDL_Rect addBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
     if (rbPointInRect(x, y, addBtn)) {
+        if (m_sliderMode) return;  // slider 模式下禁止改路数
         rbAddCell();
         return;
     }
-    bx -= kTBPad;
+    bx -= m_tbPad;
 
     // 序号按钮（从右向左：N, N-1, ..., 1），使用紧凑宽度
     for (int i = m_activeCellCount - 1; i >= 0; --i) {
-        bx -= kTBNumBtnW;
-        SDL_Rect r = { bx, (kToolbarH - kTBBtnH) / 2, kTBNumBtnW, kTBBtnH };
+        bx -= m_tbNumBtnW;
+        SDL_Rect r = { bx, (m_tbH - m_tbBtnH) / 2, m_tbNumBtnW, m_tbBtnH };
         if (rbPointInRect(x, y, r)) {
+            if (m_sliderMode) return;  // slider 模式下禁止改 Solo
             rbSetSoloCell(i);
             return;
         }
-        bx -= kTBPad;
+        bx -= m_tbPad;
     }
 
     // Multi 按钮：退出 Solo，回到多路视图
-    bx -= kTBBtnW;
-    SDL_Rect multiBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    bx -= m_tbBtnW;
+    SDL_Rect multiBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
     if (rbPointInRect(x, y, multiBtn)) {
+        if (m_sliderMode) return;
         m_soloCell = -1;
         rbRelayout();
         return;
     }
-    bx -= kTBPad;
+    bx -= m_tbPad;
 
     // Sync 按钮
-    bx -= kTBBtnW;
-    SDL_Rect syncBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    bx -= m_tbBtnW;
+    SDL_Rect syncBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
     if (rbPointInRect(x, y, syncBtn)) {
         rbSyncToggle();
         return;
     }
-    bx -= kTBPad;
+    bx -= m_tbPad;
 
     // Reset 按钮（Sync 左侧）
-    bx -= kTBBtnW;
-    SDL_Rect resetBtn = { bx, (kToolbarH - kTBBtnH) / 2, kTBBtnW, kTBBtnH };
+    bx -= m_tbBtnW;
+    SDL_Rect resetBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
     if (rbPointInRect(x, y, resetBtn)) {
         rbSyncReset();
+        return;
+    }
+    bx -= m_tbPad;
+
+    // Slider 按钮（Reset 左侧）：仅当激活路数==2 时可点
+    bx -= m_tbBtnW;
+    SDL_Rect sliderBtn = { bx, (m_tbH - m_tbBtnH) / 2, m_tbBtnW, m_tbBtnH };
+    if (rbPointInRect(x, y, sliderBtn)) {
+        bool enabled = (m_activeCellCount == 2);
+        if (!enabled && !m_sliderMode) return;  // 不满足条件且当前不在 slider，禁用
+        m_sliderMode = !m_sliderMode;
+        if (m_sliderMode) {
+            // 绑定前两路 player
+            RBVideoPlayer* p0 = (m_players.size() > 0) ? m_players[0].get() : nullptr;
+            RBVideoPlayer* p1 = (m_players.size() > 1) ? m_players[1].get() : nullptr;
+            if (m_sliderView) m_sliderView->rbSetPlayers(p0, p1);
+        } else {
+            if (m_sliderView) m_sliderView->rbSetPlayers(nullptr, nullptr);
+            rbRelayout();
+        }
         return;
     }
 }
