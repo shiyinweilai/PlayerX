@@ -309,12 +309,21 @@ void RBVideoPlayer::rbStepFrame(int n) {
 
     // 帧步进语义：暂停画面下让用户逐帧观察。
     // 播放中先 pause，与系统播放器（如 macOS QuickTime / Windows 系统播放器）一致。
-    if (s == RBPlayerState::Playing) {
+    // Ended 也降为 Paused：否则慢路径里 rbSeekTo 会把 Ended 自动升回 Playing，
+    // 导致 rbRefreshPausedFrameExact 因 state==Playing 直接返回，画面/PTS 不更新。
+    if (s == RBPlayerState::Playing || s == RBPlayerState::Ended) {
         m_state.store(RBPlayerState::Paused);
     }
 
-    const double fd  = rbFrameDuration();
-    const double cur = m_currentFramePts > 0.0 ? m_currentFramePts : m_currentTime.load();
+    const double fd = rbFrameDuration();
+    // cur 取 currentFramePts 与 currentTime 的较大者：
+    //   多路同步播放时，短视频已到末尾停在 m_currentFramePts ≈ duration_short，
+    //   但 m_currentTime 仍由主时钟驱动到 duration_long 附近。
+    //   按"上一帧"应从用户感知位置（主时钟）回退，而不是从该路最后真实帧 PTS 回退，
+    //   否则进度条会从主时钟位置大幅跳回短视频末尾。
+    const double curFp = m_currentFramePts;
+    const double curCt = m_currentTime.load();
+    const double cur   = std::max(curFp, curCt);
 
     // ─── 快路径：前进若干帧（≤3）时直接从 frameQueue 顺序消费 ─────────────
     // 解码线程在播放/暂停态都会持续把后续帧 push 进队列（kCapacity=8），

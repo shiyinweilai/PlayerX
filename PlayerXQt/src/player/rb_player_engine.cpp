@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <future>
+#include <vector>
 
 namespace rb {
 
@@ -180,18 +183,27 @@ void RBPlayerEngine::rbSeek(double seconds) {
 }
 
 void RBPlayerEngine::rbStepFrame(int n) {
+    // ───────────────────────────────────────────────────────────────────
+    // 全局帧步进：完全持锁串行调用每路单路 rbStepFrame。
+    //   - 前进 (n>0 且 ≤3)：单路内部走 fast path（pop 队列），毫秒级；
+    //   - 后退 (n<0)：单路内部走 seek 慢路径，每路 ~50-500ms。N 路串行会
+    //     有可见卡顿，但功能正确。多路场景下用户能容忍。
+    //
+    // 不再用并发 / 统一 target —— 那些都被验证会引入"反向只生效第一路"
+    // 等正确性问题。优先保证功能正确，性能优化以后再做。
+    // ───────────────────────────────────────────────────────────────────
     std::lock_guard<std::mutex> lk(m_mutex);
     if (m_players.empty()) return;
 
-    // 全局帧步进语义：先全局 pause，再以"最小帧时长"的步长推进所有路
+    // 全局帧步进语义：先全局 pause
     if (m_playing.load()) {
         m_pausedPts = rbComputeMasterLocked();
         m_playing.store(false);
         for (auto& p : m_players) if (p) p->rbPause();
     }
 
-    // 取所有路中最小的 frameDuration 作为全局步长
-    double fd = 1.0 / 30.0;
+    // 取所有路中最小的 frameDuration 作为全局步长（仅用于更新主时钟锚点）
+    double fd    = 1.0 / 30.0;
     bool   first = true;
     for (auto& p : m_players) {
         if (!p) continue;
@@ -205,9 +217,11 @@ void RBPlayerEngine::rbStepFrame(int n) {
     m_anchorPts  = target;
     m_pausedPts  = target;
 
+    // 每路用各自的 currentFramePts 做 step（与单路按钮行为一致，
+    // 已验证正确）。多路时刻不齐时各路各走各的一帧，可接受。
     for (auto& p : m_players) {
         if (!p) continue;
-        p->rbStepFrame(n); // 内部已 pause + seek + refresh
+        p->rbStepFrame(n);
     }
 }
 
