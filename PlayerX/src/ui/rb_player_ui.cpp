@@ -54,6 +54,10 @@ bool RBPlayerUI::rbInit(const std::string& title, int w, int h) {
         return false;
     }
 
+    // 抑制 macOS 上未被消费的按键触发的系统提示音（NSBeep）。
+    // 在窗口创建之后调用，确保 keyWindow 存在；Windows 下为 no-op。
+    rbSilenceSystemBeep();
+
     m_renderer = SDL_CreateRenderer(m_window, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!m_renderer) {

@@ -39,12 +39,20 @@ add_executable(PlayerX
 
 # ─── 平台原生文件对话框（macOS=NSOpenPanel / Windows=GetOpenFileNameW）───────
 if(APPLE)
-    target_sources(PlayerX PRIVATE src/utils/rb_file_dialog_mac.mm)
+    target_sources(PlayerX PRIVATE
+        src/utils/rb_file_dialog_mac.mm
+        src/utils/rb_macos_silence.mm
+    )
     # 仅为 .mm 启用 ARC（其他 .cpp 不受影响）
-    set_source_files_properties(src/utils/rb_file_dialog_mac.mm
+    set_source_files_properties(
+        src/utils/rb_file_dialog_mac.mm
+        src/utils/rb_macos_silence.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 elseif(WIN32)
-    target_sources(PlayerX PRIVATE src/utils/rb_file_dialog_win.cpp)
+    target_sources(PlayerX PRIVATE
+        src/utils/rb_file_dialog_win.cpp
+        src/utils/rb_macos_silence_win.cpp
+    )
 endif()
 
 # ─── 包含目录（头文件与 cpp 同目录，各子目录均加入）─────────────────────────

@@ -41,6 +41,15 @@ void    rbOpenFileDialog(const RBFileCallback& callback);
 // 应用退出前调用：终止可能残留的对话框子进程并 join 后台线程
 void    rbShutdownFileDialog();
 
+// ─── 系统提示音抑制 ───────────────────────────────────────────────────────────
+// 部分平台（macOS）在 SDL 应用接收到未被系统菜单/responder 链消费的按键时，
+// 会触发系统默认的 NSBeep，造成"按键有声音"的不良体验。
+// 调用本函数后，应用窗口接收的所有 keyDown 事件不再触发系统提示音，
+// 但 SDL 仍能正常收到 SDL_KEYDOWN 事件。
+// Windows 平台为空实现（系统不会因键盘按下而播放提示音）。
+// 必须在 SDL_CreateWindow 之后调用一次。
+void    rbSilenceSystemBeep();
+
 // ─── 时间格式化 ───────────────────────────────────────────────────────────────
 std::string rbFormatTime(double seconds); // "mm:ss" 或 "hh:mm:ss"
 
