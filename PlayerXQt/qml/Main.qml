@@ -24,6 +24,118 @@ ApplicationWindow {
     title: "PlayerXQt"
     color: "#101012"
 
+    // ─── 统一的扁平按钮 / 工具按钮 ──────────────────────────────────────
+    // 完全用 Rectangle + MouseArea 自绘，不依赖 Qt Quick Controls 的全局
+    // 风格设置（macOS 上 setStyle("Basic") 在某些 Qt 版本下不生效，会
+    // fallback 到 native 风格，导致 background/contentItem 委托失效）。
+    // 这里直接自绘可保证 hover/pressed 反馈在所有平台一致可见。
+    component FlatButton: Rectangle {
+        id: fb
+        // 公共 API（兼容原 Button 用法）
+        property string text: ""
+        property bool   enabled: true
+        property alias  font: fbText.font
+        property bool   hovered: fbHover.hovered
+        property bool   down: fbMouse.pressed && fb.enabled
+        signal clicked()
+
+        // 尺寸：根据文字自适应；外部仍可 Layout.preferredWidth 覆盖
+        implicitWidth:  Math.max(56, fbText.implicitWidth + 24)
+        implicitHeight: 28
+        radius: 5
+
+        // 颜色分层：down(明亮灰) > hovered(中灰) > normal(深灰) > disabled(几乎隐隐)
+        color: !fb.enabled ? "#1a1a1d"
+              : fb.down    ? "#4a4a55"   // 按下：明显的亮灰
+              : fb.hovered ? "#33333a"   // 悬停：中灰
+                           : "#202024"   // 默认：深灰
+        border.color: !fb.enabled ? "#252528"
+                     : fb.down    ? "#6a6a78"
+                     : fb.hovered ? "#3d3d46"
+                                  : "#2c2c32"
+        border.width: 1
+        Behavior on color        { ColorAnimation  { duration: 90 } }
+        Behavior on border.color { ColorAnimation  { duration: 90 } }
+
+        // 按下缩放 0.94，给出明确物理反馈
+        scale: down ? 0.94 : 1.0
+        Behavior on scale { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
+
+        Text {
+            id: fbText
+            anchors.centerIn: parent
+            text: fb.text
+            font.pixelSize: 13
+            color: !fb.enabled ? "#555"
+                  : fb.down    ? "#ffffff"
+                                : "#e8e8ec"
+            Behavior on color { ColorAnimation { duration: 90 } }
+        }
+
+        HoverHandler {
+            id: fbHover
+            cursorShape: fb.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            enabled: fb.enabled
+        }
+        MouseArea {
+            id: fbMouse
+            anchors.fill: parent
+            enabled: fb.enabled
+            hoverEnabled: false   // hover 已交给 HoverHandler
+            onClicked: fb.clicked()
+        }
+        opacity: enabled ? 1.0 : 0.5
+    }
+
+    component FlatToolButton: Rectangle {
+        id: ftb
+        property string text: ""
+        property bool   enabled: true
+        property alias  font: ftbText.font
+        property bool   hovered: ftbHover.hovered
+        property bool   down: ftbMouse.pressed && ftb.enabled
+        signal clicked()
+
+        implicitWidth:  Math.max(34, ftbText.implicitWidth + 16)
+        implicitHeight: 26
+        radius: 4
+
+        color: !ftb.enabled ? "transparent"
+              : ftb.down    ? "#55ffffff"   // 按下：半透明白
+              : ftb.hovered ? "#33ffffff"   // 悬停：更淡的半透明白
+                            : "transparent"
+        border.color: ftb.down ? "#88ffffff" : "transparent"
+        border.width: 1
+        Behavior on color { ColorAnimation { duration: 90 } }
+
+        scale: down ? 0.92 : 1.0
+        Behavior on scale { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
+
+        Text {
+            id: ftbText
+            anchors.centerIn: parent
+            text: ftb.text
+            font.pixelSize: 13
+            color: !ftb.enabled ? "#555"
+                  : ftb.down    ? "#ffffff"
+                                : "#e8e8ec"
+        }
+
+        HoverHandler {
+            id: ftbHover
+            cursorShape: ftb.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            enabled: ftb.enabled
+        }
+        MouseArea {
+            id: ftbMouse
+            anchors.fill: parent
+            enabled: ftb.enabled
+            hoverEnabled: false
+            onClicked: ftb.clicked()
+        }
+        opacity: enabled ? 1.0 : 0.5
+    }
+
     // ─── 工具：把秒数格式化为 HH:MM:SS ───────────────────────────────────
     function fmtTime(sec) {
         if (!isFinite(sec) || sec < 0) sec = 0
@@ -69,76 +181,78 @@ ApplicationWindow {
     }
 
     // ─── 顶部工具栏 ──────────────────────────────────────────────────────
+    // 自绘 background：深色填充 + 底部 1px 分隔线，与视频区在视觉上彻底
+    // 切开。原先 ToolBar 用系统主题色，与视频黑底界限模糊，按钮按下时还
+    // 会引起整体重绘抖动。
     header: ToolBar {
+        id: topBar
+        height: 44
+        background: Rectangle {
+            color: "#17171a"
+            // 底部分隔线
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#000"
+            }
+        }
+
         RowLayout {
             anchors.fill: parent
-            anchors.margins: 6
-            spacing: 8
+            anchors.leftMargin: 8
+            anchors.rightMargin: 10
+            anchors.topMargin: 5
+            anchors.bottomMargin: 6
+            spacing: 6
 
-            Button {
+            FlatButton {
                 text: Engine.fileCount > 0 ? "新打开" : "打开"
-                focusPolicy: Qt.NoFocus  // 避免点击后拿走焦点并吞掉 Space 快捷键
                 onClicked: openDialog.open()
             }
-            Button {
+            FlatButton {
                 text: "添加"
-                focusPolicy: Qt.NoFocus
                 enabled: Engine.fileCount > 0 && Engine.fileCount < 9
                 onClicked: addDialog.open()
             }
-            ToolSeparator {}
-            Button {
+            Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
+            FlatButton {
                 text: "<<"
-                focusPolicy: Qt.NoFocus
                 enabled: Engine.duration > 0
-                ToolTip.text: "后退 5 秒"
-                ToolTip.visible: hovered
                 onClicked: Engine.seek(Math.max(0, Engine.position - 5))
             }
-            Button {
+            FlatButton {
                 text: "<"
-                focusPolicy: Qt.NoFocus
                 enabled: Engine.duration > 0
-                ToolTip.text: "上一帧"
-                ToolTip.visible: hovered
                 onClicked: Engine.stepFrame(-1)
             }
-            // 播放/暂停按钮：保持默认黑白风格，仅靠 ⏸/▶ 图标本身的差异区分状态
-            Button {
+            // 播放/暂停按钮：固定宽度，避免图标切换时旁边按钮抖动
+            FlatButton {
                 id: playPauseBtn
-                focusPolicy: Qt.NoFocus
                 enabled: Engine.fileCount > 0
-                // 固定宽度，避免图标切换时旁边按钮位置抖动
-                Layout.preferredWidth: 48
+                Layout.preferredWidth: 56
                 text: Engine.playing ? "⏸" : "▶"
                 font.pixelSize: 16
-                ToolTip.text: Engine.playing ? "暂停 (Space)" : "播放 (Space)"
-                ToolTip.visible: hovered
-                ToolTip.delay: 400
                 onClicked: Engine.togglePause()
             }
-            Button {
+            FlatButton {
                 text: ">"
-                focusPolicy: Qt.NoFocus
                 enabled: Engine.duration > 0
-                ToolTip.text: "下一帧"
-                ToolTip.visible: hovered
                 onClicked: Engine.stepFrame(1)
             }
-            Button {
+            FlatButton {
                 text: ">>"
-                focusPolicy: Qt.NoFocus
                 enabled: Engine.duration > 0
-                ToolTip.text: "前进 5 秒"
-                ToolTip.visible: hovered
                 onClicked: Engine.seek(Math.min(Engine.duration, Engine.position + 5))
             }
 
-            ToolSeparator {}
+            Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
 
             Label { text: "布局:"; color: "#bbb" }
             ComboBox {
                 id: layoutCombo
+                focusPolicy: Qt.NoFocus
                 model: root.multiLayoutNames
                 // 根据当前 Engine.layoutMode 反查在 multiLayoutValues 中的位置；
                 // Single 模式不在下拉列表，此时展示“进入 Single 之前”的布局。
@@ -239,11 +353,14 @@ ApplicationWindow {
     Shortcut { sequence: "9"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(8) }
 
     // ─── 视频网格容器 ────────────────────────────────────────────────────
+    // 顶部留 2px 余白，避免与 ToolBar 视觉粘连；同时让 cell 的 2px 选中边
+    // 框不被 ToolBar 阴影/分隔线压住。
     Item {
         id: videoArea
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
+        anchors.topMargin: 2
         anchors.bottom: parent.bottom
 
         focus: true
@@ -380,11 +497,12 @@ ApplicationWindow {
                         anchors.right: parent.right
                         anchors.bottom: parent.bottom
                         anchors.margins: 6
-                        height: 56
+                        height: 68
                         radius: 6
                         color: "#cc101014"
                         border.color: "#22ffffff"
                         border.width: 1
+                        clip: true   // 防止窄 cell 下子项溢出越界绘制
                         z: 10
 
                         // hover 联动：使用 HoverHandler.hovered，
@@ -400,11 +518,12 @@ ApplicationWindow {
                             anchors.rightMargin: 8
                             anchors.topMargin: 4
                             anchors.bottomMargin: 4
-                            spacing: 2
+                            spacing: 4
 
                             // 第一行：单路进度条 + 时间
                             RowLayout {
                                 Layout.fillWidth: true
+                                Layout.preferredHeight: 24
                                 spacing: 8
 
                                 Slider {
@@ -438,38 +557,44 @@ ApplicationWindow {
                             // 第二行：按钮组
                             // 注：按钮文本本身已足够直观（<< < ⏯ > >>），不再使用 ToolTip。
                             // ToolTip 弹出层会覆盖在按钮之上 → 触发 hover 抖动闪烁，体验极差。
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 4
+                            // 使用 Item + RowLayout 包裹 + Layout.fillWidth + clip 防止在窄 cell 下溢出。
+                            Item {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 28
+                                clip: true
+                                RowLayout {
+                                    anchors.centerIn: parent
+                                    spacing: 4
 
-                                ToolButton {
-                                    text: "<<"
-                                    focusPolicy: Qt.NoFocus
-                                    onClicked: Engine.seekAt(cell.playerIdx,
-                                                Math.max(0, cell._pos() - 5))
-                                }
-                                ToolButton {
-                                    text: "<"
-                                    focusPolicy: Qt.NoFocus
-                                    onClicked: Engine.stepFrameAt(cell.playerIdx, -1)
-                                }
-                                // 单路播放/暂停按钮：保持默认黑白风格，仅靠 ⏸/▶ 图标差异区分状态
-                                ToolButton {
-                                    id: cellPlayBtn
-                                    focusPolicy: Qt.NoFocus
-                                    text: cell._playing() ? "⏸" : "▶"
-                                    onClicked: Engine.togglePauseAt(cell.playerIdx)
-                                }
-                                ToolButton {
-                                    text: ">"
-                                    focusPolicy: Qt.NoFocus
-                                    onClicked: Engine.stepFrameAt(cell.playerIdx, 1)
-                                }
-                                ToolButton {
-                                    text: ">>"
-                                    focusPolicy: Qt.NoFocus
-                                    onClicked: Engine.seekAt(cell.playerIdx,
-                                                Math.min(cell._dur(), cell._pos() + 5))
+                                    FlatToolButton {
+                                        text: "<<"
+                                        implicitWidth: 32
+                                        onClicked: Engine.seekAt(cell.playerIdx,
+                                                    Math.max(0, cell._pos() - 5))
+                                    }
+                                    FlatToolButton {
+                                        text: "<"
+                                        implicitWidth: 28
+                                        onClicked: Engine.stepFrameAt(cell.playerIdx, -1)
+                                    }
+                                    // 单路播放/暂停按钮：保持图标差异区分状态
+                                    FlatToolButton {
+                                        id: cellPlayBtn
+                                        text: cell._playing() ? "⏸" : "▶"
+                                        implicitWidth: 36
+                                        onClicked: Engine.togglePauseAt(cell.playerIdx)
+                                    }
+                                    FlatToolButton {
+                                        text: ">"
+                                        implicitWidth: 28
+                                        onClicked: Engine.stepFrameAt(cell.playerIdx, 1)
+                                    }
+                                    FlatToolButton {
+                                        text: ">>"
+                                        implicitWidth: 32
+                                        onClicked: Engine.seekAt(cell.playerIdx,
+                                                    Math.min(cell._dur(), cell._pos() + 5))
+                                    }
                                 }
                             }
                         }

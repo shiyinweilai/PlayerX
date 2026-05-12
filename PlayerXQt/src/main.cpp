@@ -21,7 +21,9 @@ int main(int argc, char* argv[]) {
     app.setApplicationName("PlayerXQt");
     app.setOrganizationName("PlayerX");
 
-    QQuickStyle::setStyle("Fusion");
+    // 使用 Basic 风格，自绘 background/contentItem 委托才能生效。
+    // macOS 默认会套用原生 NSButton 风格 → 自绘失效、无 hover/press 反馈。
+    QQuickStyle::setStyle("Basic");
 
     avformat_network_init();
 
