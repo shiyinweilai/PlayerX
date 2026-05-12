@@ -183,6 +183,11 @@ ApplicationWindow {
     property bool compareSliderActive: false
     readonly property bool compareSliderAvailable: Engine.fileCount === 2
 
+    // cell 右上角 🔁 “替换本路”按钮 ↔ replaceDialog 的中转变量：
+    // FileDialog 是全局只一份，不能随 cell 上下文变化；点按钮时先写入该值，
+    // 对话框 onAccepted 里读取它去调 Engine.replaceAt(idx, url)。初值 -1 表示未选中。
+    property int pendingReplaceIdx: -1
+
     // 切换函数：仅在 fileCount === 2 时允许进入；离开 2 路场景时强制关闭
     function _toggleCompareSlider() {
         if (compareSliderActive) {
@@ -244,6 +249,23 @@ ApplicationWindow {
                     Engine.addFile(urls[i])
                 }
             }
+        }
+    }
+    // 「替换本路」对话框：单选文件，原地调用 Engine.replaceAt(idx, url)。
+    // 使用 root.pendingReplaceIdx 传递“哪一路要被替换”——FileDialog 不能绑定变量，
+    // 在 cell 点 🔁 时先写入该 idx，然后 open() 。
+    FileDialog {
+        id: replaceDialog
+        title: "替换本路视频文件"
+        fileMode: FileDialog.OpenFile
+        nameFilters: [
+            "视频文件 (*.mp4 *.mov *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv)",
+            "所有文件 (*)"
+        ]
+        onAccepted: {
+            var idx = root.pendingReplaceIdx
+            if (idx < 0 || idx >= Engine.fileCount) return
+            Engine.replaceAt(idx, selectedFile)
         }
     }
     // ─── 顶部工具栏 ──────────────────────────────────────────────────────
@@ -1236,6 +1258,79 @@ ApplicationWindow {
                                 text: Engine.fileNameAt(cell.playerIdx)
                                 elide: Text.ElideMiddle
                                 Layout.maximumWidth: Math.max(80, cell.width / 2)
+                            }
+                            // 【cell hover 工具按钮】三个同风格的圆点：➕ 新增一路、🔁 替换本路、✕ 关闭本路。
+                            // 仅 hover 本 cell 时可见，不污染观影画面。
+                            //  - ➕：Engine.fileCount >= 9 时置灰
+                            //  - 🔁：先写 root.pendingReplaceIdx 再弹 replaceDialog
+                            //  - ✕：调 Engine.closeAt(idx)，fileCount 变化会触发 visibleCount/Repeater
+                            //         重新求值，UI 自动收拢。
+                            Rectangle {
+                                Layout.preferredWidth: 18
+                                Layout.preferredHeight: 18
+                                Layout.leftMargin: 2
+                                radius: 9
+                                visible: cellHover.hovered
+                                opacity: addPathArea.enabled ? 1.0 : 0.45
+                                color: addPathArea.containsMouse && addPathArea.enabled ? "#3a8a3a"
+                                      : addPathArea.pressed && addPathArea.enabled    ? "#2c6a2c"
+                                                                                       : "#55ffffff"
+                                Behavior on color { ColorAnimation { duration: 90 } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "＋"
+                                    color: "white"
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                }
+                                MouseArea {
+                                    id: addPathArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    enabled: Engine.fileCount < 9
+                                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                                    onClicked: addDialog.open()
+                                }
+                                ToolTip.visible: addPathArea.containsMouse
+                                ToolTip.delay: 600
+                                ToolTip.timeout: 3000
+                                ToolTip.text: addPathArea.enabled ? "新增一路（可多选文件）" : "已达 9 路上限"
+                            }
+                            Rectangle {
+                                Layout.preferredWidth: 18
+                                Layout.preferredHeight: 18
+                                Layout.leftMargin: 2
+                                radius: 9
+                                visible: cellHover.hovered
+                                color: replaceArea.containsMouse ? "#3a78c8"
+                                      : replaceArea.pressed     ? "#2a5994"
+                                                                : "#55ffffff"
+                                Behavior on color { ColorAnimation { duration: 90 } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    // 用水平三点 ⋯（macOS/iOS/Material 通用的“更多/打开选项”语义），
+                                    // 避开 ↻ 与“重置/重新加载”视觉撞车。需要靠下半像素才视觉居中。
+                                    anchors.verticalCenterOffset: -1
+                                    text: "⋯"
+                                    color: "white"
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                }
+                                MouseArea {
+                                    id: replaceArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        // 记下“本 cell 要被替换”后弹对话框
+                                        root.pendingReplaceIdx = cell.playerIdx
+                                        replaceDialog.open()
+                                    }
+                                }
+                                ToolTip.visible: replaceArea.containsMouse
+                                ToolTip.delay: 600
+                                ToolTip.timeout: 3000
+                                ToolTip.text: "替换本路视频（保持序号不变）"
                             }
                             // 关闭本路的 ✕ 按钮：仅 hover 时出现。
                             // 调用 Engine.closeAt(idx) 后，fileCount 变化会触发 visibleCount/Repeater

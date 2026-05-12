@@ -78,6 +78,8 @@ public slots:
     // 文件管理
     bool openFiles(const QList<QUrl>& urls);
     bool addFile(const QUrl& url);
+    // 原地替换某一路（索引不变）；用于"换视频"按钮。
+    bool replaceAt(int idx, const QUrl& url);
     void closeAt(int idx);
     void closeAll();
 

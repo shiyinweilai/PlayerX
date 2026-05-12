@@ -93,6 +93,29 @@ int RBPlayerEngine::rbAddFile(const std::string& file) {
     return static_cast<int>(m_players.size()) - 1;
 }
 
+bool RBPlayerEngine::rbReplaceAt(int idx, const std::string& file) {
+    std::lock_guard<std::mutex> lk(m_mutex);
+    if (idx < 0 || idx >= static_cast<int>(m_players.size())) return false;
+    if (file.empty()) return false;
+
+    auto np = std::make_unique<RBVideoPlayer>();
+    if (!np->rbOpen(file)) {
+        // 打开失败：保持原 player 不变，由调用方决定是否提示用户。
+        return false;
+    }
+    // 与 rbAddFile 一致的初始化策略：脱离主时钟、继承全局倍速、若全局在播则起播。
+    np->rbEnableMasterClock(false);
+    np->rbSetSpeed(m_speed);
+    if (m_playing.load()) {
+        np->rbPlay();
+    }
+
+    // 关闭旧 player 后再原地替换槽位：索引保持不变，layout/UI 无需重排。
+    if (m_players[idx]) m_players[idx]->rbClose();
+    m_players[idx] = std::move(np);
+    return true;
+}
+
 void RBPlayerEngine::rbCloseAt(int idx) {
     std::lock_guard<std::mutex> lk(m_mutex);
     if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;

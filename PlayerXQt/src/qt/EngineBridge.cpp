@@ -105,6 +105,22 @@ bool EngineBridge::addFile(const QUrl& url) {
     return true;
 }
 
+bool EngineBridge::replaceAt(int idx, const QUrl& url) {
+    QString p = url.isLocalFile() ? url.toLocalFile() : url.toString();
+    if (p.isEmpty()) return false;
+    if (!m_engine->rbReplaceAt(idx, p.toStdString())) return false;
+
+    // 索引数量不变，但文件名/时长/位置都变了 → 通知 QML 刷新文件名条与悬浮控制条。
+    emit filesChanged();
+    emit positionChanged();
+    emit durationChanged();
+    emit playingChanged();
+    emit requestRepaint();
+    // 暂停态下让首帧立刻可见，避免画面残留为旧帧
+    if (auto* pl = m_engine->rbAt(idx)) pl->rbRefreshPausedFrame(200);
+    return true;
+}
+
 void EngineBridge::closeAt(int idx) {
     int n = fileCount();
     if (idx < 0 || idx >= n) return;

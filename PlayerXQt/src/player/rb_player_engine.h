@@ -38,6 +38,10 @@ public:
     bool rbOpenFiles(const std::vector<std::string>& files);
     // 追加一路；返回新 index，失败返回 -1
     int  rbAddFile(const std::string& file);
+    // 原地替换某一路：保持索引不变，关闭旧文件、打开新文件。
+    // 与 rbAddFile 行为一致：脱离主时钟、继承全局倍速、若全局在播则该路从 0 起播。
+    // 失败（idx 越界 / rbOpen 失败）时返回 false 且尽量保持原状。
+    bool rbReplaceAt(int idx, const std::string& file);
     // 关闭某一路（保留槽位为 nullptr 的语义：不留洞，直接 erase）
     void rbCloseAt(int idx);
     // 关闭全部
