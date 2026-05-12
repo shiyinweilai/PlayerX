@@ -162,6 +162,20 @@ ApplicationWindow {
     // cell 自身仍保留右键的局部开关（localInfoVisible），二者取或。
     property bool globalInfoVisible: false
 
+    // 全局“通道信息”开关（设置菜单 / 快捷键 C 控制）。
+    // 控制每个窗口左上角的序号徽标 + 右上角的文件名。默认 true。
+    property bool globalChannelVisible: true
+
+    // 全屏拑制：按 F 进入全屏后，V/C 对应的叠加元素默认隐藏，但仍可
+    // 再按 V/C 售起。本质是一个“临时压制”标志，被Pick V/C 按下时会被清除。
+    // 退出全屏时也会被清除。
+    property bool fullscreenSuppressInfo:    false
+    property bool fullscreenSuppressChannel: false
+
+    // 实际是否显示：全局开关 且 不处于全屏拑制状态。
+    readonly property bool effectiveInfoVisible:    globalInfoVisible    && !fullscreenSuppressInfo
+    readonly property bool effectiveChannelVisible: globalChannelVisible && !fullscreenSuppressChannel
+
     // ─── 文件选择 ────────────────────────────────────────────────────────
     FileDialog {
         id: openDialog
@@ -405,13 +419,61 @@ ApplicationWindow {
                     contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
                 }
 
+                // ── 通道信息显示（全局开关，快捷键 C，默认开启）──
+                // 控制每个窗口的左上角序号徽标 + 右上角文件名 Label。
+                MenuItem {
+                    id: channelItem
+                    text: "通道信息 (C)"
+                    checkable: true
+                    checked: root.globalChannelVisible
+                    onTriggered: {
+                        // 处于全屏抑制态时：先清掉抑制并强制显示
+                        if (root.fullscreenSuppressChannel) {
+                            root.fullscreenSuppressChannel = false
+                            root.globalChannelVisible = true
+                        } else {
+                            root.globalChannelVisible = !root.globalChannelVisible
+                        }
+                    }
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: channelItem.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text {
+                            leftPadding: 10
+                            text: channelItem.checked ? "✓" : ""
+                            color: "#6a9fd8"
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.minimumWidth: 22
+                        }
+                        Text {
+                            text: channelItem.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+
                 // ── 视频信息显示（全局开关，快捷键 V）──
                 MenuItem {
                     id: infoItem
                     text: "视频信息 (V)"
                     checkable: true
                     checked: root.globalInfoVisible
-                    onTriggered: root.globalInfoVisible = !root.globalInfoVisible
+                    onTriggered: {
+                        if (root.fullscreenSuppressInfo) {
+                            root.fullscreenSuppressInfo = false
+                            root.globalInfoVisible = true
+                        } else {
+                            root.globalInfoVisible = !root.globalInfoVisible
+                        }
+                    }
                     implicitHeight: 30
                     background: Rectangle {
                         radius: 4
@@ -454,10 +516,29 @@ ApplicationWindow {
         sequence: "Space"; context: Qt.ApplicationShortcut
         onActivated: Engine.togglePause()
     }
-    // V：切换全局显示视频信息
+    // V：切换全局显示视频信息。全屏拑制状下会先清拑再强制显示。
     Shortcut {
         sequence: "V"; context: Qt.ApplicationShortcut
-        onActivated: root.globalInfoVisible = !root.globalInfoVisible
+        onActivated: {
+            if (root.fullscreenSuppressInfo) {
+                root.fullscreenSuppressInfo = false
+                root.globalInfoVisible = true
+            } else {
+                root.globalInfoVisible = !root.globalInfoVisible
+            }
+        }
+    }
+    // C：切换全局通道信息（序号+文件名）。全屏拑制状下会先清拑再强制显示。
+    Shortcut {
+        sequence: "C"; context: Qt.ApplicationShortcut
+        onActivated: {
+            if (root.fullscreenSuppressChannel) {
+                root.fullscreenSuppressChannel = false
+                root.globalChannelVisible = true
+            } else {
+                root.globalChannelVisible = !root.globalChannelVisible
+            }
+        }
     }
     Shortcut {
         sequence: "Left"; context: Qt.ApplicationShortcut
@@ -477,8 +558,20 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "F"; context: Qt.ApplicationShortcut
-        onActivated: root.visibility = (root.visibility === Window.FullScreen)
-                     ? Window.AutomaticVisibility : Window.FullScreen
+        onActivated: {
+            var goingFullscreen = (root.visibility !== Window.FullScreen)
+            root.visibility = goingFullscreen
+                ? Window.FullScreen : Window.AutomaticVisibility
+            // 进入全屏：默认拑制 V/C 的叠加显示，但保留开关本身的值，
+            // 用户可以再按 V/C 售起。退出全屏：清除拑制，恢复平常表现。
+            if (goingFullscreen) {
+                root.fullscreenSuppressInfo    = true
+                root.fullscreenSuppressChannel = true
+            } else {
+                root.fullscreenSuppressInfo    = false
+                root.fullscreenSuppressChannel = false
+            }
+        }
     }
     Shortcut {
         sequence: "S"; context: Qt.ApplicationShortcut
@@ -611,7 +704,7 @@ ApplicationWindow {
                         playerIndex: cell.playerIdx
                     }
 
-                    // 序号徽标
+                    // 序号徽标（受全局“通道信息”开关控制，默认显示）
                     Rectangle {
                         anchors.left: parent.left
                         anchors.top: parent.top
@@ -619,6 +712,7 @@ ApplicationWindow {
                         width: 22; height: 22; radius: 4
                         color: "#cc000000"
                         z: 5
+                        visible: root.effectiveChannelVisible
                         Label {
                             anchors.centerIn: parent
                             text: cell.playerIdx + 1
@@ -627,7 +721,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // 文件名（顶部右侧，避免和底部工具条重叠）
+                    // 文件名（顶部右侧，避免和底部工具条重叠；受全局“通道信息”开关控制）
                     Label {
                         anchors.right: parent.right
                         anchors.top: parent.top
@@ -637,6 +731,7 @@ ApplicationWindow {
                         background: Rectangle { color: "#aa000000"; radius: 3 }
                         leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
                         z: 5
+                        visible: root.effectiveChannelVisible
                     }
 
                     // 鼠标交互：单击选中、双击切换该路暂停
@@ -664,9 +759,10 @@ ApplicationWindow {
                         }
                     }
 
-                    // 右键信息面板开关状态：局部（右键）+ 全局（设置菜单/V）
+                    // 右键信息面板开关状态：局部（右键）+ 全局（设置菜单/V）。
+                    // 全局部分走 effectiveInfoVisible，全屏拑制后不显示。局部右键仍以实体为准。
                     property bool localInfoVisible: false
-                    readonly property bool infoVisible: localInfoVisible || root.globalInfoVisible
+                    readonly property bool infoVisible: localInfoVisible || root.effectiveInfoVisible
 
                     // ─── 右键视频信息面板 ──────────────────────────────────
                     // 固定显示在 cell 左上角（序号徽标下方），右键再次点击关闭。
