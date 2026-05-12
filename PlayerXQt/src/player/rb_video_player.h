@@ -110,6 +110,13 @@ public:
 private:
     void rbReleaseCurrentFrame();
 
+    // 切换 currentFrame 前调用：根据新帧 PTS 与当前帧 PTS 的差更新连续帧序号。
+    //   - dt ≈ +fd（±0.5fd 容差）→ index += 1（严格下一显示帧）
+    //   - dt ≈ -fd                → index -= 1
+    //   - 其他（首帧 / seek / 大跨度跳）→ 用 PTS·fps 重新校准
+    // 这样可以避开"基于 PTS/duration 推算帧号"在 B 帧 / VFR / PTS 偏移下的跳变。
+    void rbUpdateFrameIndex(double newPts);
+
     std::unique_ptr<RBDemuxer>    m_demuxer;
     std::unique_ptr<RBDecoder>    m_decoder;
     std::unique_ptr<RBFrameQueue> m_frameQueue;
@@ -123,6 +130,10 @@ private:
     AVFrame*                      m_currentFrame{nullptr};
     double                        m_currentFramePts{0.0};
     AVRational                    m_videoTimeBase{1, 1};
+
+    // 当前显示帧的连续序号（按显示顺序 0,1,2,…），由 rbUpdateFrameIndex 维护。
+    // 对应 rbCurrentFrameNum() 的返回值；不再用 pts/duration 推算。
+    int64_t                       m_displayFrameIndex{0};
 
     // 播放时钟
     double                        m_playStartWallTime{0.0}; // 开始播放时的系统时间

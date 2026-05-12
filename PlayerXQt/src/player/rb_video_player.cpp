@@ -105,6 +105,7 @@ void RBVideoPlayer::rbClose() {
     m_playStartWallTime = 0.0;
     m_playStartPts      = 0.0;
     m_seekPending       = false;
+    m_displayFrameIndex = 0;
 }
 
 void RBVideoPlayer::rbPlay() {
@@ -268,6 +269,7 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
             // 弹出并替换当前帧
             AVFrame* f = m_frameQueue->rbPop();
             if (f) {
+                rbUpdateFrameIndex(framePts);
                 rbReleaseCurrentFrame();
                 m_currentFrame    = f;
                 m_currentFramePts = framePts;
@@ -327,23 +329,34 @@ void RBVideoPlayer::rbStepFrame(int n) {
     const double curCt = m_currentTime.load();
     const double cur   = std::max(curFp, curCt);
 
-    // ─── 快路径：前进若干帧（≤3）时直接从 frameQueue 顺序消费 ─────────────
+    // ─── 快路径：前进时直接从 frameQueue 顺序消费（严格逐帧）─────────────
     // 解码线程在播放/暂停态都会持续把后续帧 push 进队列（kCapacity=8），
     // 因此连按"前进一帧"时，队列里通常已经存在 PTS > 当前 PTS 的下一帧。
     // 走"pop 即换帧"的路径，完全不触发 av_seek_frame / 线程同步，几乎零开销。
+    //
+    // 关键改进：队列暂时为空时，短超时等待解码线程产出新帧，而不是立刻 fallback
+    // 到 seek 慢路径。多路场景下，慢路径以 fd/2 为阈值丢帧、且 PTS/duration 取整
+    // 在 GOP 边界附近会累积误差，导致"实际命中 PTS"跨 N 帧——表现为帧号跳变。
+    // 走快路径则严格 +1 帧，所有路完全一致。
+    //
     // 仅在以下情况 fallback 到 seek 慢路径：
     //   - n < 0（后退）：解码线程不能反向产帧，必须 seek
-    //   - |n| > 3：避免一次连吞过多帧导致队列见底再阻塞
-    //   - 队列没有 PTS > 当前 PTS 的帧（已到末端或刚 seek 过）
-    if (n > 0 && n <= 3) {
+    //   - 等待解码超时（已到末端 / EOF）
+    if (n > 0) {
         bool ok = true;
         for (int i = 0; i < n && ok; ++i) {
             ok = false;
-            // 持续 pop 直到找到 PTS > 当前 PTS 的帧（队列里可能有重复或较旧的帧）
-            // 大多数情况下第一个 peek 就是下一帧。
-            while (true) {
+            using clock = std::chrono::steady_clock;
+            // 单帧最多等 200ms（够解码线程产出 1-2 帧；EOF / 卡顿场景才会超时）
+            auto deadline = clock::now() + std::chrono::milliseconds(200);
+
+            while (clock::now() < deadline) {
                 AVFrame* peek = m_frameQueue->rbPeek();
-                if (!peek) break; // 队列空，退出本次步进的 fast path
+                if (!peek) {
+                    // 队列空：让出 CPU 让解码线程产出下一帧
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    continue;
+                }
                 int64_t rawPts = (peek->best_effort_timestamp != AV_NOPTS_VALUE)
                                 ? peek->best_effort_timestamp
                                 : peek->pts;
@@ -361,6 +374,7 @@ void RBVideoPlayer::rbStepFrame(int n) {
                 // 命中下一帧：替换 currentFrame
                 AVFrame* f = m_frameQueue->rbPop();
                 if (f) {
+                    rbUpdateFrameIndex(framePts);
                     rbReleaseCurrentFrame();
                     m_currentFrame      = f;
                     m_currentFramePts   = framePts;
@@ -375,7 +389,7 @@ void RBVideoPlayer::rbStepFrame(int n) {
             if (!ok) break;
         }
         if (ok) return; // 快路径成功，结束
-        // 快路径失败（队列空/见底），落到下方 seek 慢路径
+        // 快路径失败（等待超时 / EOF），落到下方 seek 慢路径作为兜底
     }
 
     // ─── 慢路径：seek 到目标帧 PTS 附近，再用帧级阈值丢前置帧 ─────────────
@@ -421,6 +435,7 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
 
             AVFrame* f = m_frameQueue->rbPop();
             if (f) {
+                rbUpdateFrameIndex(framePts);
                 rbReleaseCurrentFrame();
                 m_currentFrame    = f;
                 m_currentFramePts = framePts;
@@ -470,6 +485,7 @@ bool RBVideoPlayer::rbRefreshPausedFrame(int timeoutMs) {
             // 弹出目标帧作为当前显示帧
             AVFrame* f = m_frameQueue->rbPop();
             if (f) {
+                rbUpdateFrameIndex(framePts);
                 rbReleaseCurrentFrame();
                 m_currentFrame    = f;
                 m_currentFramePts = framePts;
@@ -497,19 +513,47 @@ void RBVideoPlayer::rbReleaseCurrentFrame() {
 // ─── 帧信息查询 ──────────────────────────────────────────────────────────────
 
 int64_t RBVideoPlayer::rbCurrentFrameNum() const {
+    // 直接返回按显示顺序自增的连续帧序号（由 rbUpdateFrameIndex 维护）。
+    //
+    // 不再使用 m_currentFrame->pts / duration 推算，原因：
+    //   1. 含 B 帧的 GOP，PTS 不是"显示顺序的等差数列"，pts/dur 会出现
+    //      0,1,2,2,3,4,4,5… 这种重复或跳变（跨路 GOP 结构不同更明显）；
+    //   2. VFR 视频每帧 duration 不一致，pts/avgDur 误差累积；
+    //   3. 容器 start_time 偏移会让首帧帧号偏离 0。
+    // 自增序号在快路径每帧 +1，seek/大跨度跳时按 PTS·fps 重校准，
+    // 多路全程严格一致，符合用户对"连按下一帧就 +1"的直觉。
     if (!m_currentFrame) return 0;
-    // 与 display.cpp 完全一致：left_frame->pts / ffmpeg::frame_duration(left_frame)
-    // frame->duration 即 pkt_duration（已在 hw transfer 时正确拷贝）
-    int64_t dur = m_currentFrame->duration;
-    if (dur <= 0) {
-        // 回退：用 r_frame_rate 估算（软解或旧版 FFmpeg）
-        if (!m_demuxer) return 0;
-        double fd = rbFrameDuration();
-        if (fd <= 0.0) return 0;
-        dur = static_cast<int64_t>(fd / av_q2d(m_demuxer->rbVideoTimeBase()) + 0.5);
+    return m_displayFrameIndex;
+}
+
+void RBVideoPlayer::rbUpdateFrameIndex(double newPts) {
+    // 在替换 m_currentFrame 之前调用：根据 newPts 与当前帧 PTS 的差更新序号。
+    if (!m_currentFrame) {
+        // 首帧：用 PTS·fps 估算起始序号（容器 start_time 不为 0 时也能对）。
+        double fps = rbFps();
+        m_displayFrameIndex = (fps > 0.0)
+            ? static_cast<int64_t>(newPts * fps + 0.5)
+            : 0;
+        return;
     }
-    if (dur <= 0) return 0;
-    return m_currentFrame->pts / dur;
+    const double fd = rbFrameDuration();
+    if (fd <= 0.0) {
+        m_displayFrameIndex += 1;
+        return;
+    }
+    const double dt = newPts - m_currentFramePts;
+    // ±0.5fd 容差判定"严格相邻一帧"
+    if (dt > fd * 0.5 && dt < fd * 1.5) {
+        m_displayFrameIndex += 1;             // 严格下一显示帧
+    } else if (dt < -fd * 0.5 && dt > -fd * 1.5) {
+        m_displayFrameIndex -= 1;             // 严格上一显示帧
+    } else {
+        // seek / 大跨度跳：按 PTS·fps 重校准
+        double fps = rbFps();
+        m_displayFrameIndex = (fps > 0.0)
+            ? static_cast<int64_t>(newPts * fps + 0.5)
+            : m_displayFrameIndex + (dt > 0 ? 1 : -1);
+    }
 }
 
 char RBVideoPlayer::rbCurrentFrameType() const {
