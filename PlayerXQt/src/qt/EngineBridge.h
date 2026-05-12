@@ -80,6 +80,9 @@ public slots:
     void pause();
     void togglePause();
     void seek(double seconds);
+    // 相对 seek：每路在各自当前位置上 ±delta，独立时钟的路不被对齐到主时钟。
+    // 顶部 << / >> 按钮使用，区别于绝对 seek（进度条拖拽）。
+    void seekRelative(double deltaSeconds);
     void stepFrame(int n);
 
     // 单路控制

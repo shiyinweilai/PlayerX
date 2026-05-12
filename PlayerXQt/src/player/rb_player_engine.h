@@ -52,6 +52,12 @@ public:
     void rbPause();
     void rbTogglePause();
     void rbSeek(double seconds);
+    // 相对 seek：每路在各自当前位置上 ±delta，独立时钟的路不被对齐。
+    //   - 主时钟下的路：以主时钟当前位置 + delta 作为统一目标（仍对齐）
+    //   - 独立时钟（已脱离主时钟）的路：以该路自己的 currentTime + delta
+    // 这样 a 单路独立暂停在 ta 时按全局 +5s，a 跳到 ta+5；其他路跳到 tm+5，
+    // 不会强行把 a 拉到 tm+5（即"对齐主时钟"）。
+    void rbSeekRelative(double deltaSeconds);
     void rbStepFrame(int n); // 全局逐帧
 
     // ─── 单路控制（不影响其他路；用于多窗口独立操作）─────────────────
@@ -60,7 +66,9 @@ public:
     void rbStepFrameAt(int idx, int n);
 
     // ─── 状态查询 ─────────────────────────────────────────────────────
-    bool   rbIsPlaying()   const { return m_playing.load(); }
+    // 注意：rbIsPlaying 语义为"任一路在播即算播放中"（含独立时钟下的路），
+    // 实现位于 .cpp 中（需要持锁遍历 players）。
+    bool   rbIsPlaying()   const;
     double rbPosition()    const; // 全局主时钟（秒）
     double rbDuration()    const; // 所有路 duration 的最大值
     bool   rbIsAllEnded()  const;

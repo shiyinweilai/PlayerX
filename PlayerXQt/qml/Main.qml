@@ -220,7 +220,8 @@ ApplicationWindow {
             FlatButton {
                 text: "<<"
                 enabled: Engine.duration > 0
-                onClicked: Engine.seek(Math.max(0, Engine.position - 5))
+                // 相对快退：每路在自己当前位置 -5s，独立时钟的路不被对齐到主时钟
+                onClicked: Engine.seekRelative(-5)
             }
             FlatButton {
                 text: "<"
@@ -244,7 +245,15 @@ ApplicationWindow {
             FlatButton {
                 text: ">>"
                 enabled: Engine.duration > 0
-                onClicked: Engine.seek(Math.min(Engine.duration, Engine.position + 5))
+                // 相对快进：每路在自己当前位置 +5s，独立时钟的路不被对齐到主时钟
+                onClicked: Engine.seekRelative(5)
+            }
+            // 全局重置：所有路 seek 回 0（与快捷键 R 等价）
+            FlatButton {
+                text: "⟲"
+                font.pixelSize: 16
+                enabled: Engine.fileCount > 0
+                onClicked: Engine.seek(0)
             }
 
             Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }

@@ -182,6 +182,16 @@ void EngineBridge::seek(double s){
     }
     emit requestRepaint();
 }
+void EngineBridge::seekRelative(double delta) {
+    if (!m_engine) return;
+    m_engine->rbSeekRelative(delta);
+    // 与 seek() 一致：立刻同步 m_lastPosition 并广播 positionChanged，
+    // 让顶部进度条 + 单路 cellSlider（绑定 positionAt(idx)）立刻贴到新位置。
+    double pos = m_engine->rbPosition();
+    if (std::abs(pos - m_lastPosition) > 1e-6) m_lastPosition = pos;
+    emit positionChanged();
+    emit requestRepaint();
+}
 void EngineBridge::stepFrame(int n) {
     if (!m_engine) return;
     m_engine->rbStepFrame(n);

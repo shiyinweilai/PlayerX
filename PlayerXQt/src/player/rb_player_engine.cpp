@@ -110,11 +110,22 @@ void RBPlayerEngine::rbPlay() {
     std::lock_guard<std::mutex> lk(m_mutex);
     if (m_players.empty()) return;
 
-    // 末尾点击播放 = 自动 replay：
-    // 单路 RBVideoPlayer::rbPlay() 检测到 Ended 会自动 seek 回 0，但引擎层的
-    // m_pausedPts 仍停留在 duration —— 若不在这里复位主时钟锚点，下一次
-    // rbTick 会用 m_anchorPts(=duration) 把刚 seek 到 0 的单路重新拉回末尾，
-    // 进度条也始终显示末尾。所以一旦发现"全部 Ended"就把锚点复位到 0。
+    // ────────────────────────────────────────────────────────────────
+    // 全局 ▶ 语义（用户需求）：不对齐时间戳。
+    //   - 已经在独立播放（脱离主时钟）的路：完全不动，让它继续按自己时
+    //     钟播；
+    //   - 已经在主时钟下播放的路：继续播；
+    //   - 仅"当前暂停"的路（既没走主时钟、也没在独立播放）：从它各自
+    //     停下的位置恢复播放，并继续走独立时钟（不重新加入主时钟，
+    //     避免被主时钟的 anchorPts 拉到其他位置造成"加速追赶"）。
+    //
+    // 结果：每路从各自停下的位置接着播；不会强行把某路时间戳对齐到
+    // 其他路，符合用户期望的"全局 ▶ = 全部继续播"。
+    // ────────────────────────────────────────────────────────────────
+
+    // 末尾点击 ▶ = 自动 replay：单路 RBVideoPlayer::rbPlay() 检测到 Ended
+    // 会自动 seek 回 0，引擎层的 m_pausedPts 仍停留在 duration。这里把
+    // 锚点复位到 0，避免主时钟下一次 tick 把刚 replay 到 0 的路再次拉到末尾。
     bool allEnded = true;
     for (auto& p : m_players) {
         if (!p) continue;
@@ -124,19 +135,45 @@ void RBPlayerEngine::rbPlay() {
         m_pausedPts  = 0.0;
         m_anchorPts  = 0.0;
         m_anchorWall = rbWallTime();
+        // 全部 Ended 场景下让所有路重新加入主时钟，从 0 开始齐播
+        for (auto& p : m_players) {
+            if (!p) continue;
+            p->rbEnableMasterClock(true);
+            p->rbPlay();
+        }
+        if (!m_playing.load()) {
+            m_anchorWall = rbWallTime();
+            m_anchorPts  = 0.0;
+            m_playing.store(true);
+        }
+        return;
     }
 
+    // 非"全部 Ended"场景：保留每路当前状态（独立播放/独立暂停/主时钟），
+    // 只对"当前没在播"的路单独恢复播放，不重置锚点。
     if (!m_playing.load()) {
-        // 从暂停恢复：以 m_pausedPts 作为新的锚点 PTS，并重置 wall 锚点
+        // 引擎全局处于暂停态（主时钟没在跑）。把"主时钟仍在用且当前暂停
+        // 的路"拉回主时钟模式下播放：以 m_pausedPts 作为锚点。
         m_anchorWall = rbWallTime();
         m_anchorPts  = m_pausedPts;
         m_playing.store(true);
+        for (auto& p : m_players) {
+            if (!p) continue;
+            // 仅对"还在主时钟模式"的路重新走主时钟 ▶；脱离主时钟的单路
+            // （独立播放或独立暂停）保留各自状态不动。
+            if (p->rbUseMasterClock()) {
+                p->rbPlay();
+            }
+        }
     }
+
+    // 把"独立暂停"的路单独恢复播放（仍走独立时钟，不强行加入主时钟）。
+    // 避免被主时钟的 anchorPts 拉到其他位置 = 不会"加速追赶"。
     for (auto& p : m_players) {
         if (!p) continue;
-        // 重新启用主时钟（之前可能被单路操作关过）
-        p->rbEnableMasterClock(true);
-        p->rbPlay();
+        if (!p->rbUseMasterClock() && !p->rbIsPlaying()) {
+            p->rbPlay();   // 独立时钟下从各自停下的位置继续
+        }
     }
 }
 
@@ -148,9 +185,23 @@ void RBPlayerEngine::rbPause() {
         m_pausedPts = rbComputeMasterLocked();
         m_playing.store(false);
     }
+    // 全局暂停语义：所有路都停（含脱离主时钟的独立播放路）。
+    // 注意不修改 rbUseMasterClock 标志：保留各路"是否走主时钟"的状态，
+    // 下次全局 ▶ 时仍能让独立的路从各自停下的位置接着播，不被对齐。
     for (auto& p : m_players) {
         if (p) p->rbPause();
     }
+}
+
+bool RBPlayerEngine::rbIsPlaying() const {
+    // "全局是否在播"语义：只要有任一路在播就算播放中（含独立时钟下的路）。
+    // 这样全局 ▶/⏸ 按钮在"a 暂停、bc 独立播放"场景下也能正确显示 ⏸ 图标。
+    if (m_playing.load()) return true;
+    std::lock_guard<std::mutex> lk(m_mutex);
+    for (auto& p : m_players) {
+        if (p && p->rbIsPlaying()) return true;
+    }
+    return false;
 }
 
 void RBPlayerEngine::rbTogglePause() {
@@ -181,6 +232,51 @@ void RBPlayerEngine::rbSeek(double seconds) {
         }
     }
 }
+
+void RBPlayerEngine::rbSeekRelative(double deltaSeconds) {
+    // ────────────────────────────────────────────────────────────────
+    // 全局相对 seek（前进/后退按钮）：
+    //   - 主时钟下的路：以主时钟当前位置 + delta 作为统一目标（仍齐播）
+    //   - 独立时钟下的路（已脱离主时钟）：以该路自身 currentTime + delta，
+    //     不被强行对齐到主时钟位置。
+    //
+    // 这与"用户在顶部进度条上拖拽"的语义不同——拖拽是绝对 seek，期望
+    // 全部跳到同一位置；按 << / >> 是"全部 ±N 秒"，应保留每路相对位置。
+    // ────────────────────────────────────────────────────────────────
+    std::lock_guard<std::mutex> lk(m_mutex);
+    if (m_players.empty()) return;
+
+    // 1) 主时钟那批路：算统一目标 + clamp，并更新主时钟锚点
+    double masterCur    = rbComputeMasterLocked();
+    double masterTarget = std::max(0.0, masterCur + deltaSeconds);
+    m_anchorWall = rbWallTime();
+    m_anchorPts  = masterTarget;
+    m_pausedPts  = masterTarget;
+
+    for (auto& p : m_players) {
+        if (!p) continue;
+        if (p->rbUseMasterClock()) {
+            // 主时钟路：跳到统一目标（clamp 到自身 duration）
+            double dur = p->rbDuration();
+            double t   = (dur > 0.0) ? std::min(masterTarget, dur) : masterTarget;
+            p->rbSeekTo(t);
+            if (!m_playing.load()) {
+                p->rbRefreshPausedFrame(200);
+            }
+        } else {
+            // 独立时钟路：基于该路自身当前位置 ±delta
+            double cur = p->rbCurrentTime();
+            double dur = p->rbDuration();
+            double t   = std::max(0.0, cur + deltaSeconds);
+            if (dur > 0.0) t = std::min(t, dur);
+            p->rbSeekTo(t);
+            if (!p->rbIsPlaying()) {
+                p->rbRefreshPausedFrame(200);
+            }
+        }
+    }
+}
+
 
 void RBPlayerEngine::rbStepFrame(int n) {
     // ───────────────────────────────────────────────────────────────────
