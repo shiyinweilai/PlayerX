@@ -545,6 +545,35 @@ ApplicationWindow {
                                         }
                                     }
                                     onMoved: Engine.seekAt(cell.playerIdx, value)
+
+                                    // 自绘轨道：左侧（已播放）= 亮白；右侧（未播放）= 暗灰
+                                    background: Rectangle {
+                                        x: cellSlider.leftPadding
+                                        y: cellSlider.topPadding + cellSlider.availableHeight / 2 - height / 2
+                                        implicitWidth: 200
+                                        implicitHeight: 4
+                                        width: cellSlider.availableWidth
+                                        height: implicitHeight
+                                        radius: 2
+                                        color: "#3a3a40"   // 未播放（右侧）暗灰
+                                        Rectangle {
+                                            width: cellSlider.visualPosition * parent.width
+                                            height: parent.height
+                                            color: "#f0f0f3"   // 已播放（左侧）亮白
+                                            radius: 2
+                                        }
+                                    }
+
+                                    handle: Rectangle {
+                                        x: cellSlider.leftPadding + cellSlider.visualPosition * (cellSlider.availableWidth - width)
+                                        y: cellSlider.topPadding + cellSlider.availableHeight / 2 - height / 2
+                                        implicitWidth: 14
+                                        implicitHeight: 14
+                                        radius: 7
+                                        color: cellSlider.pressed ? "#ffffff" : "#f0f0f3"
+                                        border.color: "#80000000"
+                                        border.width: 1
+                                    }
                                 }
 
                                 Label {
