@@ -8,6 +8,7 @@
 
 #include <QFileInfo>
 #include <QUrl>
+#include <QVariantMap>
 #include <algorithm>
 
 namespace rbqt {
@@ -265,6 +266,20 @@ double EngineBridge::durationAt(int idx) const {
 bool EngineBridge::playingAt(int idx) const {
     if (auto* p = playerAt(idx)) return p->rbIsPlaying();
     return false;
+}
+
+QVariantMap EngineBridge::videoInfoAt(int idx) const {
+    QVariantMap info;
+    auto* p = playerAt(idx);
+    if (!p) return info;
+    info["codec"]     = QString::fromStdString(p->rbCodecName());
+    info["width"]     = p->rbWidth();
+    info["height"]    = p->rbHeight();
+    info["fps"]       = p->rbFps();
+    info["frameNum"]  = static_cast<qlonglong>(p->rbCurrentFrameNum());
+    info["frameType"] = QString(QChar(p->rbCurrentFrameType()));
+    info["pts"]       = p->rbCurrentTime();
+    return info;
 }
 
 // ════════════════════════════════════════════════════════════════════════

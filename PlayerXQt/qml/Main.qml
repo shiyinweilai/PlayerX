@@ -551,12 +551,143 @@ ApplicationWindow {
                     MouseArea {
                         id: cellMouse
                         anchors.fill: parent
-                        acceptedButtons: Qt.LeftButton
-                        onClicked: {
-                            Engine.activeIndex = cell.playerIdx
-                            videoArea.forceActiveFocus()
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: (mouse) => {
+                            if (mouse.button === Qt.RightButton) {
+                                // 右键：刷新信息并切换信息面板显示
+                                cell.infoVisible = !cell.infoVisible
+                            } else {
+                                Engine.activeIndex = cell.playerIdx
+                                videoArea.forceActiveFocus()
+                            }
                         }
-                        onDoubleClicked: Engine.togglePauseAt(cell.playerIdx)
+                        onDoubleClicked: (mouse) => {
+                            if (mouse.button === Qt.LeftButton)
+                                Engine.togglePauseAt(cell.playerIdx)
+                        }
+                    }
+
+                    // 右键信息面板开关状态
+                    property bool infoVisible: false
+
+                    // ─── 右键视频信息面板 ──────────────────────────────────
+                    // 固定显示在 cell 左上角（序号徽标下方），右键再次点击关闭。
+                    // 每次 positionChanged 时自动刷新帧号/帧类型/pts。
+                    Rectangle {
+                        id: infoPanel
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.leftMargin: 6
+                        anchors.topMargin: 34   // 序号徽标(22px) + 6px margin + 6px gap
+                        width: infoPanelCol.implicitWidth + 20
+                        height: infoPanelCol.implicitHeight + 16
+                        radius: 6
+                        color: "#dd0d0d10"
+                        border.color: "#33ffffff"
+                        border.width: 1
+                        z: 20
+                        visible: cell.infoVisible
+                        clip: true
+
+                        // 每次 position 变化时刷新动态信息（帧号/帧类型/pts）
+                        property var info: ({})
+                        function refreshInfo() {
+                            info = Engine.videoInfoAt(cell.playerIdx)
+                        }
+                        Connections {
+                            target: Engine
+                            function onPositionChanged() {
+                                if (infoPanel.visible) infoPanel.refreshInfo()
+                            }
+                        }
+                        // 面板变为可见时立刻刷新一次
+                        onVisibleChanged: { if (visible) refreshInfo() }
+
+                        ColumnLayout {
+                            id: infoPanelCol
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.leftMargin: 10
+                            anchors.topMargin: 8
+                            spacing: 3
+
+                            // 标题行
+                            Text {
+                                text: "视频信息"
+                                color: "#ffffff"
+                                font.pixelSize: 11
+                                font.bold: true
+                                opacity: 0.9
+                            }
+                            // 分隔线
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 1
+                                color: "#44ffffff"
+                                Layout.rightMargin: 10
+                            }
+
+                            // 信息行组件（复用）
+                            component InfoRow: RowLayout {
+                                property string label: ""
+                                property string value: ""
+                                spacing: 6
+                                Text {
+                                    text: label + ":"
+                                    color: "#9a9aa8"
+                                    font.pixelSize: 11
+                                    Layout.minimumWidth: 52
+                                }
+                                Text {
+                                    text: value
+                                    color: "#e8e8ec"
+                                    font.pixelSize: 11
+                                    font.family: "Menlo, Monaco, Courier New, monospace"
+                                }
+                            }
+
+                            InfoRow {
+                                label: "编解码"
+                                value: (infoPanel.info.codec || "—").toUpperCase()
+                            }
+                            InfoRow {
+                                label: "分辨率"
+                                value: (infoPanel.info.width && infoPanel.info.height)
+                                       ? (infoPanel.info.width + " × " + infoPanel.info.height)
+                                       : "—"
+                            }
+                            InfoRow {
+                                label: "FPS"
+                                value: infoPanel.info.fps
+                                       ? infoPanel.info.fps.toFixed(3)
+                                       : "—"
+                            }
+                            InfoRow {
+                                label: "帧号"
+                                value: infoPanel.info.frameNum !== undefined
+                                       ? "#" + infoPanel.info.frameNum
+                                       : "—"
+                            }
+                            InfoRow {
+                                label: "帧类型"
+                                value: infoPanel.info.frameType || "—"
+                            }
+                            InfoRow {
+                                label: "时间戳"
+                                value: infoPanel.info.pts !== undefined
+                                       ? infoPanel.info.pts.toFixed(3) + " s"
+                                       : "—"
+                            }
+
+                            // 底部提示
+                            Text {
+                                text: "右键关闭"
+                                color: "#555560"
+                                font.pixelSize: 10
+                                Layout.topMargin: 2
+                                Layout.rightMargin: 10
+                            }
+                        }
                     }
 
                     // 用 HoverHandler 检测整个 cell 的 hover 状态：

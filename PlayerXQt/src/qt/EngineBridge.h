@@ -16,6 +16,7 @@
 #include <QStringList>
 #include <QUrl>
 #include <QTimer>
+#include <QVariantMap>
 #include <memory>
 
 namespace rb {
@@ -95,6 +96,11 @@ public slots:
     double  positionAt(int idx) const;
     double  durationAt(int idx) const;
     bool    playingAt(int idx) const;
+    // 视频信息（供右键信息面板使用）
+    // 返回 QVariantMap，包含：
+    //   codec(string), width(int), height(int), fps(double),
+    //   frameNum(int), frameType(string), pts(double)
+    Q_INVOKABLE QVariantMap videoInfoAt(int idx) const;
 
 signals:
     void fileCountChanged();

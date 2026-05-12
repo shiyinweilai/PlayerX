@@ -8,6 +8,8 @@
 
 extern "C" {
 #include <libavutil/time.h>
+#include <libavutil/frame.h>
+#include <libavcodec/avcodec.h>
 }
 
 namespace rb {
@@ -490,6 +492,41 @@ void RBVideoPlayer::rbReleaseCurrentFrame() {
         av_frame_free(&m_currentFrame);
         m_currentFrame = nullptr;
     }
+}
+
+// ─── 帧信息查询 ──────────────────────────────────────────────────────────────
+
+int64_t RBVideoPlayer::rbCurrentFrameNum() const {
+    if (!m_currentFrame || !m_demuxer) return 0;
+    double fd = rbFrameDuration();
+    if (fd <= 0.0) return 0;
+    // 与 display.cpp 同逻辑：frame_num = pts / frame_duration
+    int64_t frameDurTb = static_cast<int64_t>(fd / av_q2d(m_demuxer->rbVideoTimeBase()) + 0.5);
+    if (frameDurTb <= 0) return 0;
+    return m_currentFrame->pts / frameDurTb;
+}
+
+char RBVideoPlayer::rbCurrentFrameType() const {
+    if (!m_currentFrame) return '?';
+    return av_get_picture_type_char(m_currentFrame->pict_type);
+}
+
+double RBVideoPlayer::rbFps() const {
+    if (!m_demuxer) return 0.0;
+    AVRational r = m_demuxer->rbVideoFrameRate();
+    if (r.num > 0 && r.den > 0) {
+        double fps = av_q2d(r);
+        if (fps >= 1.0 && fps <= 240.0) return fps;
+    }
+    return 0.0;
+}
+
+std::string RBVideoPlayer::rbCodecName() const {
+    if (!m_demuxer) return "";
+    AVCodecParameters* par = m_demuxer->rbVideoCodecPar();
+    if (!par) return "";
+    const char* name = avcodec_get_name(par->codec_id);
+    return name ? name : "";
 }
 
 } // namespace rb

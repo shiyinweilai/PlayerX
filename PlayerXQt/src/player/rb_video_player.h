@@ -91,6 +91,16 @@ public:
     int           rbHeight()      const;
     const std::string& rbFilePath() const { return m_filePath; }
 
+    // ─── 帧信息查询（供 UI 信息面板使用）──────────────────────────────────
+    // 当前帧帧号（基于 PTS / 帧时长估算，与 display.cpp 同逻辑）
+    int64_t       rbCurrentFrameNum()  const;
+    // 当前帧类型字符：'I' / 'P' / 'B' / '?' （av_get_picture_type_char）
+    char          rbCurrentFrameType() const;
+    // 视频 FPS（来自容器 r_frame_rate，回退 avg_frame_rate）
+    double        rbFps()              const;
+    // 编解码器名称（如 "h264" / "hevc" / "vp9"）
+    std::string   rbCodecName()        const;
+
     // ─── 时钟同步（多路同步时由 RBPlayerUI 调用）──────────────────────────
     // 设置外部主时钟（秒），播放器将以此为基准对齐
     void rbSetMasterClock(double masterTime);
