@@ -98,7 +98,9 @@ private slots:
     void onEngineRepaint(); // 引擎模式下由 EngineBridge 触发
 
 private:
-    void rbConvertFrameToImage();
+    // 把 frame 转换为目标显示尺寸 (dstW x dstH) 的 RGBA QImage —— 关键：sws 直接
+    // Lanczos 缩到屏幕物理像素尺寸，paint() 1:1 上屏，避免任何 Qt 端二次采样。
+    void rbConvertFrameToImage(int dstW, int dstH);
     void rbReleaseSwsContext();
     rb::RBVideoPlayer* rbActivePlayer() const; // 当前真正的 player（引擎模式或自持有）
 
@@ -109,11 +111,13 @@ private:
     int                               m_playerIndex{0};
 
     // 渲染相关
-    QImage                            m_currentImage;
+    QImage                            m_currentImage;   // 已缩放到 dstW×dstH 的 RGBA
     SwsContext*                       m_swsCtx{nullptr};
     int                               m_swsSrcW{0};
     int                               m_swsSrcH{0};
     int                               m_swsSrcFmt{-1};
+    int                               m_swsDstW{0};     // 当前 sws 目标宽（屏幕物理像素）
+    int                               m_swsDstH{0};     // 当前 sws 目标高（屏幕物理像素）
 
     QTimer                            m_renderTimer;     // 自持有模式 ~60fps 拉帧
     QTimer                            m_positionTimer;   // 自持有模式 ~10Hz 进度

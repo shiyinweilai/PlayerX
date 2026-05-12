@@ -702,6 +702,11 @@ ApplicationWindow {
                         anchors.margins: 2
                         engine: Engine
                         playerIndex: cell.playerIdx
+                        // 关闭 QtQuick 场景图对本 Item 的纹理插值。本 Item 内部
+                        // 已经用 sws Lanczos 把帧缩到屏幕物理像素并 1:1 上屏，
+                        // QtQuick 再做双线性会引入二次重采样 → 网格伪影/字模糊。
+                        smooth: false
+                        antialiasing: false
                     }
 
                     // 序号徽标（受全局“通道信息”开关控制，默认显示）

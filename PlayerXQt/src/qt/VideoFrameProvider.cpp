@@ -15,13 +15,46 @@
 
 #include <QPainter>
 #include <QFileInfo>
+#include <QQuickWindow>
+#include <QPaintDevice>
+#include <algorithm>
+#include <cmath>
 
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/pixfmt.h>
 }
 
 namespace rbqt {
+
+// 把 frame 的色彩空间/范围信息应用到 SwsContext。
+// 不调用此函数时 sws 默认按 BT.601 + limited range 解码 YUV，对：
+//   ① BT.709 视频（绝大多数现代手机/相机/H.264 1080p+）
+//   ② full-range 视频（color_range = AVCOL_RANGE_JPEG，常见于手机）
+// 会产生轻微色偏与对比度压缩 —— 高对比度边缘（白字幕/黑背景）的灰阶过渡曲
+// 线偏移 → 笔画粗细不均 → 视觉上的“毛边/网格伪影”。
+// 与旧工程 PlayerX/rb_video_cell.cpp、video-compare/format_converter.cpp 行为对齐。
+static void rbSwsApplyColorspace(SwsContext* ctx, const AVFrame* frame) {
+    if (!ctx || !frame) return;
+    int sws_cs = SWS_CS_ITU601;
+    switch (frame->colorspace) {
+        case AVCOL_SPC_BT709:        sws_cs = SWS_CS_ITU709;    break;
+        case AVCOL_SPC_FCC:          sws_cs = SWS_CS_FCC;       break;
+        case AVCOL_SPC_SMPTE170M:    sws_cs = SWS_CS_SMPTE170M; break;
+        case AVCOL_SPC_SMPTE240M:    sws_cs = SWS_CS_SMPTE240M; break;
+        case AVCOL_SPC_BT2020_CL:
+        case AVCOL_SPC_BT2020_NCL:   sws_cs = SWS_CS_BT2020;    break;
+        default: break;
+    }
+    const int* coeffs = sws_getCoefficients(sws_cs);
+    const int src_range = (frame->color_range == AVCOL_RANGE_JPEG) ? 1 : 0;
+    constexpr int FIXED_1_0 = (1 << 16);
+    sws_setColorspaceDetails(ctx,
+        coeffs, src_range,        // src
+        coeffs, 1,                // dst：RGB 输出永远 full-range
+        0, FIXED_1_0, FIXED_1_0);
+}
 
 VideoFrameProvider::VideoFrameProvider(QQuickItem* parent)
     : QQuickPaintedItem(parent)
@@ -151,6 +184,7 @@ void VideoFrameProvider::setPlayerIndex(int idx) {
     // 切换播放器后需要重建 sws（分辨率/格式可能变）+ 清空当前图，避免显示旧帧
     rbReleaseSwsContext();
     m_currentImage = QImage();
+    m_swsDstW = m_swsDstH = 0;
     emit playerIndexChanged();
     update();
 }
@@ -198,11 +232,12 @@ void VideoFrameProvider::stepFrame(int n) {
 // ─── 主循环：拉帧 + 重绘 ────────────────────────────────────────────────
 
 void VideoFrameProvider::onTick() {
-    // 自持有模式
+    // 自持有模式：仅触发重绘，真正的 sws 转换在 paint() 里按目标尺寸完成。
+    // 这样 sws 一次就把帧 Lanczos 缩到屏幕物理像素，paint 1:1 上屏，避免任何
+    // Qt 端二次插值（双线性）造成的网格伪影与文字模糊。
     if (!m_player) return;
     AVFrame* frame = m_player->rbGetCurrentFrame();
     if (frame) {
-        rbConvertFrameToImage();
         update();
     }
     bool nowPlaying = m_player->rbIsPlaying();
@@ -227,16 +262,32 @@ void VideoFrameProvider::onPositionPoll() {
 }
 
 void VideoFrameProvider::onEngineRepaint() {
-    // 引擎模式：每帧让 rbConvertFrameToImage 内部从 player 拉帧并转换。
+    // 引擎模式：仅触发重绘，sws 转换延迟到 paint()（需要目标 dst 尺寸）。
     auto* p = rbActivePlayer();
     if (!p) return;
-    rbConvertFrameToImage();
     update();
 }
 
-// ─── 帧格式转换：AVFrame → QImage(RGBA8888) ─────────────────────────────
-
-void VideoFrameProvider::rbConvertFrameToImage() {
+// ─── 帧格式转换：AVFrame → 目标尺寸 RGBA QImage ─────────────────────────
+//
+// 关键改造（对齐旧工程 PlayerX/rb_video_cell.cpp 的成熟方案）：
+//   1) 直接把 sws 的目标尺寸设成屏幕“物理像素”dstW×dstH —— sws 一次完成
+//      色彩转换 + 缩放，绝不让 Qt 的 QPainter 再做第二次重采样。
+//   2) 缩放算法用 SWS_LANCZOS（Lanczos3，6×6 采样、带负瓣）替代默认的
+//      SWS_BILINEAR（2×2 双线性、无负瓣）：
+//        · BILINEAR 在非整数缩放比下会沿采样网格累积偏差 → 网格伪影；
+//        · BILINEAR 下采样视频内文字（字幕/时间戳）会糊成一团；
+//        · LANCZOS 锐边保持最好（mpv 默认重采样器）。
+//      搭配 SWS_FULL_CHR_H_INT | SWS_ACCURATE_RND 确保色度全分辨率插值
+//      与精确舍入，消除 4:2:0 视频在白字幕等高对比边缘的彩色毛边。
+//   3) rbSwsApplyColorspace —— 让 BT.709 / full-range 视频用正确矩阵
+//      解 YUV，避免错误矩阵造成的灰阶偏移“伪边缘”。
+//
+// dstW/dstH 由 paint() 根据 boundingRect × devicePixelRatio + 视频纵横比
+// 计算得到，传给本函数；这里只在三元组（src 尺寸、src 格式、dst 尺寸）变化
+// 时才重建 SwsContext。
+void VideoFrameProvider::rbConvertFrameToImage(int dstW, int dstH) {
+    if (dstW <= 0 || dstH <= 0) return;
     auto* p = rbActivePlayer();
     if (!p) return;
     AVFrame* f = p->rbGetCurrentFrame();
@@ -245,23 +296,33 @@ void VideoFrameProvider::rbConvertFrameToImage() {
     AVPixelFormat srcFmt = (AVPixelFormat)f->format;
     if (srcFmt == AV_PIX_FMT_NONE) return;
 
-    if (m_currentImage.size() != QSize(f->width, f->height) ||
+    // 目标 QImage 大小必须与 sws 目标尺寸一致；不一致或首次时分配。
+    if (m_currentImage.size() != QSize(dstW, dstH) ||
         m_currentImage.format() != QImage::Format_RGBA8888) {
-        m_currentImage = QImage(f->width, f->height, QImage::Format_RGBA8888);
+        m_currentImage = QImage(dstW, dstH, QImage::Format_RGBA8888);
     }
 
+    // SwsContext 仅在 src 三元组或 dst 尺寸变化时重建（缩放系数会被缓存）。
     if (!m_swsCtx ||
-        m_swsSrcW != f->width || m_swsSrcH != f->height || m_swsSrcFmt != srcFmt) {
+        m_swsSrcW != f->width || m_swsSrcH != f->height ||
+        m_swsSrcFmt != srcFmt ||
+        m_swsDstW != dstW || m_swsDstH != dstH) {
         rbReleaseSwsContext();
         m_swsCtx = sws_getContext(
             f->width, f->height, srcFmt,
-            f->width, f->height, AV_PIX_FMT_RGBA,
-            SWS_BILINEAR, nullptr, nullptr, nullptr);
+            dstW, dstH, AV_PIX_FMT_RGBA,
+            SWS_LANCZOS | SWS_FULL_CHR_H_INT | SWS_ACCURATE_RND,
+            nullptr, nullptr, nullptr);
         m_swsSrcW   = f->width;
         m_swsSrcH   = f->height;
         m_swsSrcFmt = srcFmt;
+        m_swsDstW   = dstW;
+        m_swsDstH   = dstH;
     }
     if (!m_swsCtx) return;
+
+    // 每帧应用色彩空间/范围（开销极小，但 frame 的 colorspace/range 可能动态变化）
+    rbSwsApplyColorspace(m_swsCtx, f);
 
     uint8_t*  dst[4]       = { m_currentImage.bits(), nullptr, nullptr, nullptr };
     int       dstStride[4] = { static_cast<int>(m_currentImage.bytesPerLine()), 0, 0, 0 };
@@ -275,30 +336,69 @@ void VideoFrameProvider::rbReleaseSwsContext() {
     }
     m_swsSrcW = m_swsSrcH = 0;
     m_swsSrcFmt = -1;
+    m_swsDstW = m_swsDstH = 0;
 }
 
-// ─── 绘制：保持视频纵横比，居中铺满 ────────────────────────────────────
-
+// ─── 绘制：保持视频纵横比，居中、按物理像素 1:1 整数对齐铺满 ────────────────
+//
+// 流程（严格对齐旧工程 PlayerX/rb_video_cell.cpp 的“整数对齐 + 1:1 上屏”）：
+//   ① 取当前帧分辨率 fw×fh（如 1080×1920），以及当前 widget 的物理像素尺寸
+//      areaW×areaH（boundingRect × devicePixelRatio）。
+//   ② 按视频纵横比等比缩放，dstW/dstH **四舍五入到整数像素**（std::round）。
+//      浮点截断会导致 sws 的目标尺寸与屏幕实际渲染矩形错位 → 亚像素偏差 →
+//      边缘像素采样发生 0~0.999 像素偏移 → 字幕等高对比边缘出现毛边/锯齿。
+//   ③ 调用 rbConvertFrameToImage(dstW, dstH) —— sws 一次 Lanczos 直接缩到
+//      dstW×dstH 的 RGBA。
+//   ④ paint 用整数 QRectF（同样四舍五入）直接 1:1 上屏，**关闭** Qt 的
+//      SmoothPixmapTransform —— 因为图像已经是目标物理像素尺寸，再开双线性
+//      只会徒增模糊（这是用户反馈“缩放后视频内文字模糊”的核心元凶）。
 void VideoFrameProvider::paint(QPainter* painter) {
-    if (m_currentImage.isNull()) return;
+    if (!painter) return;
 
+    // 当前帧尺寸（决定纵横比；用 player 的 frame 尺寸而非 m_currentImage，
+    // 因为首帧到达前 m_currentImage 仍是空的）
+    auto* p = rbActivePlayer();
+    if (!p) return;
+    AVFrame* f = p->rbGetCurrentFrame();
+    if (!f || f->width <= 0 || f->height <= 0) return;
+    const int fw = f->width;
+    const int fh = f->height;
+
+    // boundingRect 是逻辑像素，乘 DPR 得到屏幕物理像素 —— sws 的目标必须是
+    // 物理像素，否则 Retina 屏会得到 0.5× 大小的 RGB 缓冲再被 Qt 双线性放大
+    // 到 1×（这正是网格伪影最容易出现的路径）。
     const QRectF dstRect = boundingRect();
     if (dstRect.width() <= 0 || dstRect.height() <= 0) return;
+    const qreal dpr = (window() ? window()->devicePixelRatio()
+                                : painter->device()->devicePixelRatioF());
+    const int areaW = std::max(1, int(std::round(dstRect.width()  * dpr)));
+    const int areaH = std::max(1, int(std::round(dstRect.height() * dpr)));
 
-    const double srcAR = double(m_currentImage.width()) / double(m_currentImage.height());
-    const double dstAR = dstRect.width() / dstRect.height();
-    QRectF target = dstRect;
-    if (srcAR > dstAR) {
-        double h = dstRect.width() / srcAR;
-        target.setY(dstRect.y() + (dstRect.height() - h) / 2.0);
-        target.setHeight(h);
-    } else {
-        double w = dstRect.height() * srcAR;
-        target.setX(dstRect.x() + (dstRect.width() - w) / 2.0);
-        target.setWidth(w);
-    }
+    // 等比缩放，整数物理像素
+    const double scaleX = double(areaW) / double(fw);
+    const double scaleY = double(areaH) / double(fh);
+    const double scale  = std::min(scaleX, scaleY);
+    const int    dstW   = std::max(1, int(std::round(fw * scale)));
+    const int    dstH   = std::max(1, int(std::round(fh * scale)));
 
-    painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+    // 先按目标物理像素尺寸做一次 sws Lanczos 转换 + 缩放
+    rbConvertFrameToImage(dstW, dstH);
+    if (m_currentImage.isNull()) return;
+
+    // 计算上屏矩形：物理像素整数对齐，再换回逻辑像素给 QPainter（QPainter
+    // 的坐标系是逻辑像素）。先用整数物理像素居中，再除以 dpr 得到逻辑坐标。
+    const int physOffsetX = (areaW - dstW) / 2;
+    const int physOffsetY = (areaH - dstH) / 2;
+    const QRectF target(
+        dstRect.x() + double(physOffsetX) / dpr,
+        dstRect.y() + double(physOffsetY) / dpr,
+        double(dstW) / dpr,
+        double(dstH) / dpr);
+
+    // 关键：图像已经是目标物理像素，1:1 上屏。**关闭** SmoothPixmapTransform，
+    // 否则 Qt 还会做一次双线性插值——网格伪影 / 文字糊化的元凶。
+    painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
+    painter->setRenderHint(QPainter::Antialiasing,           false);
     painter->drawImage(target, m_currentImage);
 }
 
