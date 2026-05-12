@@ -11,6 +11,7 @@
 #include <QIcon>
 
 #include "qt/EngineBridge.h"
+#include "qt/FsUtils.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -30,10 +31,15 @@ int main(int argc, char* argv[]) {
     // EngineBridge 必须先于 engine.load 创建，且生命周期 >= QML 引擎
     rbqt::EngineBridge engineBridge;
 
+    // FsUtils：仅供 QML 多组对比模式配置面板使用的纯工具类（文件夹扫描等）。
+    // 不与播放内核交互，单组模式下 QML 不会调用任何方法 → 行为零变化。
+    rbqt::FsUtils fsUtils;
+
     QQmlApplicationEngine engine;
 
     // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
     engine.rootContext()->setContextProperty("Engine", &engineBridge);
+    engine.rootContext()->setContextProperty("Fs",     &fsUtils);
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,

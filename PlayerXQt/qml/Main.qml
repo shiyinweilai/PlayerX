@@ -200,7 +200,10 @@ ApplicationWindow {
         }
     }
 
-    // ─── 文件选择 ────────────────────────────────────────────────────────
+    // ─── 文件 / 文件夹 选择 ──────────────────────────────────────────
+    // “新打开 / 打开窗口”与“添加”现均支持两种入口：多选文件 或 文件夹。
+    // 文件夹路径在 QML 侧用 Fs.scanVideoFolder 展开为文件列表后再调
+    // Engine.openFiles / Engine.addFile——后端接口不需任何修改。
     FileDialog {
         id: openDialog
         title: "选择视频文件（可多选）"
@@ -211,17 +214,46 @@ ApplicationWindow {
         ]
         onAccepted: Engine.openFiles(selectedFiles)
     }
+    FolderDialog {
+        id: openFolderDlg
+        title: "选择视频文件夹（所有视频作为一组打开）"
+        onAccepted: {
+            var files = Fs.scanVideoFolder(selectedFolder, true)
+            if (files.length === 0) return
+            // 限制上限 9 个，与原“添加”按钮限制保持一致
+            if (files.length > 9) files = files.slice(0, 9)
+            Engine.openFiles(Fs.toFileUrls(files))
+        }
+    }
     FileDialog {
         id: addDialog
-        title: "添加视频文件"
-        fileMode: FileDialog.OpenFile
+        title: "添加视频文件（可多选）"
+        fileMode: FileDialog.OpenFiles
         nameFilters: [
             "视频文件 (*.mp4 *.mov *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv)",
             "所有文件 (*)"
         ]
-        onAccepted: Engine.addFile(selectedFile)
+        onAccepted: {
+            // 逐个调 addFile，遵守 9 个上限
+            for (var i = 0; i < selectedFiles.length; ++i) {
+                if (Engine.fileCount >= 9) break
+                Engine.addFile(selectedFiles[i])
+            }
+        }
     }
-
+    FolderDialog {
+        id: addFolderDlg
+        title: "添加文件夹中的视频"
+        onAccepted: {
+            var files = Fs.scanVideoFolder(selectedFolder, true)
+            if (files.length === 0) return
+            var urls = Fs.toFileUrls(files)
+            for (var i = 0; i < urls.length; ++i) {
+                if (Engine.fileCount >= 9) break
+                Engine.addFile(urls[i])
+            }
+        }
+    }
     // ─── 顶部工具栏 ──────────────────────────────────────────────────────
     // 自绘 background：深色填充 + 底部 1px 分隔线，与视频区在视觉上彻底
     // 切开。原先 ToolBar 用系统主题色，与视频黑底界限模糊，按钮按下时还
@@ -249,14 +281,143 @@ ApplicationWindow {
             anchors.bottomMargin: 6
             spacing: 6
 
+            // 打开按钮：单个组件即下拉。点击 → 弹出菜单：
+            //   「打开窗口」/「打开文件夹」/「新增窗口」/「增加文件夹」/「多组对比模式」
+            // 主体功能与多组模式不相关——多组模式走「MultiGroupDialog」独立路径，仅重用 Engine.openFiles。
             FlatButton {
-                text: Engine.fileCount > 0 ? "新打开" : "打开"
-                onClicked: openDialog.open()
+                id: openBtn
+                text: (Engine.fileCount > 0 ? "新打开" : "打开") + "  ▾"
+                onClicked: openMenu.popup(openBtn, 0, openBtn.height + 2)
+                // 悬停提示：一次性提示可导入多个文件或整个文件夹
+                ToolTip.visible: openBtn.hovered
+                ToolTip.delay: 800
+                ToolTip.timeout: 4000
+                ToolTip.text: "可一次性导入多个文件，或导入整个文件夹"
             }
-            FlatButton {
-                text: "添加"
-                enabled: Engine.fileCount > 0 && Engine.fileCount < 9
-                onClicked: addDialog.open()
+            // 二级菜单（与 “设置” 菜单同风格，避免 macOS 默认白底）
+            Menu {
+                id: openMenu
+                padding: 4
+                width: 220
+                background: Rectangle {
+                    color: "#1e1e22"
+                    border.color: "#3a3a42"
+                    border.width: 1
+                    radius: 6
+                }
+                MenuItem {
+                    id: openMenuFile
+                    text: "📄 打开窗口…"
+                    onTriggered: openDialog.open()
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: openMenuFile.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                        Text {
+                            text: openMenuFile.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+                MenuItem {
+                    id: openMenuFolder
+                    text: "📁 打开文件夹…"
+                    onTriggered: openFolderDlg.open()
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: openMenuFolder.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                        Text {
+                            text: openMenuFolder.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+                MenuSeparator {
+                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
+                }
+                MenuItem {
+                    id: openMenuAdd
+                    text: "➕ 新增窗口…"
+                    enabled: Engine.fileCount > 0 && Engine.fileCount < 9
+                    onTriggered: addDialog.open()
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: openMenuAdd.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                        Text {
+                            text: openMenuAdd.text
+                            color: openMenuAdd.enabled ? "#e8e8ec" : "#666"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+                MenuItem {
+                    id: openMenuAddFolder
+                    text: "📁 新增文件夹…"
+                    enabled: Engine.fileCount > 0 && Engine.fileCount < 9
+                    onTriggered: addFolderDlg.open()
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: openMenuAddFolder.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                        Text {
+                            text: openMenuAddFolder.text
+                            color: openMenuAddFolder.enabled ? "#e8e8ec" : "#666"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+                MenuSeparator {
+                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
+                }
+                MenuItem {
+                    id: openMenuMulti
+                    text: "🗂️ 打开多组对比模式…"
+                    onTriggered: multiGroupDialog.show()
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: openMenuMulti.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                        Text {
+                            text: openMenuMulti.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
             }
             Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
             FlatButton {
@@ -296,6 +457,37 @@ ApplicationWindow {
                 font.pixelSize: 16
                 enabled: Engine.fileCount > 0
                 onClicked: Engine.seek(0)
+            }
+
+            // ── 多组对比模式专用：上一组 / 下一组 + 组号指示 ──
+            // 仅在 multiGroupDialog.active = true 时可见，默认 false → 单组模式下完全不占位。
+            FlatButton {
+                text: "⏮"
+                visible: multiGroupDialog.active
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                font.pixelSize: 14
+                enabled: multiGroupDialog.active
+                onClicked: multiGroupDialog.prevGroup()
+            }
+            FlatButton {
+                text: "⏭"
+                visible: multiGroupDialog.active
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                font.pixelSize: 14
+                enabled: multiGroupDialog.active
+                onClicked: multiGroupDialog.nextGroup()
+            }
+            Label {
+                visible: multiGroupDialog.active
+                color: "#9a9aa8"
+                font.pixelSize: 11
+                text: {
+                    if (!multiGroupDialog.active) return ""
+                    var n = multiGroupDialog.groupCount()
+                    var i = multiGroupDialog.groupIndex()
+                    if (n <= 0 || i < 0) return "— / —"
+                    return (i + 1) + " / " + n
+                }
             }
 
             Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
@@ -892,6 +1084,19 @@ ApplicationWindow {
     Shortcut { sequence: "8"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(7) }
     Shortcut { sequence: "9"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(8) }
 
+    // ── 多组对比专用快捷键：上组 / 下组。仅在 multiGroupDialog.active 时生效。
+    // 选用 Ctrl+↑/↓，避免与现有 ←→（快进快退） / “.”“,”（帧步进）冲突。
+    Shortcut {
+        sequence: "Ctrl+Up";   context: Qt.ApplicationShortcut
+        enabled: multiGroupDialog.active
+        onActivated: multiGroupDialog.prevGroup()
+    }
+    Shortcut {
+        sequence: "Ctrl+Down"; context: Qt.ApplicationShortcut
+        enabled: multiGroupDialog.active
+        onActivated: multiGroupDialog.nextGroup()
+    }
+
     // ─── 视频网格容器 ────────────────────────────────────────────────────
     // 顶部留 2px 余白，避免与 ToolBar 视觉粘连；同时让 cell 的 2px 选中边
     // 框不被 ToolBar 阴影/分隔线压住。
@@ -1412,6 +1617,16 @@ ApplicationWindow {
             rightIndex: 1
             channelVisible: root.effectiveChannelVisible
         }
+    }
+
+    // ─── 多组对比模式配置面板（独立窗口，默认隐藏）──────────
+    // 只有用户在 “打开 ▾” 菜单点 “多组对比模式…” 才会 show()。
+    // 未 show 时完全不会调用 Engine 任何接口 → 与旧逻辑零交互。
+    MultiGroupDialog {
+        id: multiGroupDialog
+        visible: false
+        // 作为给 root 的子窗口，关闭主窗时一起退出
+        transientParent: root
     }
 
     // 全局进度条已移除：多路场景下各路独立播放控制，全局进度条语义

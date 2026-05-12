@@ -48,6 +48,8 @@ qt_add_executable(PlayerXQt
     src/qt/EngineBridge.cpp
     # 滑动对比模式（独立组件，不影响 Grid 视图与播放内核）
     src/qt/SliderCompareItem.cpp
+    # 多组对比模式辅助工具（仅供 QML 配置面板使用，不触达播放内核）
+    src/qt/FsUtils.cpp
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
@@ -57,6 +59,8 @@ qt_add_qml_module(PlayerXQt
     QML_FILES
         qml/Main.qml
         qml/SliderCompareView.qml
+        qml/MultiGroupRow.qml
+        qml/MultiGroupDialog.qml
 )
 
 # ─── 头文件搜索路径 ───────────────────────────────────────────────────────────
