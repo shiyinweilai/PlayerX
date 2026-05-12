@@ -176,6 +176,30 @@ ApplicationWindow {
     readonly property bool effectiveInfoVisible:    globalInfoVisible    && !fullscreenSuppressInfo
     readonly property bool effectiveChannelVisible: globalChannelVisible && !fullscreenSuppressChannel
 
+    // ─── 滑动对比模式（仅在恰好两路视频时可启用）────────────────────
+    // 完全独立于 Grid 视图：开启时隐藏 Grid，显示 SliderCompareView；
+    // 所有播放控制（空格/方向键/数字键/底部进度/cell 工具条）继续走
+    // Engine.* 接口，不会因为切到滑动模式而改变行为。
+    property bool compareSliderActive: false
+    readonly property bool compareSliderAvailable: Engine.fileCount === 2
+
+    // 切换函数：仅在 fileCount === 2 时允许进入；离开 2 路场景时强制关闭
+    function _toggleCompareSlider() {
+        if (compareSliderActive) {
+            compareSliderActive = false
+        } else if (compareSliderAvailable) {
+            compareSliderActive = true
+        }
+    }
+    // fileCount 变化时若不再满足 2 路条件，自动退出滑动模式
+    Connections {
+        target: Engine
+        function onFileCountChanged() {
+            if (root.compareSliderActive && Engine.fileCount !== 2)
+                root.compareSliderActive = false
+        }
+    }
+
     // ─── 文件选择 ────────────────────────────────────────────────────────
     FileDialog {
         id: openDialog
@@ -272,6 +296,15 @@ ApplicationWindow {
                 font.pixelSize: 16
                 enabled: Engine.fileCount > 0
                 onClicked: Engine.seek(0)
+            }
+
+            // 滑动对比模式按钮（仅 2 路视频可用，与 B 快捷键联动）
+            FlatButton {
+                id: compareBtn
+                enabled: root.compareSliderAvailable
+                Layout.preferredWidth: 84
+                text: root.compareSliderActive ? "⇆ 退出对比" : "⇆ 滑动对比"
+                onClicked: root._toggleCompareSlider()
             }
 
             Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
@@ -589,6 +622,11 @@ ApplicationWindow {
         sequence: "R"; context: Qt.ApplicationShortcut
         onActivated: Engine.seek(0)
     }
+    // B：切换"滑动对比"模式（仅 2 路视频可用）
+    Shortcut {
+        sequence: "B"; context: Qt.ApplicationShortcut
+        onActivated: root._toggleCompareSlider()
+    }
     // 数字键 1..9：toggle 单路/多路。
     //   - 当前不是 Single，或 activeIndex != n-1：进入 Single 并显示对应窗口
     //   - 当前已经是 Single 且 activeIndex == n-1（再次按下相同数字）：
@@ -671,6 +709,8 @@ ApplicationWindow {
         Grid {
             id: grid
             anchors.fill: parent
+            // 滑动对比模式启用时隐藏 Grid（Grid 内的所有子项与控制逻辑保持不变）
+            visible: !root.compareSliderActive
             columns: videoArea.gridCols()
             rows: videoArea.gridRows()
             spacing: 4
@@ -1124,6 +1164,19 @@ ApplicationWindow {
             text: "点击左上角「打开」选择一个或多个视频"
             color: "#888"
             font.pixelSize: 18
+        }
+
+        // ─── 滑动对比视图（独立组件，仅在 compareSliderActive 时显示）──
+        // 完全独立于上方 Grid 视图，不与 cell / VideoFrameProvider 共享任何
+        // 状态。所有播放控制继续走 Engine.* 接口（顶部 ToolBar / Shortcut /
+        // 底部进度条），与 Grid 模式行为一致。
+        SliderCompareView {
+            anchors.fill: parent
+            visible: root.compareSliderActive && Engine.fileCount === 2
+            engine: Engine
+            leftIndex: 0
+            rightIndex: 1
+            channelVisible: root.effectiveChannelVisible
         }
     }
 

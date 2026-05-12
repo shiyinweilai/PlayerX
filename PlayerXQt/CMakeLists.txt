@@ -46,6 +46,8 @@ qt_add_executable(PlayerXQt
     # Qt 桥接层
     src/qt/VideoFrameProvider.cpp
     src/qt/EngineBridge.cpp
+    # 滑动对比模式（独立组件，不影响 Grid 视图与播放内核）
+    src/qt/SliderCompareItem.cpp
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
@@ -54,6 +56,7 @@ qt_add_qml_module(PlayerXQt
     VERSION 1.0
     QML_FILES
         qml/Main.qml
+        qml/SliderCompareView.qml
 )
 
 # ─── 头文件搜索路径 ───────────────────────────────────────────────────────────
