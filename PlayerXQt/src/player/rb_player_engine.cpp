@@ -57,10 +57,31 @@ int RBPlayerEngine::rbAddFile(const std::string& file) {
     auto p = std::make_unique<RBVideoPlayer>();
     if (!p->rbOpen(file)) return -1;
 
-    p->rbEnableMasterClock(true);
-    // 新加入的路把 master clock 同步到当前位置
-    p->rbSetMasterClock(rbComputeMasterLocked());
-    if (m_playing.load()) p->rbPlay();
+    // ────────────────────────────────────────────────────────────────
+    // 解耦：新加入的视频从自己的 0 开始独立播放，不被主时钟拖到当前位置
+    //
+    // 旧行为（出问题）：
+    //   p->rbEnableMasterClock(true);
+    //   p->rbSetMasterClock(rbComputeMasterLocked());  // 拉到 e.g. 1:20
+    //   if (m_playing) p->rbPlay();
+    // 现象：
+    //   1) 已经播到 1:20 时点击"添加" → 新视频被强行设置主时钟到 1:20，
+    //      内部从 0 解码追赶 → 视觉上"快速播放追赶"；
+    //   2) 同时添加两个视频 → 两路都被同一主时钟广播覆盖，时间戳相互
+    //      绑定，无法独立播放/控制。
+    //
+    // 新行为：与"单路控制（rbTogglePauseAt / rbSeekAt / rbStepFrameAt）"
+    // 的既有策略保持一致 —— 让该路脱离主时钟（rbEnableMasterClock(false)），
+    // 不会被 rbTick 的 rbBroadcastClock 覆盖；从自身 0 位置独立起播。
+    // 用户后续如需多路对齐，可通过：拖拽全局进度条（rbSeek 内部会重新
+    // 把所有路 rbEnableMasterClock(true) 拉回主时钟）来主动对齐。
+    // ────────────────────────────────────────────────────────────────
+    p->rbEnableMasterClock(false);
+    if (m_playing.load()) {
+        p->rbPlay();          // 全局在播 → 新路从 0 独立播
+    }
+    // 全局暂停态：新路保持初始暂停在 0，由用户后续控制。
+
     m_players.push_back(std::move(p));
     return static_cast<int>(m_players.size()) - 1;
 }
