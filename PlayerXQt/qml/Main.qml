@@ -158,6 +158,10 @@ ApplicationWindow {
     // 默认 SideBySide=1。仅在 ComboBox 交互、S 键循环、打开多个文件后同步。
     property int lastMultiLayout: 1
 
+    // 全局“显示所有视频信息”开关（设置菜单 / 快捷键 V 控制）。
+    // cell 自身仍保留右键的局部开关（localInfoVisible），二者取或。
+    property bool globalInfoVisible: false
+
     // ─── 文件选择 ────────────────────────────────────────────────────────
     FileDialog {
         id: openDialog
@@ -258,91 +262,179 @@ ApplicationWindow {
 
             Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
 
-            Label { text: "布局:"; color: "#bbb" }
-            ComboBox {
-                id: layoutCombo
-                focusPolicy: Qt.NoFocus
-                model: root.multiLayoutNames
-                currentIndex: {
-                    var idx = root.multiLayoutValues.indexOf(Engine.layoutMode)
-                    return idx >= 0 ? idx : 0
-                }
-                onActivated: {
-                    var v = root.multiLayoutValues[currentIndex]
-                    Engine.layoutMode = v
-                    root.lastMultiLayout = v
-                }
-                Layout.preferredWidth: 120
-                Layout.preferredHeight: 28
-                // 显式 implicit 尺寸，避免外层布局把 ComboBox 收缩到 0 时露出
-                // 平台默认 native 背景（macOS 下偶发出现的白底来源之一）。
-                implicitWidth:  120
-                implicitHeight: 28
+            // ─── 设置按钮（多级菜单）────────────────────────────────────
+            FlatButton {
+                id: settingsBtn
+                text: "⚙ 设置 ▾"
+                Layout.preferredWidth: 86
+                onClicked: settingsMenu.popup(settingsBtn, 0, settingsBtn.height + 2)
+            }
 
-                // ── 深色自绘样式，与工具栏整体风格一致 ──
+            // ── 设置一级菜单（深色，自绘）──
+            Menu {
+                id: settingsMenu
+                padding: 4
+                width: 180
+
                 background: Rectangle {
-                    // 让 background 显式撑满整个 ComboBox，覆盖任何底层样式
-                    implicitWidth:  120
-                    implicitHeight: 28
-                    radius: 5
-                    color: layoutCombo.pressed ? "#4a4a55"
-                         : layoutCombo.hovered ? "#33333a"
-                                               : "#202024"
-                    border.color: layoutCombo.pressed ? "#6a6a78"
-                                : layoutCombo.hovered ? "#3d3d46"
-                                                      : "#2c2c32"
+                    color: "#1e1e22"
+                    border.color: "#3a3a42"
                     border.width: 1
-                    Behavior on color        { ColorAnimation { duration: 90 } }
-                    Behavior on border.color { ColorAnimation { duration: 90 } }
+                    radius: 6
                 }
-                contentItem: Text {
-                    leftPadding: 10
-                    rightPadding: layoutCombo.indicator.width + 6
-                    text: layoutCombo.displayText
-                    color: "#e8e8ec"
-                    font.pixelSize: 13
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
+
+                // 自绘统一的菜单项 delegate（深色 + 悬停灰底，不会出现 macOS 默认白底）
+                delegate: MenuItem {
+                    id: settingsItem
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: settingsItem.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text {
+                            leftPadding: 10
+                            text: settingsItem.checkable && settingsItem.checked ? "✓" : ""
+                            color: "#6a9fd8"
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.minimumWidth: 22
+                        }
+                        Text {
+                            text: settingsItem.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                        // 子菜单箭头：当此项是「布局」入口时显示 ▶
+                        Text {
+                            text: settingsItem.text === "布局" ? "▶" : ""
+                            color: "#888"
+                            font.pixelSize: 11
+                            verticalAlignment: Text.AlignVCenter
+                            rightPadding: 10
+                        }
+                    }
                 }
-                indicator: Text {
-                    x: layoutCombo.width - width - 8
-                    y: (layoutCombo.height - height) / 2
-                    text: "▾"
-                    color: "#888"
-                    font.pixelSize: 11
-                }
-                // 下拉弹出层
-                popup: Popup {
-                    y: layoutCombo.height + 2
-                    width: layoutCombo.width
+
+                // ── 二级菜单：布局（Qt 原生嵌套 Menu，悬停自动展开）──
+                Menu {
+                    id: layoutSubMenu
+                    title: "布局"
                     padding: 4
+                    width: 140
+
                     background: Rectangle {
                         color: "#1e1e22"
                         border.color: "#3a3a42"
                         border.width: 1
                         radius: 6
                     }
-                    contentItem: ListView {
-                        implicitHeight: contentHeight
-                        model: layoutCombo.delegateModel
-                        clip: true
+
+                    delegate: MenuItem {
+                        id: layoutItem
+                        implicitHeight: 30
+                        background: Rectangle {
+                            radius: 4
+                            color: layoutItem.highlighted ? "#33333a" : "transparent"
+                        }
+                        contentItem: RowLayout {
+                            spacing: 0
+                            Text {
+                                leftPadding: 10
+                                text: layoutItem.checked ? "✓" : ""
+                                color: "#6a9fd8"
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                                Layout.minimumWidth: 22
+                            }
+                            Text {
+                                text: layoutItem.text
+                                color: "#e8e8ec"
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+
+                    Repeater {
+                        model: root.multiLayoutNames
+                        MenuItem {
+                            id: layoutRepItem
+                            required property string modelData
+                            required property int index
+                            text: modelData
+                            checkable: true
+                            checked: Engine.layoutMode === root.multiLayoutValues[index]
+                            onTriggered: {
+                                var v = root.multiLayoutValues[index]
+                                Engine.layoutMode = v
+                                root.lastMultiLayout = v
+                            }
+                            implicitHeight: 30
+                            background: Rectangle {
+                                radius: 4
+                                color: layoutRepItem.highlighted ? "#33333a" : "transparent"
+                            }
+                            contentItem: RowLayout {
+                                spacing: 0
+                                Text {
+                                    leftPadding: 10
+                                    text: layoutRepItem.checked ? "✓" : ""
+                                    color: "#6a9fd8"
+                                    font.pixelSize: 12
+                                    verticalAlignment: Text.AlignVCenter
+                                    Layout.minimumWidth: 22
+                                }
+                                Text {
+                                    text: layoutRepItem.text
+                                    color: "#e8e8ec"
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
                     }
                 }
-                delegate: ItemDelegate {
-                    width: layoutCombo.width - 8
-                    height: 30
+
+                MenuSeparator {
+                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
+                }
+
+                // ── 视频信息显示（全局开关，快捷键 V）──
+                MenuItem {
+                    id: infoItem
+                    text: "视频信息 (V)"
+                    checkable: true
+                    checked: root.globalInfoVisible
+                    onTriggered: root.globalInfoVisible = !root.globalInfoVisible
+                    implicitHeight: 30
                     background: Rectangle {
                         radius: 4
-                        color: highlighted ? "#33333a" : "transparent"
+                        color: infoItem.highlighted ? "#33333a" : "transparent"
                     }
-                    contentItem: Text {
-                        leftPadding: 8
-                        text: modelData
-                        color: highlighted ? "#ffffff" : "#cccccc"
-                        font.pixelSize: 13
-                        verticalAlignment: Text.AlignVCenter
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text {
+                            leftPadding: 10
+                            text: infoItem.checked ? "✓" : ""
+                            color: "#6a9fd8"
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.minimumWidth: 22
+                        }
+                        Text {
+                            text: infoItem.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
                     }
-                    highlighted: layoutCombo.highlightedIndex === index
                 }
             }
 
@@ -361,6 +453,11 @@ ApplicationWindow {
     Shortcut {
         sequence: "Space"; context: Qt.ApplicationShortcut
         onActivated: Engine.togglePause()
+    }
+    // V：切换全局显示视频信息
+    Shortcut {
+        sequence: "V"; context: Qt.ApplicationShortcut
+        onActivated: root.globalInfoVisible = !root.globalInfoVisible
     }
     Shortcut {
         sequence: "Left"; context: Qt.ApplicationShortcut
@@ -555,7 +652,7 @@ ApplicationWindow {
                         onClicked: (mouse) => {
                             if (mouse.button === Qt.RightButton) {
                                 // 右键：刷新信息并切换信息面板显示
-                                cell.infoVisible = !cell.infoVisible
+                                cell.localInfoVisible = !cell.localInfoVisible
                             } else {
                                 Engine.activeIndex = cell.playerIdx
                                 videoArea.forceActiveFocus()
@@ -567,8 +664,9 @@ ApplicationWindow {
                         }
                     }
 
-                    // 右键信息面板开关状态
-                    property bool infoVisible: false
+                    // 右键信息面板开关状态：局部（右键）+ 全局（设置菜单/V）
+                    property bool localInfoVisible: false
+                    readonly property bool infoVisible: localInfoVisible || root.globalInfoVisible
 
                     // ─── 右键视频信息面板 ──────────────────────────────────
                     // 固定显示在 cell 左上角（序号徽标下方），右键再次点击关闭。
