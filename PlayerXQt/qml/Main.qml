@@ -1671,6 +1671,32 @@ ApplicationWindow {
                                         onClicked: Engine.seekAt(cell.playerIdx,
                                                     Math.min(cell._dur(), cell._pos() + 5))
                                     }
+
+                                    // 与“快进/快退/帧步进”分组，避免误点。窄 cell 下也能保留这条线。
+                                    Rectangle {
+                                        Layout.preferredWidth: 1
+                                        Layout.preferredHeight: 16
+                                        Layout.leftMargin: 2
+                                        Layout.rightMargin: 2
+                                        color: "#2a2a30"
+                                    }
+
+                                    // 单路重置：把本路 seek 回 0。图标与底部全局重置 ⟲ 完全一致，
+                                    // 让“当前路重置 / 全部重置”在视觉语义上对齐。
+                                    // 仅复用既有 Engine.seekAt 接口，零新增后端代码。
+                                    FlatToolButton {
+                                        id: cellResetBtn
+                                        text: "⟲"
+                                        font.pixelSize: 14
+                                        implicitWidth: 28
+                                        enabled: cell._dur() > 0
+                                        onClicked: Engine.seekAt(cell.playerIdx, 0)
+
+                                        ToolTip.visible: hovered
+                                        ToolTip.delay: 600
+                                        ToolTip.timeout: 3000
+                                        ToolTip.text: "重置本路到开头（不影响其他路）"
+                                    }
                                 }
                             }
                         }
