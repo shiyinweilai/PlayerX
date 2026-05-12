@@ -229,6 +229,20 @@ void EngineBridge::resetSpeed() {
     }
 }
 
+void EngineBridge::setSpeed(double speed) {
+    if (!m_engine) return;
+    // 保护性裁剪：与引擎内部级别范围 ±42 级近似对齐（1/128 ~ 128）。
+    if (!(speed > 0.0)) return;
+    if (speed < 1.0/128.0) speed = 1.0/128.0;
+    if (speed > 128.0)    speed = 128.0;
+    m_engine->rbSetSpeed(speed);
+    double s = m_engine->rbSpeed();
+    if (std::abs(s - m_lastSpeed) > 1e-9) {
+        m_lastSpeed = s;
+        emit speedChanged();
+    }
+}
+
 // 单路
 void EngineBridge::togglePauseAt(int idx) {
     if (!m_engine) return;

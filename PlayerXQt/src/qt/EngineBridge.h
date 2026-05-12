@@ -95,8 +95,10 @@ public slots:
     // adjustSpeed(+1)：倍速上一级（6 级为一倍）
     // adjustSpeed(-1)：倍速下一级
     // resetSpeed()：重置为 1.0x
+    // setSpeed(x)：直接跳到某个倍率（供菜单常用档位使用，内部会裁到合理范围）
     void adjustSpeed(int delta);
     void resetSpeed();
+    void setSpeed(double speed);
 
     // 单路控制
     void togglePauseAt(int idx);

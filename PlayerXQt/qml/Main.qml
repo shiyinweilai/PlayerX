@@ -298,64 +298,48 @@ ApplicationWindow {
                 onClicked: Engine.seek(0)
             }
 
-            // ── 倍速控件（参考 video-compare：每按 6 次倍变，1/128~128x）──
-            FlatButton {
-                text: "⏪"
-                font.pixelSize: 14
-                enabled: Engine.fileCount > 0
-                ToolTip.visible: hovered
-                ToolTip.delay: 600
-                ToolTip.text: "慢速 ( - )"
-                onClicked: Engine.adjustSpeed(-1)
-            }
-            // 倍速文本：单击复位到 1.0x；颜色随是否非 1.0x 高亮
-            Rectangle {
-                Layout.preferredWidth: 56
+            Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
+
+            // ── 当前倍速指示（只在非 1.0x 时显示；点击复位；不占额外宽度）──
+            // 设计目标：日常 1.0x 时完全隐藏不占位；进入慢/快速时给一个紧凑的高亮提示，
+            // 单击即可回到 1.0x。详细控制仍走 ⚙ → 播放速度 子菜单。
+            Item {
+                id: speedBadge
+                visible: Math.abs(Engine.speed - 1.0) > 1e-6
+                Layout.preferredWidth: visible ? speedBadgeLabel.implicitWidth + 14 : 0
                 Layout.fillHeight: true
-                color: "transparent"
-                Label {
-                    anchors.centerIn: parent
-                    color: Math.abs(Engine.speed - 1.0) < 1e-6 ? "#9aa0a6" : "#00c0a0"
-                    font.pixelSize: 13
-                    font.bold: true
-                    // 1.0x / 0.50x / 1.50x / 2.0x …
-                    text: {
-                        var s = Engine.speed
-                        if (Math.abs(s - 1.0) < 1e-6) return "1.0x"
-                        if (s >= 1.0) return s.toFixed(s >= 10 ? 0 : 2).replace(/\.?0+$/,"") + "x"
-                        return s.toFixed(2).replace(/0+$/,"").replace(/\.$/,"") + "x"
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 22
+                    radius: 11
+                    color: "#1f3a33"           // 深绿底，和高亮色 #00c0a0 同色系
+                    border.color: "#00c0a0"
+                    border.width: 1
+                    Label {
+                        id: speedBadgeLabel
+                        anchors.centerIn: parent
+                        color: "#00c0a0"
+                        font.pixelSize: 12
+                        font.bold: true
+                        text: {
+                            var s = Engine.speed
+                            if (s >= 1.0) return s.toFixed(s >= 10 ? 0 : 2).replace(/\.?0+$/,"") + "x"
+                            return s.toFixed(2).replace(/0+$/,"").replace(/\.$/,"") + "x"
+                        }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        hoverEnabled: true
+                        onClicked: Engine.resetSpeed()
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 600
+                        ToolTip.text: "当前倍速 " + speedBadgeLabel.text + "，点击重置为 1.0x ( 0 )"
                     }
                 }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: Engine.resetSpeed()
-                    hoverEnabled: true
-                    ToolTip.visible: containsMouse
-                    ToolTip.delay: 600
-                    ToolTip.text: "点击重置为 1.0x ( 0 )"
-                }
             }
-            FlatButton {
-                text: "⏩"
-                font.pixelSize: 14
-                enabled: Engine.fileCount > 0
-                ToolTip.visible: hovered
-                ToolTip.delay: 600
-                ToolTip.text: "快速 ( = )"
-                onClicked: Engine.adjustSpeed(+1)
-            }
-
-            // 滑动对比模式按钮（仅 2 路视频可用，与 B 快捷键联动）
-            FlatButton {
-                id: compareBtn
-                enabled: root.compareSliderAvailable
-                Layout.preferredWidth: 84
-                text: root.compareSliderActive ? "⇆ 退出对比" : "⇆ 滑动对比"
-                onClicked: root._toggleCompareSlider()
-            }
-
-            Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
 
             // ─── 设置按钮（多级菜单）────────────────────────────────────
             FlatButton {
@@ -403,9 +387,9 @@ ApplicationWindow {
                             verticalAlignment: Text.AlignVCenter
                             Layout.fillWidth: true
                         }
-                        // 子菜单箭头：当此项是「布局」入口时显示 ▶
+                        // 子菜单箭头：当此项是子菜单入口时显示 ▶
                         Text {
-                            text: settingsItem.text === "布局" ? "▶" : ""
+                            text: (settingsItem.text === "布局" || settingsItem.text.indexOf("播放速度") === 0) ? "▶" : ""
                             color: "#888"
                             font.pixelSize: 11
                             verticalAlignment: Text.AlignVCenter
@@ -492,6 +476,202 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                 }
                             }
+                        }
+                    }
+                }
+
+                MenuSeparator {
+                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
+                }
+
+                // ── 二级菜单：播放速度（参考 video-compare：每档 2^(1/6)，约 1.122x）──
+                // 列出常用档位 + 减速/加速/重置三项；快捷键 - = 0 仍然全局可用。
+                Menu {
+                    id: speedSubMenu
+                    title: "播放速度"
+                    padding: 4
+                    width: 170
+
+                    background: Rectangle {
+                        color: "#1e1e22"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 6
+                    }
+
+                    delegate: MenuItem {
+                        id: speedItem
+                        implicitHeight: 30
+                        background: Rectangle {
+                            radius: 4
+                            color: speedItem.highlighted ? "#33333a" : "transparent"
+                        }
+                        contentItem: RowLayout {
+                            spacing: 0
+                            Text {
+                                leftPadding: 10
+                                text: speedItem.checked ? "✓" : ""
+                                color: "#6a9fd8"
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                                Layout.minimumWidth: 22
+                            }
+                            Text {
+                                text: speedItem.text
+                                color: speedItem.enabled ? "#e8e8ec" : "#666"
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+
+                    // 常用档位（直接 setSpeed；checked 用近似比较，避免按 - = 落到非常用档时全部不亮）
+                    Repeater {
+                        model: [0.25, 0.5, 1.0, 1.5, 2.0]
+                        MenuItem {
+                            id: presetItem
+                            required property real modelData
+                            text: {
+                                var v = modelData
+                                if (Math.abs(v - 1.0) < 1e-6) return "1.0x （正常）"
+                                return (v < 1.0 ? v.toFixed(2).replace(/0+$/,"").replace(/\.$/,"")
+                                                : v.toFixed(v >= 10 ? 0 : 1).replace(/\.0$/,"")) + "x"
+                            }
+                            checkable: true
+                            checked: Math.abs(Engine.speed - modelData) < 1e-3
+                            enabled: Engine.fileCount > 0
+                            onTriggered: Engine.setSpeed(modelData)
+                            implicitHeight: 30
+                            background: Rectangle {
+                                radius: 4
+                                color: presetItem.highlighted ? "#33333a" : "transparent"
+                            }
+                            contentItem: RowLayout {
+                                spacing: 0
+                                Text {
+                                    leftPadding: 10
+                                    text: presetItem.checked ? "✓" : ""
+                                    color: "#6a9fd8"
+                                    font.pixelSize: 12
+                                    verticalAlignment: Text.AlignVCenter
+                                    Layout.minimumWidth: 22
+                                }
+                                Text {
+                                    text: presetItem.text
+                                    color: presetItem.enabled ? "#e8e8ec" : "#666"
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+                    }
+
+                    MenuSeparator {
+                        contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
+                    }
+
+                    // 步进式（与快捷键 - / = / 0 对齐）
+                    // 注意：必须给 contentItem/background 用与上面档位项一致的深色 delegate，
+                    // 否则会落到系统默认（白底 + 浅灰禁用色），在深色面板里几乎看不见。
+                    MenuItem {
+                        id: speedDecItem
+                        text: "减速 ( - )"
+                        enabled: Engine.fileCount > 0
+                        onTriggered: Engine.adjustSpeed(-1)
+                        implicitHeight: 30
+                        background: Rectangle {
+                            radius: 4
+                            color: speedDecItem.highlighted ? "#33333a" : "transparent"
+                        }
+                        contentItem: RowLayout {
+                            spacing: 0
+                            Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                            Text {
+                                text: speedDecItem.text
+                                color: speedDecItem.enabled ? "#e8e8ec" : "#666"
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                    MenuItem {
+                        id: speedIncItem
+                        text: "加速 ( = )"
+                        enabled: Engine.fileCount > 0
+                        onTriggered: Engine.adjustSpeed(+1)
+                        implicitHeight: 30
+                        background: Rectangle {
+                            radius: 4
+                            color: speedIncItem.highlighted ? "#33333a" : "transparent"
+                        }
+                        contentItem: RowLayout {
+                            spacing: 0
+                            Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                            Text {
+                                text: speedIncItem.text
+                                color: speedIncItem.enabled ? "#e8e8ec" : "#666"
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                    MenuItem {
+                        id: speedResetItem
+                        text: "重置为 1.0x ( 0 )"
+                        enabled: Engine.fileCount > 0
+                        onTriggered: Engine.resetSpeed()
+                        implicitHeight: 30
+                        background: Rectangle {
+                            radius: 4
+                            color: speedResetItem.highlighted ? "#33333a" : "transparent"
+                        }
+                        contentItem: RowLayout {
+                            spacing: 0
+                            Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                            Text {
+                                text: speedResetItem.text
+                                color: speedResetItem.enabled ? "#e8e8ec" : "#666"
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                }
+
+                // ── 滑动对比（仅 2 路视频可用，B 快捷键联动）──
+                MenuItem {
+                    id: compareItem
+                    text: "滑动对比 (B)"
+                    checkable: true
+                    checked: root.compareSliderActive
+                    enabled: root.compareSliderAvailable || root.compareSliderActive
+                    onTriggered: root._toggleCompareSlider()
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: compareItem.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text {
+                            leftPadding: 10
+                            text: compareItem.checked ? "✓" : ""
+                            color: "#6a9fd8"
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.minimumWidth: 22
+                        }
+                        Text {
+                            text: compareItem.text
+                            color: compareItem.enabled ? "#e8e8ec" : "#666"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
                         }
                     }
                 }
