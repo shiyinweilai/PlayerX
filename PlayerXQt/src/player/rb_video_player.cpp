@@ -395,9 +395,14 @@ void RBVideoPlayer::rbStepFrame(int n) {
     // ─── 慢路径：seek 到目标帧 PTS 附近，再用帧级阈值丢前置帧 ─────────────
     // 关键技巧：底层 av_seek_frame 走 BACKWARD 关键帧，rbRefreshPausedFrameExact
     // 用 fd/2 作为丢弃阈值，能精确停在目标帧上而非关键帧。
+    //
+    // 后退（n<0）放宽超时：HEVC / 大 GOP（16/32/64）场景下，BACKWARD seek 落到
+    // GOP 起始 IDR，要从 IDR 一路解码到 target（可能 30+ 帧），500ms 在硬解失败/
+    // 软解时容易超时，触发 fallback 导致每次后退实际只回退到 GOP 边界附近的同一帧
+    // （表现为"卡在 #16 退不动"）。1500ms 给软解留足空间。
     const double target = std::max(0.0, std::min(cur + n * fd, m_duration));
     rbSeekTo(target);
-    rbRefreshPausedFrameExact(target, fd, 500);
+    rbRefreshPausedFrameExact(target, fd, n < 0 ? 1500 : 500);
 }
 
 bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, int timeoutMs) {
@@ -411,6 +416,31 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
     // 丢帧阈值：PTS < target - frameDur/2 认为是 keyframe 表的"前置帧"。
     // 只留下 PTS 距目标不超过 0.5 帧的帧，即目标帧本身（或与其重合的临近帧）。
     const double dropThresh = target - frameDur * 0.5;
+
+    // 兜底候选帧：保存"PTS < dropThresh 但最接近 target 的那一帧"。
+    // 用于解决"大 GOP（HEVC GOP=16+）+ B 帧 + 后退一帧"的死锁场景：
+    //   target 处于 GOP 中段，BACKWARD seek 落到 GOP 起始的 IDR，
+    //   解码线程会先吐 IDR ~ target-1 这一长串帧，全部 < dropThresh；
+    //   若直接丢光，超时返回 false → 当前帧不换 → target 不变
+    //   → 下一次按"上一帧"还是同一个 target → 永远卡在 #16 那种 GOP 边界帧。
+    // 改进：保留最后一个 < dropThresh 的帧作为兜底，超时时换上它。
+    // 这样实际效果：最坏只回退到 GOP 边界的"上一帧"附近（误差 ≤1 帧），
+    // 用户连按"上一帧"可以一路回退到 0，不会停滞。
+    AVFrame* fallback         = nullptr;
+    double   fallbackPts      = 0.0;
+    auto useAndReleaseFallback = [&](){
+        if (!fallback) return false;
+        rbUpdateFrameIndex(fallbackPts);
+        rbReleaseCurrentFrame();
+        m_currentFrame      = fallback;
+        m_currentFramePts   = fallbackPts;
+        m_playStartPts      = fallbackPts;
+        m_playStartWallTime = rbWallTime();
+        m_currentTime.store(fallbackPts);
+        m_seekPending       = false;
+        fallback            = nullptr;
+        return true;
+    };
 
     while (clock::now() < deadline) {
         AVFrame* peek = m_frameQueue->rbPeek();
@@ -428,13 +458,23 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
                                     : rawPts * av_q2d(m_videoTimeBase);
 
             if (m_seekPending && !noPts && framePts < dropThresh) {
+                // 前置帧：保留为 fallback（取最接近 target 的那一帧）
                 AVFrame* drop = m_frameQueue->rbPop();
-                if (drop) av_frame_free(&drop);
+                if (drop) {
+                    if (!fallback || framePts > fallbackPts) {
+                        if (fallback) av_frame_free(&fallback);
+                        fallback    = drop;
+                        fallbackPts = framePts;
+                    } else {
+                        av_frame_free(&drop);
+                    }
+                }
                 continue;
             }
 
             AVFrame* f = m_frameQueue->rbPop();
             if (f) {
+                if (fallback) av_frame_free(&fallback);
                 rbUpdateFrameIndex(framePts);
                 rbReleaseCurrentFrame();
                 m_currentFrame    = f;
@@ -448,6 +488,9 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+    // 超时：用兜底候选帧。fallback 为最接近 target 的"前置帧"，
+    // 退而求其次也比卡死强（用户表现为"上一帧"虽然偏一点点但能持续后退）。
+    if (useAndReleaseFallback()) return true;
     return false;
 }
 
