@@ -201,30 +201,11 @@ ApplicationWindow {
     }
 
     // ─── 文件 / 文件夹 选择 ──────────────────────────────────────────
-    // “新打开 / 打开窗口”与“添加”现均支持两种入口：多选文件 或 文件夹。
-    // 文件夹路径在 QML 侧用 Fs.scanVideoFolder 展开为文件列表后再调
-    // Engine.openFiles / Engine.addFile——后端接口不需任何修改。
-    FileDialog {
-        id: openDialog
-        title: "选择视频文件（可多选）"
-        fileMode: FileDialog.OpenFiles
-        nameFilters: [
-            "视频文件 (*.mp4 *.mov *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv)",
-            "所有文件 (*)"
-        ]
-        onAccepted: Engine.openFiles(selectedFiles)
-    }
-    FolderDialog {
-        id: openFolderDlg
-        title: "选择视频文件夹（所有视频作为一组打开）"
-        onAccepted: {
-            var files = Fs.scanVideoFolder(selectedFolder, true)
-            if (files.length === 0) return
-            // 限制上限 9 个，与原“添加”按钮限制保持一致
-            if (files.length > 9) files = files.slice(0, 9)
-            Engine.openFiles(Fs.toFileUrls(files))
-        }
-    }
+    // 下拉菜单合并后只保留两个入口：「添加文件」/「添加文件夹」。
+    //   - fileCount == 0 时，主按钮文案为 “打开”，此时“添加”与「打开」语义一致；
+    //   - fileCount > 0 时，主按钮文案为 “新打开”，点进去还是「添加」。
+    //   - 要重新载入一组 → 在各 cell 右上角 ✕ 关闭后再添加。
+    // 文件夹路径在 QML 侧用 Fs.scanVideoFolder 展开为文件列表后再调。
     FileDialog {
         id: addDialog
         title: "添加视频文件（可多选）"
@@ -234,10 +215,16 @@ ApplicationWindow {
             "所有文件 (*)"
         ]
         onAccepted: {
-            // 逐个调 addFile，遵守 9 个上限
-            for (var i = 0; i < selectedFiles.length; ++i) {
-                if (Engine.fileCount >= 9) break
-                Engine.addFile(selectedFiles[i])
+            // fileCount==0 采用批量 openFiles、效果 == 打开；否则逐个 addFile
+            if (Engine.fileCount === 0) {
+                var arr = selectedFiles
+                if (arr.length > 9) arr = arr.slice(0, 9)
+                Engine.openFiles(arr)
+            } else {
+                for (var i = 0; i < selectedFiles.length; ++i) {
+                    if (Engine.fileCount >= 9) break
+                    Engine.addFile(selectedFiles[i])
+                }
             }
         }
     }
@@ -248,9 +235,14 @@ ApplicationWindow {
             var files = Fs.scanVideoFolder(selectedFolder, true)
             if (files.length === 0) return
             var urls = Fs.toFileUrls(files)
-            for (var i = 0; i < urls.length; ++i) {
-                if (Engine.fileCount >= 9) break
-                Engine.addFile(urls[i])
+            if (Engine.fileCount === 0) {
+                if (urls.length > 9) urls = urls.slice(0, 9)
+                Engine.openFiles(urls)
+            } else {
+                for (var i = 0; i < urls.length; ++i) {
+                    if (Engine.fileCount >= 9) break
+                    Engine.addFile(urls[i])
+                }
             }
         }
     }
@@ -288,11 +280,11 @@ ApplicationWindow {
                 id: openBtn
                 text: (Engine.fileCount > 0 ? "新打开" : "打开") + "  ▾"
                 onClicked: openMenu.popup(openBtn, 0, openBtn.height + 2)
-                // 悬停提示：一次性提示可导入多个文件或整个文件夹
+                // 悬停提示：可一次选择多个文件，或导入整个文件夹
                 ToolTip.visible: openBtn.hovered
                 ToolTip.delay: 800
                 ToolTip.timeout: 4000
-                ToolTip.text: "可一次性导入多个文件，或导入整个文件夹"
+                ToolTip.text: "一次可选多个文件，或导入整个文件夹；右上角 ✕ 可单独关闭某一路"
             }
             // 二级菜单（与 “设置” 菜单同风格，避免 macOS 默认白底）
             Menu {
@@ -306,54 +298,9 @@ ApplicationWindow {
                     radius: 6
                 }
                 MenuItem {
-                    id: openMenuFile
-                    text: "📄 打开窗口…"
-                    onTriggered: openDialog.open()
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: openMenuFile.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                        Text {
-                            text: openMenuFile.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-                MenuItem {
-                    id: openMenuFolder
-                    text: "📁 打开文件夹…"
-                    onTriggered: openFolderDlg.open()
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: openMenuFolder.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                        Text {
-                            text: openMenuFolder.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-                MenuSeparator {
-                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
-                }
-                MenuItem {
                     id: openMenuAdd
-                    text: "➕ 新增窗口…"
-                    enabled: Engine.fileCount > 0 && Engine.fileCount < 9
+                    text: "➕ 添加文件…"
+                    enabled: Engine.fileCount < 9
                     onTriggered: addDialog.open()
                     implicitHeight: 30
                     background: Rectangle {
@@ -371,11 +318,16 @@ ApplicationWindow {
                             Layout.fillWidth: true
                         }
                     }
+                    // 悬停提示：一次可选多个文件
+                    ToolTip.visible: openMenuAdd.hovered
+                    ToolTip.delay: 600
+                    ToolTip.timeout: 4000
+                    ToolTip.text: "一次可选多个文件进行添加"
                 }
                 MenuItem {
                     id: openMenuAddFolder
-                    text: "📁 新增文件夹…"
-                    enabled: Engine.fileCount > 0 && Engine.fileCount < 9
+                    text: "📁 添加文件夹…"
+                    enabled: Engine.fileCount < 9
                     onTriggered: addFolderDlg.open()
                     implicitHeight: 30
                     background: Rectangle {
@@ -393,6 +345,10 @@ ApplicationWindow {
                             Layout.fillWidth: true
                         }
                     }
+                    ToolTip.visible: openMenuAddFolder.hovered
+                    ToolTip.delay: 600
+                    ToolTip.timeout: 4000
+                    ToolTip.text: "文件夹下所有视频会被一次性添加"
                 }
                 MenuSeparator {
                     contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
@@ -1280,6 +1236,38 @@ ApplicationWindow {
                                 text: Engine.fileNameAt(cell.playerIdx)
                                 elide: Text.ElideMiddle
                                 Layout.maximumWidth: Math.max(80, cell.width / 2)
+                            }
+                            // 关闭本路的 ✕ 按钮：仅 hover 时出现。
+                            // 调用 Engine.closeAt(idx) 后，fileCount 变化会触发 visibleCount/Repeater
+                            // 重新求值，UI 自动收拢 —— 不需要额外手动刷新。
+                            Rectangle {
+                                Layout.preferredWidth: 18
+                                Layout.preferredHeight: 18
+                                Layout.leftMargin: 2
+                                radius: 9
+                                visible: cellHover.hovered
+                                color: closeArea.containsMouse ? "#e0454d"
+                                      : closeArea.pressed     ? "#a83239"
+                                                              : "#55ffffff"
+                                Behavior on color { ColorAnimation { duration: 90 } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "✕"
+                                    color: "white"
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                }
+                                MouseArea {
+                                    id: closeArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: Engine.closeAt(cell.playerIdx)
+                                }
+                                ToolTip.visible: closeArea.containsMouse
+                                ToolTip.delay: 600
+                                ToolTip.timeout: 3000
+                                ToolTip.text: "关闭本路视频"
                             }
                         }
                     }
