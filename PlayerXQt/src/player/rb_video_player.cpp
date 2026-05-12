@@ -497,13 +497,19 @@ void RBVideoPlayer::rbReleaseCurrentFrame() {
 // ─── 帧信息查询 ──────────────────────────────────────────────────────────────
 
 int64_t RBVideoPlayer::rbCurrentFrameNum() const {
-    if (!m_currentFrame || !m_demuxer) return 0;
-    double fd = rbFrameDuration();
-    if (fd <= 0.0) return 0;
-    // 与 display.cpp 同逻辑：frame_num = pts / frame_duration
-    int64_t frameDurTb = static_cast<int64_t>(fd / av_q2d(m_demuxer->rbVideoTimeBase()) + 0.5);
-    if (frameDurTb <= 0) return 0;
-    return m_currentFrame->pts / frameDurTb;
+    if (!m_currentFrame) return 0;
+    // 与 display.cpp 完全一致：left_frame->pts / ffmpeg::frame_duration(left_frame)
+    // frame->duration 即 pkt_duration（已在 hw transfer 时正确拷贝）
+    int64_t dur = m_currentFrame->duration;
+    if (dur <= 0) {
+        // 回退：用 r_frame_rate 估算（软解或旧版 FFmpeg）
+        if (!m_demuxer) return 0;
+        double fd = rbFrameDuration();
+        if (fd <= 0.0) return 0;
+        dur = static_cast<int64_t>(fd / av_q2d(m_demuxer->rbVideoTimeBase()) + 0.5);
+    }
+    if (dur <= 0) return 0;
+    return m_currentFrame->pts / dur;
 }
 
 char RBVideoPlayer::rbCurrentFrameType() const {

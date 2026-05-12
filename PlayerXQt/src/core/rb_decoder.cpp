@@ -171,7 +171,14 @@ void RBDecoder::decodeLoop(RBPacketQueue* pktQueue, RBFrameQueue* frameQueue) {
                 if (ret < 0) break;
                 AVFrame* out = av_frame_alloc();
                 if (frame->format == m_hwPixFmt && m_hwPixFmt != AV_PIX_FMT_NONE) {
-                    if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
+                if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
+                        // 补全硬件解码后丢失的元数据
+                        swFrame->pts                  = frame->pts;
+                        swFrame->best_effort_timestamp = frame->best_effort_timestamp;
+                        swFrame->pkt_dts              = frame->pkt_dts;
+                        swFrame->duration             = frame->duration;
+                        swFrame->pict_type            = frame->pict_type;
+                        swFrame->flags                = frame->flags; // 含 AV_FRAME_FLAG_KEY
                         av_frame_move_ref(out, swFrame);
                     } else {
                         av_frame_free(&out);
@@ -203,9 +210,14 @@ void RBDecoder::decodeLoop(RBPacketQueue* pktQueue, RBFrameQueue* frameQueue) {
 
             AVFrame* out = av_frame_alloc();
             if (frame->format == m_hwPixFmt && m_hwPixFmt != AV_PIX_FMT_NONE) {
-                if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
-                    swFrame->pts = frame->pts;
+            if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
+                    // 补全硬件解码后丢失的元数据
+                    swFrame->pts                  = frame->pts;
                     swFrame->best_effort_timestamp = frame->best_effort_timestamp;
+                    swFrame->pkt_dts              = frame->pkt_dts;
+                    swFrame->duration             = frame->duration;
+                    swFrame->pict_type            = frame->pict_type;
+                    swFrame->flags                = frame->flags; // 含 AV_FRAME_FLAG_KEY
                     av_frame_move_ref(out, swFrame);
                 } else {
                     av_frame_free(&out);
