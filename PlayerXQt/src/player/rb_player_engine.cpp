@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <future>
 #include <vector>
@@ -47,6 +48,10 @@ bool RBPlayerEngine::rbOpenFiles(const std::vector<std::string>& files) {
     m_anchorWall = rbWallTime();
     m_anchorPts  = 0.0;
     m_pausedPts  = 0.0;
+    // 倍速复位为 1.0x（“打开新文件 = 干净状态”）
+    m_speed       = 1.0;
+    m_speedLevel  = 0;
+    for (auto& q : m_players) { if (q) q->rbSetSpeed(1.0); }
     return anyOk;
 }
 
@@ -77,6 +82,8 @@ int RBPlayerEngine::rbAddFile(const std::string& file) {
     // 把所有路 rbEnableMasterClock(true) 拉回主时钟）来主动对齐。
     // ────────────────────────────────────────────────────────────────
     p->rbEnableMasterClock(false);
+    // 让新加路继承当前全局倍速，避免“主时钟 2x 下独立路仍 1x”的不一致。
+    p->rbSetSpeed(m_speed);
     if (m_playing.load()) {
         p->rbPlay();          // 全局在播 → 新路从 0 独立播
     }
@@ -103,6 +110,8 @@ void RBPlayerEngine::rbCloseAll() {
     m_anchorWall = rbWallTime();
     m_anchorPts  = 0.0;
     m_pausedPts  = 0.0;
+    m_speed      = 1.0;
+    m_speedLevel = 0;
 }
 
 int RBPlayerEngine::rbCount() const {
@@ -465,13 +474,62 @@ void RBPlayerEngine::rbTick() {
 
 double RBPlayerEngine::rbComputeMasterLocked() const {
     if (!m_playing.load()) return m_pausedPts;
-    return m_anchorPts + (rbWallTime() - m_anchorWall);
+    return m_anchorPts + (rbWallTime() - m_anchorWall) * m_speed;
 }
 
 void RBPlayerEngine::rbBroadcastClock(double t) {
     for (auto& p : m_players) {
         if (p && p->rbUseMasterClock()) p->rbSetMasterClock(t);
     }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// 倍速控制：采用 video-compare 同样的 2^(level/6) 类似对数步進
+// ═════════════════════════════════════════════════════════════════════
+static constexpr int    kSpeedKeyPressesToDouble = 6;            // 每 6 按 ×2
+static constexpr int    kSpeedLevelMaxAbs        = 6 * 7;        // ±128倍
+static double rbSpeedFactorFromLevel(int level) {
+    return std::pow(2.0, static_cast<double>(level) / static_cast<double>(kSpeedKeyPressesToDouble));
+}
+
+void RBPlayerEngine::rbSetSpeed(double speed) {
+    if (!(speed > 0.0)) return;
+    if (speed < 1.0/128.0) speed = 1.0/128.0;
+    if (speed > 128.0)     speed = 128.0;
+
+    std::lock_guard<std::mutex> lk(m_mutex);
+    if (speed == m_speed) return;
+
+    // 重锚主时钟以避免倍速变更瞬间主时钟跳变：
+    //   master = anchorPts + (now - anchorWall) * speed
+    // 切换为 speed' 后，先冻结当前 master 然后以它为新起点。
+    if (m_playing.load()) {
+        const double now = rbWallTime();
+        m_anchorPts  = m_anchorPts + (now - m_anchorWall) * m_speed;
+        m_anchorWall = now;
+    }
+    m_speed = speed;
+
+    // 带动所有 player 的本地倍速（独立时钟路生效；主时钟路本字段不影响
+    // 选帧逻辑，但仍推送以保证 “独立 → 主时钟” 切换后立即一致）。
+    for (auto& p : m_players) {
+        if (p) p->rbSetSpeed(m_speed);
+    }
+}
+
+void RBPlayerEngine::rbAdjustSpeedLevel(int delta) {
+    int newLevel = m_speedLevel + delta;
+    if (newLevel >  kSpeedLevelMaxAbs) newLevel =  kSpeedLevelMaxAbs;
+    if (newLevel < -kSpeedLevelMaxAbs) newLevel = -kSpeedLevelMaxAbs;
+    if (newLevel == m_speedLevel) return;
+    m_speedLevel = newLevel;
+    rbSetSpeed(rbSpeedFactorFromLevel(newLevel));
+}
+
+void RBPlayerEngine::rbResetSpeed() {
+    if (m_speedLevel == 0 && m_speed == 1.0) return;
+    m_speedLevel = 0;
+    rbSetSpeed(1.0);
 }
 
 } // namespace rb

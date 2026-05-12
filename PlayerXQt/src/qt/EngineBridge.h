@@ -36,6 +36,10 @@ class EngineBridge : public QObject {
     Q_PROPERTY(double     position    READ position    NOTIFY positionChanged)
     Q_PROPERTY(double     duration    READ duration    NOTIFY durationChanged)
     Q_PROPERTY(QStringList titles     READ titles      NOTIFY filesChanged)
+    // 倍速控制：全局倍速因子（1.0 = 原速）。
+    // 仅提供读接口与 adjustSpeed/resetSpeed slot，不允许 QML 直接赋任意值，
+    // 避免跳出合理范围。
+    Q_PROPERTY(double     speed       READ speed       NOTIFY speedChanged)
 
 public:
     // 与 QML 同步的 layout 枚举
@@ -65,6 +69,7 @@ public:
     double      position()    const { return m_lastPosition; }
     double      duration()    const { return m_lastDuration; }
     QStringList titles()      const;
+    double      speed()       const { return m_lastSpeed; }
 
     void setActiveIndex(int v);
     void setLayoutMode(int v);
@@ -85,6 +90,13 @@ public slots:
     // 顶部 << / >> 按钮使用，区别于绝对 seek（进度条拖拽）。
     void seekRelative(double deltaSeconds);
     void stepFrame(int n);
+
+    // 倍速控制（全局）
+    // adjustSpeed(+1)：倍速上一级（6 级为一倍）
+    // adjustSpeed(-1)：倍速下一级
+    // resetSpeed()：重置为 1.0x
+    void adjustSpeed(int delta);
+    void resetSpeed();
 
     // 单路控制
     void togglePauseAt(int idx);
@@ -110,6 +122,7 @@ signals:
     void playingChanged();
     void positionChanged();
     void durationChanged();
+    void speedChanged();
     void requestRepaint(); // 通知所有 VideoFrameProvider 刷新
 
 private slots:
@@ -131,6 +144,7 @@ private:
     double  m_lastPosition{-1.0};
     double  m_lastDuration{-1.0};
     int     m_lastFileCount{0};
+    double  m_lastSpeed{1.0};
 };
 
 } // namespace rbqt

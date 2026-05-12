@@ -209,6 +209,26 @@ void EngineBridge::stepFrame(int n) {
     emit requestRepaint();
 }
 
+// 倍速控制
+void EngineBridge::adjustSpeed(int delta) {
+    if (!m_engine) return;
+    m_engine->rbAdjustSpeedLevel(delta);
+    double s = m_engine->rbSpeed();
+    if (std::abs(s - m_lastSpeed) > 1e-9) {
+        m_lastSpeed = s;
+        emit speedChanged();
+    }
+}
+void EngineBridge::resetSpeed() {
+    if (!m_engine) return;
+    m_engine->rbResetSpeed();
+    double s = m_engine->rbSpeed();
+    if (std::abs(s - m_lastSpeed) > 1e-9) {
+        m_lastSpeed = s;
+        emit speedChanged();
+    }
+}
+
 // 单路
 void EngineBridge::togglePauseAt(int idx) {
     if (!m_engine) return;
@@ -348,6 +368,13 @@ void EngineBridge::onTick() {
     if (std::abs(dur - m_lastDuration) > 1e-3) {
         m_lastDuration = dur;
         emit durationChanged();
+    }
+
+    // 倍速同步（外部可能因 rbOpenFiles 复位为 1.0）
+    double sp = m_engine->rbSpeed();
+    if (std::abs(sp - m_lastSpeed) > 1e-9) {
+        m_lastSpeed = sp;
+        emit speedChanged();
     }
 
     // 通知 VideoFrameProvider 重绘

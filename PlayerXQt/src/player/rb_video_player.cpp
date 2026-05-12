@@ -204,6 +204,26 @@ void RBVideoPlayer::rbSetMasterClock(double masterTime) {
     m_masterClock = masterTime;
 }
 
+void RBVideoPlayer::rbSetSpeed(double speed) {
+    // 倍速安全范围：1/128 ~ 128 倍（与 video-compare 一致）。
+    // 超出范围视为无意义，不调整。
+    if (!(speed > 0.0)) speed = 1.0;
+    if (speed < 1.0/128.0) speed = 1.0/128.0;
+    if (speed > 128.0)     speed = 128.0;
+    if (speed == m_speed) return;
+
+    // 重锚本地时钟，避免倍速变更瞬间 playTime 跳变。
+    //   原公式 playTime = m_playStartPts + (now - m_playStartWallTime) * m_speed
+    //   切换为 m_speed' 后：先取 now 冻结当前 playTime，再以它为新起点续走。
+    if (m_state.load() == RBPlayerState::Playing && !m_useMasterClock) {
+        const double wallNow  = rbWallTime();
+        const double playNow  = m_playStartPts + (wallNow - m_playStartWallTime) * m_speed;
+        m_playStartPts        = playNow;
+        m_playStartWallTime   = wallNow;
+    }
+    m_speed = speed;
+}
+
 AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
     if (m_state.load() != RBPlayerState::Playing) {
         return m_currentFrame; // 暂停时返回最后一帧
@@ -215,10 +235,10 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
     if (m_useMasterClock) {
         playTime = m_masterClock;
     } else {
-        playTime = m_playStartPts + (wallNow - m_playStartWallTime);
+        // 本地时钟需作倍速缩放；m_speed=1.0 时与原逻辑一致。
+        playTime = m_playStartPts + (wallNow - m_playStartWallTime) * m_speed;
     }
     playTime = std::min(playTime, m_duration > 0 ? m_duration : playTime);
-
     // 从队列中取出 PTS <= playTime 的帧
     bool gotFrame = false;
     while (true) {

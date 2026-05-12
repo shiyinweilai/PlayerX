@@ -298,6 +298,54 @@ ApplicationWindow {
                 onClicked: Engine.seek(0)
             }
 
+            // ── 倍速控件（参考 video-compare：每按 6 次倍变，1/128~128x）──
+            FlatButton {
+                text: "⏪"
+                font.pixelSize: 14
+                enabled: Engine.fileCount > 0
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: "慢速 ( - )"
+                onClicked: Engine.adjustSpeed(-1)
+            }
+            // 倍速文本：单击复位到 1.0x；颜色随是否非 1.0x 高亮
+            Rectangle {
+                Layout.preferredWidth: 56
+                Layout.fillHeight: true
+                color: "transparent"
+                Label {
+                    anchors.centerIn: parent
+                    color: Math.abs(Engine.speed - 1.0) < 1e-6 ? "#9aa0a6" : "#00c0a0"
+                    font.pixelSize: 13
+                    font.bold: true
+                    // 1.0x / 0.50x / 1.50x / 2.0x …
+                    text: {
+                        var s = Engine.speed
+                        if (Math.abs(s - 1.0) < 1e-6) return "1.0x"
+                        if (s >= 1.0) return s.toFixed(s >= 10 ? 0 : 2).replace(/\.?0+$/,"") + "x"
+                        return s.toFixed(2).replace(/0+$/,"").replace(/\.$/,"") + "x"
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: Engine.resetSpeed()
+                    hoverEnabled: true
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 600
+                    ToolTip.text: "点击重置为 1.0x ( 0 )"
+                }
+            }
+            FlatButton {
+                text: "⏩"
+                font.pixelSize: 14
+                enabled: Engine.fileCount > 0
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: "快速 ( = )"
+                onClicked: Engine.adjustSpeed(+1)
+            }
+
             // 滑动对比模式按钮（仅 2 路视频可用，与 B 快捷键联动）
             FlatButton {
                 id: compareBtn
@@ -627,6 +675,12 @@ ApplicationWindow {
         sequence: "B"; context: Qt.ApplicationShortcut
         onActivated: root._toggleCompareSlider()
     }
+    // 倍速快捷键（参考 video-compare）：- 慢、= 快、0 复位
+    // 同时支持小键盘 + / - 与主键盘 + 的常见组合
+    Shortcut { sequence: "-";          context: Qt.ApplicationShortcut; onActivated: Engine.adjustSpeed(-1) }
+    Shortcut { sequence: "=";          context: Qt.ApplicationShortcut; onActivated: Engine.adjustSpeed(+1) }
+    Shortcut { sequence: "+";          context: Qt.ApplicationShortcut; onActivated: Engine.adjustSpeed(+1) }
+    Shortcut { sequence: "0";          context: Qt.ApplicationShortcut; onActivated: Engine.resetSpeed() }
     // 数字键 1..9：toggle 单路/多路。
     //   - 当前不是 Single，或 activeIndex != n-1：进入 Single 并显示对应窗口
     //   - 当前已经是 Single 且 activeIndex == n-1（再次按下相同数字）：

@@ -65,15 +65,25 @@ public:
     void rbSeekAt(int idx, double seconds);
     void rbStepFrameAt(int idx, int n);
 
-    // ─── 状态查询 ─────────────────────────────────────────────────────
-    // 注意：rbIsPlaying 语义为"任一路在播即算播放中"（含独立时钟下的路），
-    // 实现位于 .cpp 中（需要持锁遍历 players）。
+    // ─── 状态查询 ─────────────────────────────────────
+    // 注意：rbIsPlaying 语义为“任一路在播即算播放中”（含独立时钟下的路），
+    // 实现位于 .cpp 中（需持锁遍历 players）。
     bool   rbIsPlaying()   const;
     double rbPosition()    const; // 全局主时钟（秒）
     double rbDuration()    const; // 所有路 duration 的最大值
     bool   rbIsAllEnded()  const;
     double rbFrameDuration() const; // 取所有路中最小的单帧时长，用于全局帧步进
 
+    // ─── 倍速控制（全局）────────────────────────────────────
+    // 主时钟按 m_speed 倍率推进，同时下发给所有 player 以保证独立时钟路
+    // 也同步倍速。采用 video-compare 同样的 2^(level/6) 步进策略：每按 6
+    // 次倍速变 2x；level 范围 [-42, 42] 对应 [1/128, 128] 倍。
+    void   rbSetSpeed(double speed);
+    double rbSpeed() const { return m_speed; }
+    // 调节倍速级别（递增递减 1，外部不必计算 factor）
+    void   rbAdjustSpeedLevel(int delta);
+    int    rbSpeedLevel() const { return m_speedLevel; }
+    void   rbResetSpeed(); // 重置为 1.0x
     // ─── 给渲染层调用：每帧 tick，会推进主时钟并把时钟下发给各 player ──
     // 调用者通常是 QTimer @ ~60Hz。
     void rbTick();
@@ -94,6 +104,11 @@ private:
     double m_anchorPts{0.0};    // 主时钟在锚点时的值（秒）
     // 暂停时缓存主时钟值（恢复播放时作为新 anchorPts）
     double m_pausedPts{0.0};
+
+    // 倍速： m_speed = 2^(m_speedLevel / 6)。level=0 即 1.0x。
+    // 主时钟推进量 m· m_speed，同时下发给所有 player 的 rbSetSpeed。
+    int    m_speedLevel{0};
+    double m_speed{1.0};
 };
 
 } // namespace rb

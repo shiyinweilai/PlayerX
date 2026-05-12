@@ -112,12 +112,21 @@ public:
     // 后者来自容器声明的 codec_id，前者来自 AVCodecContext->codec->name
     std::string   rbDecoderName()      const;
 
-    // ─── 时钟同步（多路同步时由 RBPlayerUI 调用）──────────────────────────
+    // ─── 时钟同步（多路同步时由 RBPlayerUI 调用）──────────────
     // 设置外部主时钟（秒），播放器将以此为基准对齐
     void rbSetMasterClock(double masterTime);
     bool rbUseMasterClock() const { return m_useMasterClock; }
     void rbEnableMasterClock(bool enable) { m_useMasterClock = enable; }
 
+    // ─── 倍速控制 ─────────────────────────────────────────────────────
+    // 设置本地时钟倍速因子（用于不走主时钟的独立路及主时钟为补偿同一因子同步设置）。
+    // 语义： m_speed=1.0 为原速。本地时钟公式：
+    //   playTime = m_playStartPts + (now - m_playStartWallTime) * m_speed
+    // 主时钟模式下本字段不生效（由 RBPlayerEngine 控制主时钟倍速），
+    // 但仍会被推送以保证 “独立路” 切换为主时钟后立即一致。
+    // 重错锁 m_playStartPts/WallTime 避免倍速变更璬间 PTS 跳变。
+    void rbSetSpeed(double speed);
+    double rbSpeed() const { return m_speed; }
 private:
     void rbReleaseCurrentFrame();
 
@@ -160,6 +169,11 @@ private:
     // 主时钟同步
     bool                          m_useMasterClock{false};
     double                        m_masterClock{0.0};
+
+    // 倍速因子（1.0 = 原速）；playTime 推进中 wall 增量会乘以此倍速。
+    // 不动 PTS 本身，只动 “wall 隔 → PTS 增量” 的换算。不影响帧步进、seek、
+    // 解码任何路径、渲染任何路径。
+    double                        m_speed{1.0};
 };
 
 } // namespace rb
