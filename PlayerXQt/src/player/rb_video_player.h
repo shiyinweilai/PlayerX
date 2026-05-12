@@ -100,6 +100,17 @@ public:
     double        rbFps()              const;
     // 编解码器名称（如 "h264" / "hevc" / "vp9"）
     std::string   rbCodecName()        const;
+    // 像素格式名（如 "yuv420p" / "nv12"），来自实际解码器输出
+    std::string   rbPixelFormatName()  const;
+    // 色彩空间（如 "bt709" / "bt2020nc"）
+    std::string   rbColorSpaceName()   const;
+    // 色彩范围（"tv" / "pc"）
+    std::string   rbColorRangeName()   const;
+    // 是否启用了硬件加速（实际生效，包含回退后的状态）
+    bool          rbHwAccelActive()    const;
+    // 实际使用的解码器名（如 h264 / h264_videotoolbox），与 rbCodecName 区别在于
+    // 后者来自容器声明的 codec_id，前者来自 AVCodecContext->codec->name
+    std::string   rbDecoderName()      const;
 
     // ─── 时钟同步（多路同步时由 RBPlayerUI 调用）──────────────────────────
     // 设置外部主时钟（秒），播放器将以此为基准对齐

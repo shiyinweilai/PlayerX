@@ -9,6 +9,7 @@
 extern "C" {
 #include <libavutil/time.h>
 #include <libavutil/frame.h>
+#include <libavutil/pixdesc.h>
 #include <libavcodec/avcodec.h>
 }
 
@@ -720,6 +721,72 @@ std::string RBVideoPlayer::rbCodecName() const {
     if (!par) return "";
     const char* name = avcodec_get_name(par->codec_id);
     return name ? name : "";
+}
+
+std::string RBVideoPlayer::rbPixelFormatName() const {
+    // 像素格式有两个层级，需要分别报告：
+    //   ① 码流声明格式（codecpar->format）—— 来自容器 SPS / extradata，
+    //      ffprobe 报告的就是这个，例如 yuv420p / yuv420p10le。
+    //   ② 实际产出的 AVFrame->format —— 解码器真正吐到 CPU 上的格式。
+    //      软解时 ① == ②；硬解时 VideoToolbox 在 macOS 上几乎总是输出
+    //      nv12（8bit）或 p010le（10bit），即使码流是 yuv420p。
+    //
+    // 输出策略：
+    //   - 两者一致：仅显示一个（如 "yuv420p"）
+    //   - 两者不同：显示 "码流 → 输出"（如 "yuv420p → nv12 (VT)"）
+    //   - 还没解出第一帧：仅显示码流格式
+    std::string streamFmt;
+    if (m_demuxer) {
+        AVCodecParameters* par = m_demuxer->rbVideoCodecPar();
+        if (par && par->format != AV_PIX_FMT_NONE) {
+            const char* n = av_get_pix_fmt_name(
+                static_cast<AVPixelFormat>(par->format));
+            if (n) streamFmt = n;
+        }
+    }
+
+    std::string runtimeFmt;
+    if (m_currentFrame && m_currentFrame->format != AV_PIX_FMT_NONE) {
+        const char* n = av_get_pix_fmt_name(
+            static_cast<AVPixelFormat>(m_currentFrame->format));
+        if (n) runtimeFmt = n;
+    }
+
+    if (runtimeFmt.empty()) return streamFmt;            // 没解出帧：只显示码流
+    if (streamFmt.empty())  return runtimeFmt;           // 兜底
+    if (streamFmt == runtimeFmt) return streamFmt;       // 软解一致
+
+    // 硬解或像素格式发生转换 —— 双层显示
+    bool hw = m_decoder && m_decoder->rbHwAccelActive();
+    return streamFmt + " → " + runtimeFmt + (hw ? " (VT)" : "");
+}
+
+std::string RBVideoPlayer::rbColorSpaceName() const {
+    // 优先从当前帧读取（FFmpeg 会从码流 VUI 解出来填到 frame->colorspace）
+    AVColorSpace sp = AVCOL_SPC_UNSPECIFIED;
+    if (m_currentFrame) sp = m_currentFrame->colorspace;
+    if (sp == AVCOL_SPC_UNSPECIFIED && m_decoder) sp = m_decoder->rbColorSpace();
+    if (sp == AVCOL_SPC_UNSPECIFIED) return "";
+    const char* n = av_color_space_name(sp);
+    return n ? n : "";
+}
+
+std::string RBVideoPlayer::rbColorRangeName() const {
+    AVColorRange r = AVCOL_RANGE_UNSPECIFIED;
+    if (m_currentFrame) r = m_currentFrame->color_range;
+    if (r == AVCOL_RANGE_UNSPECIFIED && m_decoder) r = m_decoder->rbColorRange();
+    if (r == AVCOL_RANGE_MPEG) return "tv";   // limited
+    if (r == AVCOL_RANGE_JPEG) return "pc";   // full
+    return "";
+}
+
+bool RBVideoPlayer::rbHwAccelActive() const {
+    return m_decoder && m_decoder->rbHwAccelActive();
+}
+
+std::string RBVideoPlayer::rbDecoderName() const {
+    if (!m_decoder) return "";
+    return m_decoder->rbDecoderName();
 }
 
 } // namespace rb

@@ -48,6 +48,12 @@ public:
     int rbWidth()  const;
     int rbHeight() const;
     AVPixelFormat rbPixFmt() const;
+    AVColorSpace  rbColorSpace() const;
+    AVColorRange  rbColorRange() const;
+    // 实际是否启用了硬件加速（即使请求了 hwAccel=true 也可能因初始化失败回退软解）
+    bool          rbHwAccelActive() const { return m_hwPixFmt != AV_PIX_FMT_NONE; }
+    // 当前使用的解码器名（如 h264 / h264_videotoolbox）
+    std::string   rbDecoderName() const;
 
 private:
     void decodeLoop(RBPacketQueue* pktQueue, RBFrameQueue* frameQueue);

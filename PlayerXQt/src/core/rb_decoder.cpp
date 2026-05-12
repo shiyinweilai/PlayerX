@@ -132,6 +132,17 @@ int RBDecoder::rbHeight() const { return m_codecCtx ? m_codecCtx->height : 0; }
 AVPixelFormat RBDecoder::rbPixFmt() const {
     return m_codecCtx ? m_codecCtx->pix_fmt : AV_PIX_FMT_NONE;
 }
+AVColorSpace RBDecoder::rbColorSpace() const {
+    return m_codecCtx ? m_codecCtx->colorspace : AVCOL_SPC_UNSPECIFIED;
+}
+AVColorRange RBDecoder::rbColorRange() const {
+    return m_codecCtx ? m_codecCtx->color_range : AVCOL_RANGE_UNSPECIFIED;
+}
+std::string RBDecoder::rbDecoderName() const {
+    if (!m_codecCtx || !m_codecCtx->codec) return "";
+    const char* n = m_codecCtx->codec->name;
+    return n ? n : "";
+}
 
 void RBDecoder::decodeLoop(RBPacketQueue* pktQueue, RBFrameQueue* frameQueue) {
     AVFrame* frame   = av_frame_alloc();

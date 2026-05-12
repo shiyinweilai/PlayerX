@@ -755,11 +755,14 @@ ApplicationWindow {
                             anchors.centerIn: parent
                             spacing: 8
 
-                            // 帧号
+                            // 帧号（固定最小宽度，避免 1/2/3/4 位数字之间抖动）
                             Text {
                                 color: "#e8e8ec"
                                 font.pixelSize: 11
                                 font.family: "Menlo, Monaco, Courier New, monospace"
+                                horizontalAlignment: Text.AlignRight
+                                Layout.minimumWidth: 56
+                                Layout.preferredWidth: 56
                                 text: channelBar.info.frameNum !== undefined
                                       ? "#" + channelBar.info.frameNum
                                       : "#—"
@@ -769,11 +772,14 @@ ApplicationWindow {
                                 Layout.preferredHeight: 12
                                 color: "#55ffffff"
                             }
-                            // 时间戳
+                            // 时间戳（固定最小宽度，避免抖动）
                             Text {
                                 color: "#e8e8ec"
                                 font.pixelSize: 11
                                 font.family: "Menlo, Monaco, Courier New, monospace"
+                                horizontalAlignment: Text.AlignRight
+                                Layout.minimumWidth: 70
+                                Layout.preferredWidth: 70
                                 text: channelBar.info.pts !== undefined
                                       ? channelBar.info.pts.toFixed(3) + "s"
                                       : "—"
@@ -919,6 +925,28 @@ ApplicationWindow {
                             InfoRow {
                                 label: "帧类型"
                                 value: infoPanel.info.frameType || "—"
+                            }
+                            InfoRow {
+                                label: "像素格式"
+                                value: infoPanel.info.pixFmt || "—"
+                            }
+                            InfoRow {
+                                label: "色彩空间"
+                                value: infoPanel.info.colorSpace || "—"
+                            }
+                            InfoRow {
+                                label: "色彩范围"
+                                value: infoPanel.info.colorRange || "—"
+                            }
+                            InfoRow {
+                                label: "解码器"
+                                value: infoPanel.info.decoder || "—"
+                            }
+                            InfoRow {
+                                label: "硬件加速"
+                                value: infoPanel.info.hwAccel === undefined
+                                       ? "—"
+                                       : (infoPanel.info.hwAccel ? "是 (VideoToolbox)" : "否")
                             }
 
                             // 底部提示

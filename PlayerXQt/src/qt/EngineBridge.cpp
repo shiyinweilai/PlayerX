@@ -272,13 +272,18 @@ QVariantMap EngineBridge::videoInfoAt(int idx) const {
     QVariantMap info;
     auto* p = playerAt(idx);
     if (!p) return info;
-    info["codec"]     = QString::fromStdString(p->rbCodecName());
-    info["width"]     = p->rbWidth();
-    info["height"]    = p->rbHeight();
-    info["fps"]       = p->rbFps();
-    info["frameNum"]  = static_cast<qlonglong>(p->rbCurrentFrameNum());
-    info["frameType"] = QString(QChar(p->rbCurrentFrameType()));
-    info["pts"]       = p->rbCurrentTime();
+    info["codec"]      = QString::fromStdString(p->rbCodecName());
+    info["decoder"]    = QString::fromStdString(p->rbDecoderName());
+    info["width"]      = p->rbWidth();
+    info["height"]     = p->rbHeight();
+    info["fps"]        = p->rbFps();
+    info["frameNum"]   = static_cast<qlonglong>(p->rbCurrentFrameNum());
+    info["frameType"]  = QString(QChar(p->rbCurrentFrameType()));
+    info["pts"]        = p->rbCurrentTime();
+    info["pixFmt"]     = QString::fromStdString(p->rbPixelFormatName());
+    info["colorSpace"] = QString::fromStdString(p->rbColorSpaceName());
+    info["colorRange"] = QString::fromStdString(p->rbColorRangeName());
+    info["hwAccel"]    = p->rbHwAccelActive();
     return info;
 }
 
