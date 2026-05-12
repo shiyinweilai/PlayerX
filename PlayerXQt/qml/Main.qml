@@ -721,17 +721,77 @@ ApplicationWindow {
                         }
                     }
 
-                    // 文件名（顶部右侧，避免和底部工具条重叠；受全局“通道信息”开关控制）
-                    Label {
+                    // 顶部右侧“通道信息”胶囊条：帧号 · 时间戳 · 文件名。
+                    // 受全局“通道信息”开关控制，默认显示；帧号/时间戳随 Engine.position 自动刷新。
+                    Rectangle {
+                        id: channelBar
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.margins: 6
-                        text: Engine.fileNameAt(cell.playerIdx)
-                        color: "#dcdcde"
-                        background: Rectangle { color: "#aa000000"; radius: 3 }
-                        leftPadding: 6; rightPadding: 6; topPadding: 2; bottomPadding: 2
+                        radius: 3
+                        color: "#aa000000"
                         z: 5
                         visible: root.effectiveChannelVisible
+                        // 宽/高按内容自适应
+                        implicitWidth:  channelRow.implicitWidth + 12
+                        implicitHeight: channelRow.implicitHeight + 4
+                        width:  implicitWidth
+                        height: implicitHeight
+
+                        // 动态信息（帧号/时间戳）随引擎位置变化刷新
+                        property var info: ({})
+                        function refreshInfo() {
+                            if (visible) info = Engine.videoInfoAt(cell.playerIdx)
+                        }
+                        Connections {
+                            target: Engine
+                            function onPositionChanged() { channelBar.refreshInfo() }
+                        }
+                        onVisibleChanged: refreshInfo()
+                        Component.onCompleted: refreshInfo()
+
+                        RowLayout {
+                            id: channelRow
+                            anchors.centerIn: parent
+                            spacing: 8
+
+                            // 帧号
+                            Text {
+                                color: "#e8e8ec"
+                                font.pixelSize: 11
+                                font.family: "Menlo, Monaco, Courier New, monospace"
+                                text: channelBar.info.frameNum !== undefined
+                                      ? "#" + channelBar.info.frameNum
+                                      : "#—"
+                            }
+                            Rectangle {
+                                Layout.preferredWidth: 1
+                                Layout.preferredHeight: 12
+                                color: "#55ffffff"
+                            }
+                            // 时间戳
+                            Text {
+                                color: "#e8e8ec"
+                                font.pixelSize: 11
+                                font.family: "Menlo, Monaco, Courier New, monospace"
+                                text: channelBar.info.pts !== undefined
+                                      ? channelBar.info.pts.toFixed(3) + "s"
+                                      : "—"
+                            }
+                            Rectangle {
+                                Layout.preferredWidth: 1
+                                Layout.preferredHeight: 12
+                                color: "#55ffffff"
+                            }
+                            // 文件名
+                            Text {
+                                color: "#dcdcde"
+                                font.pixelSize: 11
+                                text: Engine.fileNameAt(cell.playerIdx)
+                                elide: Text.ElideMiddle
+                                Layout.maximumWidth: Math.max(80, cell.width / 2)
+                            }
+                        }
                     }
 
                     // 鼠标交互：单击选中、双击切换该路暂停
@@ -857,20 +917,8 @@ ApplicationWindow {
                                        : "—"
                             }
                             InfoRow {
-                                label: "帧号"
-                                value: infoPanel.info.frameNum !== undefined
-                                       ? "#" + infoPanel.info.frameNum
-                                       : "—"
-                            }
-                            InfoRow {
                                 label: "帧类型"
                                 value: infoPanel.info.frameType || "—"
-                            }
-                            InfoRow {
-                                label: "时间戳"
-                                value: infoPanel.info.pts !== undefined
-                                       ? infoPanel.info.pts.toFixed(3) + " s"
-                                       : "—"
                             }
 
                             // 底部提示
