@@ -263,8 +263,6 @@ ApplicationWindow {
                 id: layoutCombo
                 focusPolicy: Qt.NoFocus
                 model: root.multiLayoutNames
-                // 根据当前 Engine.layoutMode 反查在 multiLayoutValues 中的位置；
-                // Single 模式不在下拉列表，此时展示“进入 Single 之前”的布局。
                 currentIndex: {
                     var idx = root.multiLayoutValues.indexOf(Engine.layoutMode)
                     return idx >= 0 ? idx : 0
@@ -274,7 +272,78 @@ ApplicationWindow {
                     Engine.layoutMode = v
                     root.lastMultiLayout = v
                 }
-                Layout.preferredWidth: 130
+                Layout.preferredWidth: 120
+                Layout.preferredHeight: 28
+                // 显式 implicit 尺寸，避免外层布局把 ComboBox 收缩到 0 时露出
+                // 平台默认 native 背景（macOS 下偶发出现的白底来源之一）。
+                implicitWidth:  120
+                implicitHeight: 28
+
+                // ── 深色自绘样式，与工具栏整体风格一致 ──
+                background: Rectangle {
+                    // 让 background 显式撑满整个 ComboBox，覆盖任何底层样式
+                    implicitWidth:  120
+                    implicitHeight: 28
+                    radius: 5
+                    color: layoutCombo.pressed ? "#4a4a55"
+                         : layoutCombo.hovered ? "#33333a"
+                                               : "#202024"
+                    border.color: layoutCombo.pressed ? "#6a6a78"
+                                : layoutCombo.hovered ? "#3d3d46"
+                                                      : "#2c2c32"
+                    border.width: 1
+                    Behavior on color        { ColorAnimation { duration: 90 } }
+                    Behavior on border.color { ColorAnimation { duration: 90 } }
+                }
+                contentItem: Text {
+                    leftPadding: 10
+                    rightPadding: layoutCombo.indicator.width + 6
+                    text: layoutCombo.displayText
+                    color: "#e8e8ec"
+                    font.pixelSize: 13
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                indicator: Text {
+                    x: layoutCombo.width - width - 8
+                    y: (layoutCombo.height - height) / 2
+                    text: "▾"
+                    color: "#888"
+                    font.pixelSize: 11
+                }
+                // 下拉弹出层
+                popup: Popup {
+                    y: layoutCombo.height + 2
+                    width: layoutCombo.width
+                    padding: 4
+                    background: Rectangle {
+                        color: "#1e1e22"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 6
+                    }
+                    contentItem: ListView {
+                        implicitHeight: contentHeight
+                        model: layoutCombo.delegateModel
+                        clip: true
+                    }
+                }
+                delegate: ItemDelegate {
+                    width: layoutCombo.width - 8
+                    height: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: Text {
+                        leftPadding: 8
+                        text: modelData
+                        color: highlighted ? "#ffffff" : "#cccccc"
+                        font.pixelSize: 13
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    highlighted: layoutCombo.highlightedIndex === index
+                }
             }
 
             Item { Layout.fillWidth: true }
@@ -424,7 +493,8 @@ ApplicationWindow {
                     width:  (grid.width  - grid.spacing * (grid.columns - 1)) / Math.max(1, grid.columns)
                     height: (grid.height - grid.spacing * (grid.rows    - 1)) / Math.max(1, grid.rows)
                     color: "#000"
-                    border.color: (videoArea.slotPlayerIndex(index) === Engine.activeIndex) ? "#3a8bff" : "#222"
+                    // 不显示选中边框：鼠标悬停时悬浮控制条已提供足够的视觉反馈
+                    border.color: "#222"
                     border.width: 2
 
                     property int playerIdx: videoArea.slotPlayerIndex(index)
