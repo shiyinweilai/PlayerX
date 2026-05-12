@@ -117,6 +117,12 @@ private:
     // 这样可以避开"基于 PTS/duration 推算帧号"在 B 帧 / VFR / PTS 偏移下的跳变。
     void rbUpdateFrameIndex(double newPts);
 
+    // 后退一帧专用：从已 seek 后的帧队列里持续解码，找到"PTS 严格小于 curPts 的
+    // 最大 PTS 帧"作为目标。VFR / PTS 不等距 / GOP 边界等场景下比 fd 估算更鲁棒。
+    // curPts: 当前帧的 PTS（秒），辅助函数会找到比它严格小的"最近一帧"。
+    // 返回 true 表示成功换帧。
+    bool rbStepBackwardOne(double curPts, int timeoutMs = 1500);
+
     std::unique_ptr<RBDemuxer>    m_demuxer;
     std::unique_ptr<RBDecoder>    m_decoder;
     std::unique_ptr<RBFrameQueue> m_frameQueue;

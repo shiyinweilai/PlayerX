@@ -392,19 +392,37 @@ void RBVideoPlayer::rbStepFrame(int n) {
         // 快路径失败（等待超时 / EOF），落到下方 seek 慢路径作为兜底
     }
 
-    // ─── 慢路径：seek 到目标帧 PTS 附近，再用帧级阈值丢前置帧 ─────────────
+    // ─── 后退专用路径：“找 PTS 严格小于 cur 的最大 PTS 帧” ───────────
+    // 不依赖 fd 估算 target，对 VFR / PTS 不等距 / GOP 边界都鲁棒。
+    // 典型场景（0002_a.mp4）：
+    //   #14 PTS=0.472s，#15 PTS=0.539s（间隔 0.067s≈2·fd，视频录制丢帧）
+    //   从 #15 后退，旧逻辑 target=0.539-0.0335=0.505，dropThresh=0.489
+    //   → #14 的 0.472 < 0.489 被当作”前置帧“丢弃或仅作 fallback
+    //   → #15 的 0.539 又被误认为“目标” → 位置不变 → 起”退不动“。
+    // 新逻辑：seek 到 cur 附近后，从解码序列中保留“所有 PTS < cur-eps 中
+    // 最大的那一帧”，遇到 PTS ≥ cur-eps 的帧就停。这样不管间隔多大都
+    // 能准确拿到“上一帧”。
+    if (n == -1) {
+        // 后退一帧：seek 到 cur 之前一个足够远的位置，让解码器能还原
+        // 出中间所有帧。fd*3 足够跨过 VFR 的大间隔。
+        const double seekTarget = std::max(0.0, cur - fd * 3.0);
+        rbSeekTo(seekTarget);
+        if (rbStepBackwardOne(cur, 1500)) return;
+        // 完全失败（已在 PTS=0 附近、无可后退）：不做任何处理
+        return;
+    }
+
+    // ─── 多帧后退 / 前进慢路径：seek 到目标帧 PTS 附近，再用帧级阈值丢前置帧 ─────
     // 关键技巧：底层 av_seek_frame 走 BACKWARD 关键帧，rbRefreshPausedFrameExact
     // 用 fd/2 作为丢弃阈值，能精确停在目标帧上而非关键帧。
     //
     // 后退（n<0）放宽超时：HEVC / 大 GOP（16/32/64）场景下，BACKWARD seek 落到
     // GOP 起始 IDR，要从 IDR 一路解码到 target（可能 30+ 帧），500ms 在硬解失败/
-    // 软解时容易超时，触发 fallback 导致每次后退实际只回退到 GOP 边界附近的同一帧
-    // （表现为"卡在 #16 退不动"）。1500ms 给软解留足空间。
+    // 软解时容易超时。
     const double target = std::max(0.0, std::min(cur + n * fd, m_duration));
     rbSeekTo(target);
     rbRefreshPausedFrameExact(target, fd, n < 0 ? 1500 : 500);
 }
-
 bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, int timeoutMs) {
     auto s = m_state.load();
     if (s == RBPlayerState::Idle || s == RBPlayerState::Error || s == RBPlayerState::Playing) {
@@ -491,6 +509,85 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
     // 超时：用兜底候选帧。fallback 为最接近 target 的"前置帧"，
     // 退而求其次也比卡死强（用户表现为"上一帧"虽然偏一点点但能持续后退）。
     if (useAndReleaseFallback()) return true;
+    return false;
+}
+
+bool RBVideoPlayer::rbStepBackwardOne(double curPts, int timeoutMs) {
+    // 后退一帧专用：找到 PTS 严格小于 curPts 的最大 PTS 帧。
+    // 调用前必须已经做过 rbSeekTo(curPts - 足够大余量)，让解码器从更早的关键帧
+    // 开始解码，覆盖 curPts 之前的帧序列。
+    auto s = m_state.load();
+    if (s == RBPlayerState::Idle || s == RBPlayerState::Error || s == RBPlayerState::Playing) {
+        return false;
+    }
+    using clock = std::chrono::steady_clock;
+    auto deadline = clock::now() + std::chrono::milliseconds(timeoutMs);
+
+    // PTS 比较的浮点容差（避免与 curPts 相等的帧被误判为"严格小"）。
+    // 取一个很小的值即可，经验上 1ms 已远小于任何真实 fd。
+    const double kEps = 0.001;
+
+    // 候选帧：当前为止见过的、PTS < curPts - kEps 的最大 PTS 帧。
+    AVFrame* best         = nullptr;
+    double   bestPts      = -1.0;
+
+    auto commitBest = [&](){
+        if (!best) return false;
+        rbUpdateFrameIndex(bestPts);
+        rbReleaseCurrentFrame();
+        m_currentFrame      = best;
+        m_currentFramePts   = bestPts;
+        m_playStartPts      = bestPts;
+        m_playStartWallTime = rbWallTime();
+        m_currentTime.store(bestPts);
+        m_seekPending       = false;
+        best                = nullptr;
+        return true;
+    };
+
+    while (clock::now() < deadline) {
+        AVFrame* peek = m_frameQueue->rbPeek();
+        if (!peek) {
+            if (m_frameQueue->rbIsEof()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        int64_t rawPts = (peek->best_effort_timestamp != AV_NOPTS_VALUE)
+                       ? peek->best_effort_timestamp
+                       : peek->pts;
+        bool   noPts = (rawPts == AV_NOPTS_VALUE);
+        double framePts = noPts ? (m_currentFramePts /* 占位 */)
+                                : rawPts * av_q2d(m_videoTimeBase);
+
+        if (noPts) {
+            // 无 PTS 帧：当作"未知"，直接消费，不参与候选挑选。
+            AVFrame* drop = m_frameQueue->rbPop();
+            if (drop) av_frame_free(&drop);
+            continue;
+        }
+
+        if (framePts >= curPts - kEps) {
+            // 已到达/越过当前帧：候选 best 就是"严格上一帧"，提交并返回。
+            // peek 这一帧不消费（留给后续播放/前进路径自然消费）。
+            if (commitBest()) return true;
+            // 若没有候选（说明 BACKWARD seek 没有覆盖到 curPts 之前的帧 ——
+            // 极端情况：curPts ≈ 0，已无更早的帧），退出。
+            return false;
+        }
+
+        // PTS < curPts - kEps：作为后退候选。取最大 PTS。
+        AVFrame* f = m_frameQueue->rbPop();
+        if (!f) continue;
+        if (!best || framePts > bestPts) {
+            if (best) av_frame_free(&best);
+            best    = f;
+            bestPts = framePts;
+        } else {
+            av_frame_free(&f);
+        }
+    }
+    // 超时：用当前最佳候选兜底
+    if (commitBest()) return true;
     return false;
 }
 
@@ -585,13 +682,16 @@ void RBVideoPlayer::rbUpdateFrameIndex(double newPts) {
         return;
     }
     const double dt = newPts - m_currentFramePts;
-    // ±0.5fd 容差判定"严格相邻一帧"
-    if (dt > fd * 0.5 && dt < fd * 1.5) {
+    // VFR / B 帧 PTS 不等距场景下，相邻一帧的 dt 可能是 0.5fd ~ 3fd。
+    // 这里用宽容性区间判“严格相邻一帧”：只要 PTS 单调且间隔在 ±3fd 内，
+    // 都认为是“退/进一帧”。避免 0002_a.mp4 这种首段有丢帧的视频被当成“大跨度
+    // 跳”、被 PTS·fps 误校准为 #16（实际应是 #15）。
+    if (dt > 0.0 && dt < fd * 3.0) {
         m_displayFrameIndex += 1;             // 严格下一显示帧
-    } else if (dt < -fd * 0.5 && dt > -fd * 1.5) {
+    } else if (dt < 0.0 && dt > -fd * 3.0) {
         m_displayFrameIndex -= 1;             // 严格上一显示帧
     } else {
-        // seek / 大跨度跳：按 PTS·fps 重校准
+        // seek / 大跨度跳（|dt| ≥ 3fd）：按 PTS·fps 重校准
         double fps = rbFps();
         m_displayFrameIndex = (fps > 0.0)
             ? static_cast<int64_t>(newPts * fps + 0.5)
