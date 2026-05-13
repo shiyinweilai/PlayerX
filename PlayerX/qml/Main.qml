@@ -97,6 +97,14 @@ ApplicationWindow {
                 onTriggered: multiGroupDialog.show()
             }
             MenuSeparator {}
+            // 一次性关闭所有视频（与单路 ✕ 一致；带二次确认）
+            MenuItem {
+                id: miCloseAll
+                text: qsTr("关闭所有视频")
+                enabled: Engine.fileCount > 0
+                onTriggered: confirmCloseAllDialog.open()
+            }
+            MenuSeparator {}
             // 评分数据：查看/导出/清空本地 CSV（与播放完全解耦）
             MenuItem {
                 id: miRatings
@@ -305,6 +313,13 @@ ApplicationWindow {
         context: Qt.ApplicationShortcut
         onActivated: multiGroupDialog.show()
     }
+    // 关闭所有视频：⌘W / Ctrl+W（行业惯例的"关闭文档"键，对我们等价于清空所有路）
+    Shortcut {
+        sequences: [StandardKey.Close]
+        context: Qt.ApplicationShortcut
+        enabled: Engine.fileCount > 0
+        onActivated: confirmCloseAllDialog.open()
+    }
     Shortcut {
         sequences: [StandardKey.Preferences]          // macOS: ⌘,
         context: Qt.ApplicationShortcut
@@ -489,8 +504,9 @@ ApplicationWindow {
                     title: qsTr("文件")
                     ScRow { keys: root._modKey + "O";       desc: qsTr("打开文件（最多 9 路）") }
                     ScRow { keys: root._modKey + "⇧O";     desc: qsTr("打开文件夹 / 多组对比") }
-                    ScRow { keys: root._modKey + "M";       desc: qsTr("打开文件夹 / 多组对比（别名）") }
-                    ScRow { keys: root._modKey + ",";       desc: qsTr("偏好设置") }
+                ScRow { keys: root._modKey + "M";       desc: qsTr("打开文件夹 / 多组对比（别名）") }
+                ScRow { keys: root._modKey + "W";       desc: qsTr("关闭所有视频") }
+                ScRow { keys: root._modKey + ",";       desc: qsTr("偏好设置") }
                     ScRow { keys: root._modKey + "Q";       desc: qsTr("退出 PlayerX") }
                 }
                 // 播放
@@ -640,6 +656,120 @@ ApplicationWindow {
         }
     }
 
+    // ─── 关闭全部视频：二次确认（深色，与 about/shortcuts 风格一致）──
+    //  · 触发源：工具栏【✕ 全部】、菜单【文件 ▸ 关闭所有视频】、快捷键 ⌘W/Ctrl+W
+    //  · 设计：modal + 深色面板 + 阴影 + 自绘 footer（取消/确认清空），避免误触
+    //  · 操作只调 Engine.closeAll()，不影响本地 ratings.csv（评分独立保存）
+    Dialog {
+        id: confirmCloseAllDialog
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        implicitWidth: 380
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+            // 双层外阴影（与 aboutDialog/shortcutsDialog 一致）
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -8
+                radius: parent.radius + 4
+                color: "transparent"
+                border.color: "#80000000"
+                border.width: 1
+                opacity: 0.45
+            }
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -4
+                radius: parent.radius + 2
+                color: "transparent"
+                border.color: "#a0000000"
+                border.width: 1
+                opacity: 0.55
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 40
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("关闭所有视频？")
+                color: "#e8e8ec"
+                font.pixelSize: 15
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a32"
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("此操作将关闭当前所有 %1 路视频，本次播放进度不会保留。\n本地评分（ratings.csv）不受影响。")
+                       .arg(Engine.fileCount)
+                color: "#c8c8cc"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a32"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                FlatButton {
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("取消")
+                    onClicked: confirmCloseAllDialog.close()
+                }
+                FlatButton {
+                    implicitWidth: 110
+                    implicitHeight: 30
+                    text: qsTr("关闭全部")
+                    textColor: "#e07070"   // 危险动作 → 红色文字
+                    onClicked: {
+                        confirmCloseAllDialog.close()
+                        Engine.closeAll()
+                    }
+                }
+            }
+        }
+    }
+
     // ─── 统一的扁平按钮 / 工具按钮 ──────────────────────────────────────
     // 完全用 Rectangle + MouseArea 自绘，不依赖 Qt Quick Controls 的全局
     // 风格设置（macOS 上 setStyle("Basic") 在某些 Qt 版本下不生效，会
@@ -653,6 +783,9 @@ ApplicationWindow {
         property alias  font: fbText.font
         property bool   hovered: fbHover.hovered
         property bool   down: fbMouse.pressed && fb.enabled
+        // 文字颜色（可选）：外部不设时走默认配色；设了则覆盖（按下/悬停/禁用三态自动派生）。
+        // 主要给"危险动作"按钮用（如 ✕ 全部 → 红色），不影响普通按钮。
+        property color  textColor: "transparent"   // 透明 = 走默认逻辑
         signal clicked()
 
         // 尺寸：根据文字自适应；外部仍可 Layout.preferredWidth 覆盖
@@ -682,9 +815,15 @@ ApplicationWindow {
             anchors.centerIn: parent
             text: fb.text
             font.pixelSize: 13
-            color: !fb.enabled ? "#555"
-                  : fb.down    ? "#ffffff"
-                                : "#e8e8ec"
+            // 默认配色 vs 外部覆盖：fb.textColor 透明（默认值）则走原逻辑。
+            color: !fb.enabled
+                   ? "#555"
+                   : (fb.textColor.a > 0
+                        ? (fb.down    ? Qt.lighter(fb.textColor, 1.25)
+                          : fb.hovered ? Qt.lighter(fb.textColor, 1.10)
+                                       : fb.textColor)
+                        : (fb.down    ? "#ffffff"
+                                      : "#e8e8ec"))
             Behavior on color { ColorAnimation { duration: 90 } }
         }
 
@@ -1047,6 +1186,25 @@ ApplicationWindow {
                 Layout.topMargin: 6
                 Layout.bottomMargin: 6
                 visible: Engine.fileCount > 0
+            }
+
+            // ── 关闭全部视频（一次性清空所有路）──
+            // 设计：
+            //   · 只在 fileCount > 0 时显示，与单路 ✕ 一致；
+            //   · 文案 "✕ 全部" 用红色调色，悬停加深，与单路关闭按钮的语义/视觉对齐；
+            //   · 点击先弹深色二次确认弹窗，避免误触一次性丢失全部正在比较的视频；
+            //   · 也可通过【文件】▸ 关闭所有视频 / ⌘W 触发。
+            FlatButton {
+                id: closeAllBtn
+                text: "✕ 全部"
+                visible: Engine.fileCount > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                font.pixelSize: 12
+                textColor: "#e07070"
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: qsTr("关闭所有视频（⌘W / Ctrl+W）")
+                onClicked: confirmCloseAllDialog.open()
             }
 
             // ── 当前倍速指示（只在非 1.0x 时显示；点击复位；不占额外宽度）──
