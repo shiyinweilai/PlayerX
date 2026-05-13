@@ -591,7 +591,7 @@ ApplicationWindow {
             }
         }
         contentItem: ColumnLayout {
-            spacing: 8
+            spacing: 10
             Text {
                 text: "PlayerX"
                 color: "#e8e8ec"
@@ -599,13 +599,21 @@ ApplicationWindow {
                 font.bold: true
             }
             Text {
-                text: qsTr("基于 Qt 6 + QML + FFmpeg 的多路视频对比播放器")
+                text: qsTr("一款简洁高效的多路视频对比播放器，\n支持最多 9 路同步播放、多组对比与逐帧分析。")
                 color: "#c8c8cc"
                 font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
             }
+            // 版本 + 作者
             Text {
                 text: qsTr("版本 1.0.0")
-                color: "#888"
+                color: "#9aa0a6"
+                font.pixelSize: 12
+            }
+            Text {
+                text: qsTr("作者 rbyang")
+                color: "#9aa0a6"
                 font.pixelSize: 12
             }
         }
