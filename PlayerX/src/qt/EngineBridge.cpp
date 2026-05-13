@@ -305,6 +305,11 @@ QString EngineBridge::fileNameAt(int idx) const {
     if (idx < 0 || idx >= m_engine->rbCount()) return {};
     return QFileInfo(QString::fromStdString(m_engine->rbPathAt(idx))).fileName();
 }
+QString EngineBridge::filePathAt(int idx) const {
+    if (!m_engine) return {};
+    if (idx < 0 || idx >= m_engine->rbCount()) return {};
+    return QString::fromStdString(m_engine->rbPathAt(idx));
+}
 double EngineBridge::positionAt(int idx) const {
     if (auto* p = playerAt(idx)) return p->rbCurrentTime();
     return 0.0;

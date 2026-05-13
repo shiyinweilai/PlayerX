@@ -12,6 +12,7 @@
 
 #include "qt/EngineBridge.h"
 #include "qt/FsUtils.h"
+#include "qt/RatingStore.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -35,11 +36,16 @@ int main(int argc, char* argv[]) {
     // 不与播放内核交互，单组模式下 QML 不会调用任何方法 → 行为零变化。
     rbqt::FsUtils fsUtils;
 
+    // RatingStore：视频评分的本地 CSV 持久化（覆盖式，按 file_path+rater 唯一）。
+    // 完全独立于播放内核，仅暴露给 QML 用于评分写入/导出/查看。
+    rbqt::RatingStore ratingStore;
+
     QQmlApplicationEngine engine;
 
     // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
     engine.rootContext()->setContextProperty("Engine", &engineBridge);
     engine.rootContext()->setContextProperty("Fs",     &fsUtils);
+    engine.rootContext()->setContextProperty("Rating", &ratingStore);
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,

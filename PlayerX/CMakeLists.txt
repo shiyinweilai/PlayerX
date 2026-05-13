@@ -52,6 +52,8 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/qt/SliderCompareItem.cpp
     # 多组对比模式辅助工具（仅供 QML 配置面板使用，不触达播放内核）
     src/qt/FsUtils.cpp
+    # 视频评分本地持久化（CSV，与播放内核解耦）
+    src/qt/RatingStore.cpp
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
@@ -63,6 +65,7 @@ qt_add_qml_module(PlayerX
         qml/SliderCompareView.qml
         qml/MultiGroupRow.qml
         qml/MultiGroupDialog.qml
+        qml/RatingsDialog.qml
 )
 
 # ─── 头文件搜索路径 ───────────────────────────────────────────────────────────

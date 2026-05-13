@@ -109,6 +109,8 @@ public slots:
 
     // 工具
     QString fileNameAt(int idx) const;
+    // 取某路视频的绝对文件路径（用于评分等持久化场景；空字符串表示该路未打开）
+    Q_INVOKABLE QString filePathAt(int idx) const;
     double  positionAt(int idx) const;
     double  durationAt(int idx) const;
     bool    playingAt(int idx) const;

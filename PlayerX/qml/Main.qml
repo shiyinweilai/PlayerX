@@ -32,6 +32,56 @@ ApplicationWindow {
     //            完整的细粒度设置仍由现有 settingsMenu 自定义弹窗承担，
     //            "偏好设置…"会直接弹出现有的 settingsMenu，零功能影响。
     menuBar: MenuBar {
+        id: appMenuBar
+
+        // ─── 深色主题 + 紧凑高度 ───────────────────────────────────────
+        // 仅 Windows/Linux 走这套自定义外观；macOS 使用系统全局菜单栏，
+        // 自动忽略 background/delegate，不受影响。
+        // 配色与应用整体一致：底 #1a1a1d、分隔 #2c2c32、hover #2a2a32、
+        // 按下/打开态 #3a3a45，正文 #e8e8ec、未 hover 次级 #cfcfd2。
+        background: Rectangle {
+            implicitHeight: 26
+            color: "#1a1a1d"
+            // 底部 1px 细分隔线，与下方内容区过渡
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2c2c32"
+            }
+        }
+
+        delegate: MenuBarItem {
+            id: mbItem
+            implicitHeight: 26
+            padding: 0
+            leftPadding: 10
+            rightPadding: 10
+            topPadding: 0
+            bottomPadding: 0
+
+            contentItem: Text {
+                text: mbItem.text
+                color: mbItem.highlighted || mbItem.hovered ? "#ffffff" : "#cfcfd2"
+                font.pixelSize: 12
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                // 去掉 Qt 默认的 "&" 助记键下划线样式带来的视觉噪点
+                textFormat: Text.PlainText
+                renderType: Text.NativeRendering
+            }
+
+            background: Rectangle {
+                implicitHeight: 26
+                // highlighted = 当前 Menu 已展开；hovered = 鼠标悬停
+                color: mbItem.highlighted ? "#3a3a45"
+                       : mbItem.hovered   ? "#2a2a32"
+                                          : "transparent"
+                radius: 3
+            }
+        }
+
         Menu {
             title: qsTr("文件")
             MenuItem {
@@ -45,6 +95,13 @@ ApplicationWindow {
                 id: miOpenFolder
                 text: qsTr("打开文件夹…")
                 onTriggered: multiGroupDialog.show()
+            }
+            MenuSeparator {}
+            // 评分数据：查看/导出/清空本地 CSV（与播放完全解耦）
+            MenuItem {
+                id: miRatings
+                text: qsTr("评分数据…")
+                onTriggered: ratingsDialog.open()
             }
             MenuSeparator {}
             MenuItem {
@@ -467,6 +524,17 @@ ApplicationWindow {
         // 再次点击当前分数 = 取消评分
         arr[idx] = (arr[idx] === score) ? 0 : score
         cellRatings = arr
+
+        // 持久化到本地 CSV（Rating = RatingStore 单例）。
+        // 取消评分（arr[idx]===0）也写入，便于审计；按 file_path+rater 覆盖，
+        // 因此重复点同一分数→0→3 等只会留下最新一条。
+        if (typeof Rating !== "undefined") {
+            var fp = Engine.filePathAt(idx)
+            if (fp && fp.length > 0) {
+                var fn = Engine.fileNameAt(idx)
+                Rating.recordRating(fp, fn, arr[idx])
+            }
+        }
     }
     Connections {
         target: Engine
@@ -540,11 +608,14 @@ ApplicationWindow {
             Engine.replaceAt(idx, selectedFile)
         }
     }
-    // ─── 顶部工具栏 ──────────────────────────────────────────────────────
-    // 自绘 background：深色填充 + 底部 1px 分隔线，与视频区在视觉上彻底
+    // ─── 底部工具栏 ──────────────────────────────────────────────────────
+    // 自绘 background：深色填充 + 顶部 1px 分隔线，与视频区在视觉上彻底
     // 切开。原先 ToolBar 用系统主题色，与视频黑底界限模糊，按钮按下时还
     // 会引起整体重绘抖动。
-    header: ToolBar {
+    // 放在 footer：Windows 上避免"菜单栏 + 工具栏"的双顶栏观感；每路视频
+    // 有各自的 OSD 进度条，这里承载的是全局播放控制（快进/快退/帧步进/
+    // 播放暂停/重置/多组切换/倍速徽标），放到窗口底部更符合主流播放器习惯。
+    footer: ToolBar {
         id: topBar
         height: 44
         background: Rectangle {
@@ -2046,6 +2117,14 @@ ApplicationWindow {
         id: multiGroupDialog
         visible: false
         // 作为给 root 的子窗口，关闭主窗时一起退出
+        transientParent: root
+    }
+
+    // ─── 评分数据查看 / 导出 / 清空面板 ───────────────────────
+    // 仅在「文件 ▸ 评分数据…」时 open()；与播放完全解耦。
+    RatingsDialog {
+        id: ratingsDialog
+        visible: false
         transientParent: root
     }
 
