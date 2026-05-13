@@ -188,6 +188,37 @@ ApplicationWindow {
     // 对话框 onAccepted 里读取它去调 Engine.replaceAt(idx, url)。初值 -1 表示未选中。
     property int pendingReplaceIdx: -1
 
+    // ── 视频评分（纯 UI/会话级，不入引擎）────────────────────────────
+    // 用 var 数组，按 playerIdx 索引存 1-5 分；0 / undefined 视为未评分。
+    // 关闭某路（fileCount 减少）时简单地把数组裁到当前 fileCount，避免序号
+    // 收拢后评分错位串到下一路。打开新文件时也清掉残留。
+    // 注意：本数据完全游离于 Engine 之外，关闭再打开同名文件评分会丢失，
+    //       这是当前最小实现的明确取舍——后续若要持久化再扩展即可。
+    property var cellRatings: []
+    function ratingAt(idx) {
+        if (idx < 0 || idx >= cellRatings.length) return 0
+        var v = cellRatings[idx]
+        return (typeof v === "number" && v >= 1 && v <= 5) ? v : 0
+    }
+    function setRatingAt(idx, score) {
+        if (idx < 0) return
+        // 复制后整体赋值，确保 onCellRatingsChanged 能触发到 UI 绑定
+        var arr = cellRatings.slice()
+        while (arr.length <= idx) arr.push(0)
+        // 再次点击当前分数 = 取消评分
+        arr[idx] = (arr[idx] === score) ? 0 : score
+        cellRatings = arr
+    }
+    Connections {
+        target: Engine
+        function onFileCountChanged() {
+            // 简单裁剪：fileCount 缩小后，保留前 N 项；扩大无需处理
+            if (root.cellRatings.length > Engine.fileCount) {
+                root.cellRatings = root.cellRatings.slice(0, Engine.fileCount)
+            }
+        }
+    }
+
     // 切换函数：仅在 fileCount === 2 时允许进入；离开 2 路场景时强制关闭
     function _toggleCompareSlider() {
         if (compareSliderActive) {
@@ -1259,50 +1290,20 @@ ApplicationWindow {
                                 elide: Text.ElideMiddle
                                 Layout.maximumWidth: Math.max(80, cell.width / 2)
                             }
-                            // 【cell hover 工具按钮】三个同风格的圆点：➕ 新增一路、🔁 替换本路、✕ 关闭本路。
+                            // 【cell hover 工具按钮】两个同风格的圆点：⋯ 更多操作、✕ 关闭本路。
                             // 仅 hover 本 cell 时可见，不污染观影画面。
-                            //  - ➕：Engine.fileCount >= 9 时置灰
-                            //  - 🔁：先写 root.pendingReplaceIdx 再弹 replaceDialog
+                            //  - ⋯：弹出 cellMenu，内含「评分（1-5 星）」与「替换本路视频…」
+                            //         （新增一路已在顶部工具栏／下拉菜单提供，cell 内不再重复）
                             //  - ✕：调 Engine.closeAt(idx)，fileCount 变化会触发 visibleCount/Repeater
                             //         重新求值，UI 自动收拢。
                             Rectangle {
+                                id: moreBtn
                                 Layout.preferredWidth: 18
                                 Layout.preferredHeight: 18
                                 Layout.leftMargin: 2
                                 radius: 9
-                                visible: cellHover.hovered
-                                opacity: addPathArea.enabled ? 1.0 : 0.45
-                                color: addPathArea.containsMouse && addPathArea.enabled ? "#3a8a3a"
-                                      : addPathArea.pressed && addPathArea.enabled    ? "#2c6a2c"
-                                                                                       : "#55ffffff"
-                                Behavior on color { ColorAnimation { duration: 90 } }
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: "＋"
-                                    color: "white"
-                                    font.pixelSize: 13
-                                    font.bold: true
-                                }
-                                MouseArea {
-                                    id: addPathArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    enabled: Engine.fileCount < 9
-                                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                                    onClicked: addDialog.open()
-                                }
-                                ToolTip.visible: addPathArea.containsMouse
-                                ToolTip.delay: 600
-                                ToolTip.timeout: 3000
-                                ToolTip.text: addPathArea.enabled ? "新增一路（可多选文件）" : "已达 9 路上限"
-                            }
-                            Rectangle {
-                                Layout.preferredWidth: 18
-                                Layout.preferredHeight: 18
-                                Layout.leftMargin: 2
-                                radius: 9
-                                visible: cellHover.hovered
-                                color: replaceArea.containsMouse ? "#3a78c8"
+                                visible: cellHover.hovered || cellMenu.opened
+                                color: replaceArea.containsMouse || cellMenu.opened ? "#3a78c8"
                                       : replaceArea.pressed     ? "#2a5994"
                                                                 : "#55ffffff"
                                 Behavior on color { ColorAnimation { duration: 90 } }
@@ -1322,17 +1323,20 @@ ApplicationWindow {
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
-                                        // 记下“本 cell 要被替换”后弹对话框
-                                        root.pendingReplaceIdx = cell.playerIdx
-                                        replaceDialog.open()
+                                        // 打开本 cell 的菜单（评分 + 替换）
+                                        if (cellMenu.opened) cellMenu.close()
+                                        else cellMenu.open()
                                     }
                                 }
-                                ToolTip.visible: replaceArea.containsMouse
+                                ToolTip.visible: replaceArea.containsMouse && !cellMenu.opened
                                 ToolTip.delay: 600
                                 ToolTip.timeout: 3000
-                                ToolTip.text: "替换本路视频（保持序号不变）"
+                                ToolTip.text: "更多：评分 / 替换本路视频"
                             }
-                            // 关闭本路的 ✕ 按钮：仅 hover 时出现。
+                            // 关闭本路的 ✕ 按钮：常驻显示（不随 hover 消失），仅当用户按 C
+                            // 关闭通道信息条 / 全屏拑制角标时才隐藏，与同一行的 #idx·时间·文件名
+                            // 信息条共用一套可见性，避免 cellMenu 弹出时鼠标移出 cell 导致 ✕
+                            // 闪掉、菜单边缘抖动。
                             // 调用 Engine.closeAt(idx) 后，fileCount 变化会触发 visibleCount/Repeater
                             // 重新求值，UI 自动收拢 —— 不需要额外手动刷新。
                             Rectangle {
@@ -1340,7 +1344,7 @@ ApplicationWindow {
                                 Layout.preferredHeight: 18
                                 Layout.leftMargin: 2
                                 radius: 9
-                                visible: cellHover.hovered
+                                visible: root.effectiveChannelVisible
                                 color: closeArea.containsMouse ? "#e0454d"
                                       : closeArea.pressed     ? "#a83239"
                                                               : "#55ffffff"
@@ -1363,6 +1367,146 @@ ApplicationWindow {
                                 ToolTip.delay: 600
                                 ToolTip.timeout: 3000
                                 ToolTip.text: "关闭本路视频"
+                            }
+                        }
+                    }
+
+                    // ── 更多菜单（⋯ 按钮触发）──────────────────────────────
+                    // 用 Popup 而非 Menu：可自定义评分星条、风格与顶部信息条一致。
+                    // 锚定到 moreBtn 下方右对齐；菜单打开时 moreBtn 保持高亮显示。
+                    // 关闭/替换 / 评分均不动 Engine 文件序号，因此对其他逻辑零侵入。
+                    Popup {
+                        id: cellMenu
+                        // 父对象用 moreBtn，可获得相对该按钮的坐标系
+                        parent: moreBtn
+                        // 弹在按钮正下方，向左对齐到按钮右边缘（避免溢出 cell 右侧）
+                        x: moreBtn.width - width
+                        y: moreBtn.height + 4
+                        padding: 8
+                        modal: false
+                        focus: true
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                        background: Rectangle {
+                            color: "#1f2227"
+                            radius: 8
+                            border.color: "#3a3f47"
+                            border.width: 1
+                        }
+
+                        // 评分状态绑定：从 root.cellRatings 读取，写入用 root.setRatingAt
+                        readonly property int currentRating: root.ratingAt(cell.playerIdx)
+                        // 鼠标 hover 预览分值（0 表示未 hover）
+                        property int hoverRating: 0
+
+                        ColumnLayout {
+                            spacing: 8
+
+                            // 顶部：当前文件名（只读，便于确认操作的是哪一路）
+                            RowLayout {
+                                spacing: 6
+                                Layout.fillWidth: true
+                                Text {
+                                    text: "#" + cell.playerIdx
+                                    color: "#9aa0a6"
+                                    font.pixelSize: 11
+                                }
+                                Text {
+                                    text: Engine.fileNameAt(cell.playerIdx)
+                                    color: "#dcdcde"
+                                    font.pixelSize: 12
+                                    elide: Text.ElideMiddle
+                                    Layout.maximumWidth: 220
+                                }
+                            }
+
+                            // 分隔线
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 1
+                                color: "#33ffffff"
+                            }
+
+                            // 评分行：标题 + 5 颗星 + 当前分值文本
+                            RowLayout {
+                                spacing: 6
+                                Text {
+                                    text: "评分"
+                                    color: "#dcdcde"
+                                    font.pixelSize: 12
+                                }
+                                Row {
+                                    spacing: 2
+                                    Repeater {
+                                        model: 5
+                                        delegate: Item {
+                                            width: 20
+                                            height: 20
+                                            property int starIndex: index + 1
+                                            property bool active: cellMenu.hoverRating > 0
+                                                ? starIndex <= cellMenu.hoverRating
+                                                : starIndex <= cellMenu.currentRating
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: parent.active ? "★" : "☆"
+                                                color: parent.active ? "#f5c518" : "#9aa0a6"
+                                                font.pixelSize: 16
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onEntered: cellMenu.hoverRating = parent.starIndex
+                                                onExited: cellMenu.hoverRating = 0
+                                                onClicked: {
+                                                    root.setRatingAt(cell.playerIdx, parent.starIndex)
+                                                    cellMenu.hoverRating = 0
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: cellMenu.currentRating > 0
+                                          ? (cellMenu.currentRating + " / 5")
+                                          : "未评分"
+                                    color: "#9aa0a6"
+                                    font.pixelSize: 11
+                                    Layout.leftMargin: 4
+                                }
+                            }
+
+                            // 分隔线
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 1
+                                color: "#33ffffff"
+                            }
+
+                            // 替换本路视频按钮（原 ⋯ 直跳替换 → 现作为菜单项）
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 28
+                                radius: 4
+                                color: replaceItemArea.containsMouse ? "#2a5994" : "transparent"
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "🔁  替换本路视频…"
+                                    color: "#dcdcde"
+                                    font.pixelSize: 12
+                                }
+                                MouseArea {
+                                    id: replaceItemArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        cellMenu.close()
+                                        root.pendingReplaceIdx = cell.playerIdx
+                                        replaceDialog.open()
+                                    }
+                                }
                             }
                         }
                     }
