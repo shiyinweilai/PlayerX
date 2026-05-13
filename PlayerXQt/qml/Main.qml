@@ -1438,11 +1438,6 @@ ApplicationWindow {
                                 spacing: 6
                                 Layout.fillWidth: true
                                 Text {
-                                    text: "#" + cell.playerIdx
-                                    color: "#9aa0a6"
-                                    font.pixelSize: 11
-                                }
-                                Text {
                                     text: Engine.fileNameAt(cell.playerIdx)
                                     color: "#dcdcde"
                                     font.pixelSize: 12
