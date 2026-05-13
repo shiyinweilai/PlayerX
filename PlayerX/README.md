@@ -1,14 +1,14 @@
-# PlayerXQt
+# PlayerX
 
-基于 **Qt 6 + QML + FFmpeg** 的视频播放器（PlayerX 的 Qt 重构版本）。
+基于 **Qt 6 + QML + FFmpeg** 的视频播放器（旧 SDL 版 PlayerX 的 Qt 重构版本）。
 
-> 本目录可独立从仓库中抽出，不依赖 PlayerX/ 与 video-compare/ 等任何兄弟目录的源代码。
+> 本目录可独立从仓库中抽出，不依赖其它兄弟目录的源代码。
 > 构建期会复用 `../build/ffmpeg/install` 的 FFmpeg 静态库；解耦时只需把对应 install 目录拷到自己的位置即可。
 
 ## 目录结构
 
 ```
-PlayerXQt/
+PlayerX/
 ├── CMakeLists.txt          # CMake 主脚本
 ├── build.py                # 构建脚本（macOS 原生）
 ├── README.md               # 本文档
@@ -60,11 +60,11 @@ python3 build.py --clean    # 清理后重新构建
 ```
 
 构建产物：
-- `build/out/bin/PlayerXQt.app`（macOS）
+- `build/out/bin/PlayerX.app`（macOS）
 
 启动：
 ```bash
-open build/out/bin/PlayerXQt.app
+open build/out/bin/PlayerX.app
 ```
 
 ## 当前进度

@@ -1,4 +1,4 @@
-// Main.qml — PlayerXQt 第 2 阶段：多路视频 + 主时钟同步
+// Main.qml — PlayerX 第 2 阶段：多路视频 + 主时钟同步
 //
 // 功能：
 //   - 顶部工具栏：Open（支持多选）/ Add / 播放暂停 / 帧步进 / Layout 切换 / 时间
@@ -14,15 +14,280 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtQuick.Window
-import PlayerXQt 1.0
+import PlayerX 1.0
 
 ApplicationWindow {
     id: root
     width: 1440
     height: 900
     visible: true
-    title: "PlayerXQt"
+    title: "PlayerX"
     color: "#101012"
+
+    // ─── 系统菜单栏（macOS 全局菜单 / Windows 窗口菜单） ──────────────────
+    // 仅作为系统级入口，与现有 ToolBar 上的"打开 ▾ / ⚙ 设置 ▾"按钮共存。
+    // macOS：自动适配为顶部全局菜单栏（系统原生样式，不接受自定义 background）。
+    // Windows / Linux：在窗口标题栏下方显示一行经典菜单栏。
+    // 设计原则：MenuBar 仅承担高频常用入口（打开/退出/设置/关于），
+    //            完整的细粒度设置仍由现有 settingsMenu 自定义弹窗承担，
+    //            "偏好设置…"会直接弹出现有的 settingsMenu，零功能影响。
+    menuBar: MenuBar {
+        Menu {
+            title: qsTr("文件")
+            MenuItem {
+                id: miOpenFile
+                text: qsTr("打开文件…")
+                enabled: Engine.fileCount < 9
+                onTriggered: addDialog.open()
+            }
+            MenuItem {
+                id: miOpenFolder
+                text: qsTr("打开文件夹…")
+                enabled: Engine.fileCount < 9
+                onTriggered: addFolderDlg.open()
+            }
+            MenuItem {
+                id: miOpenMulti
+                text: qsTr("打开多组对比…")
+                onTriggered: multiGroupDialog.show()
+            }
+            MenuSeparator {}
+            MenuItem {
+                id: miQuit
+                text: qsTr("退出 PlayerX")
+                onTriggered: Qt.quit()
+            }
+        }
+
+        // 【设置】顶层菜单（macOS / Windows 系统菜单）
+        //  · 直接镜像下方自绘 settingsMenu 的全部子项：布局 ▶ / 播放速度 ▶ /
+        //    滑动对比 / 通道信息 / 视频信息；行为与状态完全等价（共享 Engine / root 属性）。
+        //  · 系统菜单为原生 NSMenu / Win32 菜单渲染，不接受自定义深色 delegate —— 这是
+        //    macOS 标准外观，与系统其他应用一致。
+        //  · "偏好设置…"作为兜底入口，仍能弹出原深色自绘面板（与右键面板/快捷键一致）。
+        Menu {
+            id: settingsTopMenu
+            title: qsTr("设置")
+
+            // ── 布局 ▶ ──（4 种多路布局，互斥单选）
+            // 不用 Repeater：macOS 全局菜单对动态实例化的 MenuItem 支持不稳定，
+            // 显式声明每一项最稳，且和 multiLayoutNames/Values（[1,2,3,4]）一一对应。
+            Menu {
+                title: qsTr("布局")
+                MenuItem {
+                    text: qsTr("1×N 横排")
+                    checkable: true
+                    checked: Engine.layoutMode === 1
+                    onTriggered: { Engine.layoutMode = 1; root.lastMultiLayout = 1 }
+                }
+                MenuItem {
+                    text: qsTr("2×2")
+                    checkable: true
+                    checked: Engine.layoutMode === 2
+                    onTriggered: { Engine.layoutMode = 2; root.lastMultiLayout = 2 }
+                }
+                MenuItem {
+                    text: qsTr("2×3")
+                    checkable: true
+                    checked: Engine.layoutMode === 3
+                    onTriggered: { Engine.layoutMode = 3; root.lastMultiLayout = 3 }
+                }
+                MenuItem {
+                    text: qsTr("3×3")
+                    checkable: true
+                    checked: Engine.layoutMode === 4
+                    onTriggered: { Engine.layoutMode = 4; root.lastMultiLayout = 4 }
+                }
+            }
+
+            // ── 播放速度 ▶ ──（5 个常用档位 + 减速/加速/重置）
+            // 同样不用 Repeater，原因同上。
+            Menu {
+                title: qsTr("播放速度")
+                MenuItem {
+                    text: qsTr("0.25x")
+                    checkable: true
+                    checked: Math.abs(Engine.speed - 0.25) < 1e-3
+                    enabled: Engine.fileCount > 0
+                    onTriggered: Engine.setSpeed(0.25)
+                }
+                MenuItem {
+                    text: qsTr("0.5x")
+                    checkable: true
+                    checked: Math.abs(Engine.speed - 0.5) < 1e-3
+                    enabled: Engine.fileCount > 0
+                    onTriggered: Engine.setSpeed(0.5)
+                }
+                MenuItem {
+                    text: qsTr("1.0x （正常）")
+                    checkable: true
+                    checked: Math.abs(Engine.speed - 1.0) < 1e-3
+                    enabled: Engine.fileCount > 0
+                    onTriggered: Engine.setSpeed(1.0)
+                }
+                MenuItem {
+                    text: qsTr("1.5x")
+                    checkable: true
+                    checked: Math.abs(Engine.speed - 1.5) < 1e-3
+                    enabled: Engine.fileCount > 0
+                    onTriggered: Engine.setSpeed(1.5)
+                }
+                MenuItem {
+                    text: qsTr("2.0x")
+                    checkable: true
+                    checked: Math.abs(Engine.speed - 2.0) < 1e-3
+                    enabled: Engine.fileCount > 0
+                    onTriggered: Engine.setSpeed(2.0)
+                }
+                MenuSeparator {}
+                MenuItem {
+                    text: qsTr("减速 ( - )")
+                    enabled: Engine.fileCount > 0
+                    onTriggered: Engine.adjustSpeed(-1)
+                }
+                MenuItem {
+                    text: qsTr("加速 ( = )")
+                    enabled: Engine.fileCount > 0
+                    onTriggered: Engine.adjustSpeed(+1)
+                }
+                MenuItem {
+                    text: qsTr("重置为 1.0x ( 0 )")
+                    enabled: Engine.fileCount > 0
+                    onTriggered: Engine.resetSpeed()
+                }
+            }
+
+            MenuSeparator {}
+
+            // ── 滑动对比（仅 2 路视频可用，B 快捷键联动）──
+            MenuItem {
+                text: qsTr("滑动对比 (B)")
+                checkable: true
+                checked: root.compareSliderActive
+                enabled: root.compareSliderAvailable || root.compareSliderActive
+                onTriggered: root._toggleCompareSlider()
+            }
+
+            // ── 通道信息显示（C 快捷键联动）──
+            MenuItem {
+                text: qsTr("通道信息 (C)")
+                checkable: true
+                checked: root.globalChannelVisible
+                onTriggered: {
+                    if (root.fullscreenSuppressChannel) {
+                        root.fullscreenSuppressChannel = false
+                        root.globalChannelVisible = true
+                    } else {
+                        root.globalChannelVisible = !root.globalChannelVisible
+                    }
+                }
+            }
+
+            // ── 视频信息显示（V 快捷键联动）──
+            MenuItem {
+                text: qsTr("视频信息 (V)")
+                checkable: true
+                checked: root.globalInfoVisible
+                onTriggered: {
+                    if (root.fullscreenSuppressInfo) {
+                        root.fullscreenSuppressInfo = false
+                        root.globalInfoVisible = true
+                    } else {
+                        root.globalInfoVisible = !root.globalInfoVisible
+                    }
+                }
+            }
+
+            MenuSeparator {}
+
+            // 兜底：弹出原深色自绘设置面板（与快捷键 ⌘, 一致）
+            MenuItem {
+                text: qsTr("偏好设置…")
+                onTriggered: root._popupSettingsMenu()
+            }
+        }
+
+        Menu {
+            title: qsTr("帮助")
+            MenuItem {
+                text: qsTr("关于 PlayerX")
+                onTriggered: aboutDialog.open()
+            }
+        }
+    }
+
+    // 统一的"弹出设置菜单"入口：把原来锚到 settingsBtn 的逻辑收敛到一处。
+    // 因为 settingsBtn 已被移除，这里改为锚到窗口右上角（与原 ⚙ 按钮位置近似）。
+    function _popupSettingsMenu() {
+        var menuW = settingsMenu.width > 0 ? settingsMenu.width : 180
+        // x = 距窗口右边 10px；y = 工具栏下方一点（菜单栏 + ToolBar 大约 64px，留余量到 56）
+        settingsMenu.popup(root, root.width - menuW - 10, 56)
+    }
+
+    // ─── 顶层快捷键（与 MenuBar 解耦） ────────────────────────────────
+    // QtQuick.Controls 的 MenuItem 没有 shortcut 属性，必须用独立 Shortcut。
+    // 这些快捷键是窗口级（context: ApplicationShortcut），无论焦点在哪都可触发。
+    Shortcut {
+        sequences: [StandardKey.Open]                 // macOS: ⌘O / Win: Ctrl+O
+        context: Qt.ApplicationShortcut
+        enabled: Engine.fileCount < 9
+        onActivated: addDialog.open()
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+O"                      // 打开文件夹
+        context: Qt.ApplicationShortcut
+        enabled: Engine.fileCount < 9
+        onActivated: addFolderDlg.open()
+    }
+    Shortcut {
+        sequence: "Ctrl+M"                            // 打开多组对比
+        context: Qt.ApplicationShortcut
+        onActivated: multiGroupDialog.show()
+    }
+    Shortcut {
+        sequences: [StandardKey.Preferences]          // macOS: ⌘,
+        context: Qt.ApplicationShortcut
+        onActivated: root._popupSettingsMenu()
+    }
+    Shortcut {
+        sequences: [StandardKey.Quit]                 // macOS: ⌘Q / Win: Ctrl+Q
+        context: Qt.ApplicationShortcut
+        onActivated: Qt.quit()
+    }
+
+    // 简单的"关于"对话框（深色风格，与全局 UI 一致）
+    Dialog {
+        id: aboutDialog
+        title: qsTr("关于 PlayerX")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+        }
+        contentItem: ColumnLayout {
+            spacing: 8
+            Text {
+                text: "PlayerX"
+                color: "#e8e8ec"
+                font.pixelSize: 18
+                font.bold: true
+            }
+            Text {
+                text: qsTr("基于 Qt 6 + QML + FFmpeg 的多路视频对比播放器")
+                color: "#c8c8cc"
+                font.pixelSize: 13
+            }
+            Text {
+                text: qsTr("版本 1.0.0")
+                color: "#888"
+                font.pixelSize: 12
+            }
+        }
+    }
 
     // ─── 统一的扁平按钮 / 工具按钮 ──────────────────────────────────────
     // 完全用 Rectangle + MouseArea 自绘，不依赖 Qt Quick Controls 的全局
@@ -154,25 +419,25 @@ ApplicationWindow {
     readonly property var multiLayoutNames: ["1×N 横排", "2×2", "2×3", "3×3"]
     readonly property var multiLayoutValues: [1, 2, 3, 4]
 
-    // 记住上一次使用的“多路布局”，让按下 0 键可以准确回到该布局。
+    // 记住上一次使用的"多路布局"，让按下 0 键可以准确回到该布局。
     // 默认 SideBySide=1。仅在 ComboBox 交互、S 键循环、打开多个文件后同步。
     property int lastMultiLayout: 1
 
-    // 全局“显示所有视频信息”开关（设置菜单 / 快捷键 V 控制）。
+    // 全局"显示所有视频信息"开关（设置菜单 / 快捷键 V 控制）。
     // cell 自身仍保留右键的局部开关（localInfoVisible），二者取或。
     property bool globalInfoVisible: false
 
-    // 全局“通道信息”开关（设置菜单 / 快捷键 C 控制）。
+    // 全局"通道信息"开关（设置菜单 / 快捷键 C 控制）。
     // 控制每个窗口左上角的序号徽标 + 右上角的文件名。默认 true。
     property bool globalChannelVisible: true
 
-    // 全屏拑制：按 F 进入全屏后，V/C 对应的叠加元素默认隐藏，但仍可
-    // 再按 V/C 售起。本质是一个“临时压制”标志，被Pick V/C 按下时会被清除。
+    // 全屏抑制：按 F 进入全屏后，V/C 对应的叠加元素默认隐藏，但仍可
+    // 再按 V/C 售起。本质是一个"临时抑制"标志，被Pick V/C 按下时会被清除。
     // 退出全屏时也会被清除。
     property bool fullscreenSuppressInfo:    false
     property bool fullscreenSuppressChannel: false
 
-    // 实际是否显示：全局开关 且 不处于全屏拑制状态。
+    // 实际是否显示：全局开关 且 不处于全屏抑制状态。
     readonly property bool effectiveInfoVisible:    globalInfoVisible    && !fullscreenSuppressInfo
     readonly property bool effectiveChannelVisible: globalChannelVisible && !fullscreenSuppressChannel
 
@@ -183,7 +448,7 @@ ApplicationWindow {
     property bool compareSliderActive: false
     readonly property bool compareSliderAvailable: Engine.fileCount === 2
 
-    // cell 右上角 🔁 “替换本路”按钮 ↔ replaceDialog 的中转变量：
+    // cell 右上角 🔁 "替换本路"按钮 ↔ replaceDialog 的中转变量：
     // FileDialog 是全局只一份，不能随 cell 上下文变化；点按钮时先写入该值，
     // 对话框 onAccepted 里读取它去调 Engine.replaceAt(idx, url)。初值 -1 表示未选中。
     property int pendingReplaceIdx: -1
@@ -238,8 +503,8 @@ ApplicationWindow {
 
     // ─── 文件 / 文件夹 选择 ──────────────────────────────────────────
     // 下拉菜单合并后只保留两个入口：「添加文件」/「添加文件夹」。
-    //   - fileCount == 0 时，主按钮文案为 “打开”，此时“添加”与「打开」语义一致；
-    //   - fileCount > 0 时，主按钮文案为 “新打开”，点进去还是「添加」。
+    //   - fileCount == 0 时，主按钮文案为 "打开"，此时"添加"与「打开」语义一致；
+    //   - fileCount > 0 时，主按钮文案为 "新打开"，点进去还是「添加」。
     //   - 要重新载入一组 → 在各 cell 右上角 ✕ 关闭后再添加。
     // 文件夹路径在 QML 侧用 Fs.scanVideoFolder 展开为文件列表后再调。
     FileDialog {
@@ -283,7 +548,7 @@ ApplicationWindow {
         }
     }
     // 「替换本路」对话框：单选文件，原地调用 Engine.replaceAt(idx, url)。
-    // 使用 root.pendingReplaceIdx 传递“哪一路要被替换”——FileDialog 不能绑定变量，
+    // 使用 root.pendingReplaceIdx 传递"哪一路要被替换"——FileDialog 不能绑定变量，
     // 在 cell 点 🔁 时先写入该 idx，然后 open() 。
     FileDialog {
         id: replaceDialog
@@ -326,108 +591,12 @@ ApplicationWindow {
             anchors.bottomMargin: 6
             spacing: 6
 
-            // 打开按钮：单个组件即下拉。点击 → 弹出菜单：
-            //   「打开窗口」/「打开文件夹」/「新增窗口」/「增加文件夹」/「多组对比模式」
-            // 主体功能与多组模式不相关——多组模式走「MultiGroupDialog」独立路径，仅重用 Engine.openFiles。
-            FlatButton {
-                id: openBtn
-                // 记录 openMenu 上一次关闭的时间戳：用于「再次点击同一按钮收起菜单」的体感修复。
-                // Qt Menu 的 click-outside-to-close 会先关闭菜单，紧接着按钮自身的 onClicked
-                // 又会触发一次 popup()，看起来就像菜单没收回。这里用一个小时间窗（200ms）
-                // 吃掉关闭后立刻发生的同一次点击。
-                property double _menuClosedAtMs: 0
-                text: (Engine.fileCount > 0 ? "新打开" : "打开") + "  ▾"
-                onClicked: {
-                    if (Date.now() - openBtn._menuClosedAtMs < 200) return
-                    openMenu.popup(openBtn, 0, openBtn.height + 2)
-                }
-            }
-            // 二级菜单（与 “设置” 菜单同风格，避免 macOS 默认白底）
-            Menu {
-                id: openMenu
-                padding: 4
-                width: 220
-                // 关闭时记录时间戳，配合 openBtn.onClicked 实现「再次点击同一按钮收起菜单」
-                onClosed: openBtn._menuClosedAtMs = Date.now()
-                background: Rectangle {
-                    color: "#1e1e22"
-                    border.color: "#3a3a42"
-                    border.width: 1
-                    radius: 6
-                }
-                MenuItem {
-                    id: openMenuAdd
-                    text: "➕ 添加文件…"
-                    enabled: Engine.fileCount < 9
-                    onTriggered: addDialog.open()
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: openMenuAdd.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                        Text {
-                            text: openMenuAdd.text
-                            color: openMenuAdd.enabled ? "#e8e8ec" : "#666"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-                MenuItem {
-                    id: openMenuAddFolder
-                    text: "📁 添加文件夹…"
-                    enabled: Engine.fileCount < 9
-                    onTriggered: addFolderDlg.open()
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: openMenuAddFolder.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                        Text {
-                            text: openMenuAddFolder.text
-                            color: openMenuAddFolder.enabled ? "#e8e8ec" : "#666"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-                MenuSeparator {
-                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
-                }
-                MenuItem {
-                    id: openMenuMulti
-                    text: "🗂️ 打开多组对比模式…"
-                    onTriggered: multiGroupDialog.show()
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: openMenuMulti.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                        Text {
-                            text: openMenuMulti.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-            }
+            // 打开 / 多组对比 入口已统一收纳到顶部系统菜单栏【文件】。
+            // 这里只保留一个 fillWidth 的 spacer，把后面的播放控制组推到工具栏右端。
 
             // 把所有"播放控制"统一推到工具栏右侧：
             // 仅当已添加视频（Engine.fileCount > 0）时显示这一整组；
-            // 没有视频的"空状态"下，工具栏只剩左侧的「打开 ▾」与最右侧的「⚙ 设置 ▾」。
+            // 没有视频的"空状态"下，工具栏整体保持空白（顶部菜单栏接管入口）。
             Item { Layout.fillWidth: true }
 
             // 第一根分隔线：把"打开"与"播放控制组"隔开（仅有视频时存在）
@@ -574,25 +743,20 @@ ApplicationWindow {
                 }
             }
 
-            // ─── 设置按钮（多级菜单）────────────────────────────────────
-            FlatButton {
-                id: settingsBtn
-                // 同 openBtn：记录菜单上一次关闭时间戳，避免「点击同一按钮收起菜单」失效。
-                property double _menuClosedAtMs: 0
-                text: "⚙ 设置 ▾"
-                Layout.preferredWidth: 86
-                onClicked: {
-                    if (Date.now() - settingsBtn._menuClosedAtMs < 200) return
-                    settingsMenu.popup(settingsBtn, 0, settingsBtn.height + 2)
-                }
-            }
+            // 设置按钮已收纳到顶部系统菜单栏【设置】▸ 偏好设置…
+            // 这里保留 settingsMenu 的定义，由顶部菜单触发其 popup（锚到窗口右上角）。
 
             // ── 设置一级菜单（深色，自绘）──
+            //  ▸ 仍由顶部菜单栏【设置】▸ 偏好设置… 弹出（锚点改为窗口右上角）。
+            //  ▸ 内部保留所有原有自绘 delegate / 子菜单（布局、播放速度、滑动对比、通道信息…），
+            //    与之前的体验完全一致；macOS 上 popup() 走 Qt Quick 自绘菜单，深色样式生效。
             Menu {
                 id: settingsMenu
                 padding: 4
                 width: 180
-                onClosed: settingsBtn._menuClosedAtMs = Date.now()
+                // 之前依赖 ToolBar 上 settingsBtn._menuClosedAtMs 来吃掉「再点同一按钮收起」的二次点击；
+                // 现在按钮已删除，触发源是顶部 MenuBar 的 MenuItem（Qt 内部已保证不会有这种二次抖动），
+                // 因此 onClosed 不再需要做额外处理。
 
                 background: Rectangle {
                     color: "#1e1e22"
@@ -1010,7 +1174,7 @@ ApplicationWindow {
         sequence: "Space"; context: Qt.ApplicationShortcut
         onActivated: Engine.togglePause()
     }
-    // V：切换全局显示视频信息。全屏拑制状下会先清拑再强制显示。
+    // V：切换全局显示视频信息。全屏抑制状下会先清抑制再强制显示。
     Shortcut {
         sequence: "V"; context: Qt.ApplicationShortcut
         onActivated: {
@@ -1022,7 +1186,7 @@ ApplicationWindow {
             }
         }
     }
-    // C：切换全局通道信息（序号+文件名）。全屏拑制状下会先清拑再强制显示。
+    // C：切换全局通道信息（序号+文件名）。全屏抑制状下会先清抑制再强制显示。
     Shortcut {
         sequence: "C"; context: Qt.ApplicationShortcut
         onActivated: {
@@ -1056,8 +1220,8 @@ ApplicationWindow {
             var goingFullscreen = (root.visibility !== Window.FullScreen)
             root.visibility = goingFullscreen
                 ? Window.FullScreen : Window.AutomaticVisibility
-            // 进入全屏：默认拑制 V/C 的叠加显示，但保留开关本身的值，
-            // 用户可以再按 V/C 售起。退出全屏：清除拑制，恢复平常表现。
+            // 进入全屏：默认抑制 V/C 的叠加显示，但保留开关本身的值，
+            // 用户可以再按 V/C 售起。退出全屏：清除抑制，恢复平常表现。
             if (goingFullscreen) {
                 root.fullscreenSuppressInfo    = true
                 root.fullscreenSuppressChannel = true
@@ -1126,7 +1290,7 @@ ApplicationWindow {
     Shortcut { sequence: "9"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(8) }
 
     // ── 多组对比专用快捷键：上组 / 下组。仅在 multiGroupDialog.active 时生效。
-    // 选用 Ctrl+↑/↓，避免与现有 ←→（快进快退） / “.”“,”（帧步进）冲突。
+    // 选用 Ctrl+↑/↓，避免与现有 ←→（快进快退） / "."","（帧步进）冲突。
     Shortcut {
         sequence: "Ctrl+Up";   context: Qt.ApplicationShortcut
         enabled: multiGroupDialog.active
@@ -1229,7 +1393,7 @@ ApplicationWindow {
                         antialiasing: false
                     }
 
-                    // 序号徽标（受全局“通道信息”开关控制，默认显示）
+                    // 序号徽标（受全局"通道信息"开关控制，默认显示）
                     Rectangle {
                         anchors.left: parent.left
                         anchors.top: parent.top
@@ -1246,8 +1410,8 @@ ApplicationWindow {
                         }
                     }
 
-                    // 顶部右侧“通道信息”胶囊条：帧号 · 时间戳 · 文件名。
-                    // 受全局“通道信息”开关控制，默认显示；帧号/时间戳随 Engine.position 自动刷新。
+                    // 顶部右侧"通道信息"胶囊条：帧号 · 时间戳 · 文件名。
+                    // 受全局"通道信息"开关控制，默认显示；帧号/时间戳随 Engine.position 自动刷新。
                     Rectangle {
                         id: channelBar
                         anchors.right: parent.right
@@ -1341,8 +1505,8 @@ ApplicationWindow {
                                 Behavior on color { ColorAnimation { duration: 90 } }
                                 Text {
                                     anchors.centerIn: parent
-                                    // 用水平三点 ⋯（macOS/iOS/Material 通用的“更多/打开选项”语义），
-                                    // 避开 ↻ 与“重置/重新加载”视觉撞车。需要靠下半像素才视觉居中。
+                                    // 用水平三点 ⋯（macOS/iOS/Material 通用的"更多/打开选项"语义），
+                                    // 避开 ↻ 与"重置/重新加载"视觉撞车。需要靠下半像素才视觉居中。
                                     anchors.verticalCenterOffset: -1
                                     text: "⋯"
                                     color: "white"
@@ -1366,7 +1530,7 @@ ApplicationWindow {
                                 ToolTip.text: "更多：评分 / 替换本路视频"
                             }
                             // 关闭本路的 ✕ 按钮：常驻显示（不随 hover 消失），仅当用户按 C
-                            // 关闭通道信息条 / 全屏拑制角标时才隐藏，与同一行的 #idx·时间·文件名
+                            // 关闭通道信息条 / 全屏抑制角标时才隐藏，与同一行的 #idx·时间·文件名
                             // 信息条共用一套可见性，避免 cellMenu 弹出时鼠标移出 cell 导致 ✕
                             // 闪掉、菜单边缘抖动。
                             // 调用 Engine.closeAt(idx) 后，fileCount 变化会触发 visibleCount/Repeater
@@ -1564,7 +1728,7 @@ ApplicationWindow {
                     }
 
                     // 右键信息面板开关状态：局部（右键）+ 全局（设置菜单/V）。
-                    // 全局部分走 effectiveInfoVisible，全屏拑制后不显示。局部右键仍以实体为准。
+                    // 全局部分走 effectiveInfoVisible，全屏抑制后不显示。局部右键仍以实体为准。
                     property bool localInfoVisible: false
                     readonly property bool infoVisible: localInfoVisible || root.effectiveInfoVisible
 
@@ -1843,7 +2007,7 @@ ApplicationWindow {
                                                     Math.min(cell._dur(), cell._pos() + 5))
                                     }
 
-                                    // 与“快进/快退/帧步进”分组，避免误点。窄 cell 下也能保留这条线。
+                                    // 与"快进/快退/帧步进"分组，避免误点。窄 cell 下也能保留这条线。
                                     Rectangle {
                                         Layout.preferredWidth: 1
                                         Layout.preferredHeight: 16
@@ -1853,7 +2017,7 @@ ApplicationWindow {
                                     }
 
                                     // 单路重置：把本路 seek 回 0。图标与底部全局重置 ⟲ 完全一致，
-                                    // 让“当前路重置 / 全部重置”在视觉语义上对齐。
+                                    // 让"当前路重置 / 全部重置"在视觉语义上对齐。
                                     // 仅复用既有 Engine.seekAt 接口，零新增后端代码。
                                     FlatToolButton {
                                         id: cellResetBtn
@@ -1900,7 +2064,7 @@ ApplicationWindow {
     }
 
     // ─── 多组对比模式配置面板（独立窗口，默认隐藏）──────────
-    // 只有用户在 “打开 ▾” 菜单点 “多组对比模式…” 才会 show()。
+    // 只有用户在 "打开 ▾" 菜单点 "多组对比模式…" 才会 show()。
     // 未 show 时完全不会调用 Engine 任何接口 → 与旧逻辑零交互。
     MultiGroupDialog {
         id: multiGroupDialog

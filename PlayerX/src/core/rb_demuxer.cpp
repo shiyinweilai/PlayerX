@@ -190,10 +190,15 @@ AVRational RBDemuxer::rbAudioTimeBase() const {
 AVRational RBDemuxer::rbVideoFrameRate() const {
     if (!m_fmtCtx || m_videoStreamIdx < 0) return {0, 1};
     AVStream* st = m_fmtCtx->streams[m_videoStreamIdx];
-    // r_frame_rate 描述"基准帧率"（最大可能的帧时间间隔的倒数），
-    // CFR 文件就是真实帧率；avg_frame_rate 在 VFR / 容器统计准确时也可用。
-    if (st->r_frame_rate.num > 0 && st->r_frame_rate.den > 0) return st->r_frame_rate;
+    // 用 FFmpeg 官方的 av_guess_frame_rate，它内部会综合 r_frame_rate、
+    // avg_frame_rate、codec time_base、field order 等信息给出最稳妥的帧率。
+    // 之前只看 r_frame_rate 的写法，会在某些 MP4（r_frame_rate 被写成容器
+    // time_base 的倒数，如 10000/1）下得到 ~10000fps 的错误结果，进而让
+    // rbStepFrame 的 fd≈0.0001s，多路帧步进"另一路画面不动"。
+    AVRational r = av_guess_frame_rate(m_fmtCtx, st, nullptr);
+    if (r.num > 0 && r.den > 0) return r;
     if (st->avg_frame_rate.num > 0 && st->avg_frame_rate.den > 0) return st->avg_frame_rate;
+    if (st->r_frame_rate.num > 0 && st->r_frame_rate.den > 0) return st->r_frame_rate;
     return {0, 1};
 }
 

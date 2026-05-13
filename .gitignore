@@ -22,3 +22,4 @@ cache
 build/player
 PlayerX/build
 PlayerXQt/__pycache__
+PlayerX/__pycache__

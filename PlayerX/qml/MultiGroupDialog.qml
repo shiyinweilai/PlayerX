@@ -15,7 +15,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
-import PlayerXQt 1.0
+import PlayerX 1.0
 
 ApplicationWindow {
     id: dlg

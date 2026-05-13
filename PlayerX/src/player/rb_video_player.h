@@ -91,14 +91,57 @@ public:
     int           rbHeight()      const;
     const std::string& rbFilePath() const { return m_filePath; }
 
-    // ─── 时钟同步（多路同步时由 RBPlayerUI 调用）──────────────────────────
+    // ─── 帧信息查询（供 UI 信息面板使用）──────────────────────────────────
+    // 当前帧帧号（基于 PTS / 帧时长估算，与 display.cpp 同逻辑）
+    int64_t       rbCurrentFrameNum()  const;
+    // 当前帧类型字符：'I' / 'P' / 'B' / '?' （av_get_picture_type_char）
+    char          rbCurrentFrameType() const;
+    // 视频 FPS（来自容器 r_frame_rate，回退 avg_frame_rate）
+    double        rbFps()              const;
+    // 编解码器名称（如 "h264" / "hevc" / "vp9"）
+    std::string   rbCodecName()        const;
+    // 像素格式名（如 "yuv420p" / "nv12"），来自实际解码器输出
+    std::string   rbPixelFormatName()  const;
+    // 色彩空间（如 "bt709" / "bt2020nc"）
+    std::string   rbColorSpaceName()   const;
+    // 色彩范围（"tv" / "pc"）
+    std::string   rbColorRangeName()   const;
+    // 是否启用了硬件加速（实际生效，包含回退后的状态）
+    bool          rbHwAccelActive()    const;
+    // 实际使用的解码器名（如 h264 / h264_videotoolbox），与 rbCodecName 区别在于
+    // 后者来自容器声明的 codec_id，前者来自 AVCodecContext->codec->name
+    std::string   rbDecoderName()      const;
+
+    // ─── 时钟同步（多路同步时由 RBPlayerUI 调用）──────────────
     // 设置外部主时钟（秒），播放器将以此为基准对齐
     void rbSetMasterClock(double masterTime);
     bool rbUseMasterClock() const { return m_useMasterClock; }
     void rbEnableMasterClock(bool enable) { m_useMasterClock = enable; }
 
+    // ─── 倍速控制 ─────────────────────────────────────────────────────
+    // 设置本地时钟倍速因子（用于不走主时钟的独立路及主时钟为补偿同一因子同步设置）。
+    // 语义： m_speed=1.0 为原速。本地时钟公式：
+    //   playTime = m_playStartPts + (now - m_playStartWallTime) * m_speed
+    // 主时钟模式下本字段不生效（由 RBPlayerEngine 控制主时钟倍速），
+    // 但仍会被推送以保证 “独立路” 切换为主时钟后立即一致。
+    // 重错锁 m_playStartPts/WallTime 避免倍速变更璬间 PTS 跳变。
+    void rbSetSpeed(double speed);
+    double rbSpeed() const { return m_speed; }
 private:
     void rbReleaseCurrentFrame();
+
+    // 切换 currentFrame 前调用：根据新帧 PTS 与当前帧 PTS 的差更新连续帧序号。
+    //   - dt ≈ +fd（±0.5fd 容差）→ index += 1（严格下一显示帧）
+    //   - dt ≈ -fd                → index -= 1
+    //   - 其他（首帧 / seek / 大跨度跳）→ 用 PTS·fps 重新校准
+    // 这样可以避开"基于 PTS/duration 推算帧号"在 B 帧 / VFR / PTS 偏移下的跳变。
+    void rbUpdateFrameIndex(double newPts);
+
+    // 后退一帧专用：从已 seek 后的帧队列里持续解码，找到"PTS 严格小于 curPts 的
+    // 最大 PTS 帧"作为目标。VFR / PTS 不等距 / GOP 边界等场景下比 fd 估算更鲁棒。
+    // curPts: 当前帧的 PTS（秒），辅助函数会找到比它严格小的"最近一帧"。
+    // 返回 true 表示成功换帧。
+    bool rbStepBackwardOne(double curPts, int timeoutMs = 1500);
 
     std::unique_ptr<RBDemuxer>    m_demuxer;
     std::unique_ptr<RBDecoder>    m_decoder;
@@ -114,6 +157,10 @@ private:
     double                        m_currentFramePts{0.0};
     AVRational                    m_videoTimeBase{1, 1};
 
+    // 当前显示帧的连续序号（按显示顺序 0,1,2,…），由 rbUpdateFrameIndex 维护。
+    // 对应 rbCurrentFrameNum() 的返回值；不再用 pts/duration 推算。
+    int64_t                       m_displayFrameIndex{0};
+
     // 播放时钟
     double                        m_playStartWallTime{0.0}; // 开始播放时的系统时间
     double                        m_playStartPts{0.0};      // 开始播放时的 PTS
@@ -122,6 +169,11 @@ private:
     // 主时钟同步
     bool                          m_useMasterClock{false};
     double                        m_masterClock{0.0};
+
+    // 倍速因子（1.0 = 原速）；playTime 推进中 wall 增量会乘以此倍速。
+    // 不动 PTS 本身，只动 “wall 隔 → PTS 增量” 的换算。不影响帧步进、seek、
+    // 解码任何路径、渲染任何路径。
+    double                        m_speed{1.0};
 };
 
 } // namespace rb

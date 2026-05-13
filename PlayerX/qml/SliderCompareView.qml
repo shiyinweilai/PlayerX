@@ -13,7 +13,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
-import PlayerXQt 1.0
+import PlayerX 1.0
 
 Item {
     id: view

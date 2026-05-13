@@ -13,7 +13,7 @@
  *   - position  = 全局 wall clock 自起点累加，受 pause / seek 影响
  *   - 切换为暂停时冻结时钟；继续播放时 wall 锚点重置
  *
- * 解耦：仅依赖 PlayerXQt/src/player + PlayerXQt/src/core，不引入 Qt。
+ * 解耦：仅依赖 PlayerX/src/player + PlayerX/src/core，不引入 Qt。
  */
 
 #include <memory>

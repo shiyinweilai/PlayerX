@@ -132,6 +132,17 @@ int RBDecoder::rbHeight() const { return m_codecCtx ? m_codecCtx->height : 0; }
 AVPixelFormat RBDecoder::rbPixFmt() const {
     return m_codecCtx ? m_codecCtx->pix_fmt : AV_PIX_FMT_NONE;
 }
+AVColorSpace RBDecoder::rbColorSpace() const {
+    return m_codecCtx ? m_codecCtx->colorspace : AVCOL_SPC_UNSPECIFIED;
+}
+AVColorRange RBDecoder::rbColorRange() const {
+    return m_codecCtx ? m_codecCtx->color_range : AVCOL_RANGE_UNSPECIFIED;
+}
+std::string RBDecoder::rbDecoderName() const {
+    if (!m_codecCtx || !m_codecCtx->codec) return "";
+    const char* n = m_codecCtx->codec->name;
+    return n ? n : "";
+}
 
 void RBDecoder::decodeLoop(RBPacketQueue* pktQueue, RBFrameQueue* frameQueue) {
     AVFrame* frame   = av_frame_alloc();
@@ -171,7 +182,14 @@ void RBDecoder::decodeLoop(RBPacketQueue* pktQueue, RBFrameQueue* frameQueue) {
                 if (ret < 0) break;
                 AVFrame* out = av_frame_alloc();
                 if (frame->format == m_hwPixFmt && m_hwPixFmt != AV_PIX_FMT_NONE) {
-                    if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
+                if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
+                        // 补全硬件解码后丢失的元数据
+                        swFrame->pts                  = frame->pts;
+                        swFrame->best_effort_timestamp = frame->best_effort_timestamp;
+                        swFrame->pkt_dts              = frame->pkt_dts;
+                        swFrame->duration             = frame->duration;
+                        swFrame->pict_type            = frame->pict_type;
+                        swFrame->flags                = frame->flags; // 含 AV_FRAME_FLAG_KEY
                         av_frame_move_ref(out, swFrame);
                     } else {
                         av_frame_free(&out);
@@ -203,9 +221,14 @@ void RBDecoder::decodeLoop(RBPacketQueue* pktQueue, RBFrameQueue* frameQueue) {
 
             AVFrame* out = av_frame_alloc();
             if (frame->format == m_hwPixFmt && m_hwPixFmt != AV_PIX_FMT_NONE) {
-                if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
-                    swFrame->pts = frame->pts;
+            if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
+                    // 补全硬件解码后丢失的元数据
+                    swFrame->pts                  = frame->pts;
                     swFrame->best_effort_timestamp = frame->best_effort_timestamp;
+                    swFrame->pkt_dts              = frame->pkt_dts;
+                    swFrame->duration             = frame->duration;
+                    swFrame->pict_type            = frame->pict_type;
+                    swFrame->flags                = frame->flags; // 含 AV_FRAME_FLAG_KEY
                     av_frame_move_ref(out, swFrame);
                 } else {
                     av_frame_free(&out);

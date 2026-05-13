@@ -12,7 +12,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
-import PlayerXQt 1.0
+import PlayerX 1.0
 
 Rectangle {
     id: row

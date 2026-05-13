@@ -14,7 +14,7 @@
  *   对每个 Item 私有 SwsContext，输入分辨率/格式变化时重建。
  *
  * 解耦原则：
- *   仅依赖 PlayerXQt/src/core / PlayerXQt/src/player / PlayerXQt/src/qt，
+ *   仅依赖 PlayerX/src/core / PlayerX/src/player / PlayerX/src/qt，
  *   不引入 SDL，不依赖旧 PlayerX 工程。
  */
 

@@ -1,30 +1,53 @@
 /**
- * main.cpp — PlayerX 入口
+ * main.cpp — PlayerX Qt+QML 应用入口
+ *
+ * 第 2 阶段：注册 EngineBridge 单例给 QML，使所有视频窗共享同一引擎。
  */
-#include "ui/rb_player_ui.h"
-#include "utils/rb_utils.h"
-#include <iostream>
+
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQuickStyle>
+#include <QIcon>
+
+#include "qt/EngineBridge.h"
+#include "qt/FsUtils.h"
+
+extern "C" {
+#include <libavformat/avformat.h>
+}
 
 int main(int argc, char* argv[]) {
-    rb::RBPlayerUI ui;
+    QGuiApplication app(argc, argv);
+    app.setApplicationName("PlayerX");
+    app.setOrganizationName("PlayerX");
 
-    if (!ui.rbInit("PlayerX", 1280, 720)) {
-        std::cerr << "[PlayerX] 初始化失败，退出" << std::endl;
-        return 1;
-    }
+    // 使用 Basic 风格，自绘 background/contentItem 委托才能生效。
+    // macOS 默认会套用原生 NSButton 风格 → 自绘失效、无 hover/press 反馈。
+    QQuickStyle::setStyle("Basic");
 
-    // 命令行参数：直接传入视频文件路径（最多 4 个）
-    for (int i = 1; i < argc && i <= 4; ++i) {
-        // 根据文件数量自动切换布局
-        if (i == 2) ui.rbSetLayout(rb::RBLayoutMode::Dual);
-        else if (i == 3) ui.rbSetLayout(rb::RBLayoutMode::Triple);
-        else if (i == 4) ui.rbSetLayout(rb::RBLayoutMode::Quad);
-        ui.rbOpenFileForCell(i - 1, argv[i]);
-    }
+    avformat_network_init();
 
-    ui.rbRunLoop();
+    // EngineBridge 必须先于 engine.load 创建，且生命周期 >= QML 引擎
+    rbqt::EngineBridge engineBridge;
 
-    // 退出前清理可能残留的文件对话框子进程，避免 osascript 窗口脱离主程序后仍显示
-    rb::rbShutdownFileDialog();
-    return 0;
+    // FsUtils：仅供 QML 多组对比模式配置面板使用的纯工具类（文件夹扫描等）。
+    // 不与播放内核交互，单组模式下 QML 不会调用任何方法 → 行为零变化。
+    rbqt::FsUtils fsUtils;
+
+    QQmlApplicationEngine engine;
+
+    // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
+    engine.rootContext()->setContextProperty("Engine", &engineBridge);
+    engine.rootContext()->setContextProperty("Fs",     &fsUtils);
+
+    QObject::connect(
+        &engine, &QQmlApplicationEngine::objectCreationFailed, &app,
+        []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
+
+    engine.loadFromModule("PlayerX", "Main");
+
+    int rc = app.exec();
+    avformat_network_deinit();
+    return rc;
 }
