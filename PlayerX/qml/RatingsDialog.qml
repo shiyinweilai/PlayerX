@@ -323,26 +323,110 @@ Window {
         }
     }
 
-    // ── 清空确认对话框 ────
+    // ── 清空确认对话框（深色主题，全自定义 header/footer，避免 Basic 主题白底）────
     Dialog {
         id: confirmClearDialog
-        title: qsTr("清空所有评分？")
         modal: true
         anchors.centerIn: parent
-        width: 360
-        standardButtons: Dialog.Yes | Dialog.No
+        width: 380
+        padding: 0
+
+        // 半透明遮罩，凸显前景
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        // 弹窗主体：深色卡片 + 阴影
         background: Rectangle {
             color: "#1e1e22"
-            border.color: "#3a3a42"
+            border.color: "#2e2e34"
             border.width: 1
-            radius: 6
+            radius: 8
+            // 简易阴影：用一层放大的、半透明 Rectangle 模拟（Qt6 Basic 不带 DropShadow）
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
         }
-        contentItem: Text {
-            text: qsTr("此操作将清空本地 ratings.csv 中的全部记录，无法恢复。\n是否继续？")
-            color: "#dcdcde"
-            font.pixelSize: 13
-            wrapMode: Text.WordWrap
+
+        // 自定义标题栏
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                text: qsTr("清空所有评分？")
+                color: "#f0f0f3"
+                font.pixelSize: 14
+                font.bold: true
+                elide: Text.ElideRight
+            }
+            // 标题与正文分隔线
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a30"
+            }
         }
+
+        // 正文
+        contentItem: Item {
+            implicitHeight: _msg.implicitHeight + 32
+            Text {
+                id: _msg
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                text: qsTr("此操作将清空本地 ratings.csv 中的全部记录，无法恢复。\n是否继续？")
+                color: "#cfcfd4"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.35
+            }
+        }
+
+        // 自定义底部按钮区（用 PillBtn，跟其他按钮风格一致）
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            // 顶部分隔线
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a30"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("取消")
+                    onClicked: confirmClearDialog.reject()
+                }
+                PillBtn {
+                    text: qsTr("确认清空")
+                    danger: true
+                    onClicked: confirmClearDialog.accept()
+                }
+            }
+        }
+
         onAccepted: { if (typeof Rating !== "undefined") Rating.clearAll() }
     }
 
