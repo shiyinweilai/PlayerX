@@ -19,6 +19,8 @@ Rectangle {
 
     // ─── 对外属性 ───────────────────────────────────────────────────
     property int laneIndex: 0                // 序号（从 0 开始，仅显示用 +1）
+    // 是否参与启动：勾选 = 参与。外层根据勾选数决定走"单文件夹打开"还是"多组对比"。
+    property bool selected: true
     property string folderPath: ""           // 选中的文件夹（空字符串 = 未选）
     property string keyword: ""              // 过滤关键字
     property var allFiles: []                // 该路扫描到的全部视频（绝对路径，已排序）
@@ -86,6 +88,7 @@ Rectangle {
     onAllFilesChanged: _recomputeVisible()
     onSortModeChanged: _recomputeVisible()
     onCurrentIndexChanged: laneChanged()
+    onSelectedChanged: laneChanged()
 
     // 当前选中文件名（仅展示用）
     function currentName() {
@@ -120,6 +123,41 @@ Rectangle {
         anchors.topMargin: 6
         anchors.bottomMargin: 6
         spacing: 8
+
+        // 勾选框：仅勾选的行参与启动。外层根据勾选数分流：
+        //   1 行 → 等同"打开文件夹"；≥2 行 → 多组对比。
+        CheckBox {
+            id: selectChk
+            Layout.preferredWidth: 24
+            Layout.preferredHeight: 24
+            Layout.alignment: Qt.AlignVCenter
+            checked: row.selected
+            onToggled: row.selected = checked
+            ToolTip.visible: hovered
+            ToolTip.delay: 400
+            ToolTip.text: row.selected ? "已参与启动（取消勾选可忽略本路）"
+                                       : "未参与启动（勾选后将参与）"
+            // 极简样式，与整体深色风格一致
+            indicator: Rectangle {
+                implicitWidth: 16
+                implicitHeight: 16
+                x: (selectChk.width - width) / 2
+                y: (selectChk.height - height) / 2
+                radius: 3
+                color: selectChk.checked ? "#0fa085" : "#101013"
+                border.color: selectChk.checked ? "#0fa085"
+                             : (selectChk.hovered ? "#5a8fd8" : "#3a3a45")
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    visible: selectChk.checked
+                    text: "✓"
+                    color: "#ffffff"
+                    font.pixelSize: 12
+                    font.bold: true
+                }
+            }
+        }
 
         // 路号徽标（统一 26x26）
         Rectangle {

@@ -19,10 +19,12 @@ import PlayerX 1.0
 
 ApplicationWindow {
     id: dlg
-    title: "多组对比模式"
+    title: "打开文件夹 / 多组对比"
 
     // 最多 9 路（与 Engine 上限一致）
     readonly property int kMaxLanes: 9
+    // 旧语义：多组对比至少 2 路；新语义下作为「是否进入多组对比态」的阈值使用，
+    //        当勾选数 < 2 时仅走单文件夹打开，不会把 active 置 true。
     readonly property int kMinLanes: 2
 
     // ─── 对外属性 ───────────────────────────────────────────────────
@@ -35,18 +37,36 @@ ApplicationWindow {
     property var laneSnapshotIndexes: [] // 上次启动时各路的 currentIndex
 
     // ─── 是否可启动 ─────────────────────────────────────────────────
+    // 新语义：勾选数 >=1 且每个勾选行都有文件即可启动。
+    //        勾选 1 行 → 等同旧「打开文件夹」（一次性把该文件夹命中文件全部载入）
+    //        勾选 >=2 行 → 多组对比（每路取 currentPath 组成 URL 列表）
     readonly property bool canStart: _computeCanStart()
+    // 当前勾选路数（供底部提示/按钮文案使用）
+    readonly property int selectedCount: _computeSelectedCount()
+
+    function _computeSelectedCount() {
+        var _ = stateBumper
+        var n = 0
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (lane && lane.selected) n++
+        }
+        return n
+    }
 
     function _computeCanStart() {
         // 显式触达 stateBumper，让 QML 绑定系统把它纳入依赖；每次 _bumpState() 后 canStart 会重算
         var _ = stateBumper
-        // 至少 2 路、且每路都有当前选中文件
-        if (_rowsModel.count < kMinLanes) return false
+        var anySelected = false
         for (var i = 0; i < _rowsModel.count; ++i) {
             var lane = _rowsModel.get(i)
-            if (!lane || !lane.currentPath || lane.currentPath.length === 0) return false
+            if (!lane || !lane.selected) continue
+            anySelected = true
+            // 单文件夹模式只要求选中文件夹即可（允许取 visibleFiles 全部）
+            // 多组对比模式要求每路有 currentPath
+            if (!lane.currentPath || lane.currentPath.length === 0) return false
         }
-        return true
+        return anySelected
     }
 
     // 触发 canStart 重新计算：修改一个有 changed 信号的普通属性即可让绑定重求。
@@ -58,7 +78,7 @@ ApplicationWindow {
     // ─── 数据模型：每路一个 ListModel 元素 ──────────────────────────
     ListModel {
         id: _rowsModel
-        // 元素字段：folderPath / keyword / currentPath / currentIndex / allCount / visibleCount
+        // 元素字段：selected / folderPath / keyword / currentPath / currentIndex / allCount / visibleCount
         // allFiles / visibleFiles 不存进 ListModel（QML ListModel 对 var 数组支持有限），
         // 改用并行的 _laneRuntime[] 数组，存运行时状态。
     }
@@ -79,6 +99,7 @@ ApplicationWindow {
         if (idx === 0) defaultKw = ""
         else defaultKw = ""   // 不预填，避免用户没改导致命中为 0
         _rowsModel.append({
+            selected: true,
             folderPath: "",
             keyword: defaultKw,
             currentPath: "",
@@ -98,14 +119,15 @@ ApplicationWindow {
         _bumpState()
     }
 
-    // 由 MultiGroupRow.stateChanged 调用，将当前行 UI 状态写回模型
-    function _syncLaneFromRow(i, folderPath, keyword, allFiles, visibleFiles, currentIndex) {
+    // 由 MultiGroupRow.laneChanged 调用，将当前行 UI 状态写回模型
+    function _syncLaneFromRow(i, selected, folderPath, keyword, allFiles, visibleFiles, currentIndex) {
         if (i < 0 || i >= _rowsModel.count) return
         _ensureRuntimeLen(_rowsModel.count)
         _laneRuntime[i] = { allFiles: allFiles, visibleFiles: visibleFiles }
         var curPath = (currentIndex >= 0 && currentIndex < visibleFiles.length)
                       ? visibleFiles[currentIndex] : ""
         _rowsModel.set(i, {
+            selected: selected,
             folderPath: folderPath,
             keyword: keyword,
             currentPath: curPath,
@@ -117,13 +139,45 @@ ApplicationWindow {
     }
 
     // ─── 对外动作：启动 / 切组 ──────────────────────────────────────
-    // 把每路的 currentPath 收集成 url 列表，调 Engine.openFiles。
+    // 新语义：
+    //   · 勾选 1 路  → 走旧「打开文件夹」路径（该路 visibleFiles 全部载入，最多 9 个），active=false
+    //   · 勾选 >=2 路 → 多组对比（每路 currentPath 组 url 列表），active=true
     function start() {
         if (!canStart) return false
+
+        // 收集勾选的行的索引
+        var selIdx = []
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            if (_rowsModel.get(i).selected) selIdx.push(i)
+        }
+        if (selIdx.length === 0) return false
+
+        // 仅勾选 1 路：等同「打开文件夹」—— 把该路 visibleFiles（已按 keyword 过滤 + 排序）全部载入
+        if (selIdx.length === 1) {
+            var onlyI = selIdx[0]
+            var rt = _laneRuntime[onlyI]
+            if (!rt || !rt.visibleFiles || rt.visibleFiles.length === 0) return false
+            var files = rt.visibleFiles.slice()
+            if (files.length > kMaxLanes) files = files.slice(0, kMaxLanes)
+            var urls1 = Fs.toFileUrls(files)
+            if (urls1.length === 0) return false
+            var ok1 = Engine.openFiles(urls1)
+            if (ok1) {
+                // 不进入多组对比态：清空快照、关掉 active，确保上下组快捷键不会误触发
+                laneSnapshotPaths = []
+                laneSnapshotIndexes = []
+                active = false
+                // 若多文件且当前处于单视图，切到 1×N 以便同时看到
+                if (Engine.layoutMode === 0 && urls1.length > 1) Engine.layoutMode = 1
+            }
+            return ok1
+        }
+
+        // 勾选 >=2 路：多组对比
         var paths = []
         var indexes = []
-        for (var i = 0; i < _rowsModel.count; ++i) {
-            var lane = _rowsModel.get(i)
+        for (var k = 0; k < selIdx.length; ++k) {
+            var lane = _rowsModel.get(selIdx[k])
             paths.push(lane.currentPath)
             indexes.push(lane.currentIndex)
         }
@@ -142,13 +196,15 @@ ApplicationWindow {
 
     // 上一组 / 下一组：每路在自己 visibleFiles 内 ±1，再 start()
     // dir = -1 / +1
+    // 仅对勾选行生效；未勾选行不参与切组。
     function navigate(dir) {
         if (!active) return false
         if (dir !== -1 && dir !== 1) return false
-        // 更新各路 currentIndex（clamp）
+        // 更新勾选路 currentIndex（clamp）
         var anyMoved = false
         for (var i = 0; i < _rowsModel.count; ++i) {
             var lane = _rowsModel.get(i)
+            if (!lane.selected) continue
             var rt = _laneRuntime[i]
             if (!rt || rt.visibleFiles.length === 0) continue
             var cur = lane.currentIndex
@@ -156,6 +212,7 @@ ApplicationWindow {
             if (next !== cur) {
                 anyMoved = true
                 _rowsModel.set(i, {
+                    selected: lane.selected,
                     folderPath: lane.folderPath,
                     keyword: lane.keyword,
                     currentPath: rt.visibleFiles[next],
@@ -166,9 +223,12 @@ ApplicationWindow {
             }
         }
         if (!anyMoved) return false
-        // 直接 openFiles 切组（语义最简单：换一批文件）
+        // 直接 openFiles 切组（语义最简单：换一批文件）— 只取勾选路
         var paths = []
-        for (var j = 0; j < _rowsModel.count; ++j) paths.push(_rowsModel.get(j).currentPath)
+        for (var j = 0; j < _rowsModel.count; ++j) {
+            var ln = _rowsModel.get(j)
+            if (ln.selected) paths.push(ln.currentPath)
+        }
         var urls = Fs.toFileUrls(paths)
         if (urls.length < kMinLanes) return false
         return Engine.openFiles(urls)
@@ -186,7 +246,11 @@ ApplicationWindow {
         return maxN
     }
     function groupIndex() {
-        // 取第一路的 currentIndex（多数场景每路命中数一样；若不同，第一路是基准）
+        // 取第一路"勾选的"的 currentIndex（多数场景每路命中数一样；若不同，第一路是基准）
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (lane && lane.selected) return lane.currentIndex
+        }
         if (_rowsModel.count === 0) return -1
         return _rowsModel.get(0).currentIndex
     }
@@ -219,13 +283,13 @@ ApplicationWindow {
             Layout.fillWidth: true
             spacing: 10
             Label {
-                text: "🗂️ 多组对比模式"
+                text: "🗂️ 打开文件夹 / 多组对比"
                 color: "#e8e8ec"
                 font.pixelSize: 16
                 font.bold: true
             }
             Label {
-                text: "为每一路指定一个文件夹与过滤关键字，启动后可用「上一组/下一组」切换"
+                text: "勾选 1 路 = 打开该文件夹全部视频；勾选 ≥2 路 = 多组对比（支持上一组/下一组）"
                 color: "#888"
                 font.pixelSize: 11
                 Layout.fillWidth: true
@@ -249,6 +313,7 @@ ApplicationWindow {
                     delegate: MultiGroupRow {
                         Layout.fillWidth: true
                         laneIndex: index
+                        selected: model.selected
                         folderPath: model.folderPath
                         keyword: model.keyword
                         currentIndex: model.currentIndex
@@ -261,7 +326,7 @@ ApplicationWindow {
                             }
                         }
                         onLaneChanged: {
-                            _syncLaneFromRow(index, folderPath, keyword,
+                            _syncLaneFromRow(index, selected, folderPath, keyword,
                                              allFiles, visibleFiles, currentIndex)
                         }
                         onRemoveRequested: removeLane(index)
@@ -325,8 +390,12 @@ ApplicationWindow {
                 font.pixelSize: 11
                 text: {
                     if (active) return "已启动 · 当前组 " + (groupIndex() + 1) + " / " + groupCount()
-                    if (canStart) return "✓ 已就绪，可启动对比"
-                    return "请为每一路选择文件夹并确保有命中文件"
+                    if (canStart) {
+                        if (selectedCount === 1) return "✓ 已就绪：将打开该文件夹下全部视频"
+                        return "✓ 已就绪：将启动 " + selectedCount + " 路对比"
+                    }
+                    if (selectedCount === 0) return "请至少勾选一路"
+                    return "请为勾选的路选择文件夹并确保有命中文件"
                 }
                 Layout.fillWidth: true
                 elide: Text.ElideRight
@@ -356,7 +425,11 @@ ApplicationWindow {
 
             Button {
                 id: startBtn
-                text: active ? "重新启动对比" : "启动对比"
+                text: {
+                    if (active) return "重新启动"
+                    if (selectedCount === 1) return "打开文件夹"
+                    return "启动对比"
+                }
                 enabled: canStart
                 onClicked: {
                     if (start()) dlg.close()

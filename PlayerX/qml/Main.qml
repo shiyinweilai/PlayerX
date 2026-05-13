@@ -40,15 +40,10 @@ ApplicationWindow {
                 enabled: Engine.fileCount < 9
                 onTriggered: addDialog.open()
             }
+            // 合并入口：单入口同时支持"打开文件夹"（勾选1路）和"多组对比"（勾选≥2路）
             MenuItem {
                 id: miOpenFolder
                 text: qsTr("打开文件夹…")
-                enabled: Engine.fileCount < 9
-                onTriggered: addFolderDlg.open()
-            }
-            MenuItem {
-                id: miOpenMulti
-                text: qsTr("打开多组对比…")
                 onTriggered: multiGroupDialog.show()
             }
             MenuSeparator {}
@@ -234,13 +229,12 @@ ApplicationWindow {
         onActivated: addDialog.open()
     }
     Shortcut {
-        sequence: "Ctrl+Shift+O"                      // 打开文件夹
+        sequence: "Ctrl+Shift+O"                      // 打开文件夹 / 多组对比（统一入口）
         context: Qt.ApplicationShortcut
-        enabled: Engine.fileCount < 9
-        onActivated: addFolderDlg.open()
+        onActivated: multiGroupDialog.show()
     }
     Shortcut {
-        sequence: "Ctrl+M"                            // 打开多组对比
+        sequence: "Ctrl+M"                            // 打开文件夹 / 多组对比（别名快捷键）
         context: Qt.ApplicationShortcut
         onActivated: multiGroupDialog.show()
     }
@@ -525,24 +519,6 @@ ApplicationWindow {
                 for (var i = 0; i < selectedFiles.length; ++i) {
                     if (Engine.fileCount >= 9) break
                     Engine.addFile(selectedFiles[i])
-                }
-            }
-        }
-    }
-    FolderDialog {
-        id: addFolderDlg
-        title: "添加文件夹中的视频"
-        onAccepted: {
-            var files = Fs.scanVideoFolder(selectedFolder, true)
-            if (files.length === 0) return
-            var urls = Fs.toFileUrls(files)
-            if (Engine.fileCount === 0) {
-                if (urls.length > 9) urls = urls.slice(0, 9)
-                Engine.openFiles(urls)
-            } else {
-                for (var i = 0; i < urls.length; ++i) {
-                    if (Engine.fileCount >= 9) break
-                    Engine.addFile(urls[i])
                 }
             }
         }
