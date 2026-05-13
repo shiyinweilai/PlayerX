@@ -331,19 +331,24 @@ ApplicationWindow {
             // 主体功能与多组模式不相关——多组模式走「MultiGroupDialog」独立路径，仅重用 Engine.openFiles。
             FlatButton {
                 id: openBtn
+                // 记录 openMenu 上一次关闭的时间戳：用于「再次点击同一按钮收起菜单」的体感修复。
+                // Qt Menu 的 click-outside-to-close 会先关闭菜单，紧接着按钮自身的 onClicked
+                // 又会触发一次 popup()，看起来就像菜单没收回。这里用一个小时间窗（200ms）
+                // 吃掉关闭后立刻发生的同一次点击。
+                property double _menuClosedAtMs: 0
                 text: (Engine.fileCount > 0 ? "新打开" : "打开") + "  ▾"
-                onClicked: openMenu.popup(openBtn, 0, openBtn.height + 2)
-                // 悬停提示：可一次选择多个文件，或导入整个文件夹
-                ToolTip.visible: openBtn.hovered
-                ToolTip.delay: 800
-                ToolTip.timeout: 4000
-                ToolTip.text: "一次可选多个文件，或导入整个文件夹；右上角 ✕ 可单独关闭某一路"
+                onClicked: {
+                    if (Date.now() - openBtn._menuClosedAtMs < 200) return
+                    openMenu.popup(openBtn, 0, openBtn.height + 2)
+                }
             }
             // 二级菜单（与 “设置” 菜单同风格，避免 macOS 默认白底）
             Menu {
                 id: openMenu
                 padding: 4
                 width: 220
+                // 关闭时记录时间戳，配合 openBtn.onClicked 实现「再次点击同一按钮收起菜单」
+                onClosed: openBtn._menuClosedAtMs = Date.now()
                 background: Rectangle {
                     color: "#1e1e22"
                     border.color: "#3a3a42"
@@ -371,11 +376,6 @@ ApplicationWindow {
                             Layout.fillWidth: true
                         }
                     }
-                    // 悬停提示：一次可选多个文件
-                    ToolTip.visible: openMenuAdd.hovered
-                    ToolTip.delay: 600
-                    ToolTip.timeout: 4000
-                    ToolTip.text: "一次可选多个文件进行添加"
                 }
                 MenuItem {
                     id: openMenuAddFolder
@@ -398,10 +398,6 @@ ApplicationWindow {
                             Layout.fillWidth: true
                         }
                     }
-                    ToolTip.visible: openMenuAddFolder.hovered
-                    ToolTip.delay: 600
-                    ToolTip.timeout: 4000
-                    ToolTip.text: "文件夹下所有视频会被一次性添加"
                 }
                 MenuSeparator {
                     contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
@@ -428,34 +424,61 @@ ApplicationWindow {
                     }
                 }
             }
-            Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
+
+            // 把所有"播放控制"统一推到工具栏右侧：
+            // 仅当已添加视频（Engine.fileCount > 0）时显示这一整组；
+            // 没有视频的"空状态"下，工具栏只剩左侧的「打开 ▾」与最右侧的「⚙ 设置 ▾」。
+            Item { Layout.fillWidth: true }
+
+            // 第一根分隔线：把"打开"与"播放控制组"隔开（仅有视频时存在）
+            Rectangle {
+                width: 1
+                Layout.fillHeight: true
+                color: "#2a2a30"
+                Layout.topMargin: 6
+                Layout.bottomMargin: 6
+                visible: Engine.fileCount > 0
+            }
+            // 快退 5 秒
             FlatButton {
                 text: "<<"
+                visible: Engine.fileCount > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
                 // 相对快退：每路在自己当前位置 -5s，独立时钟的路不被对齐到主时钟
                 onClicked: Engine.seekRelative(-5)
             }
+            // 上一帧
             FlatButton {
                 text: "<"
+                visible: Engine.fileCount > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
                 onClicked: Engine.stepFrame(-1)
             }
             // 播放/暂停按钮：固定宽度，避免图标切换时旁边按钮抖动
             FlatButton {
                 id: playPauseBtn
+                visible: Engine.fileCount > 0
                 enabled: Engine.fileCount > 0
-                Layout.preferredWidth: 56
+                Layout.preferredWidth: visible ? 56 : 0
                 text: Engine.playing ? "⏸" : "▶"
                 font.pixelSize: 16
                 onClicked: Engine.togglePause()
             }
+            // 下一帧
             FlatButton {
                 text: ">"
+                visible: Engine.fileCount > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
                 onClicked: Engine.stepFrame(1)
             }
+            // 快进 5 秒
             FlatButton {
                 text: ">>"
+                visible: Engine.fileCount > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
                 // 相对快进：每路在自己当前位置 +5s，独立时钟的路不被对齐到主时钟
                 onClicked: Engine.seekRelative(5)
@@ -463,6 +486,8 @@ ApplicationWindow {
             // 全局重置：所有路 seek 回 0（与快捷键 R 等价）
             FlatButton {
                 text: "⟲"
+                visible: Engine.fileCount > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
                 font.pixelSize: 16
                 enabled: Engine.fileCount > 0
                 onClicked: Engine.seek(0)
@@ -499,7 +524,14 @@ ApplicationWindow {
                 }
             }
 
-            Rectangle { width: 1; Layout.fillHeight: true; color: "#2a2a30"; Layout.topMargin: 6; Layout.bottomMargin: 6 }
+            Rectangle {
+                width: 1
+                Layout.fillHeight: true
+                color: "#2a2a30"
+                Layout.topMargin: 6
+                Layout.bottomMargin: 6
+                visible: Engine.fileCount > 0
+            }
 
             // ── 当前倍速指示（只在非 1.0x 时显示；点击复位；不占额外宽度）──
             // 设计目标：日常 1.0x 时完全隐藏不占位；进入慢/快速时给一个紧凑的高亮提示，
@@ -545,9 +577,14 @@ ApplicationWindow {
             // ─── 设置按钮（多级菜单）────────────────────────────────────
             FlatButton {
                 id: settingsBtn
+                // 同 openBtn：记录菜单上一次关闭时间戳，避免「点击同一按钮收起菜单」失效。
+                property double _menuClosedAtMs: 0
                 text: "⚙ 设置 ▾"
                 Layout.preferredWidth: 86
-                onClicked: settingsMenu.popup(settingsBtn, 0, settingsBtn.height + 2)
+                onClicked: {
+                    if (Date.now() - settingsBtn._menuClosedAtMs < 200) return
+                    settingsMenu.popup(settingsBtn, 0, settingsBtn.height + 2)
+                }
             }
 
             // ── 设置一级菜单（深色，自绘）──
@@ -555,6 +592,7 @@ ApplicationWindow {
                 id: settingsMenu
                 padding: 4
                 width: 180
+                onClosed: settingsBtn._menuClosedAtMs = Date.now()
 
                 background: Rectangle {
                     color: "#1e1e22"
@@ -962,12 +1000,6 @@ ApplicationWindow {
                 }
             }
 
-            Item { Layout.fillWidth: true }
-
-            Label {
-                color: "#cfcfd2"
-                text: fmtTime(Engine.position) + " / " + fmtTime(Engine.duration)
-            }
         }
     }
 
