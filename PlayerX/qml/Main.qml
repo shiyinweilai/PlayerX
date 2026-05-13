@@ -1520,21 +1520,13 @@ ApplicationWindow {
                                       ? channelBar.info.pts.toFixed(3) + "s"
                                       : "—"
                             }
-                            Rectangle {
-                                Layout.preferredWidth: 1
-                                Layout.preferredHeight: 12
-                                color: "#55ffffff"
-                            }
-                            // 文件名
-                            Text {
-                                color: "#dcdcde"
-                                font.pixelSize: 11
-                                text: Engine.fileNameAt(cell.playerIdx)
-                                elide: Text.ElideMiddle
-                                Layout.maximumWidth: Math.max(80, cell.width / 2)
-                            }
+                            // 文件名已从胶囊条移除：
+                            //   ▸ ⋯ 弹出的 cellMenu 顶部仍显示文件名；
+                            //   ▸ 鼠标悬停该文件名行可看完整绝对路径（区分同名不同目录）。
                             // 【cell hover 工具按钮】两个同风格的圆点：⋯ 更多操作、✕ 关闭本路。
-                            // 仅 hover 本 cell 时可见，不污染观影画面。
+                            // 二者均常驻显示（不随鼠标移出 cell 消失），仅在用户按 C
+                            // 关闭通道信息条 / 全屏抑制角标时才隐藏，避免菜单弹出后鼠标
+                            // 越界导致按钮闪烁或定位丢失。
                             //  - ⋯：弹出 cellMenu，内含「评分（1-5 星）」与「替换本路视频…」
                             //         （新增一路已在顶部工具栏／下拉菜单提供，cell 内不再重复）
                             //  - ✕：调 Engine.closeAt(idx)，fileCount 变化会触发 visibleCount/Repeater
@@ -1545,7 +1537,7 @@ ApplicationWindow {
                                 Layout.preferredHeight: 18
                                 Layout.leftMargin: 2
                                 radius: 9
-                                visible: cellHover.hovered || cellMenu.opened
+                                visible: root.effectiveChannelVisible
                                 color: replaceArea.containsMouse || cellMenu.opened ? "#3a78c8"
                                       : replaceArea.pressed     ? "#2a5994"
                                                                 : "#55ffffff"
@@ -1645,15 +1637,33 @@ ApplicationWindow {
                             spacing: 8
 
                             // 顶部：当前文件名（只读，便于确认操作的是哪一路）
+                            // 鼠标悬停在该文件名行上时，弹 ToolTip 显示绝对路径，
+                            // 用于在"同名不同目录"场景下区分两路视频。
+                            // 用 HoverHandler 而非 MouseArea：
+                            //   ① 不抢 Popup 焦点 / 不破坏 closePolicy；
+                            //   ② 落点更精确，仅文件名行响应，不污染评分星条。
                             RowLayout {
+                                id: fileNameRow
                                 spacing: 6
                                 Layout.fillWidth: true
                                 Text {
+                                    id: fileNameText
                                     text: Engine.fileNameAt(cell.playerIdx)
                                     color: "#dcdcde"
                                     font.pixelSize: 12
                                     elide: Text.ElideMiddle
                                     Layout.maximumWidth: 220
+                                    HoverHandler {
+                                        id: fileNameHover
+                                        cursorShape: Qt.IBeamCursor
+                                    }
+                                    ToolTip.visible: fileNameHover.hovered
+                                    ToolTip.delay: 400
+                                    ToolTip.timeout: 8000
+                                    ToolTip.text: {
+                                        var p = Engine.filePathAt(cell.playerIdx)
+                                        return (p && p.length > 0) ? p : Engine.fileNameAt(cell.playerIdx)
+                                    }
                                 }
                             }
 
