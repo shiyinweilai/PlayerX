@@ -41,6 +41,12 @@ public:
 
     // 工具：取路径文件名部分。
     Q_INVOKABLE QString fileName(const QString& path) const;
+
+    // 工具：把 QUrl（典型来自 QML FolderDialog/FileDialog）转成平台本地路径。
+    // 跨平台正确：macOS 返回 "/Users/..."，Windows 返回 "C:/Users/..."。
+    // QML 端禁止用 url.toString().substring(7) 之类的字符串截断方式，那在 Windows
+    // 上会产生 "/C:/..."（多一个前导斜杠）导致扫描失败。
+    Q_INVOKABLE QString urlToLocalFile(const QUrl& url) const;
 };
 
 } // namespace rbqt

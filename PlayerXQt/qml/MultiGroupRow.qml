@@ -103,11 +103,13 @@ Rectangle {
         id: folderDlg
         title: "为「路 " + (row.laneIndex + 1) + "」选择文件夹"
         onAccepted: {
-            var p = selectedFolder.toString()
-            if (p.indexOf("file://") === 0) p = decodeURIComponent(p.substring(7))
-            row.folderPath = p
-            // 扫描
-            row.allFiles = Fs.scanVideoFolderPath(p, true)
+            // 注意：Windows 上 selectedFolder 形如 "file:///C:/Users/..."，
+            //       直接 substring(7) 会得到 "/C:/Users/..." 多一个前导斜杠
+            //       导致 QFileInfo 判定不存在 → 扫描结果为空。
+            //       必须通过 Fs.urlToLocalFile() 让 Qt 自己处理跨平台 URL → path 转换。
+            row.folderPath = Fs.urlToLocalFile(selectedFolder)
+            // 直接传 QUrl 给 C++ 端，避免 QML 侧再做字符串处理。
+            row.allFiles = Fs.scanVideoFolder(selectedFolder, true)
         }
     }
 

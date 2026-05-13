@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(PlayerXQt VERSION 1.0.0 LANGUAGES CXX)
+project(PlayerXQt VERSION 1.0.0 LANGUAGES CXX C)
 
 # ─── C++ 标准 ────────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
@@ -35,7 +35,9 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
 qt_standard_project_setup(REQUIRES 6.5)
 
 # ─── 可执行目标 ───────────────────────────────────────────────────────────────
-qt_add_executable(PlayerXQt
+# WIN32     → Windows 下使用 GUI 子系统，避免启动时弹出黑色控制台窗口
+# MACOSX_BUNDLE → macOS 下产出 .app bundle（这个 qt_add_executable 默认就会做，显式更稳妥）
+qt_add_executable(PlayerXQt WIN32 MACOSX_BUNDLE
     src/main.cpp
     # 共享核心（与旧 SDL 版同源，已拷贝到 PlayerXQt/src/core 与 player）
     src/core/rb_demuxer.cpp
@@ -117,6 +119,10 @@ if(APPLE)
         -lbz2
     )
 elseif(WIN32)
+    # 注意：MinGW 的 GUI 子系统下，libmingw32 必须排在 Qt6EntryPoint 之前。
+    # 通过 LINK_OPTIONS 注入 -lmingw32 -lQt6EntryPoint 确保链接顺序，
+    # 同时显式列出 FFmpeg 静态库需要的 Win32 系统库。
+    target_link_options(PlayerXQt PRIVATE "-lmingw32")
     target_link_libraries(PlayerXQt PRIVATE
         ws2_32 bcrypt secur32 crypt32 ncrypt winmm
     )

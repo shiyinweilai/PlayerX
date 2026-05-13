@@ -108,4 +108,8 @@ QString FsUtils::fileName(const QString& path) const {
     return QFileInfo(path).fileName();
 }
 
+QString FsUtils::urlToLocalFile(const QUrl& url) const {
+    return urlToLocal(url);
+}
+
 } // namespace rbqt
