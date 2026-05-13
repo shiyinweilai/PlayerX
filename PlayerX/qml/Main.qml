@@ -262,11 +262,21 @@ ApplicationWindow {
         Menu {
             title: qsTr("帮助")
             MenuItem {
+                text: qsTr("快捷键…")
+                onTriggered: shortcutsDialog.open()
+            }
+            MenuSeparator {}
+            MenuItem {
                 text: qsTr("关于 PlayerX")
                 onTriggered: aboutDialog.open()
             }
         }
     }
+
+    // 平台修饰键显示文本：mac 显示 ⌘，其它显示 Ctrl+。
+    // 用于欢迎页速览 / 快捷键对话框中的显示拼接，不影响 Shortcut 实际绑定
+    //（QtQuick 的 Shortcut 会自动把 Ctrl 在 mac 映射为 ⌘）。
+    readonly property string _modKey: Qt.platform.os === "osx" ? "⌘" : "Ctrl+"
 
     // 统一的"弹出设置菜单"入口：把原来锚到 settingsBtn 的逻辑收敛到一处。
     // 因为 settingsBtn 已被移除，这里改为锚到窗口右上角（与原 ⚙ 按钮位置近似）。
@@ -306,18 +316,279 @@ ApplicationWindow {
         onActivated: Qt.quit()
     }
 
+    // F1 / ? 全局打开「快捷键」对话框（行业惯例：F1 = Help，? = 速查）
+    Shortcut {
+        sequence: "F1"
+        context: Qt.ApplicationShortcut
+        onActivated: shortcutsDialog.open()
+    }
+    Shortcut {
+        sequence: "?"
+        context: Qt.ApplicationShortcut
+        onActivated: shortcutsDialog.open()
+    }
+
+    // ─── 快捷键对话框专用小组件（必须在 root 顶层作用域、且在使用方之前定义）─────────
+    //   行渲染器：按键徽章（等宽字体 + 深色边框） + 描述。
+    component ScRow: RowLayout {
+        property string keys: ""
+        property string desc: ""
+        Layout.fillWidth: true
+        spacing: 14
+        Rectangle {
+            Layout.preferredWidth: 160
+            Layout.preferredHeight: kbdText.implicitHeight + 8
+            radius: 4
+            color: "#14141a"
+            border.color: "#2a2a32"
+            border.width: 1
+            Text {
+                id: kbdText
+                anchors.centerIn: parent
+                text: keys
+                color: "#e8e8ec"
+                font.pixelSize: 12
+                font.family: "Menlo, Consolas, monospace"
+            }
+        }
+        Text {
+            Layout.fillWidth: true
+            text: desc
+            color: "#cfd2d6"
+            font.pixelSize: 13
+            wrapMode: Text.Wrap
+        }
+    }
+
+    // 分组渲染器：小号大写标题 + 一组 ScRow。
+    //   采用 default property 显式接收行子项，避免 "title 后面的行不会被渲染" 的隐性问题。
+    component ScSection: ColumnLayout {
+        property string title: ""
+        default property alias _rows: scRows.data
+        Layout.fillWidth: true
+        spacing: 6
+        Text {
+            text: title
+            color: "#9aa0a6"
+            font.pixelSize: 11
+            font.bold: true
+            font.capitalization: Font.AllUppercase
+        }
+        ColumnLayout {
+            id: scRows
+            Layout.fillWidth: true
+            spacing: 4
+        }
+    }
+
+    // ─── 快捷键速查对话框 ────────────────────────────────────────────
+    //   行业标准做法：分组列表（File / Playback / Speed / View / Channel /
+    //   MultiGroup），左列按键徽章（等宽字体），右列描述。
+    //   修饰键显示用 `_modKey` 自动适配 mac (⌘) / Win·Linux (Ctrl+)。
+    //   全部内容与本文件中真实绑定的 Shortcut 一一对应，不做夸张承诺。
+    Dialog {
+        id: shortcutsDialog
+        title: qsTr("快捷键")
+        modal: true
+        anchors.centerIn: parent
+        // 不使用 standardButtons，改为完全自绘 footer，避免 Qt Basic style
+        // 给 DialogButtonBox 渲染白底浅色按钮，与对话框深色基调冲突。
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        // 用 implicitWidth 让对话框自适应到一个稳定宽度，避免随窗口变化抖动
+        implicitWidth: 560
+        // 背景：深色面板 + 内描边 + 外阴影（用半透明描边模拟，零依赖）
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 8
+            // 外阴影：在 Rectangle 外围画一圈渐隐方框（layer 模拟 box-shadow）
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -8
+                radius: parent.radius + 4
+                color: "transparent"
+                border.color: "#80000000"   // 50% 黑
+                border.width: 1
+                opacity: 0.45
+            }
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -4
+                radius: parent.radius + 2
+                color: "transparent"
+                border.color: "#a0000000"
+                border.width: 1
+                opacity: 0.55
+            }
+        }
+        // 自定义标题颜色（默认标题在深色背景下偏黑，肉眼难辨）
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 40
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("快捷键")
+                color: "#e8e8ec"
+                font.pixelSize: 15
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a32"
+            }
+        }
+        // 自定义页脚：深色背景 + 自绘"关闭"按钮（与全局 FlatButton 一致风格）
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 52
+            // 顶部 1px 分隔线
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a32"
+            }
+            FlatButton {
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                Layout.preferredWidth: 88
+                implicitWidth: 88
+                implicitHeight: 30
+                text: qsTr("关闭")
+                onClicked: shortcutsDialog.close()
+            }
+        }
+
+        // 内容：可滚动列；行高紧凑，等宽按键徽章
+        contentItem: Flickable {
+            id: scFlick
+            implicitHeight: Math.min(scCol.implicitHeight, 460)
+            contentWidth: width
+            contentHeight: scCol.implicitHeight
+            clip: true
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            ColumnLayout {
+                id: scCol
+                width: scFlick.width
+                spacing: 14
+
+                // 文件
+                ScSection {
+                    title: qsTr("文件")
+                    ScRow { keys: root._modKey + "O";       desc: qsTr("打开文件（最多 9 路）") }
+                    ScRow { keys: root._modKey + "⇧O";     desc: qsTr("打开文件夹 / 多组对比") }
+                    ScRow { keys: root._modKey + "M";       desc: qsTr("打开文件夹 / 多组对比（别名）") }
+                    ScRow { keys: root._modKey + ",";       desc: qsTr("偏好设置") }
+                    ScRow { keys: root._modKey + "Q";       desc: qsTr("退出 PlayerX") }
+                }
+                // 播放
+                ScSection {
+                    title: qsTr("播放")
+                    ScRow { keys: "Space";  desc: qsTr("暂停 / 继续") }
+                    ScRow { keys: "←  /  →"; desc: qsTr("后退 / 前进 5 秒") }
+                    ScRow { keys: ",  /  ."; desc: qsTr("上一帧 / 下一帧") }
+                    ScRow { keys: "R";       desc: qsTr("回到开头") }
+                }
+                // 倍速
+                ScSection {
+                    title: qsTr("倍速")
+                    ScRow { keys: "-";   desc: qsTr("减速一档") }
+                    ScRow { keys: "=  /  +"; desc: qsTr("加速一档") }
+                    ScRow { keys: "0";   desc: qsTr("复位为 1.0×") }
+                }
+                // 视图
+                ScSection {
+                    title: qsTr("视图")
+                    ScRow { keys: "F"; desc: qsTr("切换全屏") }
+                    ScRow { keys: "V"; desc: qsTr("切换视频信息叠加") }
+                    ScRow { keys: "C"; desc: qsTr("切换通道信息叠加（序号 + 文件名）") }
+                    ScRow { keys: "S"; desc: qsTr("在多路布局间循环切换") }
+                    ScRow { keys: "B"; desc: qsTr("滑动对比模式（仅 2 路）") }
+                }
+                // 路数（数字键）
+                ScSection {
+                    title: qsTr("单路 / 多路")
+                    ScRow { keys: "1 … 9"; desc: qsTr("切到第 N 路单路；再次按下回到上次的多路布局") }
+                }
+                // 多组对比专用
+                ScSection {
+                    title: qsTr("多组对比（仅当多组对比窗口激活时）")
+                    ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组") }
+                    ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组") }
+                }
+            }
+        }
+    }
+
     // 简单的"关于"对话框（深色风格，与全局 UI 一致）
     Dialog {
         id: aboutDialog
         title: qsTr("关于 PlayerX")
         modal: true
         anchors.centerIn: parent
-        standardButtons: Dialog.Ok
+        // 同 shortcutsDialog：自绘 footer，避免默认 DialogButtonBox 的白底
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        implicitWidth: 360
         background: Rectangle {
             color: "#1e1e22"
             border.color: "#3a3a42"
             border.width: 1
             radius: 6
+            // 外阴影（与 shortcutsDialog 一致）
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -8
+                radius: parent.radius + 4
+                color: "transparent"
+                border.color: "#80000000"
+                border.width: 1
+                opacity: 0.45
+            }
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -4
+                radius: parent.radius + 2
+                color: "transparent"
+                border.color: "#a0000000"
+                border.width: 1
+                opacity: 0.55
+            }
+        }
+        // 标题栏
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 40
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("关于 PlayerX")
+                color: "#e8e8ec"
+                font.pixelSize: 15
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a32"
+            }
         }
         contentItem: ColumnLayout {
             spacing: 8
@@ -336,6 +607,27 @@ ApplicationWindow {
                 text: qsTr("版本 1.0.0")
                 color: "#888"
                 font.pixelSize: 12
+            }
+        }
+        // 自绘页脚：右下角"确定"按钮
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 52
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a32"
+            }
+            FlatButton {
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                implicitWidth: 88
+                implicitHeight: 30
+                text: qsTr("确定")
+                onClicked: aboutDialog.close()
             }
         }
     }
@@ -2097,13 +2389,328 @@ ApplicationWindow {
             }
         }
 
-        // 占位提示
-        Label {
-            anchors.centerIn: parent
-            visible: Engine.fileCount <= 0
-            text: "点击左上角「打开」选择一个或多个视频"
-            color: "#888"
-            font.pixelSize: 18
+        // ─── 空状态欢迎面板 ─────────────────────────────────────────
+        //   仅在 Engine.fileCount <= 0 时显示；一旦有视频自动隐藏，
+        //   不与 Grid 视图、SliderCompareView 共享任何状态，零功能侵入。
+        //
+        //   组成：
+        //     · 大标题 / 副标题（说明软件用途）
+        //     · 两个大按钮：① 打开文件   ② 打开文件夹 / 多组对比
+        //       直接复用顶部菜单同款入口（addDialog.open / multiGroupDialog.show），
+        //       不重复任何打开逻辑。
+        //     · DropArea 全覆盖：支持文件 + 文件夹拖拽
+        //         - 视频文件：直接进入 selectedFiles 队列
+        //         - 文件夹：用 Fs.scanVideoFolder 递归展开为视频文件
+        //         - 混合：一起合并、最多取前 9 个，调 Engine.openFiles
+        //     · 操作说明（快捷键、批量上限提示等）
+        Item {
+            id: emptyHero
+            anchors.fill: parent
+            visible: Engine.fileCount <= 0 && !root.compareSliderActive
+
+            // 拖拽高亮态：DropArea 进入时整块面板加柔和高亮边框
+            property bool dragHover: dropZone.containsDrag
+
+            // 半透明遮罩：让欢迎面板与窗口主体的纯黑稍稍区分开
+            Rectangle {
+                anchors.fill: parent
+                color: emptyHero.dragHover ? "#1a3a78c8" : "transparent"
+                Behavior on color { ColorAnimation { duration: 140 } }
+            }
+
+            // 拖入时的虚线高亮边框（不挡点击，纯视觉反馈）
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 12
+                color: "transparent"
+                radius: 12
+                border.color: emptyHero.dragHover ? "#3a78c8" : "transparent"
+                border.width: 2
+                Behavior on border.color { ColorAnimation { duration: 140 } }
+            }
+
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: 24
+                width: Math.min(parent.width - 80, 720)
+
+                // 标题
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: "PlayerX"
+                    color: "#e8e8ec"
+                    font.pixelSize: 36
+                    font.bold: true
+                }
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: "多路视频对比 · 同步播放 · 评分采集"
+                    color: "#9aa0a6"
+                    font.pixelSize: 14
+                }
+
+                // ── 两个大按钮 ─────────────────────────────────────
+                RowLayout {
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: 18
+
+                    // ① 打开文件
+                    Rectangle {
+                        id: heroBtnFile
+                        Layout.preferredWidth: 240
+                        Layout.preferredHeight: 132
+                        radius: 10
+                        color: heroBtnFileMA.containsMouse ? "#2a3a55"
+                              : heroBtnFileMA.pressed     ? "#1e2a40"
+                                                          : "#1e1e22"
+                        border.color: heroBtnFileMA.containsMouse ? "#3a78c8" : "#3a3a42"
+                        border.width: 1
+                        Behavior on color { ColorAnimation { duration: 120 } }
+                        Behavior on border.color { ColorAnimation { duration: 120 } }
+
+                        ColumnLayout {
+                            anchors.centerIn: parent
+                            spacing: 8
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "🎬"
+                                font.pixelSize: 36
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "打开文件"
+                                color: "#e8e8ec"
+                                font.pixelSize: 16
+                                font.bold: true
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "选择 1-9 个视频文件"
+                                color: "#9aa0a6"
+                                font.pixelSize: 12
+                            }
+                        }
+
+                        MouseArea {
+                            id: heroBtnFileMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: addDialog.open()
+                        }
+                    }
+
+                    // ② 打开文件夹 / 多组对比
+                    Rectangle {
+                        id: heroBtnFolder
+                        Layout.preferredWidth: 240
+                        Layout.preferredHeight: 132
+                        radius: 10
+                        color: heroBtnFolderMA.containsMouse ? "#2a3a55"
+                              : heroBtnFolderMA.pressed     ? "#1e2a40"
+                                                            : "#1e1e22"
+                        border.color: heroBtnFolderMA.containsMouse ? "#3a78c8" : "#3a3a42"
+                        border.width: 1
+                        Behavior on color { ColorAnimation { duration: 120 } }
+                        Behavior on border.color { ColorAnimation { duration: 120 } }
+
+                        ColumnLayout {
+                            anchors.centerIn: parent
+                            spacing: 8
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "📁"
+                                font.pixelSize: 36
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "打开文件夹"
+                                color: "#e8e8ec"
+                                font.pixelSize: 16
+                                font.bold: true
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "整文件夹载入 / 多组对比"
+                                color: "#9aa0a6"
+                                font.pixelSize: 12
+                            }
+                        }
+
+                        MouseArea {
+                            id: heroBtnFolderMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: multiGroupDialog.show()
+                        }
+                    }
+                }
+
+                // ── 操作说明 ──────────────────────────────────────
+                Rectangle {
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.preferredWidth: 498   // 240*2 + 18 ，与按钮组对齐
+                    color: "#14141820"
+                    radius: 8
+                    border.color: "#2a2a32"
+                    border.width: 1
+                    implicitHeight: tipsCol.implicitHeight + 24
+
+                    ColumnLayout {
+                        id: tipsCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
+                        spacing: 6
+
+                        Text {
+                            text: emptyHero.dragHover
+                                  ? "🎯 松开鼠标即可载入"
+                                  : "💡 也可以直接把视频文件或文件夹 拖入此窗口"
+                            color: emptyHero.dragHover ? "#6aa8ff" : "#cfd2d6"
+                            font.pixelSize: 13
+                            font.bold: emptyHero.dragHover
+                        }
+                        Text {
+                            text: "·  支持 mp4 / mov / mkv / avi / webm / flv / ts / m4v / wmv，最多同时载入 9 路"
+                            color: "#9aa0a6"
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
+                        // ── 速览：四组高频快捷键（分组 + 等宽按键徽章）──
+                        //    完整列表见「帮助 → 快捷键…」或按 F1 / ?。
+                        //    `_modKey` 在 macOS 上自动显示 ⌘，其它平台显示 Ctrl。
+                        GridLayout {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 4
+                            columns: 2
+                            columnSpacing: 28
+                            rowSpacing: 6
+
+                            // 文件
+                            RowLayout {
+                                spacing: 8
+                                Text { text: "打开";       color: "#cfd2d6"; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                                Text { text: root._modKey + "O"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
+                                Text { text: root._modKey + "⇧O"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                            }
+                            // 播放
+                            RowLayout {
+                                spacing: 8
+                                Text { text: "播放";       color: "#cfd2d6"; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                                Text { text: "Space";       color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
+                                Text { text: "← →";        color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
+                                Text { text: ", .";         color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                            }
+                            // 视图
+                            RowLayout {
+                                spacing: 8
+                                Text { text: "视图";       color: "#cfd2d6"; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                                Text { text: "F";  color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
+                                Text { text: "V/C"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
+                                Text { text: "S";  color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
+                                Text { text: "B";  color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                            }
+                            // 路数 / 倍速
+                            RowLayout {
+                                spacing: 8
+                                Text { text: "路 / 速";   color: "#cfd2d6"; font.pixelSize: 12; Layout.preferredWidth: 56 }
+                                Text { text: "1…9"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
+                                Text { text: "− = 0"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                            }
+                        }
+                        // 入口：跳转到「快捷键…」对话框
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 4
+                            implicitHeight: 18
+                            Text {
+                                id: shortcutsLink
+                                anchors.right: parent.right
+                                text: "查看全部快捷键 →   (F1)"
+                                color: shortcutsLinkMA.containsMouse ? "#6aa8ff" : "#7a7f86"
+                                font.pixelSize: 12
+                                font.underline: shortcutsLinkMA.containsMouse
+                            }
+                            MouseArea {
+                                id: shortcutsLinkMA
+                                anchors.fill: shortcutsLink
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: shortcutsDialog.open()
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── 拖拽落区：必须放在最后（z 序最高），覆盖整个空状态区域 ──
+            //   只在 fileCount==0 时存在，载入视频后该 Item 整体 visible=false。
+            //   既不会在播放期间误触发，也不会与 Grid 内的事件抢截。
+            DropArea {
+                id: dropZone
+                anchors.fill: parent
+
+                // 仅接受带 url 的拖拽（文件/文件夹）
+                onEntered: function(drag) {
+                    if (!drag.hasUrls) { drag.accepted = false; return }
+                    drag.accept(Qt.CopyAction)
+                }
+
+                onDropped: function(drop) {
+                    if (!drop.hasUrls) return
+
+                    // 视频扩展名白名单（与 FileDialog 保持一致）
+                    var exts = ["mp4","mov","mkv","avi","webm","flv","ts","m4v","wmv"]
+                    function hasVideoExt(p) {
+                        var s = String(p).toLowerCase()
+                        var dot = s.lastIndexOf(".")
+                        if (dot < 0) return false
+                        var ext = s.substring(dot + 1)
+                        return exts.indexOf(ext) >= 0
+                    }
+
+                    var collected = []   // 最终 url 列表
+
+                    for (var i = 0; i < drop.urls.length; ++i) {
+                        var u = drop.urls[i]
+                        // QUrl → 字符串
+                        var s = String(u)
+                        // 文件夹判断：先尝试用 Fs.scanVideoFolder（接受 QUrl）
+                        // 若返回非空则视为目录；否则按文件处理。
+                        var scanned = []
+                        try {
+                            scanned = Fs.scanVideoFolder(u, true)
+                        } catch (e) { scanned = [] }
+
+                        if (scanned && scanned.length > 0) {
+                            // 文件夹：收集其中所有视频
+                            for (var j = 0; j < scanned.length; ++j) {
+                                collected.push("file://" + scanned[j])
+                                if (collected.length >= 9) break
+                            }
+                        } else if (hasVideoExt(s)) {
+                            collected.push(s)
+                        }
+                        if (collected.length >= 9) break
+                    }
+
+                    if (collected.length === 0) return
+                    if (collected.length > 9) collected = collected.slice(0, 9)
+                    Engine.openFiles(collected)
+                }
+            }
         }
 
         // ─── 滑动对比视图（独立组件，仅在 compareSliderActive 时显示）──
