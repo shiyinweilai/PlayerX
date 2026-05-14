@@ -36,6 +36,24 @@ ApplicationWindow {
     property var laneSnapshotPaths: []   // 上次启动时各路的 currentPath，用于检测是否需要重新 start
     property var laneSnapshotIndexes: [] // 上次启动时各路的 currentIndex
 
+    // ─── 单路浏览模式的「N 宫格」状态 ───────────────────────────────
+    // singleLaneMode = true 时，表示当前已启动且只有 1 路有效（来自单文件夹 / 添加文件）。
+    // 此时支持把当前页同时显示 viewCount 个视频（1/2/4/6/9），
+    // navigate(±1) 会以 viewCount 为步长翻页。
+    // 多组对比模式（≥2 路文件夹）下 viewCount 始终视作 1，宫格切换按钮在主界面隐藏。
+    readonly property var supportedViewCounts: [1, 2, 4, 6, 9]
+    property int viewCount: 1
+    // 当前激活路的索引（active 后；单路浏览/扁平文件来源时即唯一那一路；多组对比下取第一路）
+    property int activeLaneIndex: -1
+
+    // 是否处于「单路浏览」态：active=true 且只有 1 路在跑（含「添加文件」走 loadFlatFiles 创建的虚拟路）
+    readonly property bool singleLaneMode: active && _isSingleLaneActive()
+
+    function _isSingleLaneActive() {
+        // 用启动时的快照判断：laneSnapshotPaths.length === 1 即单路
+        return laneSnapshotPaths && laneSnapshotPaths.length === 1
+    }
+
     // ─── 是否可启动 ─────────────────────────────────────────────────
     // 新语义：只要有 ≥1 路「勾选 + 已选文件夹且有命中」即可启动。
     //        「勾选但未选文件夹」的行会被启动逻辑自动忽略，不会阻塞其他已就绪的行。
@@ -79,6 +97,16 @@ ApplicationWindow {
             if (lane.currentPath && lane.currentPath.length > 0) return true
         }
         return false
+    }
+
+    // ─── 内部小工具：根据 N 选 LayoutMode ──────────────────────────
+    // Engine.LayoutMode：0=Single 1=SideBySide 2=Grid2x2 3=Grid2x3 4=Grid3x3
+    function _layoutModeFor(n) {
+        if (n <= 1) return 0
+        if (n === 2) return 1
+        if (n === 3 || n === 4) return 2
+        if (n === 5 || n === 6) return 3
+        return 4 // 7/8/9 → 3x3
     }
 
     // 触发 canStart 重新计算：修改一个有 changed 信号的普通属性即可让绑定重求。
@@ -182,6 +210,8 @@ ApplicationWindow {
                 // 进入 active 态，使「上一组/下一组」可以在 visibleFiles 内循环切换
                 laneSnapshotPaths = [ laneOnly.currentPath ]
                 laneSnapshotIndexes = [ laneOnly.currentIndex ]
+                activeLaneIndex = onlyI
+                viewCount = 1
                 active = true
                 // 单视频用单视图最合适
                 if (Engine.layoutMode !== 0) Engine.layoutMode = 0
@@ -203,6 +233,8 @@ ApplicationWindow {
         if (ok) {
             laneSnapshotPaths = paths
             laneSnapshotIndexes = indexes
+            activeLaneIndex = selIdx.length > 0 ? selIdx[0] : -1
+            viewCount = 1   // 多组对比下 viewCount 概念不参与，强制 1
             active = true
             // 启动后默认把布局切到 1×N，避免 single 模式只看到一路
             if (Engine.layoutMode === 0 && urls.length > 1) Engine.layoutMode = 1
@@ -210,39 +242,180 @@ ApplicationWindow {
         return ok
     }
 
-    // 上一组 / 下一组：每路在自己 visibleFiles 内 ±1，再 openFiles
+    // ─── 「添加文件」走的扁平接管入口 ──────────────────────────────
+    // 把一组离散视频文件 (urls / 也允许 path) 作为「单路浏览」的 visibleFiles 接管，
+    // 启动后即可使用 N 宫格切换 + 翻页。
+    //
+    // 实现方式：把这批文件灌进一个新建的 lane（folderPath/keyword 留空，仅 allFiles/visibleFiles 有值），
+    // 调用 Engine.openFiles 打开第 0 个，进入 active 态。
+    // 所有翻页 / 宫格切换走 navigate / setViewCount，与单文件夹模式完全一致。
+    function loadFlatFiles(urls) {
+        if (!urls || urls.length === 0) return false
+        // 统一成本地路径数组：file:// URL → 本地路径；普通字符串保持不变
+        var localPaths = []
+        for (var i = 0; i < urls.length; ++i) {
+            var u = urls[i]
+            var s = ""
+            if (typeof u === "string") s = u
+            else if (u !== undefined && u !== null) {
+                // QUrl 或可 toString 的对象
+                s = u.toString()
+            }
+            if (!s) continue
+            if (s.indexOf("file://") === 0) {
+                // 转本地路径
+                s = Fs.urlToLocalFile(u)
+            }
+            if (s && s.length > 0) localPaths.push(s)
+        }
+        if (localPaths.length === 0) return false
+
+        // 重置 lanes：只保留 1 路，把扁平文件灌进去
+        while (_rowsModel.count > 1) removeLane(_rowsModel.count - 1)
+        if (_rowsModel.count === 0) addLane()
+        _ensureRuntimeLen(_rowsModel.count)
+        _laneRuntime[0] = { allFiles: localPaths, visibleFiles: localPaths }
+        _rowsModel.set(0, {
+            selected: true,
+            folderPath: "",         // 没有文件夹，纯文件来源
+            keyword: "",
+            currentPath: localPaths[0],
+            currentIndex: 0,
+            allCount: localPaths.length,
+            visibleCount: localPaths.length
+        })
+        _bumpState()
+
+        // 打开第 0 个，进入 active 态
+        var u0 = Fs.toFileUrls([ localPaths[0] ])
+        if (u0.length === 0) return false
+        var ok = Engine.openFiles(u0)
+        if (ok) {
+            laneSnapshotPaths = [ localPaths[0] ]
+            laneSnapshotIndexes = [ 0 ]
+            activeLaneIndex = 0
+            viewCount = 1
+            active = true
+            if (Engine.layoutMode !== 0) Engine.layoutMode = 0
+        }
+        return ok
+    }
+
+    // ─── 单路浏览：切换「同时显示 N 个」 ────────────────────────────
+    // 从当前 currentIndex 起，连续取 N 个 visibleFiles 一并打开（不够则截断）。
+    // 调用前提：singleLaneMode === true。多组对比下调用直接 no-op。
+    function setViewCount(n) {
+        if (!active) return false
+        if (!singleLaneMode) return false
+        if (supportedViewCounts.indexOf(n) < 0) return false
+        var i = activeLaneIndex
+        if (i < 0 || i >= _laneRuntime.length) return false
+        var rt = _laneRuntime[i]
+        if (!rt || !rt.visibleFiles || rt.visibleFiles.length === 0) return false
+        var lane = _rowsModel.get(i)
+        if (!lane) return false
+        var total = rt.visibleFiles.length
+        // 「页起点」对齐：以当前 currentIndex 所在的页起点重算（保证跨 N 切换时不抖）
+        var oldN = Math.max(1, viewCount)
+        var pageStart = Math.floor(Math.max(0, lane.currentIndex) / oldN) * oldN
+        if (pageStart >= total) pageStart = 0
+        // 取 N 个（末尾不够就截断）
+        var take = Math.min(n, total - pageStart)
+        if (take <= 0) return false
+        var slice = rt.visibleFiles.slice(pageStart, pageStart + take)
+        var urls = Fs.toFileUrls(slice)
+        if (urls.length === 0) return false
+        var ok = Engine.openFiles(urls)
+        if (!ok) return false
+        // 同步页起点 → currentIndex；snapshot/viewCount 更新
+        _rowsModel.set(i, {
+            selected: lane.selected,
+            folderPath: lane.folderPath,
+            keyword: lane.keyword,
+            currentPath: rt.visibleFiles[pageStart],
+            currentIndex: pageStart,
+            allCount: rt.allFiles.length,
+            visibleCount: total
+        })
+        viewCount = n
+        // 单路 snapshot 仍记一路（path 跟踪页起点；indexes 跟踪页起点 index）
+        laneSnapshotPaths = [ rt.visibleFiles[pageStart] ]
+        laneSnapshotIndexes = [ pageStart ]
+        Engine.layoutMode = _layoutModeFor(take)
+        return true
+    }
+
+    // 上一组 / 下一组：
+    //   · 单路浏览模式（singleLaneMode=true）：以 viewCount 为步长翻页（循环），一次性打开 N 个
+    //   · 多组对比模式：每路 ±1 循环切换
     // dir = -1 / +1
-    // 仅对勾选行生效；未勾选行不参与切组。
-    // 末端处理：循环（B 模式）—— 走到尾再按「下一组」回到第 0 个；走到首再按「上一组」跳到末尾。
     function navigate(dir) {
         if (!active) return false
         if (dir !== -1 && dir !== 1) return false
-        // 更新勾选路 currentIndex（循环）
-        var anyMoved = false
-        for (var i = 0; i < _rowsModel.count; ++i) {
-            var lane = _rowsModel.get(i)
-            if (!lane.selected) continue
+
+        // ── 单路浏览：按 viewCount 翻页 ──────────────────────────────
+        if (singleLaneMode) {
+            var i = activeLaneIndex
+            if (i < 0 || i >= _laneRuntime.length) return false
             var rt = _laneRuntime[i]
-            if (!rt || rt.visibleFiles.length === 0) continue
-            var n = rt.visibleFiles.length
-            var cur = lane.currentIndex
-            // 循环：(cur + dir + n) % n —— 即便 cur=-1（异常）也能合法回到 0/n-1
-            var next = ((cur + dir) % n + n) % n
-            if (next !== cur) {
+            if (!rt || !rt.visibleFiles || rt.visibleFiles.length === 0) return false
+            var lane = _rowsModel.get(i)
+            if (!lane) return false
+            var total = rt.visibleFiles.length
+            var step = Math.max(1, viewCount)
+            // 总页数：ceil(total / step)
+            var pages = Math.ceil(total / step)
+            var curPage = Math.floor(Math.max(0, lane.currentIndex) / step)
+            var nextPage = ((curPage + dir) % pages + pages) % pages
+            var pageStart = nextPage * step
+            if (pageStart >= total) pageStart = 0
+            var take = Math.min(step, total - pageStart)
+            if (take <= 0) return false
+            var slice = rt.visibleFiles.slice(pageStart, pageStart + take)
+            var urls1 = Fs.toFileUrls(slice)
+            if (urls1.length === 0) return false
+            var ok1 = Engine.openFiles(urls1)
+            if (!ok1) return false
+            _rowsModel.set(i, {
+                selected: lane.selected,
+                folderPath: lane.folderPath,
+                keyword: lane.keyword,
+                currentPath: rt.visibleFiles[pageStart],
+                currentIndex: pageStart,
+                allCount: rt.allFiles.length,
+                visibleCount: total
+            })
+            laneSnapshotPaths = [ rt.visibleFiles[pageStart] ]
+            laneSnapshotIndexes = [ pageStart ]
+            // 末页不足 N 时降级 layoutMode 兼容显示
+            Engine.layoutMode = _layoutModeFor(take)
+            return true
+        }
+
+        // ── 多组对比：每路 ±1 循环（保留旧逻辑） ────────────────────
+        var anyMoved = false
+        for (var k = 0; k < _rowsModel.count; ++k) {
+            var laneM = _rowsModel.get(k)
+            if (!laneM.selected) continue
+            var rtM = _laneRuntime[k]
+            if (!rtM || rtM.visibleFiles.length === 0) continue
+            var nM = rtM.visibleFiles.length
+            var curM = laneM.currentIndex
+            var nextM = ((curM + dir) % nM + nM) % nM
+            if (nextM !== curM) {
                 anyMoved = true
-                _rowsModel.set(i, {
-                    selected: lane.selected,
-                    folderPath: lane.folderPath,
-                    keyword: lane.keyword,
-                    currentPath: rt.visibleFiles[next],
-                    currentIndex: next,
-                    allCount: rt.allFiles.length,
-                    visibleCount: n
+                _rowsModel.set(k, {
+                    selected: laneM.selected,
+                    folderPath: laneM.folderPath,
+                    keyword: laneM.keyword,
+                    currentPath: rtM.visibleFiles[nextM],
+                    currentIndex: nextM,
+                    allCount: rtM.allFiles.length,
+                    visibleCount: nM
                 })
             }
         }
         if (!anyMoved) return false
-        // 直接 openFiles 切组（语义最简单：换一批文件）— 只取「有效路」（勾选 + 有 currentPath）
         var paths = []
         for (var j = 0; j < _rowsModel.count; ++j) {
             var ln = _rowsModel.get(j)
@@ -251,27 +424,43 @@ ApplicationWindow {
             paths.push(ln.currentPath)
         }
         var urls = Fs.toFileUrls(paths)
-        // 单路也允许切（>=1）；多路对比仍要 >=kMinLanes，但单路场景 paths.length===1 也合法
         if (urls.length < 1) return false
         return Engine.openFiles(urls)
     }
     function nextGroup() { return navigate(1) }
     function prevGroup() { return navigate(-1) }
 
-    // 当前组号 / 总组数（基于"最长那路的 visibleFiles"，仅作显示用）
+    // 当前组号 / 总组数（仅显示用）
+    //   · 单路浏览模式：按页计算，groupCount = ceil(total / viewCount), groupIndex = floor(cur / viewCount)
+    //   · 多组对比模式：基于"最长那路的 visibleFiles"
     function groupCount() {
-        var maxN = 0
-        for (var i = 0; i < _laneRuntime.length; ++i) {
+        if (singleLaneMode) {
+            var i = activeLaneIndex
+            if (i < 0 || i >= _laneRuntime.length) return 0
             var rt = _laneRuntime[i]
-            if (rt && rt.visibleFiles.length > maxN) maxN = rt.visibleFiles.length
+            if (!rt || !rt.visibleFiles) return 0
+            var step = Math.max(1, viewCount)
+            return Math.ceil(rt.visibleFiles.length / step)
+        }
+        var maxN = 0
+        for (var k = 0; k < _laneRuntime.length; ++k) {
+            var rtM = _laneRuntime[k]
+            if (rtM && rtM.visibleFiles.length > maxN) maxN = rtM.visibleFiles.length
         }
         return maxN
     }
     function groupIndex() {
-        // 取第一路"勾选的"的 currentIndex（多数场景每路命中数一样；若不同，第一路是基准）
-        for (var i = 0; i < _rowsModel.count; ++i) {
+        if (singleLaneMode) {
+            var i = activeLaneIndex
+            if (i < 0 || i >= _rowsModel.count) return -1
             var lane = _rowsModel.get(i)
-            if (lane && lane.selected) return lane.currentIndex
+            if (!lane) return -1
+            var step = Math.max(1, viewCount)
+            return Math.floor(Math.max(0, lane.currentIndex) / step)
+        }
+        for (var j = 0; j < _rowsModel.count; ++j) {
+            var ln = _rowsModel.get(j)
+            if (ln && ln.selected) return ln.currentIndex
         }
         if (_rowsModel.count === 0) return -1
         return _rowsModel.get(0).currentIndex

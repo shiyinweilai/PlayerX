@@ -1426,11 +1426,22 @@ ApplicationWindow {
             "所有文件 (*)"
         ]
         onAccepted: {
-            // fileCount==0 采用批量 openFiles、效果 == 打开；否则逐个 addFile
+            // 从空状态打开 → 走 MultiGroupDialog.loadFlatFiles 接管，获得 N 宫格切换 / 翻页能力；
+            // 已有视频时 → 维持原"逐个 addFile"的追加语义（不打断当前对比）。
             if (Engine.fileCount === 0) {
-                var arr = selectedFiles
-                if (arr.length > 9) arr = arr.slice(0, 9)
-                Engine.openFiles(arr)
+                if (selectedFiles.length === 1) {
+                    // 单个文件：直接打开即可，不进 active 态（用户没想进队列模式）
+                    Engine.openFiles(selectedFiles)
+                } else if (selectedFiles.length > 1) {
+                    // 多个文件：纳入 MultiGroupDialog 接管，默认以 1 宫格启动，
+                    // 之后用底栏 ▦ 按钮切宫格、⏮⏭ 翻页。
+                    if (!multiGroupDialog.loadFlatFiles(selectedFiles)) {
+                        // 兜底：接管失败仍按老逻辑直开（截前 9 个）
+                        var arr = selectedFiles
+                        if (arr.length > 9) arr = arr.slice(0, 9)
+                        Engine.openFiles(arr)
+                    }
+                }
             } else {
                 for (var i = 0; i < selectedFiles.length; ++i) {
                     if (Engine.fileCount >= 9) break
@@ -1574,6 +1585,38 @@ ApplicationWindow {
                 font.pixelSize: 14
                 enabled: multiGroupDialog.active
                 onClicked: multiGroupDialog.nextGroup()
+            }
+            // ── 单视频浏览模式专用：宫格切换（1/2/4/6/9） ──
+            // 仅在 singleLaneMode（即来源为单文件夹或"添加文件"等单路情形）下显示。
+            // 点击弹出菜单选择 N → 调 setViewCount(n)：从当前页起点连续取 N 个视频铺到 N 宫格里。
+            FlatButton {
+                id: viewCountBtn
+                text: "▦ " + multiGroupDialog.viewCount
+                visible: multiGroupDialog.singleLaneMode
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                font.pixelSize: 13
+                enabled: multiGroupDialog.singleLaneMode
+                onClicked: viewCountMenu.popup(viewCountBtn, 0, viewCountBtn.height)
+                Menu {
+                    id: viewCountMenu
+                    Repeater {
+                        model: multiGroupDialog.supportedViewCounts
+                        delegate: MenuItem {
+                            text: {
+                                var n = modelData
+                                if (n === 1) return "1 · 单视图"
+                                if (n === 2) return "2 · 横排"
+                                if (n === 4) return "4 · 2×2 宫格"
+                                if (n === 6) return "6 · 2×3 宫格"
+                                if (n === 9) return "9 · 3×3 宫格"
+                                return n + " 个"
+                            }
+                            checkable: true
+                            checked: multiGroupDialog.viewCount === modelData
+                            onTriggered: multiGroupDialog.setViewCount(modelData)
+                        }
+                    }
+                }
             }
             Label {
                 visible: multiGroupDialog.active
