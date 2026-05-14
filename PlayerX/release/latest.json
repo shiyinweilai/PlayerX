@@ -1,5 +1,5 @@
 {
-  "version": "2.0.10",
+  "version": "2.0.11",
   "minSupported": "1.0.0",
   "author": "rbyang",
   "copyright": "Copyright (c) 2026 PlayerX",
@@ -7,16 +7,16 @@
   "mandatory": false,
   "downloads": {
     "mac-arm64": {
-      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-2.0.10-arm64-mac.zip",
-      "sha256": "b0c19adc6d6756c4aef4d8c4b4b87e3ce896438bc026964aceba05a3f3a4fb12"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.11-arm64-mac.zip",
+      "sha256": "e486cbca7d402ac3de87b89fc0cffdb7ebeebc46934072cb7c15beb9777abd47"
     },
     "win-install": {
-      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-Setup-2.0.10.exe",
-      "sha256": "3b19ad82b441ce6102b0b9f584a9bc545582205038f06657daca3df3c5d83d69"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-Setup-2.0.11.exe",
+      "sha256": "a0964683cf10ed9596a7e7ae6622a8fa2062a274158350e2dc8c3d9218ddd0b2"
     },
     "win-portable": {
-      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-2.0.10-win64-portable.zip",
-      "sha256": "65905c3551fcacda55a159dd5ad207ca03a56c6c3607e52b533d7db783b2748c"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.11-win64-portable.zip",
+      "sha256": "f01224bafbafaef56dd3c62ce84f5765999489112aba0be7a8a3e63c91983776"
     }
   }
 }

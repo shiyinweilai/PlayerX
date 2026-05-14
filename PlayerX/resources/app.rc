@@ -1,0 +1,14 @@
+// PlayerX Windows 资源脚本
+// ----------------------------------------------------------------------------
+// 由 CMakeLists.txt 在 WIN32 目标上加入 add_executable 源列表；
+// llvm-mingw 的 windres 会把 icon/icon.ico 编译进 exe。
+//
+// .ico 文件由 build.py prepare-icons 步骤从 icon-1024.png 自动生成（多尺寸打包：
+// 16/32/48/64/128/256），路径相对本文件所在目录。
+//
+// IDI_ICON1 = 1：Windows Explorer / 任务栏 / Alt-Tab 默认会读取 exe 中
+// "数值最小的 ICON 资源" 作为应用图标，所以 ID 取最小的 1。
+// ----------------------------------------------------------------------------
+
+#define IDI_ICON1 1
+IDI_ICON1 ICON "icon/icon.ico"

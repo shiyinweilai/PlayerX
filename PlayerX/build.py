@@ -256,6 +256,104 @@ def find_mingw_toolchain():
     return found
 
 
+# ─── 应用图标生成 ─────────────────────────────────────────────────────────────
+#
+# 单一图源：PlayerX/resources/icon/icon-1024.png
+# 派生产物：
+#   * icon.icns —— macOS bundle 图标（CMake 通过 MACOSX_BUNDLE_ICON_FILE 引用）
+#   * icon.ico  —— Windows exe 嵌入图标（resources/app.rc 引用）+ NSIS 安装器图标
+# 设计原则：图源换了只需重新跑 build.py，无需任何手工同步；CMake/NSIS 永远引用
+# 派生产物的固定文件名（icon.icns / icon.ico），不感知图源改动。
+# ──────────────────────────────────────────────────────────────────────────────
+def prepare_icons():
+    """按需从 icon-1024.png 生成 icon.icns 与 icon.ico；已是最新则跳过。
+
+    macOS：用系统自带 sips + iconutil（零依赖）。
+    Windows .ico：先用 sips 生成 16/32/48/64/128/256 六个尺寸 PNG，然后用 Python
+                  zlib 标准库手写最小可用 ICO 头（PNG-in-ICO，Vista+ 支持）。
+                  这样不引入 Pillow 依赖，与现有工具栈一致。
+    """
+    icon_dir = os.path.join(SOURCE_DIR, "resources", "icon")
+    src_png  = os.path.join(icon_dir, "icon-1024.png")
+    icns_out = os.path.join(icon_dir, "icon.icns")
+    ico_out  = os.path.join(icon_dir, "icon.ico")
+
+    if not os.path.isfile(src_png):
+        warn(f"未找到图源 {src_png}，跳过图标生成（应用将无自定义图标）")
+        return
+
+    src_mtime = os.path.getmtime(src_png)
+
+    # ── 1) macOS .icns（仅在 macOS 主机上生成；Windows 交叉编译也是从 macOS 跑的，
+    #     所以这里不做平台过滤，反正 sips/iconutil 都是 macOS 工具）──
+    if IS_MACOS_HOST and (
+        not os.path.isfile(icns_out) or os.path.getmtime(icns_out) < src_mtime
+    ):
+        info(f"生成 macOS 图标: {icns_out}")
+        # iconutil 需要标准命名的 .iconset 目录
+        iconset = os.path.join(icon_dir, "_icon.iconset")
+        if os.path.isdir(iconset):
+            shutil.rmtree(iconset)
+        os.makedirs(iconset)
+        # Apple 要求的 9 个尺寸（含 @2x）
+        sizes = [
+            (16,  "icon_16x16.png"),     (32,  "icon_16x16@2x.png"),
+            (32,  "icon_32x32.png"),     (64,  "icon_32x32@2x.png"),
+            (128, "icon_128x128.png"),   (256, "icon_128x128@2x.png"),
+            (256, "icon_256x256.png"),   (512, "icon_256x256@2x.png"),
+            (512, "icon_512x512.png"),   (1024,"icon_512x512@2x.png"),
+        ]
+        for sz, name in sizes:
+            subprocess.run(
+                ["sips", "-z", str(sz), str(sz), src_png, "--out",
+                 os.path.join(iconset, name)],
+                check=True, capture_output=True,
+            )
+        subprocess.run(
+            ["iconutil", "-c", "icns", iconset, "-o", icns_out],
+            check=True, capture_output=True,
+        )
+        shutil.rmtree(iconset)
+        success(f"已生成 {os.path.basename(icns_out)}")
+
+    # ── 2) Windows .ico（多尺寸 PNG-in-ICO，Vista+ 支持） ──
+    if not os.path.isfile(ico_out) or os.path.getmtime(ico_out) < src_mtime:
+        info(f"生成 Windows 图标: {ico_out}")
+        ico_sizes = [16, 32, 48, 64, 128, 256]
+        png_blobs = []
+        for sz in ico_sizes:
+            tmp = os.path.join(icon_dir, f"_icon_{sz}.png")
+            subprocess.run(
+                ["sips", "-z", str(sz), str(sz), src_png, "--out", tmp],
+                check=True, capture_output=True,
+            )
+            with open(tmp, "rb") as f:
+                png_blobs.append((sz, f.read()))
+            os.remove(tmp)
+
+        # 手写 ICO 文件头（参见 https://en.wikipedia.org/wiki/ICO_(file_format)）
+        # ICONDIR (6 bytes): reserved=0, type=1(ICO), count=N
+        # ICONDIRENTRY (16 bytes each):
+        #   width(1, 0=256), height(1, 0=256), colors(1)=0, reserved(1)=0,
+        #   planes(2)=1, bpp(2)=32, size(4), offset(4)
+        import struct
+        n = len(png_blobs)
+        header = struct.pack("<HHH", 0, 1, n)
+        entries = b""
+        offset = 6 + 16 * n
+        for sz, blob in png_blobs:
+            w = h = 0 if sz == 256 else sz
+            entries += struct.pack("<BBBBHHII", w, h, 0, 0, 1, 32,
+                                   len(blob), offset)
+            offset += len(blob)
+        with open(ico_out, "wb") as f:
+            f.write(header)
+            f.write(entries)
+            for _, blob in png_blobs:
+                f.write(blob)
+        success(f"已生成 {os.path.basename(ico_out)}")
+
+
 # ─── 构建步骤 ──────────────────────────────────────────────────────────────────
 def clean(target: str):
     bdir = build_dir_for(target)
@@ -736,8 +834,13 @@ def package_windows(version: str) -> dict:
             f"-DAPP_VERSION={version}",
             f"-DSRC_DIR={rel_src}",
             f"-DOUT_DIR={rel_out}",
-            nsi,
         ]
+        # 安装/卸载器图标：build.py 已经把 .ico 派生好了，存在则注入
+        ico_path = os.path.join(SOURCE_DIR, "resources", "icon", "icon.ico")
+        if os.path.isfile(ico_path):
+            rel_ico = os.path.relpath(ico_path, os.path.dirname(nsi))
+            cmd.append(f"-DAPP_ICON={rel_ico}")
+        cmd.append(nsi)
         run(cmd, cwd=os.path.dirname(nsi))
         setup_exe = os.path.join(dist, f"PlayerX-Setup-{version}.exe")
         if os.path.isfile(setup_exe):
@@ -859,6 +962,8 @@ def package(target: str):
     """对应 --package：常规 build/install 完成后生成分发包。"""
     version = _read_app_version()
     info(f"打包版本: {version} (target={target})")
+    # 即便走 --package-only（跳过编译）也要保证 .ico 已存在，否则 NSIS 找不到
+    prepare_icons()
     dl = {}
     if target == "macos":
         dl.update(package_macos(version))
@@ -905,6 +1010,10 @@ def main():
 
     ffmpeg_dir = find_ffmpeg(target)
     qt_dir     = find_qt6(target)
+
+    # 派生 .icns / .ico（图源未改动则秒过；放在 configure 之前，CMake 才能把
+    # .icns 加入 bundle Resources、windres 才能把 .ico 嵌入 exe）
+    prepare_icons()
 
     info(f"开始构建 PlayerX [{build_type}] target={target}")
     info(f"  源码:    {SOURCE_DIR}")

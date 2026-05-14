@@ -6,3 +6,7 @@ build/
 .idea/
 .vscode/
 *.user
+
+# 自动生成的图标派生产物（由 build.py 从 resources/icon/icon-1024.png 生成）
+resources/icon/icon.icns
+resources/icon/icon.ico
