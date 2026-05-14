@@ -36,6 +36,19 @@ ApplicationWindow {
     property var laneSnapshotPaths: []   // 上次启动时各路的 currentPath，用于检测是否需要重新 start
     property var laneSnapshotIndexes: [] // 上次启动时各路的 currentIndex
 
+    // ─── 评分模式（review mode）────────────────────────────────────
+    // 由 Main.qml 注入回调；reviewMode = true 时，翻上一组/下一组前要求当前组所有通道都已评分。
+    //   - unratedChecker  : function() -> [idx, idx, ...] 返回未评分通道的索引列表（空数组=全部已评分）
+    //   - getCellLabel    : function(idx) -> "通道 1 · xxx.mp4" 文案，仅用于提醒展示
+    //   - onGoToRate      : function() 用户点"去评分"时的回调（通常关掉 dlg、聚焦主窗）
+    //   - setRatingAt     : function(idx, score) 提醒弹窗内联评分时调用（复用主窗 _writeRating）
+    // 三者任一为 null 时 reviewMode 直接跳过提醒、按原逻辑翻组，安全降级。
+    property bool reviewMode: false
+    property var  unratedChecker: null
+    property var  getCellLabel: null
+    property var  onGoToRate: null
+    property var  setRatingAt: null
+
     // ─── 单路浏览模式的「N 宫格」状态 ───────────────────────────────
     // singleLaneMode = true 时，表示当前已启动且只有 1 路有效（来自单文件夹 / 添加文件）。
     // 此时支持把当前页同时显示 viewCount 个视频（1/2/4/6/9），
@@ -353,6 +366,26 @@ ApplicationWindow {
         if (!active) return false
         if (dir !== -1 && dir !== 1) return false
 
+        // ── 评分模式拦截：当前组若有未评分通道，先弹提醒 ─────────
+        // 仅由 reviewMode 主动触发；未注入 unratedChecker 时直接跳过，安全降级。
+        if (reviewMode && typeof unratedChecker === "function") {
+            var missing = []
+            try { missing = unratedChecker() || [] } catch (e) { missing = [] }
+            if (missing.length > 0) {
+                _pendingNavDir = dir
+                _pendingMissing = missing
+                unratedDialog.show()
+                return false
+            }
+        }
+        return _doNavigate(dir)
+    }
+
+    // 提醒弹窗"跳过"时调用：绕过 reviewMode 拦截，直接执行翻组。
+    property int _pendingNavDir: 0
+    property var _pendingMissing: []
+    function _doNavigate(dir) {
+
         // ── 单路浏览：按 viewCount 翻页 ──────────────────────────────
         if (singleLaneMode) {
             var i = activeLaneIndex
@@ -596,6 +629,36 @@ ApplicationWindow {
             Layout.fillWidth: true
             spacing: 8
 
+            // ⚙️ 配置：当前仅一个开关（评分模式），未来可扩展
+            Button {
+                id: configBtn
+                text: reviewMode ? "⚙️ 评分模式" : "⚙️ 配置"
+                onClicked: {
+                    // 在按钮正上方弹出（上拉菜单式）
+                    var p = configBtn.mapToItem(null, 0, 0)
+                    settingsPopup.x = dlg.x + p.x
+                    settingsPopup.y = dlg.y + p.y - settingsPopup.height - 4
+                    settingsPopup.show()
+                }
+                background: Rectangle {
+                    color: configBtn.down ? "#4a4a55"
+                          : configBtn.hovered ? "#33333a"
+                                              : "#202024"
+                    border.color: reviewMode ? "#0fa085" : "#3a3a42"
+                    border.width: 1
+                    radius: 4
+                }
+                contentItem: Text {
+                    text: configBtn.text
+                    color: reviewMode ? "#0fa085" : "#e8e8ec"
+                    font.pixelSize: 12
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                implicitHeight: 30
+                implicitWidth: reviewMode ? 110 : 90
+            }
+
             Label {
                 color: "#9a9aa8"
                 font.pixelSize: 11
@@ -664,6 +727,374 @@ ApplicationWindow {
                 }
                 implicitHeight: 30
                 implicitWidth: 110
+            }
+        }
+    }
+
+    // ─── 配置上拉菜单：极简深色，仅一个「开启评分」勾选项 ─────────
+    // 风格参考系统右键菜单 / 文件菜单：无标题、无说明、点击直接切换，
+    // 失焦自动隐藏（Qt.Popup flag 已自带）。
+    Window {
+        id: settingsPopup
+        width: 200
+        height: 38
+        flags: Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+        color: "transparent"
+        modality: Qt.NonModal
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#1f1f24"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+
+            // 单行菜单项：✓ + 开启评分
+            Rectangle {
+                id: reviewItem
+                anchors.fill: parent
+                anchors.margins: 4
+                radius: 4
+                color: reviewItemMA.containsMouse ? "#2c2c34" : "transparent"
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    spacing: 8
+
+                    // 左侧勾选标记（开启时显示 ✓，否则空 24px 占位，对齐文字）
+                    Text {
+                        Layout.preferredWidth: 16
+                        text: dlg.reviewMode ? "✓" : ""
+                        color: "#0fa085"
+                        font.pixelSize: 14
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "开启评分"
+                        color: "#e8e8ec"
+                        font.pixelSize: 13
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                MouseArea {
+                    id: reviewItemMA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        dlg.reviewMode = !dlg.reviewMode
+                        settingsPopup.close()
+                    }
+                }
+            }
+        }
+    }
+
+    // ─── 未评分提醒弹窗：评分模式下翻组前的拦截 UI ─────────────
+    // 列出当前组未评分的通道，每行右侧内联 5 颗星可直接评分；
+    // 评完后该项从列表移除，全部评完时「去评分」变「继续翻组」。
+    Window {
+        id: unratedDialog
+        width: 560
+        height: 320
+        flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
+        color: "#161619"
+        modality: Qt.ApplicationModal
+        title: "评分模式 · 当前组尚未评分"
+        // 居中到主对话框上方
+        x: dlg.x + (dlg.width  - width)  / 2
+        y: dlg.y + (dlg.height - height) / 2
+
+        // 评分动作反馈 toast（右上角一闪而过，避免点击后无反馈）
+        property string _toastText: ""
+        Timer {
+            id: _toastTimer
+            interval: 900
+            onTriggered: unratedDialog._toastText = ""
+        }
+
+        // 弹窗内对各通道的本地评分缓存：chIdx -> 1..5；评分后用于驻留显示星位。
+        // 真实评分写入由 dlg.setRatingAt 完成，本字段仅用于 UI 展示，避免点快了不知道打了几分。
+        property var _localRatings: ({})
+        // 全部通道是否都已评分（基于 _pendingMissing 与 _localRatings 派生）
+        readonly property bool _allRated: {
+            var arr = dlg._pendingMissing || []
+            if (!arr.length) return true
+            for (var i = 0; i < arr.length; ++i) {
+                var v = _localRatings[arr[i]]
+                if (!v || v <= 0) return false
+            }
+            return true
+        }
+        // 关闭时清空本地评分缓存与 toast，避免下次打开看到旧状态
+        onVisibleChanged: {
+            if (!visible) {
+                _localRatings = ({})
+                _toastText = ""
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 12
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Label {
+                    text: {
+                        var total = (dlg._pendingMissing || []).length
+                        if (total === 0) return "✅ 当前组全部评分完成"
+                        // 已在弹窗内完成的数量
+                        var done = 0
+                        for (var i = 0; i < total; ++i) {
+                            var v = unratedDialog._localRatings[dlg._pendingMissing[i]]
+                            if (v && v > 0) done++
+                        }
+                        if (done >= total) return "✅ 当前组全部评分完成"
+                        return "🔔 当前组还有 " + (total - done) + " 个通道未评分"
+                    }
+                    color: "#e8e8ec"
+                    font.pixelSize: 15
+                    font.bold: true
+                }
+                Item { Layout.fillWidth: true }
+                Label {
+                    visible: unratedDialog._toastText.length > 0
+                    text: unratedDialog._toastText
+                    color: "#0fa085"
+                    font.pixelSize: 12
+                    font.bold: true
+                }
+            }
+            Label {
+                text: unratedDialog._allRated
+                      ? "可点击「继续翻组」进入下一组。"
+                      : "在下方直接点星号完成评分（也可在主界面使用 Shift+1~5 快捷键）。"
+                color: "#9a9aa8"
+                font.pixelSize: 11
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+            }
+
+            // 未评分通道列表：每行 = 文件名 + 5 颗星 + 清除
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#101013"
+                border.color: "#2a2a32"
+                border.width: 1
+                radius: 4
+
+                ScrollView {
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    clip: true
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: 4
+                        Repeater {
+                            model: dlg._pendingMissing
+                            delegate: Rectangle {
+                                // 把外层 modelData（=通道 idx）提升为稳定属性，
+                                // 防止被内层 Repeater 的 modelData/index 遮蔽。
+                                property int chIdx: modelData
+                                Layout.fillWidth: true
+                                implicitHeight: 32
+                                color: "transparent"
+                                radius: 3
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    spacing: 8
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        color: "#cfcfd4"
+                                        font.pixelSize: 12
+                                        elide: Text.ElideMiddle
+                                        verticalAlignment: Text.AlignVCenter
+                                        text: {
+                                            var idx = chIdx
+                                            var label = ""
+                                            if (typeof dlg.getCellLabel === "function") {
+                                                try { label = dlg.getCellLabel(idx) || "" } catch (e) {}
+                                            }
+                                            if (!label) label = "通道 " + (idx + 1)
+                                            return label
+                                        }
+                                    }
+
+                                    // 5 颗星星：点击即评分；评分后驻留显示，便于回看分数
+                                    Row {
+                                        spacing: 2
+                                        Repeater {
+                                            model: 5
+                                            delegate: Rectangle {
+                                                // 同样把内层 index 显式抬出来，避免闭包陷阱
+                                                property int starOrder: index    // 0..4
+                                                // 当前通道已评分数（0 表示未评分）
+                                                property int curScore: {
+                                                    var v = unratedDialog._localRatings[chIdx]
+                                                    return v ? v : 0
+                                                }
+                                                // 该位是否被点亮：悬停时按 hover 位预览，否则按已评分实心
+                                                property bool litFilled: starMA.containsMouse
+                                                                          ? false   // hover 预览见下方 hoverFilled
+                                                                          : (starOrder < curScore)
+                                                property bool hoverFilled: starMA.containsMouse && (starOrder <= 0 || starMA.containsMouse)
+                                                width: 22; height: 22
+                                                color: starMA.containsMouse ? "#2c2c34" : "transparent"
+                                                radius: 3
+                                                Text {
+                                                    anchors.centerIn: parent
+                                                    // 实心：已评分（驻留）或 hover 预览到当前位置
+                                                    text: (starMA.containsMouse || litFilled) ? "★" : "☆"
+                                                    color: {
+                                                        if (starMA.containsMouse) return "#ffd34d"
+                                                        if (litFilled) return "#ffd34d"
+                                                        return "#7a7a82"
+                                                    }
+                                                    font.pixelSize: 16
+                                                    font.bold: true
+                                                }
+                                                MouseArea {
+                                                    id: starMA
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        var ch = chIdx              // 来自外层 delegate（通道 idx）
+                                                        var sc = starOrder + 1      // 1~5（星星序号）
+                                                        if (typeof dlg.setRatingAt === "function") {
+                                                            try { dlg.setRatingAt(ch, sc) } catch (e) {}
+                                                        }
+                                                        // 评分后驻留：写入本地缓存，不再从列表移除
+                                                        var lr = unratedDialog._localRatings
+                                                        var nr = {}
+                                                        for (var k in lr) nr[k] = lr[k]
+                                                        nr[ch] = sc
+                                                        unratedDialog._localRatings = nr
+                                                        // Toast 反馈
+                                                        var stars = ""
+                                                        for (var s = 0; s < sc; ++s) stars += "★"
+                                                        unratedDialog._toastText = "通道 " + (ch + 1) + " 评分：" + stars
+                                                        _toastTimer.restart()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Button {
+                    text: "取消"
+                    onClicked: unratedDialog.close()
+                    background: Rectangle {
+                        color: parent.down ? "#4a4a55"
+                              : parent.hovered ? "#33333a"
+                                                : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#e8e8ec"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 30
+                    implicitWidth: 80
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                    text: "跳过本次"
+                    visible: !unratedDialog._allRated
+                    onClicked: {
+                        var d = dlg._pendingNavDir
+                        unratedDialog.close()
+                        // 绕过 reviewMode 拦截直接翻组
+                        if (d === -1 || d === 1) dlg._doNavigate(d)
+                    }
+                    background: Rectangle {
+                        color: parent.down ? "#4a4a55"
+                              : parent.hovered ? "#33333a"
+                                                : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#e8e8ec"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 30
+                    implicitWidth: 90
+                }
+
+                // 评分未完 → 「去评分」；全部评完 → 「继续翻组」
+                Button {
+                    id: actionBtn
+                    text: unratedDialog._allRated ? "继续翻组" : "去评分"
+                    onClicked: {
+                        if (unratedDialog._allRated) {
+                            // 全部评完：直接翻组
+                            var d = dlg._pendingNavDir
+                            unratedDialog.close()
+                            if (d === -1 || d === 1) dlg._doNavigate(d)
+                        } else {
+                            // 还有未评分：关闭多组对话框，让用户回主窗操作
+                            unratedDialog.close()
+                            if (typeof dlg.onGoToRate === "function") {
+                                try { dlg.onGoToRate() } catch (e) {}
+                            }
+                            dlg.close()
+                        }
+                    }
+                    background: Rectangle {
+                        color: actionBtn.down ? "#0a8f76"
+                              : actionBtn.hovered ? "#0db092"
+                                                  : "#0fa085"
+                        border.color: "#0fa085"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: actionBtn.text
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 30
+                    implicitWidth: 100
+                }
             }
         }
     }

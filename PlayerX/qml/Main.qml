@@ -3613,6 +3613,33 @@ ApplicationWindow {
         visible: false
         // 作为给 root 的子窗口，关闭主窗时一起退出
         transientParent: root
+
+        // ── 评分模式回调注入 ───────────────────────────────────
+        // 由 dlg 内部在 reviewMode=true 时调用，决定当前组未评分的通道索引列表。
+        // 这里复用主窗 cellRatings + Engine.fileCount，安全且零侵入。
+        unratedChecker: function() {
+            var miss = []
+            var n = Engine.fileCount
+            for (var i = 0; i < n; ++i) {
+                if (root.ratingAt(i) <= 0) miss.push(i)
+            }
+            return miss
+        }
+        // 提示弹窗用：把 idx 转成"通道 N · 文件名"展示
+        getCellLabel: function(idx) {
+            var name = ""
+            try { name = Engine.fileNameAt(idx) || "" } catch (e) { name = "" }
+            return "通道 " + (idx + 1) + (name ? " · " + name : "")
+        }
+        // 用户点"去评分"时：关闭对话框后聚焦主窗，方便立即按 Shift+1~5 评分
+        onGoToRate: function() {
+            // 主窗在最前 → 快捷键能直接命中
+            try { root.requestActivate() } catch (e) {}
+        }
+        // 提醒弹窗内联评分写入：复用主窗 _writeRating，自动持久化 + Toast 反馈也走同一条路。
+        setRatingAt: function(idx, score) {
+            try { root._writeRating(idx, score) } catch (e) {}
+        }
     }
 
     // ─── 评分数据查看 / 导出 / 清空面板 ───────────────────────
