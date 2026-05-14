@@ -1,5 +1,5 @@
 {
-  "version": "2.0.5",
+  "version": "2.0.7",
   "minSupported": "1.0.0",
   "author": "rbyang",
   "copyright": "Copyright (c) 2026 PlayerX",
@@ -7,8 +7,16 @@
   "mandatory": false,
   "downloads": {
     "mac-arm64": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.5-arm64-mac.zip",
-      "sha256": "315d3f1d936d7b8e464b257aa6fa8ad92143b19f788712f728ed2339f65719e0"
+      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-2.0.7-arm64-mac.zip",
+      "sha256": "6df2c5c81758f0436c0c37c645422493c1b529bf7721ad3ea056641c4277f910"
+    },
+    "win-install": {
+      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-Setup-2.0.7.exe",
+      "sha256": "052607136514e8c361df12f9aa62eb9bc8011d543b419b719d07412ea93d81c4"
+    },
+    "win-portable": {
+      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-2.0.7-win64-portable.zip",
+      "sha256": "a757a5addb801eff1ef3cc698b8b878af18b68696f3053a93b5704b2857c6a70"
     }
   }
 }

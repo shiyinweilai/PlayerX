@@ -440,11 +440,21 @@ def deploy_qt_for_windows(qt_dir: str, install_dir: str):
 
     # ── 2. 平台插件（必需）──
     #    Qt 在运行时按 ./plugins/platforms/qwindows.dll 这样的相对路径找
+    #    tls 子目录是 Qt 6.2+ 的关键变化：HTTPS 走 QNetworkAccessManager 时，
+    #    必须能加载到至少一个 TLS 后端（schannel/openssl/certonly），
+    #    否则 QSslSocket 直接报 "TLS initialization failed"，
+    #    自动更新 GET https://.../latest.json 会瞬间挂掉。
+    #    策略：tls/ 整目录复制（一共就几个 dll），一并兼容 schannel 和 openssl。
     plugin_groups = {
         "platforms": ["qwindows.dll"],
         "imageformats": ["qico.dll", "qjpeg.dll", "qsvg.dll", "qwebp.dll"],
         "iconengines": ["qsvgicon.dll"],
         "styles": ["qmodernwindowsstyle.dll", "qwindowsvistastyle.dll"],
+        # "*" 表示该目录下所有 dll 整目录复制
+        "tls": ["*"],
+        # networkinformation 提供 "在线/离线" 检测，Qt 6.6+ 上 Network 模块
+        # 在某些路径会去 load 这些后端；带上以防万一（仅当目录存在时拷贝）
+        "networkinformation": ["*"],
     }
     for group, dlls in plugin_groups.items():
         sg = os.path.join(plugins_src, group)
@@ -452,11 +462,66 @@ def deploy_qt_for_windows(qt_dir: str, install_dir: str):
             continue
         dg = os.path.join(bin_dst, "plugins", group)
         os.makedirs(dg, exist_ok=True)
-        for name in dlls:
-            sp = os.path.join(sg, name)
+        if dlls == ["*"]:
+            for name in os.listdir(sg):
+                if not name.lower().endswith(".dll"):
+                    continue
+                # 注意：这里**不能**用 endswith("d.dll") 当 debug 过滤条件，
+                # Qt 的 plugins/tls/ 下三个 dll 名字都以 "backend.dll" 结尾
+                # （qopensslbackend.dll / qschannelbackend.dll /
+                # qcertonlybackend.dll），会全部误命中导致 TLS 后端被全部跳过，
+                # 客户端表现为 "TLS initialization failed"，HTTPS 完全不可用。
+                # 我们装的是 Release Qt SDK，plugins 目录里本来就没有 debug 版，
+                # 直接全量复制最稳妥。
+                shutil.copy2(os.path.join(sg, name), dg)
+        else:
+            for name in dlls:
+                sp = os.path.join(sg, name)
+                if os.path.isfile(sp):
+                    shutil.copy2(sp, dg)
+    info(f"已复制平台/图像/样式/TLS 插件 → {os.path.join(bin_dst, 'plugins')}")
+
+    # ── 2.1 OpenSSL 运行时（必需，用于 HTTPS / 自动更新）──
+    #    aqt 装的 win64_llvm_mingw 包里 tls/qopensslbackend.dll 存在，
+    #    但 OpenSSL 的 libssl-3-x64.dll / libcrypto-3-x64.dll 要单独装：
+    #        ~/.local/bin/aqt install-tool windows desktop tools_opensslv3_x64
+    #    默认装到 ~/Qt/Tools/OpenSSLv3/Win_x64/bin/。
+    #    qopensslbackend.dll 找不到这两个 dll 时会加载失败，导致
+    #    QSslSocket 没有可用 TLS 后端，QNetworkAccessManager 一发 HTTPS
+    #    就报 "TLS initialization failed"，自动更新拉不到 latest.json。
+    openssl_candidates = [
+        "libssl-3-x64.dll", "libcrypto-3-x64.dll",      # OpenSSL 3.x
+        "libssl-1_1-x64.dll", "libcrypto-1_1-x64.dll",  # OpenSSL 1.1.x
+    ]
+    # 候选搜索路径（按优先级）：
+    #   1. 环境变量 OPENSSL_WIN_DIR（用户显式指定的 OpenSSL 安装根，要求 bin/ 子目录里有 dll）
+    #   2. Qt 包自身的 bin/（极少见，部分自编译 SDK 会附带）
+    #   3. aqt 标准位置：~/Qt/Tools/OpenSSLv3/Win_x64/bin/
+    home = os.path.expanduser("~")
+    openssl_dirs: list[str] = []
+    env_p = os.environ.get("OPENSSL_WIN_DIR")
+    if env_p:
+        openssl_dirs.append(os.path.join(env_p, "bin"))
+        openssl_dirs.append(env_p)
+    openssl_dirs.append(bin_src)
+    openssl_dirs.append(os.path.join(home, "Qt", "Tools", "OpenSSLv3", "Win_x64", "bin"))
+
+    found_openssl = 0
+    for name in openssl_candidates:
+        for d in openssl_dirs:
+            sp = os.path.join(d, name)
             if os.path.isfile(sp):
-                shutil.copy2(sp, dg)
-    info(f"已复制平台/图像/样式插件 → {os.path.join(bin_dst, 'plugins')}")
+                shutil.copy2(sp, bin_dst)
+                info(f"已复制 OpenSSL 运行时: {name}  (来自 {d})")
+                found_openssl += 1
+                break
+    if found_openssl < 2:
+        warn(
+            "未找到 OpenSSL 运行时（libssl-3-x64.dll / libcrypto-3-x64.dll），"
+            "Windows 端 HTTPS 将失败（TLS initialization failed）。\n"
+            "    请执行：~/.local/bin/aqt install-tool --outputdir ~/Qt windows desktop tools_opensslv3_x64\n"
+            "    或显式设置：export OPENSSL_WIN_DIR=/path/to/openssl_root"
+        )
 
     # ── 3. QML 模块（QtQuick 全家桶）──
     #    Main.qml 用了 QtQuick / QtQuick.Controls / QtQuick.Layouts /
