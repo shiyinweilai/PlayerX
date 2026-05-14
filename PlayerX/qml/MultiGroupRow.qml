@@ -116,6 +116,51 @@ Rectangle {
         }
     }
 
+    // ─── 参考图：单张图（image 模式）选择对话框 ────────────
+    // 选好后写入 ReferenceStore；后续主窗左侧"参考图侧边栏"自动读取。
+    FileDialog {
+        id: refImgDlg
+        title: "为该文件夹选择参考图（固定图）"
+        nameFilters: [ "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.gif)" ]
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            if (row.folderPath.length === 0) return
+            Reference.setReferenceUrl(row.folderPath, selectedFile)
+        }
+    }
+
+    // ─── 参考图：图片文件夹（folder 模式）选择对话框 ────────
+    // folder 模式：参考图按当前视频在其文件夹中的序号同步切换。
+    FolderDialog {
+        id: refDirDlg
+        title: "为该文件夹选择参考图文件夹（跟随对比组）"
+        onAccepted: {
+            if (row.folderPath.length === 0) return
+            Reference.setReferenceFolderUrl(row.folderPath, selectedFolder)
+        }
+    }
+
+    // ─── 参考图按钮下拉菜单（选 image / folder 类型）────────
+    Menu {
+        id: refMenu
+        MenuItem {
+            text: "选择图片…（固定图）"
+            onTriggered: refImgDlg.open()
+        }
+        MenuItem {
+            text: "选择文件夹…（跟随对比组）"
+            onTriggered: refDirDlg.open()
+        }
+        MenuSeparator { visible: refBtn._hasRef }
+        MenuItem {
+            text: "清除绑定"
+            visible: refBtn._hasRef
+            height: visible ? implicitHeight : 0
+            onTriggered: {
+                if (row.folderPath.length > 0) Reference.clearReference(row.folderPath)
+            }
+        }
+    }
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: 10
@@ -203,6 +248,84 @@ Rectangle {
             contentItem: Text {
                 text: folderBtn.text
                 color: row.folderPath.length === 0 ? "#9ec1ee" : "#e8e8ec"
+                font.pixelSize: 14
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+        // 设为参考图（极简：纯图标按钮 28×28）
+        // 仅当该路已选文件夹时可用；已绑定时按钮显示绿色描边作为状态指示。
+        // 左键：弹下拉菜单选 image / folder；右键：清除现有绑定。
+        Button {
+            id: refBtn
+            text: "🖼"
+            Layout.preferredHeight: 28
+            Layout.preferredWidth: 28
+            Layout.alignment: Qt.AlignVCenter
+            enabled: row.folderPath.length > 0
+            hoverEnabled: true
+            // 已绑定状态：从 ReferenceStore 实时查；通过 _refTick 强制重算。
+            // ReferenceStore.referenceChanged 信号触发 _refTick++ 即可让此处刷新。
+            property int _refTick: 0
+            readonly property bool _hasRef: {
+                _refTick;  // 触发依赖
+                return row.folderPath.length > 0 && Reference.hasReference(row.folderPath)
+            }
+            // image / folder 差异化提示
+            readonly property string _refKind: {
+                _refTick;
+                return row.folderPath.length > 0 ? Reference.kindOf(row.folderPath) : ""
+            }
+            Connections {
+                target: Reference
+                function onReferenceChanged(folder) {
+                    if (folder === row.folderPath) refBtn._refTick++
+                }
+            }
+            // folderPath 变化时也强刷一次
+            Connections {
+                target: row
+                function onFolderPathChanged() { refBtn._refTick++ }
+            }
+            ToolTip.visible: hovered
+            ToolTip.delay: 400
+            ToolTip.text: row.folderPath.length === 0
+                          ? "请先选择文件夹"
+                          : (refBtn._refKind === "folder"
+                             ? "参考图文件夹已绑定（跟随对比组切换）\n左键更换 / 右键清除"
+                             : refBtn._refKind === "image"
+                                ? "参考图（固定图）已绑定\n左键更换 / 右键清除"
+                                : "点击为该文件夹绑定参考图 （图片 / 文件夹）")
+            // 左键：弹出下拉菜单让用户选 image / folder。
+            // 菜单位置紧贴按钮下边，跳越弹出不会遮住表单。
+            onClicked: refMenu.popup(refBtn, 0, refBtn.height)
+            // 右键清除（用 MouseArea 接管 RightButton；不影响左键 onClicked）
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.RightButton
+                onClicked: {
+                    if (row.folderPath.length === 0) return
+                    if (refBtn._hasRef) Reference.clearReference(row.folderPath)
+                }
+            }
+            background: Rectangle {
+                color: refBtn.down ? "#4a4a55"
+                      : refBtn.hovered ? "#33333a"
+                                       : "#202024"
+                border.color: !refBtn.enabled ? "#2a2a32"
+                              : refBtn._refKind === "folder" ? "#0fa085"  // 文件夹：绿
+                              : refBtn._refKind === "image"  ? "#5a8fd8"  // 图片：蓝
+                                                              : "#3a3a42"
+                border.width: 1
+                radius: 3
+            }
+            contentItem: Text {
+                text: refBtn.text
+                color: !refBtn.enabled ? "#555"
+                       : refBtn._refKind === "folder" ? "#7fe5cc"
+                       : refBtn._refKind === "image"  ? "#9ec1ee"
+                                                       : "#cfcfd2"
                 font.pixelSize: 14
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter

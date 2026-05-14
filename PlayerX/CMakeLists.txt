@@ -90,6 +90,8 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/qt/FsUtils.cpp
     # 视频评分本地持久化（CSV，与播放内核解耦）
     src/qt/RatingStore.cpp
+    # 文件夹参考图本地持久化（ini，与播放内核解耦）
+    src/qt/ReferenceStore.cpp
     # 应用自动更新（远端 latest.json 比对 + 下载 + relaunch；与播放内核解耦）
     src/qt/Updater.cpp
 )

@@ -1372,6 +1372,127 @@ ApplicationWindow {
     //   - Shift+数字 评分 → 必须 selectedIdx ≥ 0 才生效（fileCount==1 时自动用 0）
     property int selectedIdx: -1
 
+    // ─── 参考图侧边栏（左侧 Drawer 风格的常驻栏）─────────────────────
+    // 设计目的：AI 生成视频常以同一张参考图为基准，或一组参考图按"对比组"切换。
+    // 两种绑定模式（由 ReferenceStore 维护）：
+    //   · image  ：一张固定图，整组对比始终显示这张；
+    //   · folder ：一个图片文件夹，按"当前视频在其文件夹中的索引"取同序号图片，
+    //              切到下一组（下一段视频）时自动跟着切到下一张参考图。
+    // 与播放内核完全解耦：仅依赖 Engine.filePathAt / Reference.* 的 Q_INVOKABLE。
+    property bool refSidebarVisible: false
+    readonly property int refSidebarWidth: refSidebarVisible ? 320 : 0
+
+    // 触发器：Reference.referenceChanged / 文件切换时 ++，让下面的 readonly 重算
+    property int _refTick: 0
+    Connections {
+        target: typeof Reference !== "undefined" ? Reference : null
+        function onReferenceChanged(folder)     { root._refTick++ }
+        function onReferenceTextChanged(folder) { root._refTick++ }
+    }
+    Connections {
+        target: Engine
+        // 只在「换下一组对比」时刷新；
+        // activeIndexChanged（数字键 1/2 切换聚焦）不再影响侧边栏图文。
+        function onFilesChanged() { root._refTick++ }
+    }
+
+    // 取「当前对比组」的代表视频索引：
+    //   设计目标：同一对比组里所有通道共享同一份"参考图 + 参考文本"，
+    //   按数字键 1/2 切换聚焦、或鼠标点选某一通道时，侧边栏图文都不应变化。
+    //   故这里永远返回该组的第一个有效视频索引（index 0），
+    //   只有"换下一组对比"（Engine.filesChanged）才会重新计算。
+    function _refTargetIdx() {
+        return Engine.fileCount > 0 ? 0 : -1
+    }
+    function _refDirOf(fp) {
+        if (!fp || fp.length === 0) return ""
+        var p = String(fp)
+        var i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"))
+        return i > 0 ? p.substring(0, i) : ""
+    }
+    // 当前焦点视频的绝对路径（folder 模式下，参考图按它的文件夹序号同步切换）
+    readonly property string refCurrentVideo: {
+        _refTick;
+        var i = _refTargetIdx()
+        if (i < 0) return ""
+        return Engine.filePathAt(i) || ""
+    }
+    // 当前焦点视频所在文件夹（写入参考图绑定时用作 key）
+    readonly property string refCurrentFolder: {
+        _refTick;
+        return _refDirOf(root.refCurrentVideo)
+    }
+    // 实际渲染用的图片 URL：
+    //   · image 模式：固定图；
+    //   · folder 模式：按 refCurrentVideo 的同序号图片自动取（C++ 端完成索引计算）。
+    readonly property url refCurrentUrl: {
+        _refTick;
+        if (typeof Reference === "undefined") return ""
+        if (root.refCurrentVideo.length === 0) return ""
+        return Reference.referenceUrlForVideo(root.refCurrentVideo)
+    }
+    readonly property bool refHasCurrent: String(root.refCurrentUrl).length > 0
+    // "image" / "folder" / ""（未绑定）
+    readonly property string refCurrentMode: {
+        _refTick;
+        if (typeof Reference === "undefined") return ""
+        if (root.refCurrentFolder.length === 0) return ""
+        return Reference.kindOf(root.refCurrentFolder)
+    }
+    // folder 模式下 "N / M" 的进度文本；image 模式 / 未绑定时为空
+    readonly property string refProgressText: {
+        _refTick;
+        if (typeof Reference === "undefined") return ""
+        if (root.refCurrentVideo.length === 0) return ""
+        return Reference.referenceProgressForVideo(root.refCurrentVideo)
+    }
+
+    // ─── 参考文本（CSV）─────────────────────────────────────────────
+    // 与参考图同样按"当前视频在其文件夹中的索引"取 csv 第 N 行。
+    //   refTextData : { image, zh, en, raw, row, total }
+    //   refTextLang : "zh" / "en"，UI 偏好（持久化在 Settings 里，session 内共享）
+    property string refTextLang: "zh"
+    readonly property var refTextData: {
+        _refTick;
+        if (typeof Reference === "undefined") return ({})
+        if (root.refCurrentVideo.length === 0) return ({})
+        return Reference.referenceTextForVideo(root.refCurrentVideo) || ({})
+    }
+    readonly property bool refTextHasCurrent: {
+        var d = root.refTextData
+        if (!d) return false
+        var zh = d.zh || ""
+        var en = d.en || ""
+        return (zh.length > 0) || (en.length > 0)
+    }
+    readonly property string refTextKind: {
+        _refTick;
+        if (typeof Reference === "undefined") return ""
+        if (root.refCurrentFolder.length === 0) return ""
+        return Reference.textKindOf(root.refCurrentFolder)
+    }
+    readonly property string refTextProgress: {
+        _refTick;
+        if (typeof Reference === "undefined") return ""
+        if (root.refCurrentVideo.length === 0) return ""
+        return Reference.textProgressForVideo(root.refCurrentVideo)
+    }
+    // 当前展示的纯文本：按 refTextLang 优先，失败回退另一语言
+    readonly property string refTextDisplay: {
+        var d = root.refTextData
+        if (!d) return ""
+        var zh = d.zh || ""
+        var en = d.en || ""
+        if (root.refTextLang === "en") return en.length > 0 ? en : zh
+        return zh.length > 0 ? zh : en
+    }
+    // 是否同时有中英两份（用于决定切换按钮可见）
+    readonly property bool refTextHasBothLangs: {
+        var d = root.refTextData
+        if (!d) return false
+        return (d.zh || "").length > 0 && (d.en || "").length > 0
+    }
+
     // 评分提示 Toast（屏幕中央浮层）。HUD 由底部 Item 渲染；这里只放数据。
     //   - ratingToastText  : 主文本（星星 / 提示语）
     //   - ratingToastKind  : "score" / "clear" / "warn"，决定背景 & 边框色
@@ -1558,6 +1679,42 @@ ApplicationWindow {
 
             // 打开 / 多组对比 入口已统一收纳到顶部系统菜单栏【文件】。
             // 这里只保留一个 fillWidth 的 spacer，把后面的播放控制组推到工具栏右端。
+
+            // ── 左侧"参考图侧边栏"切换 ──
+            // 已展开 → 绿色描边作为状态指示；折叠 → 普通描边。
+            // 用原生 Button + 自绘背景，与 ToolBar 风格统一；FlatButton 不带 ToolTip / checked。
+            Button {
+                id: refToggleBtn
+                text: "🖼"
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 28
+                Layout.alignment: Qt.AlignVCenter
+                hoverEnabled: true
+                onClicked: root.refSidebarVisible = !root.refSidebarVisible
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: root.refSidebarVisible
+                              ? "隐藏参考图侧边栏"
+                              : (root.refHasCurrent
+                                 ? "显示参考图（当前文件夹已绑定）"
+                                 : "显示参考图侧边栏")
+                background: Rectangle {
+                    color: refToggleBtn.down ? "#4a4a55"
+                          : refToggleBtn.hovered ? "#33333a"
+                          : (root.refSidebarVisible ? "#2a2a32" : "#202024")
+                    border.color: root.refSidebarVisible ? "#0fa085"
+                                  : (root.refHasCurrent ? "#3d6c66" : "#3a3a42")
+                    border.width: 1
+                    radius: 5
+                }
+                contentItem: Text {
+                    text: refToggleBtn.text
+                    color: root.refSidebarVisible ? "#7fe5cc" : "#e8e8ec"
+                    font.pixelSize: 14
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
 
             // 把所有"播放控制"统一推到工具栏右侧：
             // 仅当已添加视频（Engine.fileCount > 0）时显示这一整组；
@@ -2409,12 +2566,656 @@ ApplicationWindow {
         onActivated: multiGroupDialog.nextGroup()
     }
 
+    // ─── 参考图侧边栏 ───────────────────────────────────────────────
+    // 锚定：左侧贴边、上下与 videoArea 一致；宽度 = refSidebarWidth（折叠时 0）。
+    // 折叠态完全不占位，且通过 visible 控制让其内部 binding 不参与求值，零开销。
+    Rectangle {
+        id: refSidebar
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.topMargin: 2
+        anchors.bottom: parent.bottom
+        width: root.refSidebarWidth
+        visible: root.refSidebarVisible && width > 0
+        color: "#15151a"
+        // 右侧 1px 分隔线，与视频区切开
+        Rectangle {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 1
+            color: "#2c2c32"
+        }
+
+        // 顶部标题栏（含关闭按钮）
+        Rectangle {
+            id: refHeader
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 32
+            color: "#1a1a1d"
+            Label {
+                anchors.left: parent.left
+                anchors.leftMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                text: "参考资料"
+                color: "#cfcfd2"
+                font.pixelSize: 12
+                font.bold: true
+            }
+            Label {
+                anchors.right: parent.right
+                anchors.rightMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                text: "✕"
+                color: closeMa.containsMouse ? "#ffffff" : "#9a9aa8"
+                font.pixelSize: 14
+                MouseArea {
+                    id: closeMa
+                    anchors.fill: parent
+                    anchors.margins: -4
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.refSidebarVisible = false
+                }
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2c2c32"
+            }
+        }
+
+        // 当前文件夹名（只显示叶节点目录名，避免长路径挤压）
+        Label {
+            id: refFolderLabel
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: refHeader.bottom
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            anchors.topMargin: 6
+            height: 18
+            // 文件名过长时左侧省略，关键后缀（叶节点名）始终可见
+            LayoutMirroring.enabled: false
+            horizontalAlignment: Text.AlignLeft
+            elide: Text.ElideLeft
+            // 用 rtl 让"…/leaf"中省略号在前
+            text: {
+                var f = root.refCurrentFolder
+                if (!f || f.length === 0) return "（未选中通道）"
+                // 抽取最后一段作为标题，hover 完整 tooltip
+                var i = Math.max(f.lastIndexOf("/"), f.lastIndexOf("\\"))
+                return i >= 0 ? f.substring(i + 1) : f
+            }
+            color: "#9a9aa8"
+            font.pixelSize: 11
+            ToolTip.visible: refFolderHover.containsMouse && root.refCurrentFolder.length > 0
+            ToolTip.delay: 400
+            ToolTip.text: root.refCurrentFolder
+            MouseArea { id: refFolderHover; anchors.fill: parent; hoverEnabled: true }
+        }
+
+        // 上半："参考图"区
+        Item {
+            id: refTopPane
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: refFolderLabel.bottom
+            anchors.topMargin: 4
+            // 高度由"上下分隔条"控制；refSplitter 顶部即上半底部
+            anchors.bottom: refSplitter.top
+        }
+
+        // 中央图片区 + 拖拽接收 + 占位提示
+        Rectangle {
+            id: refImageBox
+            anchors.left: refTopPane.left
+            anchors.right: refTopPane.right
+            anchors.top: refTopPane.top
+            anchors.bottom: refButtonsBar.top
+            anchors.margins: 8
+            color: "#0e0e10"
+            border.color: refDrop.containsDrag ? "#5a8fd8" : "#2c2c32"
+            border.width: 1
+            radius: 4
+
+            // 实际图片（使用文件 URL；自动 Retina 缩放，PreserveAspectFit 保持比例）
+            Image {
+                id: refImage
+                anchors.fill: parent
+                anchors.margins: 4
+                source: root.refCurrentUrl
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                mipmap: true
+                cache: true
+                // sourceSize 让 Image 按目标尺寸解码，节省内存（大图也不卡）
+                sourceSize.width:  width  > 0 ? width  * 2 : 512
+                sourceSize.height: height > 0 ? height * 2 : 512
+                visible: root.refHasCurrent && status === Image.Ready
+                asynchronous: true
+            }
+
+            // 加载中 / 失败 / 未绑定占位
+            Label {
+                anchors.centerIn: parent
+                width: parent.width - 24
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                visible: !refImage.visible
+                color: "#6a6a78"
+                font.pixelSize: 12
+                text: {
+                    if (root.refCurrentFolder.length === 0)
+                        return "请选中任一通道，\n或在「打开文件夹」对话框中为该路绑定参考图"
+                    if (!root.refHasCurrent)
+                        return "该文件夹未绑定参考图\n\n点击下方「图片」选一张固定图\n或「文件夹」让参考图随对比组切换\n（也可直接把图片或图片文件夹拖进来）"
+                    if (refImage.status === Image.Loading)  return "加载中…"
+                    if (refImage.status === Image.Error)    return "图片无法加载（可能已被移动或删除）"
+                    return ""
+                }
+            }
+
+            // 拖拽接收：
+            //   · 拖入文件夹 → folder 模式（参考图按对比组同步切换）
+            //   · 拖入图片  → image 模式（固定图）
+            //   · 多选时优先文件夹；都不命中再尝试每个 URL 当图片
+            DropArea {
+                id: refDrop
+                anchors.fill: parent
+                onDropped: function(drop) {
+                    if (root.refCurrentFolder.length === 0) {
+                        drop.accepted = false
+                        return
+                    }
+                    if (!drop.hasUrls) { drop.accepted = false; return }
+                    // 1) 优先识别文件夹
+                    for (var i = 0; i < drop.urls.length; ++i) {
+                        var u = drop.urls[i]
+                        if (Fs.isDirectory(u)) {
+                            if (Reference.setReferenceFolderUrl(root.refCurrentFolder, u)) {
+                                drop.accepted = true
+                                return
+                            }
+                        }
+                    }
+                    // 2) 否则尝试图片文件
+                    for (var j = 0; j < drop.urls.length; ++j) {
+                        var u2 = drop.urls[j]
+                        if (Reference.setReferenceUrl(root.refCurrentFolder, u2)) {
+                            drop.accepted = true
+                            return
+                        }
+                    }
+                    drop.accepted = false
+                }
+            }
+        }
+
+        // 模式 / 进度小标签：folder 模式时显示 "📂 跟随对比组 · N / M"，image 模式时显示 "🖼 固定图"
+        // 紧贴在按钮区上方，不占图片显示区。
+        Rectangle {
+            id: refModeBar
+            anchors.left: refTopPane.left
+            anchors.right: refTopPane.right
+            anchors.bottom: refButtonsBar.top
+            height: visible ? 22 : 0
+            visible: root.refHasCurrent
+            color: "transparent"
+            Label {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                horizontalAlignment: Text.AlignLeft
+                elide: Text.ElideRight
+                font.pixelSize: 11
+                color: root.refCurrentMode === "folder" ? "#7fe5cc" : "#9a9aa8"
+                text: {
+                    if (root.refCurrentMode === "folder") {
+                        return "📂 跟随对比组" + (root.refProgressText.length > 0
+                                                  ? "   ·   " + root.refProgressText
+                                                  : "")
+                    }
+                    if (root.refCurrentMode === "image") return "🖼 固定图"
+                    return ""
+                }
+            }
+        }
+
+        // 底部按钮：图片（image 模式）/ 文件夹（folder 模式）/ 清除
+        Rectangle {
+            id: refButtonsBar
+            anchors.left: refTopPane.left
+            anchors.right: refTopPane.right
+            anchors.bottom: refTopPane.bottom
+            height: 40
+            color: "transparent"
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 6
+
+                // 图片按钮：单图 image 模式（已在 image 模式时高亮）
+                Button {
+                    id: refPickImgBtn
+                    text: "图片"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    enabled: root.refCurrentFolder.length > 0
+                    hoverEnabled: true
+                    onClicked: refSidebarFileDlg.open()
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: "选择一张固定参考图（整组对比始终显示这张）"
+                    background: Rectangle {
+                        readonly property bool active: root.refCurrentMode === "image"
+                        color: !refPickImgBtn.enabled ? "#1a1a1d"
+                              : refPickImgBtn.down ? "#4a4a55"
+                              : refPickImgBtn.hovered ? "#33333a"
+                              : (active ? "#2a2a32" : "#202024")
+                        border.color: !refPickImgBtn.enabled ? "#2a2a32"
+                                      : (active ? "#5a8fd8" : "#3a3a45")
+                        border.width: 1
+                        radius: 3
+                    }
+                    contentItem: Text {
+                        text: refPickImgBtn.text
+                        color: refPickImgBtn.enabled ? "#e8e8ec" : "#555"
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                // 文件夹按钮：folder 模式（已在 folder 模式时绿色高亮）
+                Button {
+                    id: refPickDirBtn
+                    text: "文件夹"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    enabled: root.refCurrentFolder.length > 0
+                    hoverEnabled: true
+                    onClicked: refSidebarDirDlg.open()
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: "选择一个图片文件夹\n参考图按当前视频在其文件夹中的序号自动同步"
+                    background: Rectangle {
+                        readonly property bool active: root.refCurrentMode === "folder"
+                        color: !refPickDirBtn.enabled ? "#1a1a1d"
+                              : refPickDirBtn.down ? "#4a4a55"
+                              : refPickDirBtn.hovered ? "#33333a"
+                              : (active ? "#1f2e2a" : "#202024")
+                        border.color: !refPickDirBtn.enabled ? "#2a2a32"
+                                      : (active ? "#0fa085" : "#3a3a45")
+                        border.width: 1
+                        radius: 3
+                    }
+                    contentItem: Text {
+                        text: refPickDirBtn.text
+                        color: !refPickDirBtn.enabled ? "#555"
+                               : (root.refCurrentMode === "folder" ? "#7fe5cc" : "#e8e8ec")
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Button {
+                    id: refClearBtn
+                    text: "清除"
+                    Layout.preferredWidth: 56
+                    Layout.preferredHeight: 24
+                    visible: root.refHasCurrent
+                    hoverEnabled: true
+                    onClicked: {
+                        if (root.refCurrentFolder.length > 0)
+                            Reference.clearReference(root.refCurrentFolder)
+                    }
+                    background: Rectangle {
+                        color: refClearBtn.down ? "#5a2a2a"
+                              : refClearBtn.hovered ? "#3a2228"
+                                                     : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 3
+                    }
+                    contentItem: Text {
+                        text: refClearBtn.text
+                        color: "#e8b0b0"
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+        }
+
+        // ─── 上下分隔条（可拖动调整上下两栏比例）─────────────────────
+        // 用 fraction 表示上半占"内容区"剩余高度的比例（0.18 ~ 0.85），
+        // 拖动时实时改变，但不持久化（保持轻量）。
+        property real refTopFraction: 0.55
+        // 内容区起点 = refFolderLabel 底部 + 4；终点 = refSidebar 底部
+        readonly property real _refContentTop: refFolderLabel.y + refFolderLabel.height + 4
+        readonly property real _refContentBottom: height
+        readonly property real _refContentH: Math.max(120, _refContentBottom - _refContentTop)
+
+        Rectangle {
+            id: refSplitter
+            anchors.left: parent.left
+            anchors.right: parent.right
+            // y = 内容起点 + 上半占比 * 总高
+            y: refSidebar._refContentTop + Math.round(refSidebar._refContentH * refSidebar.refTopFraction)
+            height: 6
+            color: refSplitterMa.containsMouse || refSplitterMa.pressed ? "#2a2a32" : "transparent"
+            // 中线：3 个浅色"・"作为视觉提示
+            Row {
+                anchors.centerIn: parent
+                spacing: 4
+                Repeater {
+                    model: 3
+                    Rectangle { width: 3; height: 3; radius: 1.5; color: "#5a5a66" }
+                }
+            }
+            MouseArea {
+                id: refSplitterMa
+                anchors.fill: parent
+                anchors.topMargin: -2
+                anchors.bottomMargin: -2
+                hoverEnabled: true
+                cursorShape: Qt.SplitVCursor
+                drag.target: null  // 自己用 onPositionChanged 计算，避免位移到上下边界外
+                property real _grabOffset: 0
+                onPressed: function(mouse) {
+                    _grabOffset = mouse.y
+                }
+                onPositionChanged: function(mouse) {
+                    if (!pressed) return
+                    var newY = refSplitter.y + (mouse.y - _grabOffset)
+                    var topMin = refSidebar._refContentTop + 80    // 上半至少 80
+                    var topMax = refSidebar.height - 120           // 下半至少 120
+                    newY = Math.max(topMin, Math.min(topMax, newY))
+                    refSidebar.refTopFraction = (newY - refSidebar._refContentTop) / refSidebar._refContentH
+                }
+                onDoubleClicked: refSidebar.refTopFraction = 0.55  // 双击复位
+            }
+        }
+
+        // ─── 下半："参考文本"区 ─────────────────────────────────────
+        Item {
+            id: refBottomPane
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: refSplitter.bottom
+            anchors.bottom: parent.bottom
+        }
+
+        // 文本视图框（带滚动）
+        Rectangle {
+            id: refTextBox
+            anchors.left: refBottomPane.left
+            anchors.right: refBottomPane.right
+            anchors.top: refBottomPane.top
+            anchors.bottom: refTextModeBar.top
+            anchors.margins: 8
+            color: "#0e0e10"
+            border.color: refTextDrop.containsDrag ? "#5a8fd8" : "#2c2c32"
+            border.width: 1
+            radius: 4
+
+            Flickable {
+                id: refTextScroll
+                anchors.fill: parent
+                anchors.margins: 8
+                clip: true
+                contentWidth: width
+                contentHeight: refTextLabel.implicitHeight
+                visible: root.refTextHasCurrent
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                Text {
+                    id: refTextLabel
+                    width: refTextScroll.width
+                    wrapMode: Text.Wrap
+                    textFormat: Text.PlainText
+                    text: root.refTextDisplay
+                    color: "#d8d8e0"
+                    font.pixelSize: 12
+                    lineHeight: 1.45
+                    // 中文文本左右对齐更耐看；纯英文也兼容
+                    horizontalAlignment: Text.AlignLeft
+                }
+            }
+
+            // 占位提示
+            Label {
+                anchors.centerIn: parent
+                width: parent.width - 24
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                visible: !refTextScroll.visible
+                color: "#6a6a78"
+                font.pixelSize: 12
+                text: {
+                    if (root.refCurrentFolder.length === 0)
+                        return "请选中任一通道"
+                    if (root.refTextKind === "")
+                        return "未绑定参考文本（CSV）\n\n点击下方「CSV」选择文件\n或把 .csv 直接拖进来\n\n建议表头包含：Image, prompt, en_prompt"
+                    return "已绑定 CSV，但当前行为空 / 越界\n（视频序号超出 CSV 行数）"
+                }
+            }
+
+            // 拖拽接收：仅识别 .csv
+            DropArea {
+                id: refTextDrop
+                anchors.fill: parent
+                onDropped: function(drop) {
+                    if (root.refCurrentFolder.length === 0) {
+                        drop.accepted = false; return
+                    }
+                    if (!drop.hasUrls) { drop.accepted = false; return }
+                    for (var i = 0; i < drop.urls.length; ++i) {
+                        var u = drop.urls[i]
+                        var s = String(u).toLowerCase()
+                        if (s.endsWith(".csv")) {
+                            if (Reference.setReferenceCsvUrl(root.refCurrentFolder, u)) {
+                                drop.accepted = true; return
+                            }
+                        }
+                    }
+                    drop.accepted = false
+                }
+            }
+        }
+
+        // 文本进度 / 模式标签
+        Rectangle {
+            id: refTextModeBar
+            anchors.left: refBottomPane.left
+            anchors.right: refBottomPane.right
+            anchors.bottom: refTextButtonsBar.top
+            height: visible ? 22 : 0
+            visible: root.refTextHasCurrent
+            color: "transparent"
+            Label {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                horizontalAlignment: Text.AlignLeft
+                elide: Text.ElideRight
+                font.pixelSize: 11
+                color: "#7fe5cc"
+                text: {
+                    var p = root.refTextProgress
+                    var imgName = root.refTextData && root.refTextData.image ? root.refTextData.image : ""
+                    var pre = "📝 跟随对比组"
+                    if (p.length > 0) pre += "   ·   " + p
+                    if (imgName.length > 0) pre += "   ·   " + imgName
+                    return pre
+                }
+            }
+        }
+
+        // 文本区底部按钮：CSV / 中/英 / 清除
+        Rectangle {
+            id: refTextButtonsBar
+            anchors.left: refBottomPane.left
+            anchors.right: refBottomPane.right
+            anchors.bottom: refBottomPane.bottom
+            height: 40
+            color: "transparent"
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 6
+
+                // CSV 按钮：选 csv（已绑定时绿色高亮）
+                Button {
+                    id: refPickCsvBtn
+                    text: "CSV"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    enabled: root.refCurrentFolder.length > 0
+                    hoverEnabled: true
+                    onClicked: refSidebarCsvDlg.open()
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: "选择一个 CSV 文件\n参考文本按当前视频在其文件夹中的序号自动同步"
+                    background: Rectangle {
+                        readonly property bool active: root.refTextKind === "csv"
+                        color: !refPickCsvBtn.enabled ? "#1a1a1d"
+                              : refPickCsvBtn.down ? "#4a4a55"
+                              : refPickCsvBtn.hovered ? "#33333a"
+                              : (active ? "#1f2e2a" : "#202024")
+                        border.color: !refPickCsvBtn.enabled ? "#2a2a32"
+                                      : (active ? "#0fa085" : "#3a3a45")
+                        border.width: 1
+                        radius: 3
+                    }
+                    contentItem: Text {
+                        text: refPickCsvBtn.text
+                        color: !refPickCsvBtn.enabled ? "#555"
+                               : (root.refTextKind === "csv" ? "#7fe5cc" : "#e8e8ec")
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                // 中 / 英语言切换：仅当两种语言都有时显示
+                Button {
+                    id: refLangBtn
+                    text: root.refTextLang === "zh" ? "中" : "EN"
+                    Layout.preferredWidth: 40
+                    Layout.preferredHeight: 24
+                    visible: root.refTextHasBothLangs
+                    hoverEnabled: true
+                    onClicked: root.refTextLang = (root.refTextLang === "zh" ? "en" : "zh")
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: "切换中文 / 英文 prompt"
+                    background: Rectangle {
+                        color: refLangBtn.down ? "#4a4a55"
+                              : refLangBtn.hovered ? "#33333a"
+                                                    : "#202024"
+                        border.color: "#3a3a45"
+                        border.width: 1
+                        radius: 3
+                    }
+                    contentItem: Text {
+                        text: refLangBtn.text
+                        color: "#e8e8ec"
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                // 清除文本绑定
+                Button {
+                    id: refTextClearBtn
+                    text: "清除"
+                    Layout.preferredWidth: 56
+                    Layout.preferredHeight: 24
+                    visible: root.refTextKind === "csv"
+                    hoverEnabled: true
+                    onClicked: {
+                        if (root.refCurrentFolder.length > 0)
+                            Reference.clearText(root.refCurrentFolder)
+                    }
+                    background: Rectangle {
+                        color: refTextClearBtn.down ? "#5a2a2a"
+                              : refTextClearBtn.hovered ? "#3a2228"
+                                                       : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 3
+                    }
+                    contentItem: Text {
+                        text: refTextClearBtn.text
+                        color: "#e8b0b0"
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+        }
+    }
+
+    // 侧边栏：选择 CSV
+    FileDialog {
+        id: refSidebarCsvDlg
+        title: "选择参考文本 CSV"
+        nameFilters: [ "CSV (*.csv)" ]
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            if (root.refCurrentFolder.length === 0) return
+            Reference.setReferenceCsvUrl(root.refCurrentFolder, selectedFile)
+        }
+    }
+
+    // 侧边栏：选择单张参考图（image 模式）
+    FileDialog {
+        id: refSidebarFileDlg
+        title: "选择参考图（固定图）"
+        nameFilters: [ "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.gif)" ]
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            if (root.refCurrentFolder.length === 0) return
+            Reference.setReferenceUrl(root.refCurrentFolder, selectedFile)
+        }
+    }
+
+    // 侧边栏：选择参考图文件夹（folder 模式 → 跟随对比组同步切换）
+    FolderDialog {
+        id: refSidebarDirDlg
+        title: "选择参考图文件夹（跟随对比组）"
+        onAccepted: {
+            if (root.refCurrentFolder.length === 0) return
+            // 不传 selectedFolder（QUrl）字符串截取，统一用 C++ 端的 URL → path 转换
+            if (!Reference.setReferenceFolderUrl(root.refCurrentFolder, selectedFolder)) {
+                // 选错了空文件夹时静默失败；提示文字过多反而干扰。
+                // 用户能从「占位提示」直接看到"未绑定"再次操作。
+            }
+        }
+    }
+
     // ─── 视频网格容器 ────────────────────────────────────────────────────
     // 顶部留 2px 余白，避免与 ToolBar 视觉粘连；同时让 cell 的 2px 选中边
     // 框不被 ToolBar 阴影/分隔线压住。
     Item {
         id: videoArea
-        anchors.left: parent.left
+        anchors.left: refSidebar.right
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.topMargin: 2

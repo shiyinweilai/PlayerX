@@ -13,6 +13,7 @@
 #include "qt/EngineBridge.h"
 #include "qt/FsUtils.h"
 #include "qt/RatingStore.h"
+#include "qt/ReferenceStore.h"
 #include "qt/Updater.h"
 
 extern "C" {
@@ -46,6 +47,10 @@ int main(int argc, char* argv[]) {
     // 完全独立于播放内核，仅暴露给 QML 用于评分写入/导出/查看。
     rbqt::RatingStore ratingStore;
 
+    // ReferenceStore：文件夹「参考图」绑定的本地 ini 持久化，仅供 QML 侧边栏使用。
+    // 与播放内核完全解耦。
+    rbqt::ReferenceStore referenceStore;
+
     // Updater：远端 latest.json 比对 + 静默下载 + 替换 .app + relaunch。
     // 完全独立于播放内核；macOS 已完整实现，Windows 后续接 NSIS Setup。
     rbqt::Updater updater;
@@ -53,10 +58,11 @@ int main(int argc, char* argv[]) {
     QQmlApplicationEngine engine;
 
     // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
-    engine.rootContext()->setContextProperty("Engine",  &engineBridge);
-    engine.rootContext()->setContextProperty("Fs",      &fsUtils);
-    engine.rootContext()->setContextProperty("Rating",  &ratingStore);
-    engine.rootContext()->setContextProperty("Updater", &updater);
+    engine.rootContext()->setContextProperty("Engine",    &engineBridge);
+    engine.rootContext()->setContextProperty("Fs",        &fsUtils);
+    engine.rootContext()->setContextProperty("Rating",    &ratingStore);
+    engine.rootContext()->setContextProperty("Reference", &referenceStore);
+    engine.rootContext()->setContextProperty("Updater",   &updater);
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,
