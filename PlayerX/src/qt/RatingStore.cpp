@@ -12,6 +12,9 @@
 #include <QFileInfo>
 #include <QHttpMultiPart>
 #include <QHttpPart>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -29,6 +32,7 @@ constexpr const char* kCsvHeader =
 constexpr const char* kSettingsUserKey      = "rating/user";
 constexpr const char* kSettingsUploadUrlKey = "rating/uploadUrl";
 constexpr const char* kSettingsUploadTokKey = "rating/uploadToken";
+constexpr const char* kSettingsUploadTagKey = "rating/uploadTag";
 }  // namespace
 
 // ════════════════════════════════════════════════════════════════════════
@@ -213,7 +217,15 @@ bool RatingStore::exportToFile(const QString& targetPath) const {
 
 // 在内存里拼出与 exportToFile 完全一致的精简 CSV（UTF-8 with BOM）。
 // 上传代码复用这份字节，避免绕一圈磁盘。
+//
+// 重要变更：**rater 列使用 currentUser 强制覆盖**。
+//   场景：用户在评分人输入框里从 "rbyang" 改为 "test"后，期望导出/上传的 CSV
+//   全归到 "test" 名下；但本地 ratings.csv 仍保留“写入当时的 rater”以供追溯。
+//   这里仅在“导出瞬间”统一身份。
 QByteArray RatingStore::buildExportCsvBytes() const {
+    QString rater = currentUser();
+    if (rater.isEmpty()) rater = systemUserName();
+
     QByteArray buf;
     QTextStream ts(&buf, QIODevice::WriteOnly);
     ts.setEncoding(QStringConverter::Utf8);
@@ -230,7 +242,7 @@ QByteArray RatingStore::buildExportCsvBytes() const {
                                      : rawTs;
 
         ts << csvEscape(prettyTs)                          << ","
-           << csvEscape(r.value("rater").toString())       << ","
+           << csvEscape(rater)                             << ","
            << csvEscape(r.value("file_name").toString())   << ","
            << r.value("stars").toInt()                     << "\n";
     }
@@ -269,7 +281,21 @@ void RatingStore::setUploadToken(const QString& token) {
     emit uploadConfigChanged();
 }
 
-void RatingStore::uploadToCloud() {
+QString RatingStore::uploadTag() const {
+    QSettings s;
+    return s.value(kSettingsUploadTagKey).toString().trimmed();
+}
+
+void RatingStore::setUploadTag(const QString& tag) {
+    QSettings s;
+    QString trimmed = tag.trimmed();
+    if (s.value(kSettingsUploadTagKey).toString() == trimmed) return;
+    s.setValue(kSettingsUploadTagKey, trimmed);
+    s.sync();
+    emit uploadConfigChanged();
+}
+
+void RatingStore::uploadToCloud(bool force) {
     if (m_uploading) {
         // 并发护栏：连点不会发出多起请求。
         emit uploadFinished(false, tr("已有上传任务进行中，请稍后重试"));
@@ -333,6 +359,23 @@ void RatingStore::uploadToCloud() {
     cliPart.setBody(clientTag.toUtf8());
     multi->append(cliPart);
 
+    // tag 字段：后端靠 (user, tag) 识别是否重复上传
+    {
+        QHttpPart p;
+        p.setHeader(QNetworkRequest::ContentDispositionHeader,
+                    QVariant("form-data; name=\"tag\""));
+        p.setBody(uploadTag().toUtf8());
+        multi->append(p);
+    }
+    // force 字段：仅在用户“确认覆盖”后重走时为 true
+    if (force) {
+        QHttpPart p;
+        p.setHeader(QNetworkRequest::ContentDispositionHeader,
+                    QVariant("form-data; name=\"force\""));
+        p.setBody(QByteArrayLiteral("1"));
+        multi->append(p);
+    }
+
     QNetworkRequest req(u);
     req.setRawHeader("User-Agent", "PlayerX-Uploader/1.0");
     const QString tok = uploadToken();
@@ -348,18 +391,62 @@ void RatingStore::uploadToCloud() {
     emit uploadStarted();
 
     QObject::connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QByteArray body = reply->readAll();
+
+        // 服务端返回 409 = (rater, tag) 已存在，需要二次确认。
+        // 这里不作为错误报出，走专门的 uploadConflict 信号，QML 负责弹“是否覆盖”。
+        // 后端 body 是个完整 JSON（带 existing 数组 + mtime 等），直接丢给 QML 显示太吵，
+        // 这里只抽关键字段拼个人话。
+        if (httpCode == 409) {
+            QString msg;
+            QJsonParseError perr{};
+            const auto doc = QJsonDocument::fromJson(body, &perr);
+            if (perr.error == QJsonParseError::NoError && doc.isObject()) {
+                const auto obj = doc.object();
+                const QString user = obj.value(QStringLiteral("user")).toString();
+                const QString tag  = obj.value(QStringLiteral("tag")).toString();
+                const auto exArr   = obj.value(QStringLiteral("existing")).toArray();
+                const int n        = exArr.size();
+                QString lastTime;
+                if (n > 0) {
+                    const auto it0 = exArr.first().toObject();
+                    const QString iso = it0.value(QStringLiteral("mtime")).toString();
+                    const QDateTime dt = QDateTime::fromString(iso, Qt::ISODate);
+                    if (dt.isValid()) {
+                        lastTime = dt.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+                    } else {
+                        lastTime = iso;
+                    }
+                }
+                msg = tr("评分人：%1    标签：%2\n已有 %3 份记录")
+                          .arg(user.isEmpty() ? tr("(未填)") : user)
+                          .arg(tag.isEmpty()  ? tr("(空)")    : tag)
+                          .arg(n);
+                if (!lastTime.isEmpty()) {
+                    msg += tr("，最近一次：%1").arg(lastTime);
+                }
+            } else {
+                // 后端没返 JSON（不太可能）才走这个兑底分支
+                msg = tr("服务端提示该评分人/标签已有记录");
+            }
+            m_uploading = false;
+            emit uploadingChanged();
+            emit uploadConflict(msg);
+            reply->deleteLater();
+            return;
+        }
+
         const bool ok = (reply->error() == QNetworkReply::NoError);
         QString message;
         if (ok) {
-            const QByteArray body = reply->readAll();
             // 服务端返回是个简单 JSON，里面有 saved 字段；这里不动用 QJsonDocument，
             // 反正只是展示用，拿原始字节足够这个场景。只护一下快照：
             QString trimmed = QString::fromUtf8(body).trimmed();
             if (trimmed.size() > 200) trimmed = trimmed.left(200) + QStringLiteral("…");
             message = tr("上传成功：%1").arg(trimmed.isEmpty() ? tr("已收到") : trimmed);
         } else {
-            int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            QString errBody = QString::fromUtf8(reply->readAll()).trimmed();
+            QString errBody = QString::fromUtf8(body).trimmed();
             if (httpCode > 0) {
                 message = tr("上传失败 (HTTP %1) %2")
                               .arg(httpCode)

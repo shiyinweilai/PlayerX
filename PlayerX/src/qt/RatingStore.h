@@ -46,6 +46,9 @@ class RatingStore : public QObject {
     //   uploadToken    : 可选；后端开了 PLAYERX_TOKEN 时填一致的值，未开可以为空。
     Q_PROPERTY(QString uploadServerUrl READ uploadServerUrl WRITE setUploadServerUrl NOTIFY uploadConfigChanged)
     Q_PROPERTY(QString uploadToken     READ uploadToken     WRITE setUploadToken     NOTIFY uploadConfigChanged)
+    // 备注 tag：用于区分同一评分人多轮提交（如 test1 / 公司终评）。
+    // 同 (rater, tag) 重复上传时后端返回 409，由 UI 弹窗确认后再带 force=true 重传。
+    Q_PROPERTY(QString uploadTag       READ uploadTag       WRITE setUploadTag       NOTIFY uploadConfigChanged)
     // 上传过程状态：QML 按钮可以用它进行 disable / loading 反馈。
     Q_PROPERTY(bool uploading READ uploading NOTIFY uploadingChanged)
 
@@ -108,13 +111,20 @@ public slots:
     void    setUploadServerUrl(const QString& url);
     QString uploadToken() const;
     void    setUploadToken(const QString& token);
+    QString uploadTag() const;
+    void    setUploadTag(const QString& tag);
     bool    uploading() const { return m_uploading; }
 
     // 上传一份“精简 CSV”到 uploadServerUrl（与 exportToFile 写出的完全一致：
     //   updated_at,rater,file_name,stars，不含 file_path / quick_hash）。
-    // 调用后立即返回，用 uploadFinished(ok, message) 信号给出结果。
+    //   · 导出时 rater 列**强制使用** currentUser（若为空则取系统用户名），
+    //     不再沿用 CSV 里历史写入的旧 rater——避免用户改名后“名义不一致”。
+    //   · force=false（默认）：服务端检测 (rater, tag) 已存在会返回 409，
+    //     SDK 解析后通过 uploadConflict(existing) 信号告知 QML 弹覆盖确认。
+    //   · force=true：携带 force=1 强制覆盖，旧文件会被服务端归档。
+    // 调用后立即返回，用 uploadFinished(ok, message) 信号给出最终结果。
     // 在上传进行中重复调用会被忽略（避免连点手抽出多起请求）。
-    void uploadToCloud();
+    Q_INVOKABLE void uploadToCloud(bool force = false);
 
 signals:
     void currentUserChanged();
@@ -126,6 +136,9 @@ signals:
     void uploadStarted();
     // ok=true 时 message 为后端返回的文件名或简要信息；ok=false 时 message 为错误描述。
     void uploadFinished(bool ok, const QString& message);
+    // 服务端返回 409 (needConfirm) 时触发；message 是后端给的人话，QML 据此弹“是否覆盖”确认
+    // 用户确认后再调用 uploadToCloud(true) 强制覆盖。
+    void uploadConflict(const QString& message);
 private:
     // 把 vector<map> 整体重写到 CSV（覆盖式）
     bool writeAll(const QList<QVariantMap>& rows) const;

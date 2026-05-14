@@ -104,6 +104,7 @@ Window {
                 spacing: 8
                 TextField {
                     id: userField
+                    Layout.preferredWidth: 200
                     Layout.fillWidth: true
                     text: root._userBuffer
                     placeholderText: (typeof Rating !== "undefined")
@@ -121,6 +122,37 @@ Window {
                     onEditingFinished: {
                         if (typeof Rating !== "undefined") {
                             Rating.currentUser = text.trim()
+                        }
+                    }
+                }
+                // 备注 tag：同一评分人多轮提交时的区分标签。
+                // 后端会按 (rater, tag) 检测重复上传，重复时弹“是否覆盖”。
+                Text {
+                    text: qsTr("备注 tag")
+                    color: "#9aa0a6"
+                    font.pixelSize: 12
+                }
+                TextField {
+                    id: tagField
+                    Layout.preferredWidth: 160
+                    text: (typeof Rating !== "undefined") ? Rating.uploadTag : ""
+                    placeholderText: qsTr("例如 test1 / 终评")
+                    color: "#e8e8ec"
+                    placeholderTextColor: "#6a6a72"
+                    selectByMouse: true
+                    background: Rectangle {
+                        color: "#26262a"
+                        border.color: tagField.activeFocus ? "#3a7afe" : "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    // 实时同步：每次键入都立刻写回 Rating.uploadTag，
+                    // 避免“改完 tag 直接点上传按钮，但首次点击还在用旧值”的时序问题
+                    // （旧逻辑只在 editingFinished 即失焦/回车时才同步）。
+                    onTextChanged: {
+                        if (typeof Rating !== "undefined"
+                                && Rating.uploadTag !== text.trim()) {
+                            Rating.uploadTag = text.trim()
                         }
                     }
                 }
@@ -321,9 +353,16 @@ Window {
             Layout.fillWidth: true
             spacing: 8
             PillBtn {
+                id: exportBtn
                 text: qsTr("📤 导出 CSV…")
                 emphasized: true
                 onClicked: exportDialog.open()
+                // 闪烁复位：flash=true 后 1.6s 自动关闭
+                Timer {
+                    id: exportFlashTimer
+                    interval: 1600
+                    onTriggered: exportBtn.flash = false
+                }
             }
             PillBtn {
                 // 上传到后端服务器：
@@ -339,6 +378,12 @@ Window {
                          && root._rows.length > 0
                 onClicked: {
                     if (typeof Rating === "undefined") return
+                    // 防御性兜底：把焦点中的输入框（tag / 评分人）强制提交，
+                    // 避免“刚改完 tag 直接点上传”时旧值仍在使用。
+                    // 现 tagField 已做实时同步，但 userField 仍依赖 editingFinished，
+                    // 触发一次 focus 切换可让两者都把当前值落地到 Rating。
+                    if (userField.activeFocus) userField.focus = false
+                    if (tagField.activeFocus)  tagField.focus  = false
                     if (!Rating.uploadServerUrl || Rating.uploadServerUrl.length === 0) {
                         uploadConfigDialog.open()
                     } else {
@@ -350,6 +395,12 @@ Window {
                     anchors.fill: parent
                     acceptedButtons: Qt.NoButton  // 不抢单击，只接双击
                     onDoubleClicked: uploadConfigDialog.open()
+                }
+                // 闪烁复位定时器
+                Timer {
+                    id: uploadFlashTimer
+                    interval: 1600
+                    onTriggered: uploadBtn.flash = false
                 }
             }
             PillBtn {
@@ -406,7 +457,16 @@ Window {
             var path = selectedFile.toString().replace(/^file:\/\//, "")
             // Windows: file:///C:/foo → /C:/foo，去掉前导 /
             if (path.match(/^\/[A-Za-z]:/)) path = path.substring(1)
-            Rating.exportToFile(path)
+            var ok = Rating.exportToFile(path)
+            if (ok) {
+                // 成功：toast + 按钮闪绿
+                var name = path.split(/[\\/]/).pop()
+                actionToast.show(true, qsTr("已导出到 %1").arg(name))
+                exportBtn.flash = true
+                exportFlashTimer.restart()
+            } else {
+                actionToast.show(false, qsTr("导出失败：%1").arg(path))
+            }
         }
     }
 
@@ -688,9 +748,10 @@ Window {
         }
     }
 
-    // ── 上传结果提示 Toast（右下角浮层，几秒后自动淑出）─────────────────
+    // ── 通用操作反馈 Toast（导出成功 / 上传成功都走这里）───────────────
+    // 锡在对话框右下角，加轻微上滑动画，~3.5s 后深出。
     Item {
-        id: uploadToast
+        id: actionToast
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.margins: 18
@@ -698,6 +759,7 @@ Window {
         height: toastBg.height
         opacity: 0
         visible: opacity > 0.01
+        transform: Translate { id: toastSlide; y: 12 }
         z: 1000
 
         property bool _ok: true
@@ -706,6 +768,9 @@ Window {
         function show(ok, msg) {
             _ok = ok
             _msg = msg
+            // 重点击时重启动画与计时
+            fadeOut.stop()
+            slideIn.restart()
             fadeIn.restart()
             hideTimer.restart()
         }
@@ -714,16 +779,25 @@ Window {
             id: toastBg
             radius: 8
             color: "#1e1e22"
-            border.color: uploadToast._ok ? "#52c41a" : "#f5222d"
+            border.color: actionToast._ok ? "#52c41a" : "#f5222d"
             border.width: 1
             implicitWidth: Math.min(420, Math.max(220, toastLabel.implicitWidth + 32))
             width: implicitWidth
             height: toastLabel.implicitHeight + 22
+            // 轻微阴影，提高在深色背景上的漂浮感
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -4
+                z: -1
+                radius: parent.radius + 3
+                color: "#80000000"
+                opacity: 0.45
+            }
             Text {
                 id: toastLabel
                 anchors.fill: parent
                 anchors.margins: 12
-                text: (uploadToast._ok ? "✅ " : "❌ ") + uploadToast._msg
+                text: (actionToast._ok ? "✅ " : "❌ ") + actionToast._msg
                 color: "#e8e8ec"
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
@@ -733,27 +807,157 @@ Window {
 
         NumberAnimation on opacity {
             id: fadeIn
-            from: 0; to: 1; duration: 160
+            from: 0; to: 1; duration: 180
+            easing.type: Easing.OutCubic
             running: false
         }
         NumberAnimation on opacity {
             id: fadeOut
             from: 1; to: 0; duration: 280
+            easing.type: Easing.InCubic
             running: false
+        }
+        NumberAnimation {
+            id: slideIn
+            target: toastSlide
+            property: "y"
+            from: 12; to: 0; duration: 220
+            easing.type: Easing.OutCubic
         }
         Timer {
             id: hideTimer
-            interval: 4500
+            interval: 3500
             onTriggered: fadeOut.restart()
         }
     }
 
-    // 接上传结果信号跳 toast
+    // 接上传结果信号跳 toast（导出的反馈在 exportDialog.onAccepted 里直接调发）
     Connections {
         target: (typeof Rating !== "undefined") ? Rating : null
         ignoreUnknownSignals: true
         function onUploadFinished(ok, message) {
-            uploadToast.show(ok, message)
+            actionToast.show(ok, message)
+            if (ok) {
+                uploadBtn.flash = true
+                uploadFlashTimer.restart()
+            }
+        }
+        // 服务端返回 409：(rater, tag) 重复上传 → 弹覆盖确认
+        function onUploadConflict(message) {
+            uploadConflictDialog._msg = message
+            uploadConflictDialog.open()
+        }
+    }
+
+    // 覆盖确认对话框：同 (评分人, tag) 已存在时询问是否覆盖。
+    // 确认后调 Rating.uploadToCloud(true) 带 force=1 重走。
+    Dialog {
+        id: uploadConflictDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 460
+        padding: 0
+
+        property string _msg: ""
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#2e2e34"
+            border.width: 1
+            radius: 8
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("上传冲突：是否覆盖？")
+                color: "#f0f0f3"
+                font.pixelSize: 14
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a30"
+            }
+        }
+
+        contentItem: Item {
+            implicitHeight: _conflictCol.implicitHeight + 32
+            ColumnLayout {
+                id: _conflictCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                spacing: 8
+                Text {
+                    Layout.fillWidth: true
+                    text: uploadConflictDialog._msg
+                    color: "#e6e6ea"
+                    font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                    lineHeight: 1.4
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("覆盖将自动归档旧版本（每个槽位最多保留 20 份）")
+                    color: "#8a8a90"
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                }
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a30"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("取消")
+                    onClicked: uploadConflictDialog.close()
+                }
+                PillBtn {
+                    text: qsTr("覆盖上传")
+                    danger: true
+                    onClicked: {
+                        uploadConflictDialog.close()
+                        if (typeof Rating !== "undefined") Rating.uploadToCloud(true)
+                    }
+                }
+            }
         }
     }
 
@@ -802,22 +1006,32 @@ Window {
         property bool enabled: true
         property bool emphasized: false
         property bool danger: false
+        // 瞬态成功闪烁：设为 true 后按钮变绿、文案前加 ✅，外部负责起定时器退出
+        property bool flash: false
         signal clicked()
 
         implicitWidth:  Math.max(72, _t.implicitWidth + 22)
         implicitHeight: 28
         radius: 5
         color: !enabled ? "#1a1a1d"
+              : flash       ? (_ma.containsMouse ? "#37a169" : "#2f855a")
               : danger      ? (_ma.containsMouse ? "#a23a3a" : "#3a2326")
               : emphasized  ? (_ma.containsMouse ? "#3a7afe" : "#2a5994")
               :               (_ma.containsMouse ? "#3a3a44" : "#2a2a30")
-        border.color: danger ? "#5a2a2e" : "#3a3a42"
-        border.width: 1
+        border.color: flash ? "#52c41a"
+                            : (danger ? "#5a2a2e" : "#3a3a42")
+        border.width: flash ? 1 : 1
+        Behavior on color {
+            ColorAnimation { duration: 180 }
+        }
+        Behavior on border.color {
+            ColorAnimation { duration: 180 }
+        }
         Text {
             id: _t
             anchors.centerIn: parent
-            text: parent.text
-            color: parent.enabled ? "#e8e8ec" : "#555"
+            text: (parent.flash ? "✅ " : "") + parent.text
+            color: parent.enabled ? "#ffffff" : "#555"
             font.pixelSize: 12
         }
         MouseArea {
