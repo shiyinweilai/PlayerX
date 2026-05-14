@@ -1,5 +1,5 @@
 {
-  "version": "2.0.11",
+  "version": "2.0.12",
   "minSupported": "1.0.0",
   "author": "rbyang",
   "copyright": "Copyright (c) 2026 PlayerX",
@@ -7,16 +7,16 @@
   "mandatory": false,
   "downloads": {
     "mac-arm64": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.11-arm64-mac.zip",
-      "sha256": "e486cbca7d402ac3de87b89fc0cffdb7ebeebc46934072cb7c15beb9777abd47"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.12-arm64-mac.zip",
+      "sha256": "517a6d83cd90f39eec2cc5490e5232fefa6c2109285823a854afbfcf5cfec1eb"
     },
     "win-install": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-Setup-2.0.11.exe",
-      "sha256": "a0964683cf10ed9596a7e7ae6622a8fa2062a274158350e2dc8c3d9218ddd0b2"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-Setup-2.0.12.exe",
+      "sha256": "472adc9da4e2cd0bee7bebb2982eeaa292ad8a78fd2a559e5076e50a9bb6c973"
     },
     "win-portable": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.11-win64-portable.zip",
-      "sha256": "f01224bafbafaef56dd3c62ce84f5765999489112aba0be7a8a3e63c91983776"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.12-win64-portable.zip",
+      "sha256": "cb4b03ac80bbeb7bfd69caa9dacb889d6b1366b3dd623361a56222840af0b7c1"
     }
   }
 }

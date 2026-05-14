@@ -1,0 +1,17 @@
+<!--
+  PlayerX 运行时窗口图标资源
+  ============================================================================
+  把单源图 icon/icon-1024.png 编进 Qt 资源（CMake AUTORCC 自动处理 .qrc）。
+
+  用途：main.cpp 里 QGuiApplication::setWindowIcon(QIcon(":/icon/app.png"))，
+  让 Windows 任务栏 / Alt-Tab / Linux WM / macOS Dock fallback 都能拿到图标。
+
+  说明：exe 内 .rsrc 里嵌的 .ico（Windows）/ bundle 里的 .icns（macOS）
+  只解决"静态文件图标"，不解决"运行时窗口图标"——后者必须走 setWindowIcon。
+  Qt 会按需把这张大图缩放到任意尺寸（任务栏 16/32/48、Dock 128 等）。
+-->
+<RCC>
+    <qresource prefix="/icon">
+        <file alias="app.png">icon/icon-1024.png</file>
+    </qresource>
+</RCC>

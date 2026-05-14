@@ -24,6 +24,11 @@ int main(int argc, char* argv[]) {
     app.setApplicationName("PlayerX");
     app.setOrganizationName("PlayerX");
 
+    // 运行时窗口图标：Windows 任务栏 / Alt-Tab / Linux WM / macOS Dock fallback
+    // 都从这里取（exe 内 .rsrc 嵌的 .ico 只管"静态文件图标"，不管运行中 HICON）。
+    // 资源由 CMake AUTORCC 处理 resources/app_icon.qrc 自动打进 exe。
+    app.setWindowIcon(QIcon(":/icon/app.png"));
+
     // 使用 Basic 风格，自绘 background/contentItem 委托才能生效。
     // macOS 默认会套用原生 NSButton 风格 → 自绘失效、无 hover/press 反馈。
     QQuickStyle::setStyle("Basic");

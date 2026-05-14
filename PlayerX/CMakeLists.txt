@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 # 应用版本号：单点维护处。会通过 APP_VERSION_STR 注入到 C++（Updater 用作
 # currentVersion）和 QML（关于对话框 / 更新弹窗显示）。
 # 发新版本时只改这一行，不要在源码里另写硬编码版本。
-project(PlayerX VERSION 2.0.11 LANGUAGES CXX C)
+project(PlayerX VERSION 2.0.12 LANGUAGES CXX C)
 
 # ─── C++ 标准 ────────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
@@ -71,6 +71,10 @@ endif()
 qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/main.cpp
     ${_PLATFORM_ICON_SOURCES}
+    # 运行时窗口图标资源：QGuiApplication::setWindowIcon(":/icon/app.png")
+    # 让 Windows 任务栏 / Alt-Tab / Linux WM 都能拿到图标（exe 内 .rsrc 只管
+    # 静态文件图标，不管运行中窗口的 HICON）。CMake 已开 AUTORCC 自动处理。
+    resources/app_icon.qrc
     # 共享核心（与旧 SDL 版同源，已拷贝到 PlayerX/src/core 与 player）
     src/core/rb_demuxer.cpp
     src/core/rb_decoder.cpp
