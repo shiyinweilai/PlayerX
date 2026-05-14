@@ -759,8 +759,14 @@ def package_windows(version: str) -> dict:
 
     # 用 Python 自带 zipfile，避免依赖 7z；compresslevel=9 体积最小
     import zipfile
-    # 顶层目录命名包含版本号，解压后用户得到 PlayerX-2.0.x/ 而非散落文件
-    top = f"PlayerX-{version}"
+    # 顶层目录**不带版本号**，固定为 "PlayerX/"。
+    # 原因：portable 自更新会原地覆盖整个安装目录，若目录名跟版本绑定，
+    #       用户从 2.0.7 升到 2.0.9 后还停在 PlayerX-2.0.7/，与程序内显示
+    #       的版本不一致，桌面快捷方式也会因为目录改名而失效。
+    #       业内主流做法（VS Code / JetBrains / Sublime）均是：
+    #         - 文件名带版本（PlayerX-2.0.7-win64-portable.zip）便于多版本并存归档
+    #         - 解压后的安装目录名固定（PlayerX/），随版本演进不变
+    top = "PlayerX"
     with zipfile.ZipFile(portable_zip, "w",
                          compression=zipfile.ZIP_DEFLATED,
                          compresslevel=9) as zf:

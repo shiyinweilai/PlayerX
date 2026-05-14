@@ -463,7 +463,8 @@ void Updater::applyWindows(const QString& setupExe) {
     }
 
     // ── portable 路径：下载下来的是新版 ZIP（PlayerX-x.y.z-win64-portable.zip），
-    //    内部顶层目录形如 PlayerX-x.y.z/，里面是完整的 exe + 所有 dll + plugins + qml。
+    //    内部顶层目录固定为 PlayerX/（**不带版本号**，自 build.py 改造后），
+    //    里面是完整的 exe + 所有 dll + plugins + qml。
     //    自更新策略（VS Code Portable / JetBrains Portable 同款）：
     //      1) 把 zip 解压到临时目录
     //      2) 写 BAT：等父进程退出 → robocopy /MIR 整目录覆盖 → 拉起新 exe
@@ -512,11 +513,12 @@ void Updater::applyWindows(const QString& setupExe) {
     bat += QStringLiteral("  echo [ERROR] 解压失败>>%EXTRACT_DIR%\\relaunch.log\r\n");
     bat += QStringLiteral("  exit /b 1\r\n");
     bat += QStringLiteral(")\r\n");
-    bat += QStringLiteral("REM 4) 在解压目录里找形如 PlayerX-* 的顶层目录\r\n");
-    bat += QStringLiteral("set NEW_ROOT=\r\n");
-    bat += QStringLiteral("for /D %%D in (%EXTRACT_DIR%\\PlayerX-*) do set NEW_ROOT=%%D\r\n");
-    bat += QStringLiteral("if not defined NEW_ROOT (\r\n");
-    bat += QStringLiteral("  echo [ERROR] zip 内未找到 PlayerX-* 顶层目录>>%EXTRACT_DIR%\\relaunch.log\r\n");
+    bat += QStringLiteral("REM 4) 定位解压后的顶层目录\r\n");
+    bat += QStringLiteral("REM    portable zip 顶层固定为 PlayerX\\（不带版本号），\r\n");
+    bat += QStringLiteral("REM    解压目录名与版本解耦，自更新原地覆盖时路径恒定。\r\n");
+    bat += QStringLiteral("set NEW_ROOT=%EXTRACT_DIR%\\PlayerX\r\n");
+    bat += QStringLiteral("if not exist %NEW_ROOT%\\PlayerX.exe (\r\n");
+    bat += QStringLiteral("  echo [ERROR] zip 内未找到 PlayerX\\PlayerX.exe>>%EXTRACT_DIR%\\relaunch.log\r\n");
     bat += QStringLiteral("  exit /b 2\r\n");
     bat += QStringLiteral(")\r\n");
     bat += QStringLiteral("REM 5) robocopy /MIR 整目录覆盖；保留更新器自身缓存目录不被删\r\n");
