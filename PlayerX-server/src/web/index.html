@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>PlayerX · 评分收集</title>
+<link rel="stylesheet" href="/web/style.css" />
+</head>
+<body>
+<!-- ────────── 顶栏 ────────── -->
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">★</span>
+        <span class="brand-name">PlayerX</span>
+        <span class="brand-sub">评分收集中心</span>
+    </div>
+    <div class="topbar-right">
+        <span class="status-pill" id="serverStatus">
+            <span class="dot"></span><span id="serverStatusText">连接中…</span>
+        </span>
+        <button class="ghost-btn" id="refreshBtn" title="刷新列表">↻</button>
+    </div>
+</header>
+
+<!-- ────────── 概览卡片 ────────── -->
+<section class="cards">
+    <div class="card">
+        <div class="card-label">已收文件</div>
+        <div class="card-value" id="kpiCount">—</div>
+        <div class="card-foot">总数</div>
+    </div>
+    <div class="card">
+        <div class="card-label">评分人</div>
+        <div class="card-value" id="kpiUsers">—</div>
+        <div class="card-foot">独立用户</div>
+    </div>
+    <div class="card">
+        <div class="card-label">标签组</div>
+        <div class="card-value" id="kpiTags">—</div>
+        <div class="card-foot">user / tag 组合</div>
+    </div>
+    <div class="card">
+        <div class="card-label">总大小</div>
+        <div class="card-value" id="kpiSize">—</div>
+        <div class="card-foot">uploads/</div>
+    </div>
+</section>
+
+<!-- ────────── 操作行 ────────── -->
+<section class="toolbar">
+    <div class="toolbar-left">
+        <input type="search" id="searchInput" placeholder="搜索 评分人 / 标签 / 文件名…" />
+    </div>
+    <div class="toolbar-right">
+        <button class="primary-btn" id="mergeLatestBtn" title="每个 (评分人, 标签) 仅取最新一份">
+            ⬇ 合并下载（最新）
+        </button>
+        <button class="ghost-btn" id="mergeAllBtn" title="合并所有 csv（含历史）">
+            ⬇ 合并全部
+        </button>
+    </div>
+</section>
+
+<!-- ────────── 列表表格 ────────── -->
+<section class="table-wrap">
+    <table id="filesTable">
+        <thead>
+            <tr>
+                <th class="sortable" data-key="user">评分人</th>
+                <th class="sortable" data-key="tag">标签</th>
+                <th class="sortable" data-key="name">文件名</th>
+                <th class="sortable num" data-key="size">大小</th>
+                <th class="sortable num" data-key="mtime">最近更新 ⌄</th>
+                <th class="actions">操作</th>
+            </tr>
+        </thead>
+        <tbody id="filesTbody">
+            <!-- 动态填充 -->
+        </tbody>
+    </table>
+    <div class="empty" id="emptyHint" hidden>
+        <div class="empty-icon">📭</div>
+        <div class="empty-title">暂无 CSV</div>
+        <div class="empty-sub">客户端导出评分后点击「上传到云端」即可在这里看到。</div>
+    </div>
+</section>
+
+<footer class="footer">
+    <span id="appVer">PlayerX-server</span>
+    <span class="dim">·</span>
+    <a href="/list" target="_blank">原始 JSON</a>
+    <span class="dim">·</span>
+    <a href="/merge" target="_blank">合并下载</a>
+</footer>
+
+<!-- ────────── Toast ────────── -->
+<div class="toast" id="toast" hidden></div>
+
+<script src="/web/app.js"></script>
+</body>
+</html>
