@@ -302,6 +302,11 @@ Window {
         fileMode: FileDialog.SaveFile
         nameFilters: ["CSV (*.csv)"]
         defaultSuffix: "csv"
+        // 默认弹到系统"下载"目录（macOS: ~/Downloads，Windows: %USERPROFILE%\Downloads）。
+        // 注意 Qt6 FileDialog 的坑：currentFile 若是绝对 URL（如 "file:///foo.csv"），
+        // 会被解析成"根目录下 foo.csv"，进而**覆盖** currentFolder → 实际弹到 /。
+        // 修法：把文件名直接拼到下载目录 URL 后面，组成完整路径 URL。
+        currentFolder: (typeof Rating !== "undefined") ? Rating.defaultExportDir : ""
         currentFile: {
             var name = "PlayerX_ratings"
             var u = (typeof Rating !== "undefined") ? Rating.currentUser : ""
@@ -311,7 +316,13 @@ Window {
             function pad(n) { return (n < 10 ? "0" : "") + n }
             name += "_" + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate())
                   + "_" + pad(d.getHours()) + pad(d.getMinutes())
-            return "file:///" + name + ".csv"
+            // 拼接到下载目录 URL 后面，例如：file:///Users/xxx/Downloads/PlayerX_ratings_xxx.csv
+            var dir = (typeof Rating !== "undefined") ? Rating.defaultExportDir.toString() : ""
+            if (dir.length > 0) {
+                if (dir.charAt(dir.length - 1) !== "/") dir += "/"
+                return dir + name + ".csv"
+            }
+            return name + ".csv"  // 极端兜底：目录拿不到时只给文件名
         }
         onAccepted: {
             if (typeof Rating === "undefined") return

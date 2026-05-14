@@ -73,6 +73,17 @@ QString RatingStore::systemUserName() const {
     return u;
 }
 
+// 返回导出 CSV 时 FileDialog 默认落脚的目录：系统下载文件夹（~/Downloads）。
+// 如果 QStandardPaths 拿不到（极端定制环境）则退到家目录，避免 Qt 默认落到文件系统根。
+QUrl RatingStore::defaultExportDir() const {
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    if (dir.isEmpty())
+        dir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    if (dir.isEmpty())
+        dir = QDir::homePath();
+    return QUrl::fromLocalFile(dir);
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // 总数 / 列表
 // ════════════════════════════════════════════════════════════════════════
@@ -137,6 +148,27 @@ bool RatingStore::recordRating(const QString& filePath,
     if (!writeAll(rows)) return false;
     emit changed();
     return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 查询某文件在「当前评分人」下的评分（用于 UI 显示回填）
+// ════════════════════════════════════════════════════════════════════════
+
+int RatingStore::ratingFor(const QString& filePath) const {
+    if (filePath.trimmed().isEmpty()) return -1;
+    QString rater = currentUser();
+    if (rater.isEmpty()) rater = systemUserName();
+    const QList<QVariantMap> rows = readAll();
+    for (const auto& r : rows) {
+        if (r.value("file_path").toString() == filePath &&
+            r.value("rater").toString() == rater) {
+            int v = r.value("stars").toInt();
+            if (v < 0) v = 0;
+            if (v > 5) v = 5;
+            return v;
+        }
+    }
+    return -1;
 }
 
 // ════════════════════════════════════════════════════════════════════════

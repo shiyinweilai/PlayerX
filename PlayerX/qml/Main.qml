@@ -1392,6 +1392,22 @@ ApplicationWindow {
                 root.cellRatings = root.cellRatings.slice(0, Engine.fileCount)
             }
         }
+        // 翻组 / 切宫格 / 重新打开文件后，按新文件路径重建 cellRatings —
+        // 避免上一组的评分残留到下一组（同一 idx 但 path 已变）。
+        // RatingStore.ratingFor(path) 命中返回 0-5、未命中返回 -1（视为未评分）。
+        function onFilesChanged() {
+            var n = Engine.fileCount
+            var arr = []
+            for (var i = 0; i < n; ++i) {
+                var fp = Engine.filePathAt(i)
+                var v = -1
+                if (typeof Rating !== "undefined" && fp && fp.length > 0) {
+                    v = Rating.ratingFor(fp)
+                }
+                arr.push((typeof v === "number" && v >= 1 && v <= 5) ? v : 0)
+            }
+            root.cellRatings = arr
+        }
     }
 
     // 切换函数：仅在 fileCount === 2 时允许进入；离开 2 路场景时强制关闭

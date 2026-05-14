@@ -23,6 +23,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QUrl>
 #include <QVariantList>
 
 namespace rbqt {
@@ -32,6 +33,9 @@ class RatingStore : public QObject {
     Q_PROPERTY(QString currentUser READ currentUser WRITE setCurrentUser NOTIFY currentUserChanged)
     Q_PROPERTY(QString dataFilePath READ dataFilePath CONSTANT)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY changed)
+    // 导出 CSV 时 FileDialog 默认弹出的目录（QUrl 字符串，形如 "file:///Users/.../Downloads"）。
+    // 跨平台一律落到系统下载目录；若不可用则回退到家目录。
+    Q_PROPERTY(QUrl defaultExportDir READ defaultExportDir CONSTANT)
 
 public:
     explicit RatingStore(QObject* parent = nullptr);
@@ -43,6 +47,9 @@ public:
     // 数据文件绝对路径（保证父目录已建立）
     QString dataFilePath() const { return m_dataFile; }
 
+    // 导出 CSV 默认目录（QUrl 形式，供 QML FileDialog.currentFolder 绑定）
+    QUrl    defaultExportDir() const;
+
     // 当前条目总数（同 file_path 的覆盖后只算一条）
     int totalCount() const;
 
@@ -52,6 +59,13 @@ public slots:
     bool recordRating(const QString& filePath,
                       const QString& fileName,
                       int stars);
+
+    // 查询某文件路径在 *当前评分人* 下的评分。
+    //   · 命中：返回 0-5（含 0 = 已取消评分）
+    //   · 未命中：返回 -1
+    // 用途：QML 翻组 / 切宫格 / 重新打开文件后，根据新文件路径回填星级显示，
+    //       避免上一组的 cellRatings[idx] 残留串到下一组。
+    int ratingFor(const QString& filePath) const;
 
     // 返回所有评分行（每行一个 QVariantMap，键名同 CSV 列）。
     // 排序：updated_at 倒序（新→旧）。
