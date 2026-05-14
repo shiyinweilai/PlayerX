@@ -37,12 +37,14 @@ ApplicationWindow {
     property var laneSnapshotIndexes: [] // 上次启动时各路的 currentIndex
 
     // ─── 是否可启动 ─────────────────────────────────────────────────
-    // 新语义：勾选数 >=1 且每个勾选行都有文件即可启动。
-    //        勾选 1 行 → 等同旧「打开文件夹」（一次性把该文件夹命中文件全部载入）
-    //        勾选 >=2 行 → 多组对比（每路取 currentPath 组成 URL 列表）
+    // 新语义：只要有 ≥1 路「勾选 + 已选文件夹且有命中」即可启动。
+    //        「勾选但未选文件夹」的行会被启动逻辑自动忽略，不会阻塞其他已就绪的行。
+    //        有效路数 == 1 → 单视频浏览；有效路数 >= 2 → 多组对比。
     readonly property bool canStart: _computeCanStart()
-    // 当前勾选路数（供底部提示/按钮文案使用）
+    // 当前勾选路数（含未选文件夹的）
     readonly property int selectedCount: _computeSelectedCount()
+    // 当前「有效路数」：勾选 + currentPath 非空（真正会被启动的路数）
+    readonly property int effectiveCount: _computeEffectiveCount()
 
     function _computeSelectedCount() {
         var _ = stateBumper
@@ -54,19 +56,29 @@ ApplicationWindow {
         return n
     }
 
-    function _computeCanStart() {
-        // 显式触达 stateBumper，让 QML 绑定系统把它纳入依赖；每次 _bumpState() 后 canStart 会重算
+    function _computeEffectiveCount() {
         var _ = stateBumper
-        var anySelected = false
+        var n = 0
         for (var i = 0; i < _rowsModel.count; ++i) {
             var lane = _rowsModel.get(i)
             if (!lane || !lane.selected) continue
-            anySelected = true
-            // 单文件夹模式只要求选中文件夹即可（允许取 visibleFiles 全部）
-            // 多组对比模式要求每路有 currentPath
-            if (!lane.currentPath || lane.currentPath.length === 0) return false
+            if (!lane.currentPath || lane.currentPath.length === 0) continue
+            n++
         }
-        return anySelected
+        return n
+    }
+
+    function _computeCanStart() {
+        // 显式触达 stateBumper，让 QML 绑定系统把它纳入依赖；每次 _bumpState() 后 canStart 会重算
+        var _ = stateBumper
+        // 只要任意一路「勾选 + 有 currentPath」就可以启动；
+        // 「勾选但未选文件夹」的行会被 start() 自动忽略，不影响 canStart。
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (!lane || !lane.selected) continue
+            if (lane.currentPath && lane.currentPath.length > 0) return true
+        }
+        return false
     }
 
     // 触发 canStart 重新计算：修改一个有 changed 信号的普通属性即可让绑定重求。
@@ -140,40 +152,44 @@ ApplicationWindow {
 
     // ─── 对外动作：启动 / 切组 ──────────────────────────────────────
     // 新语义：
-    //   · 勾选 1 路  → 走旧「打开文件夹」路径（该路 visibleFiles 全部载入，最多 9 个），active=false
+    //   · 勾选 1 路  → 单视频浏览模式（只打开 currentPath 这一个），active=true，
+    //                  「上一组/下一组」在该路 visibleFiles 内循环切换
     //   · 勾选 >=2 路 → 多组对比（每路 currentPath 组 url 列表），active=true
     function start() {
         if (!canStart) return false
 
-        // 收集勾选的行的索引
+        // 只收集「有效路」：勾选 + currentPath 非空。
+        // 勾选但未选文件夹的行（如默认第 2 行）会被静默忽略，不阻塞启动。
         var selIdx = []
         for (var i = 0; i < _rowsModel.count; ++i) {
-            if (_rowsModel.get(i).selected) selIdx.push(i)
+            var l = _rowsModel.get(i)
+            if (!l.selected) continue
+            if (!l.currentPath || l.currentPath.length === 0) continue
+            selIdx.push(i)
         }
         if (selIdx.length === 0) return false
 
-        // 仅勾选 1 路：等同「打开文件夹」—— 把该路 visibleFiles（已按 keyword 过滤 + 排序）全部载入
+        // 仅有效 1 路：单视频浏览模式 —— 只打开当前选中那个视频，可用上一组/下一组循环切换
         if (selIdx.length === 1) {
             var onlyI = selIdx[0]
             var rt = _laneRuntime[onlyI]
             if (!rt || !rt.visibleFiles || rt.visibleFiles.length === 0) return false
-            var files = rt.visibleFiles.slice()
-            if (files.length > kMaxLanes) files = files.slice(0, kMaxLanes)
-            var urls1 = Fs.toFileUrls(files)
+            var laneOnly = _rowsModel.get(onlyI)
+            var urls1 = Fs.toFileUrls([ laneOnly.currentPath ])
             if (urls1.length === 0) return false
             var ok1 = Engine.openFiles(urls1)
             if (ok1) {
-                // 不进入多组对比态：清空快照、关掉 active，确保上下组快捷键不会误触发
-                laneSnapshotPaths = []
-                laneSnapshotIndexes = []
-                active = false
-                // 若多文件且当前处于单视图，切到 1×N 以便同时看到
-                if (Engine.layoutMode === 0 && urls1.length > 1) Engine.layoutMode = 1
+                // 进入 active 态，使「上一组/下一组」可以在 visibleFiles 内循环切换
+                laneSnapshotPaths = [ laneOnly.currentPath ]
+                laneSnapshotIndexes = [ laneOnly.currentIndex ]
+                active = true
+                // 单视频用单视图最合适
+                if (Engine.layoutMode !== 0) Engine.layoutMode = 0
             }
             return ok1
         }
 
-        // 勾选 >=2 路：多组对比
+        // 有效路 >=2：多组对比
         var paths = []
         var indexes = []
         for (var k = 0; k < selIdx.length; ++k) {
@@ -194,21 +210,24 @@ ApplicationWindow {
         return ok
     }
 
-    // 上一组 / 下一组：每路在自己 visibleFiles 内 ±1，再 start()
+    // 上一组 / 下一组：每路在自己 visibleFiles 内 ±1，再 openFiles
     // dir = -1 / +1
     // 仅对勾选行生效；未勾选行不参与切组。
+    // 末端处理：循环（B 模式）—— 走到尾再按「下一组」回到第 0 个；走到首再按「上一组」跳到末尾。
     function navigate(dir) {
         if (!active) return false
         if (dir !== -1 && dir !== 1) return false
-        // 更新勾选路 currentIndex（clamp）
+        // 更新勾选路 currentIndex（循环）
         var anyMoved = false
         for (var i = 0; i < _rowsModel.count; ++i) {
             var lane = _rowsModel.get(i)
             if (!lane.selected) continue
             var rt = _laneRuntime[i]
             if (!rt || rt.visibleFiles.length === 0) continue
+            var n = rt.visibleFiles.length
             var cur = lane.currentIndex
-            var next = Math.max(0, Math.min(rt.visibleFiles.length - 1, cur + dir))
+            // 循环：(cur + dir + n) % n —— 即便 cur=-1（异常）也能合法回到 0/n-1
+            var next = ((cur + dir) % n + n) % n
             if (next !== cur) {
                 anyMoved = true
                 _rowsModel.set(i, {
@@ -218,19 +237,22 @@ ApplicationWindow {
                     currentPath: rt.visibleFiles[next],
                     currentIndex: next,
                     allCount: rt.allFiles.length,
-                    visibleCount: rt.visibleFiles.length
+                    visibleCount: n
                 })
             }
         }
         if (!anyMoved) return false
-        // 直接 openFiles 切组（语义最简单：换一批文件）— 只取勾选路
+        // 直接 openFiles 切组（语义最简单：换一批文件）— 只取「有效路」（勾选 + 有 currentPath）
         var paths = []
         for (var j = 0; j < _rowsModel.count; ++j) {
             var ln = _rowsModel.get(j)
-            if (ln.selected) paths.push(ln.currentPath)
+            if (!ln.selected) continue
+            if (!ln.currentPath || ln.currentPath.length === 0) continue
+            paths.push(ln.currentPath)
         }
         var urls = Fs.toFileUrls(paths)
-        if (urls.length < kMinLanes) return false
+        // 单路也允许切（>=1）；多路对比仍要 >=kMinLanes，但单路场景 paths.length===1 也合法
+        if (urls.length < 1) return false
         return Engine.openFiles(urls)
     }
     function nextGroup() { return navigate(1) }
@@ -289,7 +311,7 @@ ApplicationWindow {
                 font.bold: true
             }
             Label {
-                text: "勾选 1 路 = 打开该文件夹全部视频；勾选 ≥2 路 = 多组对比（支持上一组/下一组）"
+                text: "勾选 1 路 = 单视频浏览（用上一组/下一组在该文件夹内循环切换）；勾选 ≥2 路 = 多组对比"
                 color: "#888"
                 font.pixelSize: 11
                 Layout.fillWidth: true
@@ -391,8 +413,8 @@ ApplicationWindow {
                 text: {
                     if (active) return "已启动 · 当前组 " + (groupIndex() + 1) + " / " + groupCount()
                     if (canStart) {
-                        if (selectedCount === 1) return "✓ 已就绪：将打开该文件夹下全部视频"
-                        return "✓ 已就绪：将启动 " + selectedCount + " 路对比"
+                        if (effectiveCount === 1) return "✓ 已就绪：将打开当前选中视频，可用上一组/下一组循环切换"
+                        return "✓ 已就绪：将启动 " + effectiveCount + " 路对比（未填文件夹的勾选行会自动忽略）"
                     }
                     if (selectedCount === 0) return "请至少勾选一路"
                     return "请为勾选的路选择文件夹并确保有命中文件"
@@ -427,7 +449,7 @@ ApplicationWindow {
                 id: startBtn
                 text: {
                     if (active) return "重新启动"
-                    if (selectedCount === 1) return "打开文件夹"
+                    if (effectiveCount === 1) return "打开视频"
                     return "启动对比"
                 }
                 enabled: canStart
