@@ -122,9 +122,13 @@ public slots:
     //   · force=false（默认）：服务端检测 (rater, tag) 已存在会返回 409，
     //     SDK 解析后通过 uploadConflict(existing) 信号告知 QML 弹覆盖确认。
     //   · force=true：携带 force=1 强制覆盖，旧文件会被服务端归档。
+    //   · folderPaths：可选的“文件夹白名单”。非空时只上传 file_path 所在目录
+    //     在白名单中的记录；空 = 不过滤（默认全部上传），保持向后兼容。
+    //     主要供 UI 端“按文件夹勾选上传”使用。
     // 调用后立即返回，用 uploadFinished(ok, message) 信号给出最终结果。
     // 在上传进行中重复调用会被忽略（避免连点手抽出多起请求）。
-    Q_INVOKABLE void uploadToCloud(bool force = false);
+    Q_INVOKABLE void uploadToCloud(bool force = false,
+                                   const QStringList& folderPaths = {});
 
 signals:
     void currentUserChanged();
@@ -155,7 +159,8 @@ private:
     static QString quickHashOf(const QString& path);
 
     // 在内存里拼出“精简 CSV”（与 exportToFile 完全一致）。上传时复用。
-    QByteArray buildExportCsvBytes() const;
+    // folderPaths 非空时仅保留 file_path 所在目录命中白名单的行；空 = 不过滤。
+    QByteArray buildExportCsvBytes(const QStringList& folderPaths = {}) const;
 
     QString m_dataFile;   // 绝对路径（构造时计算并 mkpath）
 

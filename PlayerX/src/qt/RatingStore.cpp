@@ -19,6 +19,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -222,9 +223,21 @@ bool RatingStore::exportToFile(const QString& targetPath) const {
 //   场景：用户在评分人输入框里从 "rbyang" 改为 "test"后，期望导出/上传的 CSV
 //   全归到 "test" 名下；但本地 ratings.csv 仍保留“写入当时的 rater”以供追溯。
 //   这里仅在“导出瞬间”统一身份。
-QByteArray RatingStore::buildExportCsvBytes() const {
+QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) const {
     QString rater = currentUser();
     if (rater.isEmpty()) rater = systemUserName();
+
+    // 把白名单一次规整化成绝对路径，避免大小写/末尾斜杠/相对路径的逐行比对开销。
+    // 空白名单 = 不过滤。
+    QSet<QString> allow;
+    const bool filter = !folderPaths.isEmpty();
+    if (filter) {
+        for (const QString& p : folderPaths) {
+            const QString t = p.trimmed();
+            if (t.isEmpty()) continue;
+            allow.insert(QFileInfo(t).absoluteFilePath());
+        }
+    }
 
     QByteArray buf;
     QTextStream ts(&buf, QIODevice::WriteOnly);
@@ -234,6 +247,13 @@ QByteArray RatingStore::buildExportCsvBytes() const {
 
     const QList<QVariantMap> rows = readAll();
     for (const auto& r : rows) {
+        if (filter) {
+            // 只看文件所在目录（与 QML 端 _rebuildGroups 的“按目录分组”一致）。
+            const QString fp = r.value("file_path").toString();
+            if (fp.isEmpty()) continue;
+            const QString dir = QFileInfo(fp).absolutePath();
+            if (!allow.contains(dir)) continue;
+        }
         const QString rawTs = r.value("updated_at").toString();
         QDateTime dt = QDateTime::fromString(rawTs, Qt::ISODateWithMs);
         if (!dt.isValid()) dt = QDateTime::fromString(rawTs, Qt::ISODate);
@@ -295,7 +315,7 @@ void RatingStore::setUploadTag(const QString& tag) {
     emit uploadConfigChanged();
 }
 
-void RatingStore::uploadToCloud(bool force) {
+void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     if (m_uploading) {
         // 并发护栏：连点不会发出多起请求。
         emit uploadFinished(false, tr("已有上传任务进行中，请稍后重试"));
@@ -315,9 +335,22 @@ void RatingStore::uploadToCloud(bool force) {
     QString rater = currentUser();
     if (rater.isEmpty()) rater = systemUserName();
 
-    const QByteArray csvBytes = buildExportCsvBytes();
-    if (csvBytes.isEmpty()) {
-        emit uploadFinished(false, tr("评分数据为空，无需上传"));
+    const QByteArray csvBytes = buildExportCsvBytes(folderPaths);
+    // 仅有表头一行 → 视为空结果。
+    // 区分两种空：完全没有评分 vs 过滤后没命中（白名单挑了空文件夹）。
+    bool csvEmpty = csvBytes.isEmpty();
+    if (!csvEmpty) {
+        // 表头行 = "updated_at,rater,file_name,stars\n"，加 BOM 共 35 字节。
+        // 用换行计数判定数据行更稳：数据行数 = 总行数 - 1（表头）。
+        int dataLines = csvBytes.count('\n') - 1;
+        if (dataLines <= 0) csvEmpty = true;
+    }
+    if (csvEmpty) {
+        if (!folderPaths.isEmpty()) {
+            emit uploadFinished(false, tr("勾选的文件夹下没有可上传的评分记录"));
+        } else {
+            emit uploadFinished(false, tr("评分数据为空，无需上传"));
+        }
         return;
     }
 

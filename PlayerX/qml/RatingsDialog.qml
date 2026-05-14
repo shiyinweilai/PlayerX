@@ -42,6 +42,53 @@ Window {
     // 时间列排序方向：true = 新→旧（默认，与 C++ 端 getAllRatings 一致），false = 旧→新
     property bool _sortDesc: true
 
+    // ── 分组（VSCode 风格三层树：文件夹 → 文件 → 评分记录）─────────
+    // _folders: [{ key:'dir:<dir>', name, path, files:[file...], latest, avg, totalItems }]
+    //   file:    { key:'file:<file_path>', name, path, items:[row...], latest, avg }
+    // _expanded: { key -> bool }，文件夹与文件用不同前缀互不冲突；刷新不丢失
+    // _visibleRows: 当前 ListView 实际渲染的行数组，元素形态为：
+    //   { kind:'folder', d:<folder> }
+    //   { kind:'file',   d:<folder>, g:<file> }
+    //   { kind:'item',   d:<folder>, g:<file>, r:<row> }
+    property var _folders: []
+    property var _expanded: ({})
+    property var _visibleRows: []
+
+    // 上传勾选：key = folder.key（如 "dir:/Users/x/a"），value = bool。
+    // 默认全选；新增文件夹自动补 true，已删除的文件夹自动清理，避免脏 key 残留。
+    // 仅用于"按文件夹勾选上传"功能，不影响导出 / 渲染。
+    property var _checkedFolders: ({})
+
+    // 上次发起上传时所携带的文件夹白名单。
+    // 设置框"保存并上传"、覆盖确认"覆盖上传"都会复用它，
+    // 避免“点上传 → 弹设置 → 保存”过程中把白名单丢了变成全量上传。
+    property var _lastUploadFolders: []
+
+    // 从 file_path 中提取所属目录（兼容 / 与 \）
+    function _dirOf(fp) {
+        if (!fp || fp.length === 0) return ""
+        var p = String(fp)
+        var i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"))
+        return i > 0 ? p.substring(0, i) : ""
+    }
+    function _baseName(p) {
+        if (!p || p.length === 0) return ""
+        var s = String(p)
+        var i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"))
+        return i >= 0 ? s.substring(i + 1) : s
+    }
+    // 仅用于「按文件夹分组」展示：剥掉 file_name 头部的「<通道号>_」前缀。
+    // RatingStore 写库时会把 file_name 拼成 "<idx+1>_<原文件名>"（见 RatingStore.cpp 的多路宏格设计），
+    // 但同一文件夹下所有文件来自同一通道，前缀此时是冗余视觉噪音；这里只剥树形展示用的副本，
+    // 库里的原始 file_name、CSV 导出列均保持不变（保留可追溯性 / 跨组对齐能力）。
+    function _stripChannelPrefix(name) {
+        if (!name) return ""
+        var s = String(name)
+        // 仅匹配「数字 + 下划线」开头，最多 2 位（覆盖 1~99 路），避免误伤真实文件名
+        var m = s.match(/^(\d{1,2})_(.+)$/)
+        return m ? m[2] : s
+    }
+
     // 按 _sortDesc 排 updated_at 字段；在 JS 里用字符串比较即可（ISO8601 字典序==时间序）。
     function _applySort(rows) {
         var arr = (rows || []).slice()  // 拷贝，避免就地改 C++ 返回的 list
@@ -54,13 +101,211 @@ Window {
         })
         return arr
     }
+    // 把扁平 _rows 聚成三层树：文件夹 → 文件 → 评分记录。
+    // _sortDesc 影响：
+    //   · 同一文件下记录始终倒序（最新在前，便于一眼看到最近评分）
+    //   · 文件之间、文件夹之间则按 _sortDesc 排（按各自组内最新时间）
+    function _rebuildGroups() {
+        var fileMap = {}
+        var fileOrder = []
+        // 第一轮：按 file_path 聚成「文件」组
+        for (var i = 0; i < _rows.length; ++i) {
+            var r = _rows[i]
+            var fkey = r.file_path && r.file_path.length > 0
+                       ? r.file_path
+                       : ("name:" + (r.file_name || "(unknown)"))
+            if (!fileMap[fkey]) {
+                var rawName = r.file_name || _baseName(fkey)
+                fileMap[fkey] = {
+                    key: "file:" + fkey,
+                    name: _stripChannelPrefix(rawName),  // 树形展示用的"干净名"
+                    rawName: rawName,                     // 保留原始名（含通道前缀），Tooltip 可用
+                    path: r.file_path || "",
+                    items: [],
+                    latest: "",
+                    avg: 0
+                }
+                fileOrder.push(fkey)
+            }
+            fileMap[fkey].items.push(r)
+        }
+        // 文件内时间倒序 + 算文件汇总
+        for (var k = 0; k < fileOrder.length; ++k) {
+            var g = fileMap[fileOrder[k]]
+            g.items.sort(function(a, b) {
+                var ta = a.updated_at || "", tb = b.updated_at || ""
+                if (ta === tb) return 0
+                return ta < tb ? 1 : -1
+            })
+            g.latest = g.items.length > 0 ? (g.items[0].updated_at || "") : ""
+            var sum = 0, cnt = 0
+            for (var j = 0; j < g.items.length; ++j) {
+                var s = parseInt(g.items[j].stars) || 0
+                if (s >= 1 && s <= 5) { sum += s; ++cnt }
+            }
+            g.avg = cnt > 0 ? Math.round(sum / cnt * 10) / 10 : 0
+        }
+        // 第二轮：把「文件」按所在目录聚成「文件夹」
+        var dirMap = {}
+        var dirOrder = []
+        for (var m = 0; m < fileOrder.length; ++m) {
+            var f = fileMap[fileOrder[m]]
+            var dir = _dirOf(f.path)
+            var dkey = dir.length > 0 ? dir : "(未知文件夹)"
+            if (!dirMap[dkey]) {
+                dirMap[dkey] = {
+                    key: "dir:" + dkey,
+                    name: dir.length > 0 ? _baseName(dir) : qsTr("(未知文件夹)"),
+                    path: dir,
+                    files: [],
+                    latest: "",
+                    avg: 0,
+                    totalItems: 0
+                }
+                dirOrder.push(dkey)
+            }
+            dirMap[dkey].files.push(f)
+        }
+        // 文件夹内文件按 _sortDesc 排，并算汇总指标
+        var folders = []
+        for (var n = 0; n < dirOrder.length; ++n) {
+            var d = dirMap[dirOrder[n]]
+            d.files.sort(function(a, b) {
+                var ta = a.latest || "", tb = b.latest || ""
+                if (ta === tb) return 0
+                if (root._sortDesc) return ta < tb ? 1 : -1
+                return ta < tb ? -1 : 1
+            })
+            // 汇总：合并文件夹下所有 items 来算平均分与最新时间
+            var dSum = 0, dCnt = 0, dLatest = "", total = 0
+            for (var p = 0; p < d.files.length; ++p) {
+                var fg = d.files[p]
+                total += fg.items.length
+                if ((fg.latest || "") > dLatest) dLatest = fg.latest || ""
+                for (var q = 0; q < fg.items.length; ++q) {
+                    var sc = parseInt(fg.items[q].stars) || 0
+                    if (sc >= 1 && sc <= 5) { dSum += sc; ++dCnt }
+                }
+            }
+            d.totalItems = total
+            d.latest = dLatest
+            d.avg = dCnt > 0 ? Math.round(dSum / dCnt * 10) / 10 : 0
+            folders.push(d)
+        }
+        // 文件夹之间按 _sortDesc 排（按文件夹内最新时间）
+        folders.sort(function(a, b) {
+            var ta = a.latest || "", tb = b.latest || ""
+            if (ta === tb) return 0
+            if (root._sortDesc) return ta < tb ? 1 : -1
+            return ta < tb ? -1 : 1
+        })
+        _folders = folders
+
+        // ── 同步 _checkedFolders：保留旧勾选，新增的文件夹默认勾上，已消失的清掉
+        var nextChecked = {}
+        for (var ci = 0; ci < folders.length; ++ci) {
+            var ck = folders[ci].key
+            // 没显式置 false 的都视作勾上（默认全选 + 保留用户手动勾上的）
+            nextChecked[ck] = (root._checkedFolders[ck] === false) ? false : true
+        }
+        _checkedFolders = nextChecked
+
+        _rebuildVisibleRows()
+    }
+    // 根据当前展开状态，把 _folders 展平为 ListView 数据源
+    function _rebuildVisibleRows() {
+        var out = []
+        for (var i = 0; i < _folders.length; ++i) {
+            var d = _folders[i]
+            out.push({ kind: "folder", d: d })
+            if (!_expanded[d.key]) continue
+            for (var j = 0; j < d.files.length; ++j) {
+                var g = d.files[j]
+                out.push({ kind: "file", d: d, g: g })
+                if (!_expanded[g.key]) continue
+                for (var k = 0; k < g.items.length; ++k) {
+                    out.push({ kind: "item", d: d, g: g, r: g.items[k] })
+                }
+            }
+        }
+        _visibleRows = out
+    }
+    function _toggleKey(key) {
+        var ex = {}
+        for (var k in _expanded) ex[k] = _expanded[k]
+        ex[key] = !ex[key]
+        _expanded = ex
+        _rebuildVisibleRows()
+    }
+    function _expandAll(flag) {
+        var ex = {}
+        for (var i = 0; i < _folders.length; ++i) {
+            var d = _folders[i]
+            ex[d.key] = !!flag
+            for (var j = 0; j < d.files.length; ++j) {
+                ex[d.files[j].key] = !!flag
+            }
+        }
+        _expanded = ex
+        _rebuildVisibleRows()
+    }
+    // 累计文件总数（统计行用）
+    function _totalFileCount() {
+        var n = 0
+        for (var i = 0; i < _folders.length; ++i) n += _folders[i].files.length
+        return n
+    }
+    // ── 勾选相关 ─────────────────────────────────────────────────────
+    function _isFolderChecked(key) {
+        // 缺省视为已勾（默认全选）
+        return _checkedFolders[key] !== false
+    }
+    function _toggleFolderChecked(key) {
+        var c = {}
+        for (var k in _checkedFolders) c[k] = _checkedFolders[k]
+        c[key] = !_isFolderChecked(key)
+        _checkedFolders = c
+    }
+    function _setAllFoldersChecked(flag) {
+        var c = {}
+        for (var i = 0; i < _folders.length; ++i) c[_folders[i].key] = !!flag
+        _checkedFolders = c
+    }
+    function _invertFolderChecked() {
+        var c = {}
+        for (var i = 0; i < _folders.length; ++i) {
+            var k = _folders[i].key
+            c[k] = !_isFolderChecked(k)
+        }
+        _checkedFolders = c
+    }
+    function _checkedFolderCount() {
+        var n = 0
+        for (var i = 0; i < _folders.length; ++i) {
+            if (_isFolderChecked(_folders[i].key)) ++n
+        }
+        return n
+    }
+    // 收集已勾选文件夹的绝对路径，传给 Rating.uploadToCloud(folderPaths)
+    function _collectCheckedFolderPaths() {
+        var out = []
+        for (var i = 0; i < _folders.length; ++i) {
+            var d = _folders[i]
+            if (_isFolderChecked(d.key) && d.path && d.path.length > 0) {
+                out.push(d.path)
+            }
+        }
+        return out
+    }
     function _refresh() {
         var raw = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
         _rows = _applySort(raw)
+        _rebuildGroups()
     }
     function _toggleTimeSort() {
         _sortDesc = !_sortDesc
         _rows = _applySort(_rows)
+        _rebuildGroups()
     }
     function open() { show() }
 
@@ -98,7 +343,11 @@ Window {
             columnSpacing: 10
             rowSpacing: 6
 
-            Text { text: qsTr("评分人"); color: "#9aa0a6"; font.pixelSize: 12 }
+            Text {
+                textFormat: Text.RichText
+                text: qsTr("评分人") + " <font color=\"#f5222d\">*</font>"
+                color: "#9aa0a6"; font.pixelSize: 12
+            }
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
@@ -128,7 +377,8 @@ Window {
                 // 备注 tag：同一评分人多轮提交时的区分标签。
                 // 后端会按 (rater, tag) 检测重复上传，重复时弹“是否覆盖”。
                 Text {
-                    text: qsTr("备注 tag")
+                    textFormat: Text.RichText
+                    text: qsTr("备注 tag") + " <font color=\"#f5222d\">*</font>"
                     color: "#9aa0a6"
                     font.pixelSize: 12
                 }
@@ -197,11 +447,33 @@ Window {
             Layout.fillWidth: true
             spacing: 12
             Text {
-                text: qsTr("共 %1 条记录").arg(root._rows.length)
+                text: qsTr("共 %1 个文件夹 · %2 个文件 · %3 条记录 · 已勾选 %4/%1 个文件夹")
+                        .arg(root._folders.length)
+                        .arg(root._totalFileCount())
+                        .arg(root._rows.length)
+                        .arg(root._checkedFolderCount())
                 color: "#c8c8cc"
                 font.pixelSize: 12
             }
             Item { Layout.fillWidth: true }
+            PillBtn {
+                text: qsTr("全选")
+                enabled: root._folders.length > 0
+                onClicked: root._setAllFoldersChecked(true)
+            }
+            PillBtn {
+                text: qsTr("反选")
+                enabled: root._folders.length > 0
+                onClicked: root._invertFolderChecked()
+            }
+            PillBtn {
+                text: qsTr("全部展开")
+                onClicked: root._expandAll(true)
+            }
+            PillBtn {
+                text: qsTr("全部折叠")
+                onClicked: root._expandAll(false)
+            }
             PillBtn {
                 text: qsTr("刷新")
                 onClicked: root._refresh()
@@ -217,7 +489,7 @@ Window {
             border.width: 1
             radius: 4
 
-            // 表头
+            // 表头：树形视图共两列——文件 / 最新评分时间（可排序）
             Row {
                 id: header
                 anchors.left: parent.left
@@ -226,63 +498,66 @@ Window {
                 anchors.margins: 1
                 height: 28
                 spacing: 0
-                Repeater {
-                    model: [
-                        // sortable=true 的列支持点击切换排序；目前只有"时间"列。
-                        // 表头改为"文件名"——展示带 "<通道号>_" 前缀的名字，鼠标悬停可见绝对路径；
-                        // 不再保留"文件路径"列：多人汇总场景下路径是环境噪音，文件名带通道号已足够区分。
-                        { t: qsTr("时间"),     w: 170, sortable: true  },
-                        { t: qsTr("评分人"),   w: 110, sortable: false },
-                        { t: qsTr("星数"),     w: 70 , sortable: false },
-                        { t: qsTr("文件名"),   w: -1 , sortable: false }   // -1 = 占满剩余
-                    ]
-                    delegate: Rectangle {
-                        id: headerCell
-                        width: modelData.w === -1
-                               ? Math.max(120, header.width
-                                                - 170 - 110 - 70)
-                               : modelData.w
-                        height: 28
-                        // 时间列在 hover/pressed 时给一点反馈；其他列保持原色
-                        color: {
-                            if (!modelData.sortable) return "#2a2a30"
-                            if (timeSortMA.pressed) return "#34343c"
-                            if (timeSortMA.containsMouse) return "#30303a"
-                            return "#2a2a30"
-                        }
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.left: parent.left
-                            anchors.leftMargin: 8
-                            // 当前排序列附加 ▼ / ▲ 指示
-                            text: modelData.sortable
-                                  ? (modelData.t + "  " + (root._sortDesc ? "▼" : "▲"))
-                                  : modelData.t
-                            color: modelData.sortable ? "#ffffff" : "#dcdcde"
-                            font.pixelSize: 12
-                            font.bold: true
-                        }
-                        Rectangle {  // 列分割
-                            anchors.right: parent.right
-                            width: 1
-                            height: parent.height
-                            color: "#1e1e22"
-                        }
-                        // 仅 sortable 列才挂 MouseArea；点一下翻转排序方向。
-                        MouseArea {
-                            id: timeSortMA
-                            anchors.fill: parent
-                            enabled: modelData.sortable === true
-                            visible: modelData.sortable === true
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root._toggleTimeSort()
-                        }
+                // 文件列（占主要宽度，不含右侧两个固定列）
+                Rectangle {
+                    width: header.width - 220 - 90
+                    height: 28
+                    color: "#2a2a30"
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        text: qsTr("文件 / 评分记录")
+                        color: "#dcdcde"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: "#1e1e22" }
+                }
+                // 最新时间（可排序）
+                Rectangle {
+                    id: hTime
+                    width: 220
+                    height: 28
+                    color: hTimeMA.pressed ? "#34343c"
+                          : hTimeMA.containsMouse ? "#30303a"
+                                                  : "#2a2a30"
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        text: qsTr("最新评分时间") + "  " + (root._sortDesc ? "▼" : "▲")
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: "#1e1e22" }
+                    MouseArea {
+                        id: hTimeMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root._toggleTimeSort()
+                    }
+                }
+                // 汇总（次数 · 平均分）
+                Rectangle {
+                    width: 90
+                    height: 28
+                    color: "#2a2a30"
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        text: qsTr("汇总")
+                        color: "#dcdcde"
+                        font.pixelSize: 12
+                        font.bold: true
                     }
                 }
             }
 
-            // 数据行（ListView）
+            // 数据行（树形 ListView，单一 ListView 同时渲染分组行与子行）
             ListView {
                 id: listView
                 anchors.left: parent.left
@@ -291,49 +566,19 @@ Window {
                 anchors.bottom: parent.bottom
                 anchors.margins: 1
                 clip: true
-                model: root._rows
+                model: root._visibleRows
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-                delegate: Rectangle {
+                delegate: Loader {
+                    id: rowLoader
                     width: listView.width
-                    height: 26
-                    color: index % 2 === 0 ? "#222226" : "#26262a"
-
-                    Row {
-                        anchors.fill: parent
-                        spacing: 0
-                        // 时间
-                        CellText { w: 170; text: (modelData.updated_at || "").replace("T", " ").substring(0, 19) }
-                        // 评分人
-                        CellText { w: 110; text: modelData.rater || "" }
-                        // 星数
-                        Rectangle {
-                            width: 70; height: parent.height
-                            color: "transparent"
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.left: parent.left
-                                anchors.leftMargin: 8
-                                text: {
-                                    var s = parseInt(modelData.stars) || 0
-                                    if (s <= 0) return "—"
-                                    var out = ""
-                                    for (var i = 0; i < s; ++i) out += "★"
-                                    for (var j = s; j < 5; ++j) out += "☆"
-                                    return out
-                                }
-                                color: (parseInt(modelData.stars) || 0) > 0 ? "#f5c518" : "#666"
-                                font.pixelSize: 12
-                            }
-                        }
-                        // 文件名（占满剩余；显示带 "<通道号>_" 前缀的名字，悬停时 ToolTip 显示绝对路径）
-                        CellText {
-                            w: listView.width - 170 - 110 - 70
-                            text: modelData.file_name || ""
-                            rtl: true     // 名字过长时左侧省略，扩展名 / 关键尾段一定可见
-                            tooltipText: modelData.file_path || ""
-                        }
-                    }
+                    sourceComponent: modelData.kind === "folder" ? folderRowComp
+                                   : modelData.kind === "file"   ? fileRowComp
+                                                                  : itemRowComp
+                    // 把当前行数据与索引推送给 sourceComponent 实例；
+                    // Component 内部通过 parent.rowData / parent.rowIndex 读取。
+                    property var rowData: modelData
+                    property int rowIndex: index
                 }
 
                 // 空状态
@@ -344,6 +589,374 @@ Window {
                     horizontalAlignment: Text.AlignHCenter
                     color: "#6a6a72"
                     font.pixelSize: 12
+                }
+            }
+
+            // ── 一级：文件夹行（可点击展开/折叠该文件夹下所有文件）─────
+            Component {
+                id: folderRowComp
+                Rectangle {
+                    id: folderRoot
+                    height: 32
+                    width: parent ? parent.width : 0
+                    color: folderMA.containsMouse ? "#2c2c34" : "#26262e"
+                    Behavior on color { ColorAnimation { duration: 120 } }
+
+                    // parent 是 Loader，从上面拿 rowData
+                    property var d: parent.rowData ? parent.rowData.d : null
+                    property bool open: d ? !!root._expanded[d.key] : false
+
+                    // 左侧 4px 强调条，强化第一层级感
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 3
+                        color: "#3a7afe"
+                    }
+
+                    // 文件列
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: parent.width - 220 - 90
+                        color: "transparent"
+                        Row {
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left
+                            anchors.leftMargin: 8
+                            anchors.right: parent.right
+                            anchors.rightMargin: 8
+                            spacing: 6
+                            // 上传勾选：自绘深色方框，独立 MouseArea 吞掉事件，
+                            // 避免被外层 folderMA 截走变成展开/折叠。
+                            Item {
+                                id: folderCheck
+                                z: 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 18; height: 18
+                                property bool checked: folderRoot.d ? root._isFolderChecked(folderRoot.d.key) : false
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 4
+                                    color: folderCheck.checked ? "#3a7afe"
+                                                               : (folderCheckMA.containsMouse ? "#3a3a44" : "#2a2a32")
+                                    border.width: 1
+                                    border.color: folderCheck.checked ? "#3a7afe"
+                                                                      : (folderCheckMA.containsMouse ? "#5a5a66" : "#4a4a54")
+                                    Behavior on color       { ColorAnimation { duration: 100 } }
+                                    Behavior on border.color { ColorAnimation { duration: 100 } }
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "✓"
+                                        color: "#ffffff"
+                                        font.pixelSize: 13
+                                        font.bold: true
+                                        visible: folderCheck.checked
+                                    }
+                                }
+                                MouseArea {
+                                    id: folderCheckMA
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    acceptedButtons: Qt.LeftButton
+                                    propagateComposedEvents: false
+                                    onPressed: function(mouse) { mouse.accepted = true }
+                                    onClicked: function(mouse) {
+                                        mouse.accepted = true
+                                        if (folderRoot.d) root._toggleFolderChecked(folderRoot.d.key)
+                                    }
+                                    ToolTip.visible: containsMouse
+                                    ToolTip.delay: 600
+                                    ToolTip.text: folderCheck.checked ? qsTr("已勾选：将参与上传")
+                                                                      : qsTr("未勾选：上传时跳过该文件夹")
+                                }
+                            }
+                            Text {
+                                width: 14
+                                horizontalAlignment: Text.AlignHCenter
+                                text: folderRoot.open ? "▾" : "▸"
+                                color: "#cfcfd4"
+                                font.pixelSize: 13
+                            }
+                            Text {
+                                text: folderRoot.open ? "📂" : "📁"
+                                font.pixelSize: 13
+                            }
+                            Text {
+                                text: folderRoot.d ? folderRoot.d.name : ""
+                                color: "#ffffff"
+                                font.pixelSize: 13
+                                font.bold: true
+                                elide: Text.ElideMiddle
+                                width: Math.max(0, parent.width - 18 - 6 - 14 - 6 - 16 - 6)
+                            }
+                        }
+                    }
+                    // 最新时间
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: parent.width - 220 - 90 + 8
+                        width: 220 - 16
+                        text: folderRoot.d
+                              ? (folderRoot.d.latest || "").replace("T", " ").substring(0, 19)
+                              : ""
+                        color: "#dcdcde"
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+                    // 汇总：M 文件 · N 条 · 平均 4.2★
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: parent.width - 90 + 8
+                        width: 90 - 16
+                        text: folderRoot.d
+                              ? (folderRoot.d.files.length + "文件·" + folderRoot.d.totalItems + "条"
+                                  + (folderRoot.d.avg > 0 ? " · " + folderRoot.d.avg + "★" : ""))
+                              : ""
+                        color: folderRoot.d && folderRoot.d.avg > 0 ? "#f5c518" : "#cfcfd4"
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                    }
+
+                    // 底部分隔线
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 1
+                        color: "#1e1e22"
+                    }
+
+                    MouseArea {
+                        id: folderMA
+                        // 让出最左侧 checkbox 区域（8 边距 + 18 方框 + 6 间距 = 32），
+                        // 否则 fill: parent 会覆盖到 checkbox 上吃掉点击事件，导致点勾选变展开。
+                        anchors.left: parent.left
+                        anchors.leftMargin: 32
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        z: 0
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse && folderRoot.d && folderRoot.d.path.length > 0
+                        ToolTip.delay: 600
+                        ToolTip.timeout: 8000
+                        ToolTip.text: folderRoot.d ? folderRoot.d.path : ""
+                        onClicked: { if (folderRoot.d) root._toggleKey(folderRoot.d.key) }
+                    }
+                }
+            }
+
+            // ── 二级：文件行（可点击展开该文件下所有评分记录）──────────
+            Component {
+                id: fileRowComp
+                Rectangle {
+                    id: fileRoot
+                    height: 28
+                    width: parent ? parent.width : 0
+                    color: fileMA.containsMouse ? "#2c2c34" : "#23232a"
+                    Behavior on color { ColorAnimation { duration: 120 } }
+
+                    property var g: parent.rowData ? parent.rowData.g : null
+                    property bool open: g ? !!root._expanded[g.key] : false
+
+                    // 文件列
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: parent.width - 220 - 90
+                        color: "transparent"
+                        // 左侧缩进区竖线，对应文件夹层级
+                        Rectangle {
+                            x: 12
+                            width: 1
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            color: "#2e2e34"
+                        }
+                        Row {
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left
+                            anchors.leftMargin: 22
+                            anchors.right: parent.right
+                            anchors.rightMargin: 8
+                            spacing: 6
+                            Text {
+                                width: 14
+                                horizontalAlignment: Text.AlignHCenter
+                                text: fileRoot.open ? "▾" : "▸"
+                                color: "#9aa0a6"
+                                font.pixelSize: 12
+                            }
+                            Text {
+                                text: "🎬"
+                                font.pixelSize: 12
+                            }
+                            Text {
+                                text: fileRoot.g ? fileRoot.g.name : ""
+                                color: "#f0f0f3"
+                                font.pixelSize: 12
+                                font.bold: true
+                                elide: Text.ElideMiddle
+                                width: Math.max(0, parent.width - 22 - 14 - 6 - 12 - 6)
+                            }
+                        }
+                    }
+                    // 最新时间
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: parent.width - 220 - 90 + 8
+                        width: 220 - 16
+                        text: fileRoot.g
+                              ? (fileRoot.g.latest || "").replace("T", " ").substring(0, 19)
+                              : ""
+                        color: "#c8c8cc"
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+                    // 汇总：N 条 · 平均 4.2★
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: parent.width - 90 + 8
+                        width: 90 - 16
+                        text: fileRoot.g
+                              ? (fileRoot.g.items.length + "条"
+                                  + (fileRoot.g.avg > 0 ? " · " + fileRoot.g.avg + "★" : ""))
+                              : ""
+                        color: fileRoot.g && fileRoot.g.avg > 0 ? "#f5c518" : "#9aa0a6"
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                    }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 1
+                        color: "#1e1e22"
+                    }
+
+                    MouseArea {
+                        id: fileMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse && fileRoot.g
+                                          && (fileRoot.g.path.length > 0
+                                              || fileRoot.g.rawName !== fileRoot.g.name)
+                        ToolTip.delay: 600
+                        ToolTip.timeout: 8000
+                        // 剥过前缀的话，把原始名也显示出来，避免歧义
+                        ToolTip.text: fileRoot.g
+                                      ? ((fileRoot.g.rawName && fileRoot.g.rawName !== fileRoot.g.name
+                                          ? fileRoot.g.rawName + "\n" : "")
+                                         + (fileRoot.g.path || ""))
+                                      : ""
+                        onClicked: { if (fileRoot.g) root._toggleKey(fileRoot.g.key) }
+                    }
+                }
+            }
+
+            // ── 三级：评分记录行（最深层级）─────────────────────
+            Component {
+                id: itemRowComp
+                Rectangle {
+                    id: itemRoot
+                    height: 26
+                    width: parent ? parent.width : 0
+                    // parent 是 Loader，从上面拿 rowData / rowIndex
+                    property var r: parent.rowData ? parent.rowData.r : null
+                    property int rIndex: parent.rowIndex !== undefined ? parent.rowIndex : 0
+                    color: itemMA.containsMouse
+                          ? "#2a2a32"
+                          : (rIndex % 2 === 0 ? "#1f1f24" : "#22222a")
+
+                    // 子项缩进区（评分人 · 星数）
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: parent.width - 220 - 90
+                        color: "transparent"
+                        // 两条缩进竖线，对应文件夹/文件两层
+                        Rectangle {
+                            x: 12
+                            width: 1
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            color: "#2e2e34"
+                        }
+                        Rectangle {
+                            x: 28
+                            width: 1
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            color: "#2e2e34"
+                        }
+                        Row {
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left
+                            anchors.leftMargin: 44
+                            anchors.right: parent.right
+                            anchors.rightMargin: 8
+                            spacing: 10
+                            Text {
+                                text: "👤 " + (itemRoot.r ? (itemRoot.r.rater || "") : "")
+                                color: "#cfcfd4"
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                                width: 160
+                            }
+                            Text {
+                                text: {
+                                    if (!itemRoot.r) return ""
+                                    var s = parseInt(itemRoot.r.stars) || 0
+                                    if (s <= 0) return "—"
+                                    var out = ""
+                                    for (var i = 0; i < s; ++i) out += "★"
+                                    for (var j = s; j < 5; ++j) out += "☆"
+                                    return out
+                                }
+                                color: itemRoot.r && (parseInt(itemRoot.r.stars) || 0) > 0
+                                       ? "#f5c518" : "#666"
+                                font.pixelSize: 12
+                            }
+                        }
+                    }
+                    // 时间
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: parent.width - 220 - 90 + 8
+                        width: 220 - 16
+                        text: itemRoot.r
+                              ? (itemRoot.r.updated_at || "").replace("T", " ").substring(0, 19)
+                              : ""
+                        color: "#9aa0a6"
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                    }
+                    // 汇总列：子项不展示具体分数，留空保持对齐
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: parent.width - 90 + 8
+                        width: 90 - 16
+                        text: ""
+                    }
+
+                    MouseArea {
+                        id: itemMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                        ToolTip.visible: containsMouse && itemRoot.r && (itemRoot.r.file_path || "").length > 0
+                        ToolTip.delay: 600
+                        ToolTip.timeout: 8000
+                        ToolTip.text: itemRoot.r ? (itemRoot.r.file_path || "") : ""
+                    }
                 }
             }
         }
@@ -384,10 +997,40 @@ Window {
                     // 触发一次 focus 切换可让两者都把当前值落地到 Rating。
                     if (userField.activeFocus) userField.focus = false
                     if (tagField.activeFocus)  tagField.focus  = false
+
+                    // ── 上传前必填校验：评分人 + 备注 tag ───────────────────
+                    // 评分人不能依赖 Rating.currentUser（它会用系统用户名兜底，
+                    // 会把“未手动设置”误判为已填），所以只看输入框文本。
+                    var raterText = userField.text.trim()
+                    var tagText   = tagField.text.trim()
+                    if (raterText.length === 0) {
+                        actionToast.show(false, qsTr("请先填写「评分人」后再上传云端"))
+                        userField.forceActiveFocus()
+                        return
+                    }
+                    if (tagText.length === 0) {
+                        actionToast.show(false, qsTr("请先填写「备注 tag」后再上传云端"))
+                        tagField.forceActiveFocus()
+                        return
+                    }
+                    // 校验通过：把评分人值落库（避免 onEditingFinished 还没触发）
+                    if (Rating.currentUser !== raterText) {
+                        Rating.currentUser = raterText
+                    }
+
+                    // ── 必须至少勾选一个文件夹再上传
+                    var picked = root._collectCheckedFolderPaths()
+                    if (picked.length === 0) {
+                        actionToast.show(false, qsTr("请先勾选至少一个文件夹后再上传"))
+                        return
+                    }
+                    // 缓存本次勾选，供"保存并上传"/"覆盖上传"等后续入口复用
+                    root._lastUploadFolders = picked
+
                     if (!Rating.uploadServerUrl || Rating.uploadServerUrl.length === 0) {
                         uploadConfigDialog.open()
                     } else {
-                        Rating.uploadToCloud()
+                        Rating.uploadToCloud(false, picked)
                     }
                 }
                 // 双击 → 重新配置地址/Token
@@ -731,7 +1374,9 @@ Window {
                         if (typeof Rating !== "undefined") {
                             Rating.uploadServerUrl = uploadConfigDialog._urlBuf.trim()
                             Rating.uploadToken     = uploadConfigDialog._tokBuf
-                            Rating.uploadToCloud()
+                            // 复用主入口已记录的勾选；如果设置框是"未配置 URL → 直接打开"路径
+                            // 进来的，_lastUploadFolders 已被填好
+                            Rating.uploadToCloud(false, root._lastUploadFolders || [])
                         }
                         uploadConfigDialog.close()
                     }
@@ -1074,7 +1719,8 @@ Window {
                     danger: true
                     onClicked: {
                         uploadConflictDialog.close()
-                        if (typeof Rating !== "undefined") Rating.uploadToCloud(true)
+                        if (typeof Rating !== "undefined")
+                            Rating.uploadToCloud(true, root._lastUploadFolders || [])
                     }
                 }
             }
