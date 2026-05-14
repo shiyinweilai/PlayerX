@@ -26,6 +26,9 @@
 #include <QUrl>
 #include <QVariantList>
 
+class QNetworkAccessManager;
+class QNetworkReply;
+
 namespace rbqt {
 
 class RatingStore : public QObject {
@@ -36,6 +39,15 @@ class RatingStore : public QObject {
     // 导出 CSV 时 FileDialog 默认弹出的目录（QUrl 字符串，形如 "file:///Users/.../Downloads"）。
     // 跨平台一律落到系统下载目录；若不可用则回退到家目录。
     Q_PROPERTY(QUrl defaultExportDir READ defaultExportDir CONSTANT)
+
+    // 上传到后端的配置项，都持久化在 QSettings 下。
+    //   uploadServerUrl: 如 "http://192.168.1.10:8765/upload"；为空表示未配置，用户点上传时
+    //                    会被引导填写。
+    //   uploadToken    : 可选；后端开了 PLAYERX_TOKEN 时填一致的值，未开可以为空。
+    Q_PROPERTY(QString uploadServerUrl READ uploadServerUrl WRITE setUploadServerUrl NOTIFY uploadConfigChanged)
+    Q_PROPERTY(QString uploadToken     READ uploadToken     WRITE setUploadToken     NOTIFY uploadConfigChanged)
+    // 上传过程状态：QML 按钮可以用它进行 disable / loading 反馈。
+    Q_PROPERTY(bool uploading READ uploading NOTIFY uploadingChanged)
 
 public:
     explicit RatingStore(QObject* parent = nullptr);
@@ -88,13 +100,32 @@ public slots:
     // 在系统文件管理器中定位 dataFilePath（macOS Finder / Windows 资源管理器）
     void revealInFolder() const;
 
-    // 平台用户名兜底（当 currentUser 为空时使用）
+    // 平台用户名兑底（当 currentUser 为空时使用）
     QString systemUserName() const;
+
+    // ──上传配置 ──────────────────────────────────────
+    QString uploadServerUrl() const;
+    void    setUploadServerUrl(const QString& url);
+    QString uploadToken() const;
+    void    setUploadToken(const QString& token);
+    bool    uploading() const { return m_uploading; }
+
+    // 上传一份“精简 CSV”到 uploadServerUrl（与 exportToFile 写出的完全一致：
+    //   updated_at,rater,file_name,stars，不含 file_path / quick_hash）。
+    // 调用后立即返回，用 uploadFinished(ok, message) 信号给出结果。
+    // 在上传进行中重复调用会被忽略（避免连点手抽出多起请求）。
+    void uploadToCloud();
 
 signals:
     void currentUserChanged();
     void changed();   // 任何写入/清空都会触发，QML 表格可绑定刷新
 
+    // 上传相关信号
+    void uploadConfigChanged();
+    void uploadingChanged();
+    void uploadStarted();
+    // ok=true 时 message 为后端返回的文件名或简要信息；ok=false 时 message 为错误描述。
+    void uploadFinished(bool ok, const QString& message);
 private:
     // 把 vector<map> 整体重写到 CSV（覆盖式）
     bool writeAll(const QList<QVariantMap>& rows) const;
@@ -110,7 +141,14 @@ private:
     static qint64 fileSizeOf(const QString& path);
     static QString quickHashOf(const QString& path);
 
+    // 在内存里拼出“精简 CSV”（与 exportToFile 完全一致）。上传时复用。
+    QByteArray buildExportCsvBytes() const;
+
     QString m_dataFile;   // 绝对路径（构造时计算并 mkpath）
+
+    // QNetworkAccessManager 懒初始化：不走上传的运行不产生任何网络资源。
+    mutable QNetworkAccessManager* m_nam = nullptr;
+    bool m_uploading = false;
 };
 
 } // namespace rbqt

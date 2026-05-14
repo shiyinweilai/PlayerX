@@ -3,12 +3,18 @@
  */
 #include "RatingStore.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHttpMultiPart>
+#include <QHttpPart>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
@@ -20,7 +26,9 @@ namespace rbqt {
 namespace {
 constexpr const char* kCsvHeader =
     "updated_at,rater,file_name,file_path,file_size,quick_hash,stars";
-constexpr const char* kSettingsUserKey = "rating/user";
+constexpr const char* kSettingsUserKey      = "rating/user";
+constexpr const char* kSettingsUploadUrlKey = "rating/uploadUrl";
+constexpr const char* kSettingsUploadTokKey = "rating/uploadToken";
 }  // namespace
 
 // ════════════════════════════════════════════════════════════════════════
@@ -199,30 +207,172 @@ bool RatingStore::exportToFile(const QString& targetPath) const {
     if (!dst.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
         return false;
 
-    QTextStream ts(&dst);
-    ts.setEncoding(QStringConverter::Utf8);
-    ts.setGenerateByteOrderMark(true);   // 让 Excel 直接打开中文不乱码
+    const QByteArray bytes = buildExportCsvBytes();
+    return dst.write(bytes) == bytes.size();
+}
 
-    // 精简表头：仅四列，按汇总场景下的可读优先排序
+// 在内存里拼出与 exportToFile 完全一致的精简 CSV（UTF-8 with BOM）。
+// 上传代码复用这份字节，避免绕一圈磁盘。
+QByteArray RatingStore::buildExportCsvBytes() const {
+    QByteArray buf;
+    QTextStream ts(&buf, QIODevice::WriteOnly);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts.setGenerateByteOrderMark(true);
     ts << "updated_at,rater,file_name,stars\n";
 
     const QList<QVariantMap> rows = readAll();
     for (const auto& r : rows) {
-        // 把 ISO8601（"2026-05-14T18:48:21.281" 或带时区）转成 "yyyy-MM-dd HH:mm:ss"。
-        // 兼容三种实际可能出现的格式：ISODateWithMs、ISODate、退化为本地时间字符串。
         const QString rawTs = r.value("updated_at").toString();
         QDateTime dt = QDateTime::fromString(rawTs, Qt::ISODateWithMs);
         if (!dt.isValid()) dt = QDateTime::fromString(rawTs, Qt::ISODate);
         const QString prettyTs = dt.isValid()
                                      ? dt.toString("yyyy-MM-dd HH:mm:ss")
-                                     : rawTs;  // 拿不动就原样吐出，至少不丢数据
+                                     : rawTs;
 
         ts << csvEscape(prettyTs)                          << ","
            << csvEscape(r.value("rater").toString())       << ","
            << csvEscape(r.value("file_name").toString())   << ","
            << r.value("stars").toInt()                     << "\n";
     }
-    return true;
+    ts.flush();
+    return buf;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// 上传：读取配置 → 拼 multipart → POST → 信号带出结果
+// ═════════════════════════════════════════════════════════════════════
+
+QString RatingStore::uploadServerUrl() const {
+    QSettings s;
+    return s.value(kSettingsUploadUrlKey).toString().trimmed();
+}
+
+void RatingStore::setUploadServerUrl(const QString& url) {
+    QSettings s;
+    QString trimmed = url.trimmed();
+    if (s.value(kSettingsUploadUrlKey).toString() == trimmed) return;
+    s.setValue(kSettingsUploadUrlKey, trimmed);
+    s.sync();
+    emit uploadConfigChanged();
+}
+
+QString RatingStore::uploadToken() const {
+    QSettings s;
+    return s.value(kSettingsUploadTokKey).toString();
+}
+
+void RatingStore::setUploadToken(const QString& token) {
+    QSettings s;
+    if (s.value(kSettingsUploadTokKey).toString() == token) return;
+    s.setValue(kSettingsUploadTokKey, token);
+    s.sync();
+    emit uploadConfigChanged();
+}
+
+void RatingStore::uploadToCloud() {
+    if (m_uploading) {
+        // 并发护栏：连点不会发出多起请求。
+        emit uploadFinished(false, tr("已有上传任务进行中，请稍后重试"));
+        return;
+    }
+    const QString url = uploadServerUrl();
+    if (url.isEmpty()) {
+        emit uploadFinished(false, tr("未配置上传地址，请先填写服务器 URL"));
+        return;
+    }
+    QUrl u(url);
+    if (!u.isValid() || (u.scheme() != "http" && u.scheme() != "https")) {
+        emit uploadFinished(false, tr("服务器地址不合法（需以 http:// 或 https:// 开头）"));
+        return;
+    }
+
+    QString rater = currentUser();
+    if (rater.isEmpty()) rater = systemUserName();
+
+    const QByteArray csvBytes = buildExportCsvBytes();
+    if (csvBytes.isEmpty()) {
+        emit uploadFinished(false, tr("评分数据为空，无需上传"));
+        return;
+    }
+
+    if (!m_nam) m_nam = new QNetworkAccessManager(this);
+
+    auto* multi = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+
+    // file 字段（主要负载）
+    QHttpPart filePart;
+    QString fileName = QStringLiteral("playerx_%1_%2.csv")
+                           .arg(rater.isEmpty() ? "anon" : rater)
+                           .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
+    filePart.setHeader(QNetworkRequest::ContentDispositionHeader,
+                       QVariant(QString("form-data; name=\"file\"; filename=\"%1\"").arg(fileName)));
+    filePart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("text/csv; charset=utf-8"));
+    filePart.setBody(csvBytes);
+    multi->append(filePart);
+
+    // user 字段
+    QHttpPart userPart;
+    userPart.setHeader(QNetworkRequest::ContentDispositionHeader,
+                       QVariant("form-data; name=\"user\""));
+    userPart.setBody(rater.toUtf8());
+    multi->append(userPart);
+
+    // client 字段（带上应用名+版本，服务端可记录以供审计）
+    QHttpPart cliPart;
+    cliPart.setHeader(QNetworkRequest::ContentDispositionHeader,
+                      QVariant("form-data; name=\"client\""));
+    QString clientTag = QString("PlayerX/%1 (%2)")
+                            .arg(qApp ? qApp->applicationVersion() : QString("dev"))
+#if defined(Q_OS_MAC)
+                            .arg("macOS");
+#elif defined(Q_OS_WIN)
+                            .arg("Windows");
+#else
+                            .arg("Linux");
+#endif
+    cliPart.setBody(clientTag.toUtf8());
+    multi->append(cliPart);
+
+    QNetworkRequest req(u);
+    req.setRawHeader("User-Agent", "PlayerX-Uploader/1.0");
+    const QString tok = uploadToken();
+    if (!tok.isEmpty()) req.setRawHeader("X-Token", tok.toUtf8());
+    // 超时 30s：局域网下 CSV 体积极小，不该超过 1s，这个是兑底。
+    req.setTransferTimeout(30 * 1000);
+
+    QNetworkReply* reply = m_nam->post(req, multi);
+    multi->setParent(reply);   // reply 析构时一起释放 multipart
+
+    m_uploading = true;
+    emit uploadingChanged();
+    emit uploadStarted();
+
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const bool ok = (reply->error() == QNetworkReply::NoError);
+        QString message;
+        if (ok) {
+            const QByteArray body = reply->readAll();
+            // 服务端返回是个简单 JSON，里面有 saved 字段；这里不动用 QJsonDocument，
+            // 反正只是展示用，拿原始字节足够这个场景。只护一下快照：
+            QString trimmed = QString::fromUtf8(body).trimmed();
+            if (trimmed.size() > 200) trimmed = trimmed.left(200) + QStringLiteral("…");
+            message = tr("上传成功：%1").arg(trimmed.isEmpty() ? tr("已收到") : trimmed);
+        } else {
+            int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            QString errBody = QString::fromUtf8(reply->readAll()).trimmed();
+            if (httpCode > 0) {
+                message = tr("上传失败 (HTTP %1) %2")
+                              .arg(httpCode)
+                              .arg(errBody.isEmpty() ? reply->errorString() : errBody);
+            } else {
+                message = tr("上传失败：%1").arg(reply->errorString());
+            }
+        }
+        m_uploading = false;
+        emit uploadingChanged();
+        emit uploadFinished(ok, message);
+        reply->deleteLater();
+    });
 }
 
 // ════════════════════════════════════════════════════════════════════════

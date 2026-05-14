@@ -326,6 +326,38 @@ Window {
                 onClicked: exportDialog.open()
             }
             PillBtn {
+                // 上传到后端服务器：
+                //   ・ 未配置地址时 → 先弹设置对话框让用户填 URL/Token
+                //   ・ 配置后点击 → 直接走上传。上传中 disable，避免连点重复提交
+                // 鼠标右键 → 进设置对话框，取不到菜单 API 只能用双击代替：双击也走设置
+                id: uploadBtn
+                text: (typeof Rating !== "undefined" && Rating.uploading)
+                      ? qsTr("☁ 上传中…")
+                      : qsTr("☁ 上传到云端")
+                enabled: typeof Rating !== "undefined"
+                         && !Rating.uploading
+                         && root._rows.length > 0
+                onClicked: {
+                    if (typeof Rating === "undefined") return
+                    if (!Rating.uploadServerUrl || Rating.uploadServerUrl.length === 0) {
+                        uploadConfigDialog.open()
+                    } else {
+                        Rating.uploadToCloud()
+                    }
+                }
+                // 双击 → 重新配置地址/Token
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton  // 不抢单击，只接双击
+                    onDoubleClicked: uploadConfigDialog.open()
+                }
+            }
+            PillBtn {
+                // “⚙ 设置”：独立入口，避免“双击上传按钮”这种隐藏交互被错过
+                text: qsTr("⚙ 上传设置")
+                onClicked: uploadConfigDialog.open()
+            }
+            PillBtn {
                 text: qsTr("🗑 清空")
                 danger: true
                 enabled: root._rows.length > 0
@@ -483,6 +515,246 @@ Window {
         }
 
         onAccepted: { if (typeof Rating !== "undefined") Rating.clearAll() }
+    }
+
+    // ── 上传设置对话框（服务器地址 / 可选 Token）────────────────────────────
+    Dialog {
+        id: uploadConfigDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 480
+        padding: 0
+        title: ""   // 自绘 header
+
+        property string _urlBuf: ""
+        property string _tokBuf: ""
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#2e2e34"
+            border.width: 1
+            radius: 8
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("☁ 上传设置")
+                color: "#f0f0f3"
+                font.pixelSize: 14
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a30"
+            }
+        }
+
+        contentItem: ColumnLayout {
+            anchors.margins: 0
+            spacing: 10
+
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 12
+                text: qsTr("填入后端服务地址，点“保存并上传”后会将当前评分 CSV 推送过去。\n局域网示例：http://192.168.x.x:8765/upload")
+                color: "#cfcfd4"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                columns: 2
+                columnSpacing: 10
+                rowSpacing: 8
+
+                Text { text: qsTr("服务地址"); color: "#9aa0a6"; font.pixelSize: 12 }
+                TextField {
+                    id: urlField
+                    Layout.fillWidth: true
+                    text: uploadConfigDialog._urlBuf
+                    onTextChanged: uploadConfigDialog._urlBuf = text
+                    placeholderText: "http://<host>:<port>/upload"
+                    color: "#e8e8ec"
+                    placeholderTextColor: "#6a6a72"
+                    selectByMouse: true
+                    background: Rectangle {
+                        color: "#26262a"
+                        border.color: urlField.activeFocus ? "#3a7afe" : "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                }
+
+                Text { text: qsTr("Token"); color: "#9aa0a6"; font.pixelSize: 12 }
+                TextField {
+                    id: tokField
+                    Layout.fillWidth: true
+                    text: uploadConfigDialog._tokBuf
+                    onTextChanged: uploadConfigDialog._tokBuf = text
+                    placeholderText: qsTr("可选；服务未启 PLAYERX_TOKEN 时留空即可")
+                    color: "#e8e8ec"
+                    placeholderTextColor: "#6a6a72"
+                    selectByMouse: true
+                    background: Rectangle {
+                        color: "#26262a"
+                        border.color: tokField.activeFocus ? "#3a7afe" : "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                }
+            }
+
+            Item { Layout.preferredHeight: 4 }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a30"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                PillBtn {
+                    text: qsTr("仅保存")
+                    onClicked: {
+                        if (typeof Rating !== "undefined") {
+                            Rating.uploadServerUrl = uploadConfigDialog._urlBuf.trim()
+                            Rating.uploadToken     = uploadConfigDialog._tokBuf
+                        }
+                        uploadConfigDialog.close()
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("取消")
+                    onClicked: uploadConfigDialog.close()
+                }
+                PillBtn {
+                    text: qsTr("保存并上传")
+                    emphasized: true
+                    enabled: uploadConfigDialog._urlBuf.trim().length > 0
+                    onClicked: {
+                        if (typeof Rating !== "undefined") {
+                            Rating.uploadServerUrl = uploadConfigDialog._urlBuf.trim()
+                            Rating.uploadToken     = uploadConfigDialog._tokBuf
+                            Rating.uploadToCloud()
+                        }
+                        uploadConfigDialog.close()
+                    }
+                }
+            }
+        }
+
+        // 打开时预填当前配置
+        onOpened: {
+            if (typeof Rating !== "undefined") {
+                _urlBuf = Rating.uploadServerUrl || ""
+                _tokBuf = Rating.uploadToken     || ""
+            }
+        }
+    }
+
+    // ── 上传结果提示 Toast（右下角浮层，几秒后自动淑出）─────────────────
+    Item {
+        id: uploadToast
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 18
+        width: toastBg.width
+        height: toastBg.height
+        opacity: 0
+        visible: opacity > 0.01
+        z: 1000
+
+        property bool _ok: true
+        property string _msg: ""
+
+        function show(ok, msg) {
+            _ok = ok
+            _msg = msg
+            fadeIn.restart()
+            hideTimer.restart()
+        }
+
+        Rectangle {
+            id: toastBg
+            radius: 8
+            color: "#1e1e22"
+            border.color: uploadToast._ok ? "#52c41a" : "#f5222d"
+            border.width: 1
+            implicitWidth: Math.min(420, Math.max(220, toastLabel.implicitWidth + 32))
+            width: implicitWidth
+            height: toastLabel.implicitHeight + 22
+            Text {
+                id: toastLabel
+                anchors.fill: parent
+                anchors.margins: 12
+                text: (uploadToast._ok ? "✅ " : "❌ ") + uploadToast._msg
+                color: "#e8e8ec"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+        NumberAnimation on opacity {
+            id: fadeIn
+            from: 0; to: 1; duration: 160
+            running: false
+        }
+        NumberAnimation on opacity {
+            id: fadeOut
+            from: 1; to: 0; duration: 280
+            running: false
+        }
+        Timer {
+            id: hideTimer
+            interval: 4500
+            onTriggered: fadeOut.restart()
+        }
+    }
+
+    // 接上传结果信号跳 toast
+    Connections {
+        target: (typeof Rating !== "undefined") ? Rating : null
+        ignoreUnknownSignals: true
+        function onUploadFinished(ok, message) {
+            uploadToast.show(ok, message)
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
