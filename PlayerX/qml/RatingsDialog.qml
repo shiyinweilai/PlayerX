@@ -9,7 +9,12 @@
  * 关键交互：
  *   - 顶部：评分人输入框（写入 QSettings，立即生效；新评分都会带上这个名字）
  *           数据文件路径只读显示 + 在 Finder/资源管理器中显示
- *   - 中部：表格（时间 / 评分人 / 文件名 / 星数 / 文件路径）
+ *   - 中部：表格（时间 / 评分人 / 星数 / 文件名）
+ *     · 文件名一列展示带通道号前缀的形式（如 "1_xxx.mp4"），
+ *       鼠标悬停时通过 ToolTip 显示该文件的完整绝对路径；
+ *     · 不再单独保留"文件路径"列——多人汇总评分时路径属于环境噪音；
+ *     · 导出 CSV 也只保留 updated_at / rater / file_name / stars 四列，
+ *       updated_at 会格式化成 "yyyy-MM-dd HH:mm:ss" 方便人眼对齐。
  *   - 底部：导出 CSV（保存对话框）/ 清空（二次确认）/ 关闭
  */
 import QtQuick
@@ -34,9 +39,28 @@ Window {
 
     // 表格数据：弹窗每次打开 / Rating.changed 时刷新
     property var _rows: []
+    // 时间列排序方向：true = 新→旧（默认，与 C++ 端 getAllRatings 一致），false = 旧→新
+    property bool _sortDesc: true
 
+    // 按 _sortDesc 排 updated_at 字段；在 JS 里用字符串比较即可（ISO8601 字典序==时间序）。
+    function _applySort(rows) {
+        var arr = (rows || []).slice()  // 拷贝，避免就地改 C++ 返回的 list
+        arr.sort(function(a, b) {
+            var ta = a.updated_at || ""
+            var tb = b.updated_at || ""
+            if (ta === tb) return 0
+            if (root._sortDesc) return ta < tb ? 1 : -1
+            return ta < tb ? -1 : 1
+        })
+        return arr
+    }
     function _refresh() {
-        _rows = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
+        var raw = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
+        _rows = _applySort(raw)
+    }
+    function _toggleTimeSort() {
+        _sortDesc = !_sortDesc
+        _rows = _applySort(_rows)
     }
     function open() { show() }
 
@@ -172,25 +196,37 @@ Window {
                 spacing: 0
                 Repeater {
                     model: [
-                        { t: qsTr("时间"),     w: 170 },
-                        { t: qsTr("评分人"),   w: 110 },
-                        { t: qsTr("星数"),     w: 70  },
-                        { t: qsTr("文件名"),   w: 240 },
-                        { t: qsTr("文件路径"), w: -1  }   // -1 = 占满剩余
+                        // sortable=true 的列支持点击切换排序；目前只有"时间"列。
+                        // 表头改为"文件名"——展示带 "<通道号>_" 前缀的名字，鼠标悬停可见绝对路径；
+                        // 不再保留"文件路径"列：多人汇总场景下路径是环境噪音，文件名带通道号已足够区分。
+                        { t: qsTr("时间"),     w: 170, sortable: true  },
+                        { t: qsTr("评分人"),   w: 110, sortable: false },
+                        { t: qsTr("星数"),     w: 70 , sortable: false },
+                        { t: qsTr("文件名"),   w: -1 , sortable: false }   // -1 = 占满剩余
                     ]
                     delegate: Rectangle {
+                        id: headerCell
                         width: modelData.w === -1
                                ? Math.max(120, header.width
-                                                - 170 - 110 - 70 - 240)
+                                                - 170 - 110 - 70)
                                : modelData.w
                         height: 28
-                        color: "#2a2a30"
+                        // 时间列在 hover/pressed 时给一点反馈；其他列保持原色
+                        color: {
+                            if (!modelData.sortable) return "#2a2a30"
+                            if (timeSortMA.pressed) return "#34343c"
+                            if (timeSortMA.containsMouse) return "#30303a"
+                            return "#2a2a30"
+                        }
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.left: parent.left
                             anchors.leftMargin: 8
-                            text: modelData.t
-                            color: "#dcdcde"
+                            // 当前排序列附加 ▼ / ▲ 指示
+                            text: modelData.sortable
+                                  ? (modelData.t + "  " + (root._sortDesc ? "▼" : "▲"))
+                                  : modelData.t
+                            color: modelData.sortable ? "#ffffff" : "#dcdcde"
                             font.pixelSize: 12
                             font.bold: true
                         }
@@ -199,6 +235,16 @@ Window {
                             width: 1
                             height: parent.height
                             color: "#1e1e22"
+                        }
+                        // 仅 sortable 列才挂 MouseArea；点一下翻转排序方向。
+                        MouseArea {
+                            id: timeSortMA
+                            anchors.fill: parent
+                            enabled: modelData.sortable === true
+                            visible: modelData.sortable === true
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root._toggleTimeSort()
                         }
                     }
                 }
@@ -248,14 +294,12 @@ Window {
                                 font.pixelSize: 12
                             }
                         }
-                        // 文件名
-                        CellText { w: 240; text: modelData.file_name || ""; rtl: true }
-                        // 文件路径（占满）
+                        // 文件名（占满剩余；显示带 "<通道号>_" 前缀的名字，悬停时 ToolTip 显示绝对路径）
                         CellText {
-                            w: listView.width - 170 - 110 - 70 - 240
-                            text: modelData.file_path || ""
-                            rtl: true
-                            dim: true
+                            w: listView.width - 170 - 110 - 70
+                            text: modelData.file_name || ""
+                            rtl: true     // 名字过长时左侧省略，扩展名 / 关键尾段一定可见
+                            tooltipText: modelData.file_path || ""
                         }
                     }
                 }
@@ -451,6 +495,7 @@ Window {
         property string text: ""
         property bool dim: false
         property bool rtl: false   // 路径/文件名过长时左侧省略，确保后缀可见
+        property string tooltipText: ""   // 非空时鼠标悬停 ~600ms 弹出（典型用法：文件名→绝对路径）
         width: w
         height: 26
         color: "transparent"
@@ -465,6 +510,17 @@ Window {
             font.pixelSize: 12
             elide: parent.rtl ? Text.ElideLeft : Text.ElideRight
             horizontalAlignment: Text.AlignLeft
+        }
+        // 悬停 ToolTip：仅在显式提供了 tooltipText 时启用，避免空 tooltip 干扰其他单元格
+        MouseArea {
+            id: _cellMA
+            anchors.fill: parent
+            hoverEnabled: parent.tooltipText.length > 0
+            acceptedButtons: Qt.NoButton          // 不抢点击事件，纯 hover
+            ToolTip.visible: containsMouse && parent.tooltipText.length > 0
+            ToolTip.delay: 500
+            ToolTip.timeout: 8000
+            ToolTip.text: parent.tooltipText
         }
     }
 

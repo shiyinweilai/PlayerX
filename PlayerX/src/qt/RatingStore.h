@@ -56,9 +56,16 @@ public:
 public slots:
     // 记录一次评分；若同 filePath 已存在则覆盖；stars=0 也会保留为"已取消"行。
     // filePath 为空时不写入，安静返回 false。
+    //
+    // channelIndex：多路场景下的宏格索引（0-based，-1 = 不提供）。
+    // 为了让导出的 CSV 能一眼分辨"哪一路"，
+    // 写入时会把 file_name 统一成 "<channel+1>_<原文件名>"的样子（如 "1_xxx.mp4"）。
+    // 未传（默认 -1）时保持原为写入原始文件名，保证后向兼容。
+    // 该名称仅影响 CSV/评分表这一层，不影响标题栏、文件列表弹窗等其他处的文件名显示。
     bool recordRating(const QString& filePath,
                       const QString& fileName,
-                      int stars);
+                      int stars,
+                      int channelIndex = -1);
 
     // 查询某文件路径在 *当前评分人* 下的评分。
     //   · 命中：返回 0-5（含 0 = 已取消评分）

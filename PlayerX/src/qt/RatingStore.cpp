@@ -111,7 +111,8 @@ QVariantList RatingStore::getAllRatings() const {
 
 bool RatingStore::recordRating(const QString& filePath,
                                const QString& fileName,
-                               int stars) {
+                               int stars,
+                               int channelIndex) {
     if (filePath.trimmed().isEmpty()) return false;
     if (stars < 0) stars = 0;
     if (stars > 5) stars = 5;
@@ -121,6 +122,11 @@ bool RatingStore::recordRating(const QString& filePath,
 
     QString name = fileName;
     if (name.isEmpty()) name = QFileInfo(filePath).fileName();
+    // 多路场景下提供了宏格索引：在 file_name 前面拼接通道号（1-based）。
+    // 仅仅作用于当前评分仅要写入 CSV 的这一行记录，不会反向传出去影响其他 UI。
+    if (channelIndex >= 0) {
+        name = QString::number(channelIndex + 1) + QStringLiteral("_") + name;
+    }
 
     QVariantMap row;
     row["updated_at"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
@@ -173,17 +179,49 @@ int RatingStore::ratingFor(const QString& filePath) const {
 
 // ════════════════════════════════════════════════════════════════════════
 // 导出到任意路径
+//
+// 注意：这里**不直接拷贝** m_dataFile，而是在内存里重新组装一份
+// "汇总友好的精简 CSV"。因为：
+//   1. 多人评分同一份视频时，大家会把各自的 CSV 汇总到一起做横向对比，
+//      file_path（每个人本地路径千差万别）、file_size、quick_hash
+//      属于环境噪音，混进去反而干扰对齐——只留 file_name 即可，
+//      file_name 已经被写成 "<通道号>_<原文件名>" 形式（如 "1_xxx.mp4"），
+//      天然带"通道维度"，多人多组 vlookup 都能对齐。
+//   2. 内部存储的 ISO8601（含毫秒/T 分隔）人眼读起来割裂，导出时统一
+//      格式化为 "yyyy-MM-dd HH:mm:ss"，与弹窗表格里看到的一致。
 // ════════════════════════════════════════════════════════════════════════
 
 bool RatingStore::exportToFile(const QString& targetPath) const {
     if (targetPath.trimmed().isEmpty()) return false;
-    QFile src(m_dataFile);
-    if (!src.exists()) return false;
-    QFile dst(targetPath);
+
     QFileInfo(targetPath).absoluteDir().mkpath(".");
-    if (!dst.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-    if (!src.open(QIODevice::ReadOnly)) return false;
-    dst.write(src.readAll());
+    QFile dst(targetPath);
+    if (!dst.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+        return false;
+
+    QTextStream ts(&dst);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts.setGenerateByteOrderMark(true);   // 让 Excel 直接打开中文不乱码
+
+    // 精简表头：仅四列，按汇总场景下的可读优先排序
+    ts << "updated_at,rater,file_name,stars\n";
+
+    const QList<QVariantMap> rows = readAll();
+    for (const auto& r : rows) {
+        // 把 ISO8601（"2026-05-14T18:48:21.281" 或带时区）转成 "yyyy-MM-dd HH:mm:ss"。
+        // 兼容三种实际可能出现的格式：ISODateWithMs、ISODate、退化为本地时间字符串。
+        const QString rawTs = r.value("updated_at").toString();
+        QDateTime dt = QDateTime::fromString(rawTs, Qt::ISODateWithMs);
+        if (!dt.isValid()) dt = QDateTime::fromString(rawTs, Qt::ISODate);
+        const QString prettyTs = dt.isValid()
+                                     ? dt.toString("yyyy-MM-dd HH:mm:ss")
+                                     : rawTs;  // 拿不动就原样吐出，至少不丢数据
+
+        ts << csvEscape(prettyTs)                          << ","
+           << csvEscape(r.value("rater").toString())       << ","
+           << csvEscape(r.value("file_name").toString())   << ","
+           << r.value("stars").toInt()                     << "\n";
+    }
     return true;
 }
 

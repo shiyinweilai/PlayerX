@@ -1380,7 +1380,10 @@ ApplicationWindow {
             var fp = Engine.filePathAt(idx)
             if (fp && fp.length > 0) {
                 var fn = Engine.fileNameAt(idx)
-                Rating.recordRating(fp, fn, arr[idx])
+                // idx = 宫格索引（0-based），传给 RatingStore 用于在 CSV 的 file_name
+                // 字段前加 "<idx+1>_" 前缀，方便多组对比时一眼定位通道；
+                // 不影响标题栏 / 文件列表弹窗等其他位置的文件名显示。
+                Rating.recordRating(fp, fn, arr[idx], idx)
             }
         }
     }
