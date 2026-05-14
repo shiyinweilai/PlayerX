@@ -1,0 +1,14 @@
+{
+  "version": "2.0.5",
+  "minSupported": "1.0.0",
+  "author": "rbyang",
+  "copyright": "Copyright (c) 2026 PlayerX",
+  "notes": "PlayerX 2.0.5 is a major update that includes performance improvements, bug fixes, and new features such as support for additional video formats and enhanced user interface.",
+  "mandatory": false,
+  "downloads": {
+    "mac-arm64": {
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.5-arm64-mac.zip",
+      "sha256": "315d3f1d936d7b8e464b257aa6fa8ad92143b19f788712f728ed2339f65719e0"
+    }
+  }
+}

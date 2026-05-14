@@ -383,11 +383,16 @@ void Updater::applyMacOS(const QString& downloadedZip) {
     sh += QStringLiteral("  if ! kill -0 \"$PARENT_PID\" 2>/dev/null; then break; fi\n");
     sh += QStringLiteral("  sleep 0.2\n");
     sh += QStringLiteral("done\n");
-    sh += QStringLiteral("# 去除浏览器/curl 下载产生的 quarantine 标记\n");
-    sh += QStringLiteral("/usr/bin/xattr -dr com.apple.quarantine \"$NEW_APP\" 2>/dev/null || true\n");
+    sh += QStringLiteral("# 去除浏览器/curl/网盘下载产生的 quarantine 标记（递归清扩展属性更彻底）\n");
+    sh += QStringLiteral("/usr/bin/xattr -rc \"$NEW_APP\" 2>/dev/null || true\n");
+    sh += QStringLiteral("# 修正写权限，避免子文件只读导致后续操作失败\n");
+    sh += QStringLiteral("/bin/chmod -R u+w \"$NEW_APP\" 2>/dev/null || true\n");
     sh += QStringLiteral("# 替换 .app（先删旧再 mv，避免合并残留）\n");
     sh += QStringLiteral("rm -rf \"$OLD_APP\"\n");
     sh += QStringLiteral("/bin/mv \"$NEW_APP\" \"$OLD_APP\"\n");
+    sh += QStringLiteral("# 重新 ad-hoc 签名：xattr 修改和 mv 都可能让原签名失效，\n");
+    sh += QStringLiteral("# 不重签会被 Gatekeeper 判定为\"已损坏\"或要求二次确认。\n");
+    sh += QStringLiteral("/usr/bin/codesign --force --deep --sign - \"$OLD_APP\" 2>/dev/null || true\n");
     sh += QStringLiteral("# 拉起新版本\n");
     sh += QStringLiteral("/usr/bin/open \"$OLD_APP\"\n");
     sf.write(sh.toUtf8());

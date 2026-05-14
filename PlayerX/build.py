@@ -514,7 +514,7 @@ def output_path(target: str) -> str:
 #  macOS  → dist/PlayerX-x.y.z-arm64-mac.zip   （ditto 保留 .app 元数据/签名）
 #  Windows→ dist/PlayerX-Setup-x.y.z.exe       （NSIS 安装版）
 #         + dist/PlayerX-x.y.z-portable.exe    （单文件 portable，自带 7z SFX）
-#  同时输出 dist/latest.json 模板与 sha256，便于上传 CDN。
+#  同时输出 release/latest.json 模板与 sha256，便于上传 CDN。
 #
 #  自动更新通道命名严格对应 Updater::platformKey()：
 #     mac-arm64 / mac-x64 / win-install / win-portable
@@ -532,11 +532,14 @@ def _read_app_version() -> str:
     return "0.0.0"
 
 
-def _bump_app_version(new_version: str) -> str:
+def _bump_app_version(new_version: str, allow_overwrite: bool = False) -> str:
     """原地修改 CMakeLists.txt 的 project(PlayerX VERSION x.y.z ...) 行。
 
     - new_version 必须形如 X.Y.Z（三段数字），否则报错退出；
-    - 新版本必须严格大于当前版本（语义版本比较），避免误降级；
+    - 默认要求新版本严格大于当前版本（语义版本比较），避免误降级；
+    - allow_overwrite=True 时跨过递增检查，用于：
+        * 同版本重打包（未上传过，只是同一版本号重新出包）→检测后跳过写文件；
+        * 主动降级（发现新版重大缺陷需要带给用户临时回退）→重写 + warn。
     - 写回时保留行尾其它内容（LANGUAGES CXX C 等）。
     返回写入后的版本号。"""
     import re
@@ -544,10 +547,20 @@ def _bump_app_version(new_version: str) -> str:
         error(f"--bump 版本号格式错误，应为 X.Y.Z（如 2.0.5），收到: {new_version}")
         sys.exit(1)
 
-    cur = _read_app_version()
-    if tuple(int(x) for x in new_version.split(".")) <= tuple(int(x) for x in cur.split(".")):
-        error(f"新版本 {new_version} 必须严格大于当前 {cur}（避免误降级）")
-        sys.exit(1)
+    cur     = _read_app_version()
+    new_t   = tuple(int(x) for x in new_version.split("."))
+    cur_t   = tuple(int(x) for x in cur.split("."))
+    if new_t < cur_t:
+        if not allow_overwrite:
+            error(f"新版本 {new_version} 小于当前 {cur}（避免误降级）；如确需回退请加 --force")
+            sys.exit(1)
+        warn(f"⚠ 正在将版本号从 {cur} **回退** 到 {new_version}（--force 已启用）")
+    elif new_t == cur_t:
+        if not allow_overwrite:
+            error(f"新版本 {new_version} 必须严格大于当前 {cur}（避免误降级）；如需同版本号重打包请加 --force")
+            sys.exit(1)
+        info(f"同版本号重打包: {new_version}（跳过写 CMakeLists.txt）")
+        return cur
 
     cmake = os.path.join(SOURCE_DIR, "CMakeLists.txt")
     with open(cmake, "r", encoding="utf-8") as f:
@@ -577,7 +590,20 @@ def _sha256_file(path: str) -> str:
 
 def _ensure_dist_dir() -> str:
     # 产物目录与 build.py 同级，避免污染父工程根目录
+    # dist/ 仅放每次构建重新生成的二进制产物（zip / Setup.exe），可随时整目录删除
     d = os.path.join(SOURCE_DIR, "dist")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _ensure_release_dir() -> str:
+    """发布元数据目录：长期保留、累积演进，**不**应被 `rm -rf dist` 误删。
+
+    放置内容：
+      - latest.json（自动更新清单：版本号 / sha256 / 真实 CDN url / notes ...）
+    与 dist/ 严格分离，对齐业界做法（npm pack 输出 vs package.json）。
+    """
+    d = os.path.join(SOURCE_DIR, "release")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -600,6 +626,15 @@ def package_macos(version: str) -> dict:
     if os.path.exists(zip_path):
         os.remove(zip_path)
     info(f"打包 .app → {zip_path}")
+
+    # ── 打包前防御性清理（避免构建机历史 xattr / 只读权限污染分发包）──
+    # 1) 补全 owner 写权限：ditto 不会改权限，只读文件会让用户端二次操作（rm/mv）失败
+    run(["chmod", "-R", "u+w", app], check=False)
+    # 2) 清掉所有扩展属性（quarantine / provenance / 资源派生属性等）
+    run(["xattr", "-rc", app], check=False)
+    # 3) xattr 改动会让原 ad-hoc 签名失效，重签一次保证用户端启动不被 Gatekeeper 拦
+    run(["codesign", "--force", "--deep", "--sign", "-", app], check=False)
+
     # ditto 是 macOS 官方推荐方式：保留 codesign 签名、xattr、符号链接
     run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zip_path])
     sha = _sha256_file(zip_path)
@@ -678,7 +713,7 @@ def package_windows(version: str) -> dict:
 
 
 def write_latest_json(version: str, downloads: dict):
-    """生成/合并 dist/latest.json，给云端上传用。
+    """生成/合并 release/latest.json，给云端上传用。
 
     设计原则：脚本只**机械合并下载条目并刷新版本号 / sha256**，
     所有用户可读字段（notes / mandatory / minSupported / author / copyright /
@@ -687,10 +722,21 @@ def write_latest_json(version: str, downloads: dict):
     - 同版本：合并 downloads（mac 跑一次更新 mac-* 字段，win 跑一次再补 win-*）；
     - 不同版本（CMakeLists 改了 VERSION）：保留 notes/mandatory 等元字段框架，
       但 downloads 字典清空重建（旧版本的 sha256 不可能匹配新包）。
+
+    存放位置：`PlayerX/release/latest.json`（与 dist/ 分离，避免被 rm -rf dist 误删）。
     """
     import json
-    dist = _ensure_dist_dir()
-    out_path = os.path.join(dist, "latest.json")
+    release_dir = _ensure_release_dir()
+    out_path = os.path.join(release_dir, "latest.json")
+
+    # 一次性兼容迁移：若旧版本 latest.json 还在 dist/，搬到 release/，保留你手填的 notes
+    legacy_path = os.path.join(_ensure_dist_dir(), "latest.json")
+    if os.path.isfile(legacy_path) and not os.path.isfile(out_path):
+        try:
+            os.replace(legacy_path, out_path)
+            info(f"已迁移旧 latest.json: dist/ → release/")
+        except Exception as e:
+            warn(f"迁移旧 latest.json 失败（将重建）: {e}")
 
     # 默认骨架：仅在 latest.json 完全不存在时使用
     base = {
@@ -736,7 +782,7 @@ def write_latest_json(version: str, downloads: dict):
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(base, f, ensure_ascii=False, indent=2)
     success(f"已生成 {out_path}")
-    info("⚠ notes / mandatory 等字段请手工编辑 dist/latest.json；url 占位符上传 CDN 前替换为真实域名")
+    info("⚠ notes / mandatory 等字段请手工编辑 release/latest.json；url 占位符上传 CDN 前替换为真实域名")
 
 def package(target: str):
     """对应 --package：常规 build/install 完成后生成分发包。"""
@@ -763,7 +809,10 @@ def main():
     parser.add_argument("--package-only", action="store_true",
                         help="跳过编译，仅基于现有 build/install 产物打分发包")
     parser.add_argument("--bump",       default="",
-                        help="打包前先把 CMakeLists.txt 的版本号改成 X.Y.Z（必须严格递增）")
+                        help="打包前先把 CMakeLists.txt 的版本号改成 X.Y.Z（默认要求严格递增）")
+    parser.add_argument("-f", "--force", "--allow-version-overwrite",
+                        dest="force", action="store_true",
+                        help="允许 --bump 到与当前相同或更低的版本号（同版本重打包 / 临时回退专用）")
     args = parser.parse_args()
 
     target     = args.platform
@@ -775,7 +824,9 @@ def main():
     if args.clean_only:
         clean(target); return
     if args.bump:
-        _bump_app_version(args.bump)
+        _bump_app_version(args.bump, allow_overwrite=args.force)
+    elif args.force:
+        warn("--force 仅在配合 --bump 时生效，已忽略")
     if args.package_only:
         package(target); return
     if args.clean:
