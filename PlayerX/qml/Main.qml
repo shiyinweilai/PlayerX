@@ -1359,6 +1359,43 @@ ApplicationWindow {
     // 注意：本数据完全游离于 Engine 之外，关闭再打开同名文件评分会丢失，
     //       这是当前最小实现的明确取舍——后续若要持久化再扩展即可。
     property var cellRatings: []
+
+    // 「显式选中」（仅 UI 层概念，独立于 Engine.activeIndex）。
+    // -1 表示未选中——默认就是 -1，避免一打开应用就有一路被高亮，造成视觉干扰。
+    // 设计动机：Engine.activeIndex 是底层渲染状态（Single 模式靠它选画面、数字键
+    // toggle 也依赖它），不能轻易置 -1，否则会破坏既有逻辑。所以这里另起一个
+    // QML 端属性，专门表达「用户主动选中了哪一路」：
+    //   - 鼠标点击 cell  → 同时设置 selectedIdx 和 Engine.activeIndex（保留原行为）
+    //   - 鼠标点击空白    → 仅清 selectedIdx（不动 Engine.activeIndex）
+    //   - 数字键 1..9     → 二者同步
+    //   - [ / ]            → 仅在 selectedIdx ≥ 0 时切换；为 -1 时按下 ] 进入 0
+    //   - Shift+数字 评分 → 必须 selectedIdx ≥ 0 才生效（fileCount==1 时自动用 0）
+    property int selectedIdx: -1
+
+    // 评分提示 Toast（屏幕中央浮层）。HUD 由底部 Item 渲染；这里只放数据。
+    //   - ratingToastText  : 主文本（星星 / 提示语）
+    //   - ratingToastKind  : "score" / "clear" / "warn"，决定背景 & 边框色
+    //   - ratingToastScore : 1～5（kind=="score" 时有意义），决定主色调
+    property string ratingToastText: ""
+    property string ratingToastKind: "score"
+    property int    ratingToastScore: 0
+    function _showRatingToast(idx, score) {
+        var stars = ""
+        for (var i = 0; i < 5; ++i) stars += (i < score ? "\u2605" : "\u2606")
+        var cleared = (score === 0)
+        ratingToastText = (cleared ? "已清除评分" : stars)
+                          + "  \u00b7  \u901a\u9053 " + (idx + 1)
+        ratingToastKind  = cleared ? "clear" : "score"
+        ratingToastScore = score
+        ratingToast.show()
+    }
+    function _showRatingWarn(text) {
+        ratingToastText  = text
+        ratingToastKind  = "warn"
+        ratingToastScore = 0
+        ratingToast.show()
+    }
+
     function ratingAt(idx) {
         if (idx < 0 || idx >= cellRatings.length) return 0
         var v = cellRatings[idx]
@@ -1410,6 +1447,9 @@ ApplicationWindow {
                 arr.push((typeof v === "number" && v >= 1 && v <= 5) ? v : 0)
             }
             root.cellRatings = arr
+            // 切换文件 / 翻组 / 改宫格后，主动复位 selectedIdx，避免上一组的
+            // 选中（蓝边）残留误导。用户若需要再选中，单击或 [ / ] 即可。
+            root.selectedIdx = -1
         }
     }
 
@@ -2251,9 +2291,10 @@ ApplicationWindow {
             Engine.layoutMode = v
             return
         }
-        // 否则进入 Single 并聚焦到该窗口
+        // 否则进入 Single 并聚焦到该窗口；同时把 UI 选中态也设上，让快捷评分有目标
         Engine.activeIndex = idx
         Engine.layoutMode  = 0  // LayoutSingle
+        root.selectedIdx   = idx
     }
     Shortcut { sequence: "1"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(0) }
     Shortcut { sequence: "2"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(1) }
@@ -2264,6 +2305,96 @@ ApplicationWindow {
     Shortcut { sequence: "7"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(6) }
     Shortcut { sequence: "8"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(7) }
     Shortcut { sequence: "9"; context: Qt.ApplicationShortcut; onActivated: root._toggleOne(8) }
+
+    // ── 快捷评分 / 选中通道切换 ─────────────────────────────────────
+    // 设计要点：
+    //   1. 数字键 1-9 已被占用为「toggle 单路/多路」，因此评分用 Shift+0..5
+    //      避开冲突（Shift+0 = 清空，Shift+1..5 = 1..5 星）。
+    //   2. [ / ] 用于在通道间切换 activeIndex（即"选中下一路 / 上一路"），
+    //      不改变布局（layoutMode），只换"选中"——这点很重要，避免和数字键
+    //      的 toggle 行为语义重叠。
+    //   3. 全部走 root.setRatingAt() 已有逻辑：写入 cellRatings + 持久化到 CSV、
+    //      "再按相同分数 = 取消"等行为完全复用，零重复实现。
+    //   4. enabled 守卫：只有 fileCount > 0 才允许评分，防止空状态误触发。
+    //   5. context 选 ApplicationShortcut：和现有数字键一致，确保仅当应用前台
+    //      聚焦时生效；TextField/SpinBox 等控件聚焦时 Qt 会自动让控件优先吃键，
+    //      所以"输入框场景下不打扰"的诉求天然满足。
+    // 评分时确定目标通道：
+    //   - 用户已显式选中（selectedIdx ≥ 0）→ 直接用
+    //   - 仅有一路视频 → 自动落到 0（无歧义场景，省去先点击的麻烦）
+    //   - 多路且未选中 → 返回 -1，调用方应给出提示，不要悄悄打到第 0 路造成误评
+    function _resolveRatingTarget() {
+        if (Engine.fileCount <= 0) return -1
+        if (root.selectedIdx >= 0 && root.selectedIdx < Engine.fileCount)
+            return root.selectedIdx
+        if (Engine.fileCount === 1) return 0
+        return -1
+    }
+    // 快捷键评分专用：不走 setRatingAt（那里含 toggle 语义，给鼠标点星条用），
+    // 这里一律“强制覆盖写入”：不管以前是几星，按下 Shift+N 就是 N 星，
+    // 避免“首次评分出现已清除评分”、“连按两下变 0 分”这些迷惑场景。
+    function _writeRating(idx, score) {
+        var arr = root.cellRatings.slice()
+        while (arr.length <= idx) arr.push(0)
+        arr[idx] = score
+        root.cellRatings = arr
+        if (typeof Rating !== "undefined") {
+            var fp = Engine.filePathAt(idx)
+            if (fp && fp.length > 0) {
+                Rating.recordRating(fp, Engine.fileNameAt(idx), score, idx)
+            }
+        }
+    }
+    function _setRatingForActive(score) {
+        var idx = root._resolveRatingTarget()
+        if (idx < 0) {
+            root._showRatingWarn("\u8bf7\u5148\u9009\u4e2d\u4e00\u4e2a\u901a\u9053\uff08\u5355\u51fb\u753b\u9762\u6216\u6309 [ / ]\uff09")
+            return
+        }
+        root._writeRating(idx, score)
+        root._showRatingToast(idx, score)
+    }
+    function _clearRatingForActive() {
+        var idx = root._resolveRatingTarget()
+        if (idx < 0) {
+            root._showRatingWarn("\u8bf7\u5148\u9009\u4e2d\u4e00\u4e2a\u901a\u9053\uff08\u5355\u51fb\u753b\u9762\u6216\u6309 [ / ]\uff09")
+            return
+        }
+        root._writeRating(idx, 0)
+        root._showRatingToast(idx, 0)
+    }
+    function _shiftActive(dir) {
+        // dir: -1 上一路 / +1 下一路；循环。
+        // 同时同步 Engine.activeIndex，让 Single 模式下的渲染也跟着切。
+        var n = Engine.fileCount
+        if (n <= 0) return
+        var cur = root.selectedIdx
+        if (cur < 0) {
+            // 未选中场景：进入选中态，从 0（往后切）或末尾（往前切）开始
+            cur = (dir > 0) ? -1 : n   // 让下面 (cur+dir) 落到 0 / n-1
+        }
+        var nxt = ((cur + dir) % n + n) % n
+        root.selectedIdx = nxt
+        Engine.activeIndex = nxt
+    }
+    Shortcut { sequence: "Shift+0"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+               onActivated: root._clearRatingForActive() }
+    Shortcut { sequence: "Shift+1"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+               onActivated: root._setRatingForActive(1) }
+    Shortcut { sequence: "Shift+2"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+               onActivated: root._setRatingForActive(2) }
+    Shortcut { sequence: "Shift+3"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+               onActivated: root._setRatingForActive(3) }
+    Shortcut { sequence: "Shift+4"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+               onActivated: root._setRatingForActive(4) }
+    Shortcut { sequence: "Shift+5"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+               onActivated: root._setRatingForActive(5) }
+    // 选中切换（不改布局，仅改 selectedIdx + Engine.activeIndex）：[ 上一路 / ] 下一路，循环。
+    // 即使 fileCount == 1，也允许按 ] 让 selectedIdx 从 -1 进入 0（"用键盘进入选中状态"）。
+    Shortcut { sequence: "[";       context: Qt.ApplicationShortcut; enabled: Engine.fileCount >= 1
+               onActivated: root._shiftActive(-1) }
+    Shortcut { sequence: "]";       context: Qt.ApplicationShortcut; enabled: Engine.fileCount >= 1
+               onActivated: root._shiftActive(+1) }
 
     // ── 多组对比专用快捷键：上组 / 下组。仅在 multiGroupDialog.active 时生效。
     // 选用 Ctrl+↑/↓，避免与现有 ←→（快进快退） / "."","（帧步进）冲突。
@@ -2326,6 +2457,18 @@ ApplicationWindow {
             return slot
         }
 
+        // 「空白处点击取消选中」底层 MouseArea。
+        // 实现思路：与 Grid 同级铺满 videoArea，z=-1 让它垫在最底下；cell 内部的
+        // MouseArea 会优先吃掉落在画面里的点击，落到 cell 外（spacing/letterbox/
+        // 工具栏下方空白）的点击则会穿到这里 → 清空 selectedIdx。
+        // 注意：滑动对比模式下也允许点击取消（无 cell，全空白），无副作用。
+        MouseArea {
+            anchors.fill: parent
+            z: -1
+            acceptedButtons: Qt.LeftButton
+            onClicked: root.selectedIdx = -1
+        }
+
         Grid {
             id: grid
             anchors.fill: parent
@@ -2343,9 +2486,16 @@ ApplicationWindow {
                     width:  (grid.width  - grid.spacing * (grid.columns - 1)) / Math.max(1, grid.columns)
                     height: (grid.height - grid.spacing * (grid.rows    - 1)) / Math.max(1, grid.rows)
                     color: "#000"
-                    // 不显示选中边框：鼠标悬停时悬浮控制条已提供足够的视觉反馈
-                    border.color: "#222"
+                    // 选中边框：跟随 root.selectedIdx（QML 层显式选中状态），不跟
+                    // Engine.activeIndex —— 这样默认 selectedIdx=-1 时不会有任何
+                    // cell 被高亮，避免视觉干扰；点击空白也能取消选中。
+                    //   - 配色用低饱和雾蓝 #4a6fa5：辨识度足够，但比 #3a7afe 柔和
+                    //   - 未选中保持深灰 #222，与原视觉一致
+                    //   - 120ms 过渡，切换 / 评分时观感顺滑
+                    readonly property bool _isActive: root.selectedIdx === cell.playerIdx
+                    border.color: cell._isActive ? "#4a6fa5" : "#222"
                     border.width: 2
+                    Behavior on border.color { ColorAnimation { duration: 120 } }
 
                     property int playerIdx: videoArea.slotPlayerIndex(index)
 
@@ -2704,6 +2854,7 @@ ApplicationWindow {
                                 cell.localInfoVisible = !cell.localInfoVisible
                             } else {
                                 Engine.activeIndex = cell.playerIdx
+                                root.selectedIdx   = cell.playerIdx   // 同步 UI 选中态
                                 videoArea.forceActiveFocus()
                             }
                         }
@@ -3361,6 +3512,96 @@ ApplicationWindow {
             leftIndex: 0
             rightIndex: 1
             channelVisible: root.effectiveChannelVisible
+        }
+
+        // ─── 评分提示 Toast（屏幕中央浮层）───────────────────
+        // 快捷键评分时在屏幕中央弹一个带颜色的圆角卡片，让用户一眼识别：
+        //   - 打了几星、落到哪一路（避免在多路网格中误诸6）
+        //   - 分数高低用语义色区分：金色=5、绿=4、蓝=3、橙=2、红=1（与集成市场上
+        //     常见的评分卡一致）
+        //   - "清除"用中性灰、"提示未选中"用警警色（橙色）
+        // 仅装饰性，不拦截鼠标；show() 重置定时，连按不闪烁。
+        Item {
+            id: ratingToast
+            anchors.centerIn: parent
+            width: toastBg.implicitWidth
+            height: toastBg.implicitHeight
+            opacity: 0
+            visible: opacity > 0.01
+            z: 999
+
+            function show() {
+                hideTimer.restart()
+                fadeIn.restart()
+            }
+
+            // 根据 kind/score 计算主色（边框+文字）与背景调。
+            // dd 前缀 = ~87% 透明度的 ARGB，不遮住背后画面。
+            readonly property color _accent: {
+                if (root.ratingToastKind === "warn")  return "#fa8c16"
+                if (root.ratingToastKind === "clear") return "#9aa0a6"
+                switch (root.ratingToastScore) {
+                case 5: return "#ffcc33"  // 金
+                case 4: return "#52c41a"  // 绿
+                case 3: return "#4a8fe7"  // 蓝
+                case 2: return "#fa8c16"  // 橙
+                case 1: return "#f5222d"  // 红
+                }
+                return "#9aa0a6"
+            }
+
+            Rectangle {
+                id: toastBg
+                anchors.centerIn: parent
+                radius: 12
+                // 背景 = 主色其于二成透明叠在深黑上：发光感 + 保证可读
+                color: "#e61b1b22"
+                border.color: ratingToast._accent
+                border.width: 2
+                implicitWidth:  toastLabel.implicitWidth + 40
+                implicitHeight: toastLabel.implicitHeight + 24
+
+                // 内部柔和色晕：用与边框同色、低透明度的 Rectangle 模拟染色背景。
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    radius: 10
+                    color: ratingToast._accent
+                    opacity: 0.16
+                }
+
+                Label {
+                    id: toastLabel
+                    anchors.centerIn: parent
+                    text: root.ratingToastText
+                    color: ratingToast._accent
+                    font.pixelSize: 22
+                    font.bold: true
+                    // 轻微阴影让彩色文字在染色背景上仍足够锐利
+                    style: Text.Raised
+                    styleColor: "#000000"
+                }
+            }
+            NumberAnimation on opacity {
+                id: fadeIn
+                from: 0; to: 1
+                duration: 140
+                easing.type: Easing.OutCubic
+                running: false
+            }
+            NumberAnimation on opacity {
+                id: fadeOut
+                from: 1; to: 0
+                duration: 280
+                easing.type: Easing.InCubic
+                running: false
+            }
+            Timer {
+                id: hideTimer
+                interval: 880
+                repeat: false
+                onTriggered: fadeOut.restart()
+            }
         }
     }
 
