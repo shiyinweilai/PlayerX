@@ -7,14 +7,18 @@
  *   2. 同一 (user, tag) 重复上传：默认 **拒绝并返回 409**，由客户端
  *      弹"是否覆盖"确认；客户端再次带 force=1 上来时，把原来的
  *      文件移到 archive/<user>__<tag>/ 下保留（最多 10 份），再写新的。
- *   3. 可选 PLAYERX_TOKEN：设了就要求 X-Token 匹配，没设就放行（局域网默认开放）。
+ *   3. 鉴权：默认开启（默认 token = 123456）。可通过环境变量
+ *      PLAYERX_TOKEN 覆盖；设置 PLAYERX_TOKEN=- 表示显式关闭鉴权。
+ *      客户端在 HTTP 头 `X-Token` 或 query `?token=` 中传入即可。
  *   4. /list /merge 两个只读接口；/list 的每条记录额外带 user / tag 字段，
  *      /merge 默认仅合并各 (user, tag) 的最新文件，避免重复行膨胀。
  *
  * 启动：
- *   npm install        # 仅首次
- *   node server.js     # 默认 0.0.0.0:8765
- *   PORT=9000 PLAYERX_TOKEN=xxxxx node server.js
+ *   npm install                       # 仅首次
+ *   node server.js                    # 默认 0.0.0.0:8765，鉴权开启 (token=123456)
+ *   PLAYERX_TOKEN=mySecret node server.js   # 自定义 token
+ *   PLAYERX_TOKEN=- node server.js          # 显式关闭鉴权
+ *   PORT=9000 node server.js          # 自定义端口
  *
  * 接口：
  *   POST /upload   multipart/form-data
@@ -34,7 +38,14 @@ const path    = require('path');
 
 // ── 配置 ──────────────────────────────────────────────────────────────
 const PORT       = parseInt(process.env.PORT || '8765', 10);
-const TOKEN      = (process.env.PLAYERX_TOKEN || '').trim();   // 空 = 不校验
+// 鉴权 token：
+//   - 默认 '123456'（默认即开启鉴权，客户端必须配同样的 token 才能上传）
+//   - 通过环境变量 PLAYERX_TOKEN 可覆盖（例如生产用更强的随机串）
+//   - 显式设为 '-' 表示关闭鉴权（局域网纯内部场景）
+const RAW_TOKEN  = process.env.PLAYERX_TOKEN;
+const TOKEN      = (RAW_TOKEN === undefined ? '123456' : RAW_TOKEN).trim() === '-'
+                   ? ''
+                   : (RAW_TOKEN === undefined ? '123456' : RAW_TOKEN).trim();
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const ARCHIVE_DIR = path.join(__dirname, 'archive');
 const MAX_BYTES  = 10 * 1024 * 1024;
@@ -122,7 +133,13 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX
 function checkToken(req, res, next) {
     if (!TOKEN) return next();
     const got = req.header('X-Token') || req.query.token;
-    if (got !== TOKEN) return res.status(401).json({ ok: false, error: 'invalid token' });
+    if (got !== TOKEN) {
+        // 文案里前缀 "[AUTH] " 让客户端可以识别为"鉴权类硬错"，弹强提醒并引导去配 token。
+        const reason = !got
+            ? '[AUTH] 服务器已开启鉴权，但客户端未携带 token，请在「⚙ 上传设置」中填写。'
+            : '[AUTH] token 不匹配，请在「⚙ 上传设置」中确认 token 是否填写正确。';
+        return res.status(401).json({ ok: false, error: reason });
+    }
     next();
 }
 

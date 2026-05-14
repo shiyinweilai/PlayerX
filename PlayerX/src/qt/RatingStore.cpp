@@ -446,13 +446,29 @@ void RatingStore::uploadToCloud(bool force) {
             if (trimmed.size() > 200) trimmed = trimmed.left(200) + QStringLiteral("…");
             message = tr("上传成功：%1").arg(trimmed.isEmpty() ? tr("已收到") : trimmed);
         } else {
-            QString errBody = QString::fromUtf8(body).trimmed();
+            // 优先从 JSON body 里抠 error 字段（避免把一长串 JSON 原文吐给用户）
+            QString errText;
+            {
+                QJsonParseError perr{};
+                const auto doc = QJsonDocument::fromJson(body, &perr);
+                if (perr.error == QJsonParseError::NoError && doc.isObject()) {
+                    errText = doc.object().value(QStringLiteral("error")).toString().trimmed();
+                }
+            }
+            if (errText.isEmpty()) errText = QString::fromUtf8(body).trimmed();
+            if (errText.isEmpty()) errText = reply->errorString();
+
+            // 401/403 视作鉴权类硬错：在文案前加 [AUTH] 标记，QML 端据此弹强提醒。
+            // 兼容服务端自身已经带 [AUTH] 前缀的情况，避免重复加。
+            const bool authErr = (httpCode == 401 || httpCode == 403);
+            if (authErr && !errText.startsWith(QStringLiteral("[AUTH]"))) {
+                errText = QStringLiteral("[AUTH] ") + errText;
+            }
+
             if (httpCode > 0) {
-                message = tr("上传失败 (HTTP %1) %2")
-                              .arg(httpCode)
-                              .arg(errBody.isEmpty() ? reply->errorString() : errBody);
+                message = tr("上传失败 (HTTP %1)：%2").arg(httpCode).arg(errText);
             } else {
-                message = tr("上传失败：%1").arg(reply->errorString());
+                message = tr("上传失败：%1").arg(errText);
             }
         }
         m_uploading = false;

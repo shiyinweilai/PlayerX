@@ -836,6 +836,15 @@ Window {
         target: (typeof Rating !== "undefined") ? Rating : null
         ignoreUnknownSignals: true
         function onUploadFinished(ok, message) {
+            // 鉴权类硬错（HTTP 401/403 由 C++ 端在文案前置 "[AUTH]"）单独弹模态提醒，
+            // 防止"一闪而过的 toast"被用户漏看，进而以为上传成功。
+            if (!ok && message && message.indexOf("[AUTH]") >= 0) {
+                // 去掉前缀 token 标记，只保留人话部分给用户
+                var clean = message.replace("[AUTH]", "").trim()
+                uploadAuthErrorDialog._msg = clean
+                uploadAuthErrorDialog.open()
+                return
+            }
             actionToast.show(ok, message)
             if (ok) {
                 uploadBtn.flash = true
@@ -846,6 +855,117 @@ Window {
         function onUploadConflict(message) {
             uploadConflictDialog._msg = message
             uploadConflictDialog.open()
+        }
+    }
+
+    // 鉴权失败对话框：服务器开启了 token 校验、但客户端未配置/配错时，弹强提醒并提供"打开设置"快捷入口。
+    Dialog {
+        id: uploadAuthErrorDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 460
+        padding: 0
+
+        property string _msg: ""
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#5a2a2a"
+            border.width: 1
+            radius: 8
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("🔒 上传被拒：鉴权失败")
+                color: "#f0f0f3"
+                font.pixelSize: 14
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a30"
+            }
+        }
+
+        contentItem: Item {
+            implicitHeight: _authCol.implicitHeight + 32
+            ColumnLayout {
+                id: _authCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                spacing: 10
+                Text {
+                    Layout.fillWidth: true
+                    text: uploadAuthErrorDialog._msg
+                    color: "#e6e6ea"
+                    font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                    lineHeight: 1.4
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("请向管理员获取正确的 token，并在「⚙ 上传设置」中填写后重试。")
+                    color: "#8a8a90"
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                }
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a30"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("知道了")
+                    onClicked: uploadAuthErrorDialog.close()
+                }
+                PillBtn {
+                    text: qsTr("打开设置")
+                    danger: true
+                    onClicked: {
+                        uploadAuthErrorDialog.close()
+                        uploadConfigDialog.open()
+                    }
+                }
+            }
         }
     }
 
