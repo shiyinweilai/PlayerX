@@ -509,6 +509,247 @@ def output_path(target: str) -> str:
     return ""
 
 
+# ─── 分发包打包 ────────────────────────────────────────────────────────────────
+#
+#  macOS  → dist/PlayerX-x.y.z-arm64-mac.zip   （ditto 保留 .app 元数据/签名）
+#  Windows→ dist/PlayerX-Setup-x.y.z.exe       （NSIS 安装版）
+#         + dist/PlayerX-x.y.z-portable.exe    （单文件 portable，自带 7z SFX）
+#  同时输出 dist/latest.json 模板与 sha256，便于上传 CDN。
+#
+#  自动更新通道命名严格对应 Updater::platformKey()：
+#     mac-arm64 / mac-x64 / win-install / win-portable
+# ──────────────────────────────────────────────────────────────────────────────
+def _read_app_version() -> str:
+    """从 CMakeLists.txt 的 project(PlayerX VERSION x.y.z ...) 提取版本号。
+    单点维护：所有打包/发布脚本都以 CMakeLists 为准，不在多处复制版本号。"""
+    cmake = os.path.join(SOURCE_DIR, "CMakeLists.txt")
+    import re
+    with open(cmake, "r", encoding="utf-8") as f:
+        for line in f:
+            m = re.search(r"project\s*\(\s*PlayerX\s+VERSION\s+([0-9.]+)", line)
+            if m:
+                return m.group(1)
+    return "0.0.0"
+
+
+def _bump_app_version(new_version: str) -> str:
+    """原地修改 CMakeLists.txt 的 project(PlayerX VERSION x.y.z ...) 行。
+
+    - new_version 必须形如 X.Y.Z（三段数字），否则报错退出；
+    - 新版本必须严格大于当前版本（语义版本比较），避免误降级；
+    - 写回时保留行尾其它内容（LANGUAGES CXX C 等）。
+    返回写入后的版本号。"""
+    import re
+    if not re.fullmatch(r"\d+\.\d+\.\d+", new_version):
+        error(f"--bump 版本号格式错误，应为 X.Y.Z（如 2.0.5），收到: {new_version}")
+        sys.exit(1)
+
+    cur = _read_app_version()
+    if tuple(int(x) for x in new_version.split(".")) <= tuple(int(x) for x in cur.split(".")):
+        error(f"新版本 {new_version} 必须严格大于当前 {cur}（避免误降级）")
+        sys.exit(1)
+
+    cmake = os.path.join(SOURCE_DIR, "CMakeLists.txt")
+    with open(cmake, "r", encoding="utf-8") as f:
+        text = f.read()
+    new_text, n = re.subn(
+        r"(project\s*\(\s*PlayerX\s+VERSION\s+)[0-9.]+",
+        r"\g<1>" + new_version,
+        text, count=1,
+    )
+    if n != 1:
+        error(f"未在 {cmake} 中匹配到 project(PlayerX VERSION ...) 行")
+        sys.exit(1)
+    with open(cmake, "w", encoding="utf-8") as f:
+        f.write(new_text)
+    success(f"版本号已更新: {cur} → {new_version}  ({cmake})")
+    return new_version
+
+
+def _sha256_file(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _ensure_dist_dir() -> str:
+    # 产物目录与 build.py 同级，避免污染父工程根目录
+    d = os.path.join(SOURCE_DIR, "dist")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def package_macos(version: str) -> dict:
+    """打 macOS .zip 分发包（ditto 保留签名/扩展属性，行业标准做法）。"""
+    bdir = build_dir_for("macos")
+    bin_dir = os.path.join(bdir, "bin")
+    app = None
+    for entry in os.listdir(bin_dir) if os.path.isdir(bin_dir) else []:
+        if entry.endswith(".app"):
+            app = os.path.join(bin_dir, entry); break
+    if not app:
+        error("未找到 .app 产物，请先执行常规构建")
+        sys.exit(1)
+
+    arch = "arm64" if platform.machine() == "arm64" else "x64"
+    dist = _ensure_dist_dir()
+    zip_path = os.path.join(dist, f"PlayerX-{version}-{arch}-mac.zip")
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+    info(f"打包 .app → {zip_path}")
+    # ditto 是 macOS 官方推荐方式：保留 codesign 签名、xattr、符号链接
+    run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zip_path])
+    sha = _sha256_file(zip_path)
+    success(f"macOS zip: {zip_path}  sha256={sha[:16]}…")
+    return {f"mac-{arch}": {"path": zip_path, "sha256": sha}}
+
+
+def package_windows(version: str) -> dict:
+    """打 Windows install / portable 双形态。"""
+    idir = install_dir_for("windows")
+    src_bin = os.path.join(idir, "bin")
+    if not os.path.isdir(src_bin):
+        error(f"未找到 Windows 安装产物目录: {src_bin}\n请先 python3 build.py -p windows")
+        sys.exit(1)
+
+    dist = _ensure_dist_dir()
+    out = {}
+
+    # 1) NSIS Setup
+    makensis = shutil.which("makensis")
+    if not makensis:
+        warn("未找到 makensis，跳过安装版打包。安装方法：brew install makensis")
+    else:
+        nsi = os.path.join(SOURCE_DIR, "installer", "PlayerX.nsi")
+        if not os.path.isfile(nsi):
+            error(f"未找到 NSIS 脚本: {nsi}")
+            sys.exit(1)
+        info(f"调用 makensis 构建 Setup ...")
+        # 通过 -D 把变量注入 NSI；OUT_DIR 必须是相对于 nsi 文件的路径
+        rel_src = os.path.relpath(src_bin, os.path.dirname(nsi))
+        rel_out = os.path.relpath(dist,    os.path.dirname(nsi))
+        cmd = [
+            makensis,
+            f"-DAPP_VERSION={version}",
+            f"-DSRC_DIR={rel_src}",
+            f"-DOUT_DIR={rel_out}",
+            nsi,
+        ]
+        run(cmd, cwd=os.path.dirname(nsi))
+        setup_exe = os.path.join(dist, f"PlayerX-Setup-{version}.exe")
+        if os.path.isfile(setup_exe):
+            sha = _sha256_file(setup_exe)
+            out["win-install"] = {"path": setup_exe, "sha256": sha}
+            success(f"Windows Setup: {setup_exe}  sha256={sha[:16]}…")
+        else:
+            error(f"NSIS 输出未找到: {setup_exe}")
+
+    # 2) Portable：直接打 ZIP 整包（行业标准做法，VS Code/JetBrains 同款）
+    #    用户解压到任意目录，双击 PlayerX.exe 即可运行；
+    #    自更新走 Updater 的 portable 分支：下载新 zip → 解压覆盖整个安装目录 → 重启。
+    #    （早期方案曾尝试 7z SFX 单文件，但 SFX 是"解压器"而非 exe 本体，
+    #     与"替换 exe"的自更新链路冲突，已废弃。）
+    portable_zip = os.path.join(dist, f"PlayerX-{version}-win64-portable.zip")
+    if os.path.exists(portable_zip):
+        os.remove(portable_zip)
+    info(f"打包 portable zip: {portable_zip}")
+
+    # 用 Python 自带 zipfile，避免依赖 7z；compresslevel=9 体积最小
+    import zipfile
+    # 顶层目录命名包含版本号，解压后用户得到 PlayerX-2.0.x/ 而非散落文件
+    top = f"PlayerX-{version}"
+    with zipfile.ZipFile(portable_zip, "w",
+                         compression=zipfile.ZIP_DEFLATED,
+                         compresslevel=9) as zf:
+        for root, dirs, files in os.walk(src_bin):
+            for name in files:
+                fp = os.path.join(root, name)
+                rel = os.path.relpath(fp, src_bin)
+                zf.write(fp, arcname=os.path.join(top, rel))
+
+    sha = _sha256_file(portable_zip)
+    out["win-portable"] = {"path": portable_zip, "sha256": sha}
+    success(f"Windows Portable: {portable_zip}  sha256={sha[:16]}…")
+
+    return out
+
+
+def write_latest_json(version: str, downloads: dict):
+    """生成/合并 dist/latest.json，给云端上传用。
+
+    设计原则：脚本只**机械合并下载条目并刷新版本号 / sha256**，
+    所有用户可读字段（notes / mandatory / minSupported / author / copyright /
+    真实 CDN url）一律以现有文件为准——你手工编辑的内容永远不会被覆盖。
+
+    - 同版本：合并 downloads（mac 跑一次更新 mac-* 字段，win 跑一次再补 win-*）；
+    - 不同版本（CMakeLists 改了 VERSION）：保留 notes/mandatory 等元字段框架，
+      但 downloads 字典清空重建（旧版本的 sha256 不可能匹配新包）。
+    """
+    import json
+    dist = _ensure_dist_dir()
+    out_path = os.path.join(dist, "latest.json")
+
+    # 默认骨架：仅在 latest.json 完全不存在时使用
+    base = {
+        "version":      version,
+        "minSupported": "1.0.0",
+        "author":       "rbyang",
+        "copyright":    "Copyright (c) 2025 PlayerX",
+        "notes":        "",
+        "mandatory":    False,
+        "downloads":    {},
+    }
+
+    if os.path.isfile(out_path):
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                old = json.load(f)
+            # 元字段一律以旧文件为准（你手工维护）
+            for k in ("minSupported", "author", "copyright", "notes", "mandatory"):
+                if k in old:
+                    base[k] = old[k]
+            # downloads：仅在版本号一致时合并，避免旧 sha256 跟新包混用
+            if old.get("version") == version:
+                base["downloads"] = dict(old.get("downloads") or {})
+        except Exception as e:
+            warn(f"读取旧 latest.json 失败，将重建: {e}")
+
+    base["version"] = version
+
+    # 合并本次新生成的下载条目；保留旧 url（如果是真实 CDN），仅刷 sha256
+    for chan, info_d in downloads.items():
+        fname     = os.path.basename(info_d["path"])
+        old_entry = base["downloads"].get(chan) or {}
+        old_url   = old_entry.get("url", "") if isinstance(old_entry, dict) else ""
+        if old_url and "YOUR-CDN.example.com" not in old_url:
+            new_url = old_url   # 用户已改为真实 CDN，保留之
+        else:
+            new_url = f"https://YOUR-CDN.example.com/PlayerX/{fname}"
+        base["downloads"][chan] = {
+            "url":    new_url,
+            "sha256": info_d["sha256"],
+        }
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(base, f, ensure_ascii=False, indent=2)
+    success(f"已生成 {out_path}")
+    info("⚠ notes / mandatory 等字段请手工编辑 dist/latest.json；url 占位符上传 CDN 前替换为真实域名")
+
+def package(target: str):
+    """对应 --package：常规 build/install 完成后生成分发包。"""
+    version = _read_app_version()
+    info(f"打包版本: {version} (target={target})")
+    dl = {}
+    if target == "macos":
+        dl.update(package_macos(version))
+    else:
+        dl.update(package_windows(version))
+    write_latest_json(version, dl)
+
+
 # ─── 主入口 ────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="PlayerX 构建脚本（macOS / macOS→Windows 交叉）")
@@ -517,6 +758,12 @@ def main():
     parser.add_argument("--debug",      action="store_true", help="Debug 构建")
     parser.add_argument("--clean",      action="store_true", help="清理后重新构建")
     parser.add_argument("--clean-only", action="store_true", help="仅清理")
+    parser.add_argument("--package",    action="store_true",
+                        help="构建后打分发包（macOS=.zip / Windows=Setup+portable）")
+    parser.add_argument("--package-only", action="store_true",
+                        help="跳过编译，仅基于现有 build/install 产物打分发包")
+    parser.add_argument("--bump",       default="",
+                        help="打包前先把 CMakeLists.txt 的版本号改成 X.Y.Z（必须严格递增）")
     args = parser.parse_args()
 
     target     = args.platform
@@ -527,6 +774,10 @@ def main():
 
     if args.clean_only:
         clean(target); return
+    if args.bump:
+        _bump_app_version(args.bump)
+    if args.package_only:
+        package(target); return
     if args.clean:
         clean(target)
 
@@ -551,6 +802,9 @@ def main():
         success(f"产物: {out}")
         if out.endswith(".app"):
             success(f"启动: open '{out}'")
+
+    if args.package:
+        package(target)
 
 if __name__ == "__main__":
     main()

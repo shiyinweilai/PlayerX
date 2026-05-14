@@ -268,7 +268,23 @@ ApplicationWindow {
         }
 
         Menu {
+            id: helpMenu
             title: qsTr("帮助")
+            // 动态首项：仅在检测到新版本时显示，作为"系统全局菜单"下的兜底入口
+            // —— macOS 顶端原生菜单不允许塞自定义控件，所以这里给一份纯 MenuItem。
+            MenuItem {
+                id: miUpdateAvailable
+                visible: Updater.updateAvailable
+                height: visible ? implicitHeight : 0
+                text: qsTr("⬆ 安装新版本 %1…").arg(Updater.latestVersion)
+                onTriggered: updateDialog.open()
+            }
+            MenuSeparator { visible: miUpdateAvailable.visible }
+            MenuItem {
+                text: qsTr("检查更新…")
+                onTriggered: { updateDialog.userInitiated = true; Updater.checkForUpdates(false) }
+            }
+            MenuSeparator {}
             MenuItem {
                 text: qsTr("快捷键…")
                 onTriggered: shortcutsDialog.open()
@@ -277,6 +293,91 @@ ApplicationWindow {
             MenuItem {
                 text: qsTr("关于 PlayerX")
                 onTriggered: aboutDialog.open()
+            }
+        }
+    }
+
+    // ─── 右上角"更新可用"胶囊按钮（VS Code 风格） ───────────────────────
+    //  · 仅在 Updater.updateAvailable=true 时显示
+    //  · 点击 → 弹 updateDialog（深色面板 + 进度条）
+    //  · 视觉上落在菜单栏下方右侧 8px 处，保证不遮挡内容；macOS 全局菜单
+    //    在屏幕顶端、本按钮位于窗口顶端，互不冲突且双入口冗余更可靠。
+    Rectangle {
+        id: updateBadge
+        z: 100
+        visible: Updater.updateAvailable
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.rightMargin: 10
+        anchors.topMargin: Qt.platform.os === "osx" ? 6 : 32   // mac 全局菜单栏不在窗口内
+        implicitHeight: 22
+        implicitWidth: badgeRow.implicitWidth + 18
+        radius: 11
+        // VS Code 蓝色调 #0e639c，与深色主题统一
+        color: badgeMA.pressed ? "#0a4f7d"
+                               : badgeMA.containsMouse ? "#1177bb" : "#0e639c"
+        border.color: "#1f8ad9"
+        border.width: 1
+        Behavior on color { ColorAnimation { duration: 120 } }
+
+        Row {
+            id: badgeRow
+            anchors.centerIn: parent
+            spacing: 6
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "⬆"
+                color: "#ffffff"
+                font.pixelSize: 12
+                font.bold: true
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("更新 %1").arg(Updater.latestVersion || "")
+                color: "#ffffff"
+                font.pixelSize: 11
+            }
+        }
+
+        MouseArea {
+            id: badgeMA
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: { updateDialog.userInitiated = false; updateDialog.open() }
+        }
+
+        ToolTip.visible: badgeMA.containsMouse
+        ToolTip.delay: 400
+        ToolTip.text: qsTr("有新版本 %1 可用，点击查看").arg(Updater.latestVersion || "")
+    }
+
+    // ─── 启动 5 秒后静默自检；同时连接 Updater 信号驱动 UI ───────────────
+    Timer {
+        id: updateAutoCheckTimer
+        interval: 5000
+        running: true
+        repeat: false
+        onTriggered: Updater.checkForUpdates(true)
+    }
+
+    Connections {
+        target: Updater
+        // 状态切换到 available 时，如果是手动触发的检查则自动弹窗；
+        // 如果是静默自检，则只显示右上角胶囊按钮，不打扰用户。
+        function onStateChanged() {
+            if (Updater.state === "available" && updateDialog.userInitiated) {
+                updateDialog.open()
+            }
+            if (Updater.state === "error" && updateDialog.userInitiated) {
+                updateDialog.open()
+            }
+        }
+        // 已是最新版 / 网络错误：仅在用户手动点了"检查更新"时弹 toast
+        function onCheckFailed(reason) {
+            if (updateDialog.userInitiated) {
+                updateToast.text = reason
+                updateToast.open()
             }
         }
     }
@@ -621,9 +722,9 @@ ApplicationWindow {
                 wrapMode: Text.WordWrap
                 lineHeight: 1.3
             }
-            // 版本 + 作者
+            // 版本 + 作者（版本号由 Updater.currentVersion 单点维护，源自 CMake project VERSION）
             Text {
-                text: qsTr("版本 1.0.0")
+                text: qsTr("版本 %1").arg(Updater.currentVersion)
                 color: "#9aa0a6"
                 font.pixelSize: 12
             }
@@ -655,6 +756,314 @@ ApplicationWindow {
             }
         }
     }
+
+    // ─── 应用自动更新：深色面板（与 aboutDialog 风格一致） ─────────────────
+    //   状态机驱动 UI：
+    //     idle / checking      → 顶部"正在检查更新…"
+    //     available            → 显示新版本号 + 释放说明 + [稍后/立即更新] 按钮
+    //     downloading          → 实时进度条 + 速率/剩余时间 + [取消]
+    //     verifying / ready    → "校验中…" / "即将重启…"
+    //     error                → 红字错误 + [关闭/重试]
+    //
+    //   userInitiated 标志：区分手动触发与启动后静默自检：
+    //     · 手动：弹出对话框 + "已是最新版本"toast；
+    //     · 静默：不打扰，仅刷新右上角胶囊按钮的可见性。
+    Dialog {
+        id: updateDialog
+        title: qsTr("应用更新")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        // 下载中禁止 ESC / 点击外部关闭，避免误中断
+        closePolicy: (Updater.state === "downloading" || Updater.state === "verifying")
+                     ? Popup.NoAutoClose
+                     : (Popup.CloseOnEscape | Popup.CloseOnPressOutside)
+        implicitWidth: 460
+
+        // 是否由用户主动触发（菜单"检查更新…"/胶囊按钮）。决定是否在异常路径下弹 toast。
+        property bool userInitiated: false
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+            // 双层外阴影
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -8
+                radius: parent.radius + 4
+                color: "transparent"
+                border.color: "#80000000"
+                border.width: 1
+                opacity: 0.45
+            }
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -4
+                radius: parent.radius + 2
+                color: "transparent"
+                border.color: "#a0000000"
+                border.width: 1
+                opacity: 0.55
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 40
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: Updater.state === "checking"   ? qsTr("正在检查更新…")
+                    : Updater.state === "available"  ? qsTr("发现新版本")
+                    : Updater.state === "downloading"? qsTr("正在下载更新…")
+                    : Updater.state === "verifying"  ? qsTr("正在校验…")
+                    : Updater.state === "ready"      ? qsTr("即将重启应用")
+                    : Updater.state === "error"      ? qsTr("更新失败")
+                                                     : qsTr("应用更新")
+                color: "#e8e8ec"
+                font.pixelSize: 15
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a32"
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 12
+            // 版本号一行：当前 → 新版本
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Text {
+                    text: qsTr("当前版本")
+                    color: "#9aa0a6"
+                    font.pixelSize: 12
+                }
+                Text {
+                    text: Updater.currentVersion
+                    color: "#e8e8ec"
+                    font.pixelSize: 13
+                    font.bold: true
+                }
+                Text {
+                    visible: Updater.latestVersion.length > 0
+                    text: "→"
+                    color: "#9aa0a6"
+                    font.pixelSize: 12
+                }
+                Text {
+                    visible: Updater.latestVersion.length > 0
+                    text: qsTr("最新版本")
+                    color: "#9aa0a6"
+                    font.pixelSize: 12
+                }
+                Text {
+                    visible: Updater.latestVersion.length > 0
+                    text: Updater.latestVersion
+                    color: "#5cb85c"
+                    font.pixelSize: 13
+                    font.bold: true
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            // 释放说明
+            Rectangle {
+                visible: Updater.releaseNotes.length > 0 && Updater.state !== "downloading"
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(notesText.implicitHeight + 16, 140)
+                color: "#16161a"
+                border.color: "#2a2a32"
+                border.width: 1
+                radius: 4
+                Flickable {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    contentHeight: notesText.implicitHeight
+                    clip: true
+                    Text {
+                        id: notesText
+                        width: parent.width
+                        text: Updater.releaseNotes
+                        color: "#c8c8cc"
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                        lineHeight: 1.3
+                    }
+                }
+            }
+
+            // 进度条（下载/校验阶段显示）
+            ColumnLayout {
+                visible: Updater.state === "downloading" || Updater.state === "verifying"
+                Layout.fillWidth: true
+                spacing: 6
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 6
+                    color: "#16161a"
+                    border.color: "#2a2a32"
+                    border.width: 1
+                    radius: 3
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 1
+                        width: Math.max(2, (parent.width - 2) *
+                               (Updater.state === "verifying" ? 1 : Updater.progress))
+                        radius: 2
+                        color: Updater.state === "verifying" ? "#9aa0a6" : "#0e639c"
+                        Behavior on width { NumberAnimation { duration: 120 } }
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: Updater.state === "verifying"
+                          ? qsTr("正在校验文件完整性…")
+                          : Updater.progressText
+                    color: "#9aa0a6"
+                    font.pixelSize: 11
+                }
+            }
+
+            // 错误提示
+            Text {
+                visible: Updater.state === "error"
+                Layout.fillWidth: true
+                text: Updater.errorText
+                color: "#e57373"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+
+            // ready 提示
+            Text {
+                visible: Updater.state === "ready"
+                Layout.fillWidth: true
+                text: qsTr("更新已下载完成，应用将自动退出并安装新版本…")
+                color: "#9aa0a6"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 52
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a32"
+            }
+            RowLayout {
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
+
+                // 下载中：取消按钮
+                FlatButton {
+                    visible: Updater.state === "downloading"
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("取消")
+                    onClicked: Updater.cancel()
+                }
+
+                // 错误状态：关闭 + 重试
+                FlatButton {
+                    visible: Updater.state === "error"
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("关闭")
+                    onClicked: updateDialog.close()
+                }
+                FlatButton {
+                    visible: Updater.state === "error"
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("重试")
+                    onClicked: {
+                        if (Updater.updateAvailable) Updater.downloadAndApply()
+                        else { updateDialog.userInitiated = true; Updater.checkForUpdates(false) }
+                    }
+                }
+
+                // 可用状态：稍后 + 立即更新
+                FlatButton {
+                    visible: Updater.state === "available"
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("稍后")
+                    onClicked: updateDialog.close()
+                }
+                FlatButton {
+                    visible: Updater.state === "available"
+                    implicitWidth: 100
+                    implicitHeight: 30
+                    text: qsTr("立即更新")
+                    onClicked: Updater.downloadAndApply()
+                }
+
+                // 检查中 / 校验中 / ready：仅显示一个不可点的"请稍候"
+                FlatButton {
+                    visible: Updater.state === "checking" ||
+                             Updater.state === "verifying" ||
+                             Updater.state === "ready"
+                    implicitWidth: 100
+                    implicitHeight: 30
+                    text: qsTr("请稍候…")
+                    enabled: false
+                }
+            }
+        }
+    }
+
+    // 简易 toast：右下角短暂提示（用于"已是最新版本"等轻量信息）
+    Popup {
+        id: updateToast
+        property string text: ""
+        modal: false
+        focus: false
+        closePolicy: Popup.NoAutoClose
+        // 锚到右下角；ApplicationWindow 内 popup 默认坐标系 = window
+        x: root.width - width - 24
+        y: root.height - height - 36
+        padding: 0
+        background: Rectangle {
+            color: "#222226"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+        }
+        contentItem: Text {
+            text: updateToast.text
+            color: "#e8e8ec"
+            font.pixelSize: 12
+            padding: 12
+        }
+        Timer {
+            running: updateToast.opened
+            interval: 2400
+            onTriggered: updateToast.close()
+        }
+    }
+
 
     // ─── 关闭全部视频：二次确认（深色，与 about/shortcuts 风格一致）──
     //  · 触发源：工具栏【✕ 全部】、菜单【文件 ▸ 关闭所有视频】、快捷键 ⌘W/Ctrl+W

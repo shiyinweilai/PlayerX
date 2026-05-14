@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
-project(PlayerX VERSION 1.0.0 LANGUAGES CXX C)
+# 应用版本号：单点维护处。会通过 APP_VERSION_STR 注入到 C++（Updater 用作
+# currentVersion）和 QML（关于对话框 / 更新弹窗显示）。
+# 发新版本时只改这一行，不要在源码里另写硬编码版本。
+project(PlayerX VERSION 2.0.5 LANGUAGES CXX C)
 
 # ─── C++ 标准 ────────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
@@ -30,7 +33,7 @@ foreach(_dep FFMPEG_INSTALL_DIR)
 endforeach()
 
 # Qt 路径：build.py 用 brew --prefix qt@6 / Qt 在线安装路径自动注入 CMAKE_PREFIX_PATH
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -54,6 +57,8 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/qt/FsUtils.cpp
     # 视频评分本地持久化（CSV，与播放内核解耦）
     src/qt/RatingStore.cpp
+    # 应用自动更新（远端 latest.json 比对 + 下载 + relaunch；与播放内核解耦）
+    src/qt/Updater.cpp
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
@@ -110,6 +115,7 @@ target_link_libraries(PlayerX PRIVATE
     Qt6::Qml
     Qt6::Quick
     Qt6::QuickControls2
+    Qt6::Network
     # FFmpeg 静态库
     avformat avcodec avfilter avutil swscale swresample
 )
@@ -140,6 +146,9 @@ target_compile_options(PlayerX PRIVATE
 
 target_compile_definitions(PlayerX PRIVATE
     $<$<CONFIG:Debug>:RB_DEBUG>
+    # 把 CMake project(... VERSION x.y.z) 的版本号注入到 C++ 与 QML
+    # （Updater 与关于对话框共用同一份版本字符串，单点维护）
+    APP_VERSION_STR="${PROJECT_VERSION}"
 )
 
 # ─── 安装 ─────────────────────────────────────────────────────────────────────
