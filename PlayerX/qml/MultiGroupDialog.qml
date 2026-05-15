@@ -70,6 +70,68 @@ ApplicationWindow {
     readonly property string _folderHistKey: "multiGroup/folderHistoryJson"
     readonly property string _folderHistFileName: "multi_group_folder_history.json"
 
+    // ─── 「全局上次导入目录」持久化 ─────────────────────────────────
+    // 用户体感：一旦导入过一次（任意一路成功选了文件夹），后续：
+    //   · 已导入路再次点 📁 → 还从该路自身路径起步（与 Qt 默认一致）；
+    //   · 新增路第一次点 📁 → 从"全局上次目录"起步，而不是回到 Macintosh HD 根。
+    // 实现：每次 MultiGroupRow.folderImported(url) 被触发时刷新此值并写盘。
+    // 仅依赖 Rating.saveString/loadString（QSettings），单值轻量，无需文件 + LocalStorage 三轨。
+    readonly property string _lastImportFolderKey: "multiGroup/lastImportFolderUrl"
+    property url lastImportFolderUrl: ""
+
+    // effectiveDefaultFolderUrl —— 真正派发给 MultiGroupRow.defaultFolderUrl 的值。
+    // 优先级（从高到低）：
+    //   1) lastImportFolderUrl —— 当前会话/历史会话最后一次「📁 选文件夹」成功的路径。
+    //      这是最贴近"上一次操作"的语义，且跨进程持久化（Rating QSettings）。
+    //   2) 已有 lanes 中"最大 laneIndex 的非空 folderPath"——
+    //      用于覆盖"老用户从未触发过 save"或"刚清掉持久化值"的场景：
+    //      此时仍然能从已存在的某一路推断出"最近的目录"，
+    //      天然实现"新增第 N 路时用第 N-1 路的目录起步"的体感。
+    //   3) 都没有 → 空 URL，Qt FolderDialog 自行回退到 HOME。
+    readonly property url effectiveDefaultFolderUrl: {
+        // 1) 持久化值
+        if (lastImportFolderUrl && ("" + lastImportFolderUrl).length > 0) {
+            return lastImportFolderUrl
+        }
+        // 2) 从 _rowsModel 里挑最近一条非空 folderPath
+        try {
+            for (var i = _rowsModel.count - 1; i >= 0; --i) {
+                var l = _rowsModel.get(i)
+                if (!l) continue
+                var p = l.folderPath || ""
+                if (p.length > 0) {
+                    var u = (p.charAt(0) === "/") ? ("file://" + p)
+                                                  : ("file:///" + p)
+                    return u
+                }
+            }
+        } catch (e) { /* ignore */ }
+        return ""
+    }
+    function _loadLastImportFolder() {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function") {
+                var s = Rating.loadString(_lastImportFolderKey, "") || ""
+                if (s && s.length > 0) lastImportFolderUrl = s
+            }
+        } catch (e) { /* ignore */ }
+    }
+    function _saveLastImportFolder(url) {
+        // url 可能是 QUrl，也可能是 string —— 统一转字符串落库
+        var s = ""
+        try { s = url ? ("" + url) : "" } catch (e) { s = "" }
+        if (!s || s.length === 0) return
+        if (("" + lastImportFolderUrl) === s) return  // 无变化，免写
+        lastImportFolderUrl = s
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.saveString === "function") {
+                Rating.saveString(_lastImportFolderKey, s)
+            }
+        } catch (e) { /* ignore */ }
+    }
+
     // 避免还原过程中 _syncLaneFromRow 反复触发写盘
     property bool _restoring: false
     // 避免 onVisibleChanged 在同一次打开中重复合并
@@ -1133,6 +1195,8 @@ ApplicationWindow {
     modality: Qt.NonModal
 
     Component.onCompleted: {
+        // 启动即加载"全局上次导入目录"（轻量、可空，不影响主流程）
+        _loadLastImportFolder()
         // 优先从本地记忆还原上次配置；首次启动或还原失败时才创建默认 2 路。
         if (_rowsModel.count === 0) {
             if (!_restoreLanes()) {
@@ -1189,6 +1253,16 @@ ApplicationWindow {
                         keyword: model.keyword
                         currentIndex: model.currentIndex
                         removable: _rowsModel.count > 1
+                        // 关键：让"📁 选择文件夹"对话框的起始目录跟随全局上一次导入目录。
+                        // 已选过 folderPath 的行内部会优先用自身 folderPath，所以这里的值
+                        // 只对"未导入过的新行 / 全新打开"两种情况生效。
+                        // 用 effectiveDefaultFolderUrl 而非 lastImportFolderUrl —— 老用户从未触发
+                        // 过 _saveLastImportFolder 时也能从已有 lanes 的 folderPath 推断出回退值。
+                        defaultFolderUrl: dlg.effectiveDefaultFolderUrl
+                        // 任意一路成功选完文件夹 → 固化为新的全局上次目录
+                        onFolderImported: function(folderUrl) {
+                            dlg._saveLastImportFolder(folderUrl)
+                        }
 
                         // 初始化期内（属性绑定→ onCurrentIndexChanged / onSelectedChanged
                         // 等会先一步触发 laneChanged）若任由 _syncLaneFromRow 执行，

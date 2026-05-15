@@ -32,10 +32,21 @@ Rectangle {
     // 动作：删除本行（laneIndex 为 0 时通常隐藏删除按钮）
     property bool removable: true
 
+    // 弹"📁 选择文件夹"对话框时使用的初始目录（QUrl）。
+    // 由父级（MultiGroupDialog）注入"全局上一次成功导入目录"，
+    // 这样 1. 已导入的行：再次点 📁 还是从上次目录起步（与 Qt 默认一致）；
+    //      2. 全新行：也能跳到全局上次目录，而不是回到 Macintosh HD 根。
+    // 空字符串 / 无效 url 时 Qt 会回退到平台默认目录（HOME），保持向下兼容。
+    property url defaultFolderUrl: ""
+
     // ─── 对外信号 ─────────────────────────────────
     signal removeRequested()
+    // 任意输入变化时触发，让父级重新计算 canStart 等
     // 注：QML Item 自带 state 属性（并附带 stateChanged 信号），故这里不能再叫 stateChanged。
-    signal laneChanged()                     // 任意输入变化时触发，让父级重新计算 canStart 等
+    signal laneChanged()
+    // 通过 📁 对话框成功选择了文件夹（accepted）。父级据此固化"全局上次目录"，
+    // 让后续新增行/再次打开此对话框都从这里起步。
+    signal folderImported(url folderUrl)
     // ─── 视觉 ───────────────────────────────────────────────────────
     color: "#1a1a1d"
     border.color: "#2c2c32"
@@ -140,6 +151,21 @@ Rectangle {
     FolderDialog {
         id: folderDlg
         title: "为「路 " + (row.laneIndex + 1) + "」选择文件夹"
+        // 起始目录优先级：
+        //   1) 本路已选过的 folderPath（用户最直观期待）；
+        //   2) 父级注入的 defaultFolderUrl —— 全局上一次成功导入的目录；
+        //   3) 都没有 → 留空（Qt 自行落到 HOME）。
+        // 注：QML 里给 url 属性赋空串等价于无效 url，Qt 会忽略并回退默认。
+        // 本路 folderPath 是绝对本地路径，用 file:// 前缀转 URL（Windows 上需要 file:/// 前缀，
+        // 但绝对路径已带 "C:/..."，拼成 "file:///C:/..." 也满足）。
+        currentFolder: {
+            if (row.folderPath && row.folderPath.length > 0) {
+                var p = row.folderPath
+                if (p.charAt(0) === "/") return "file://" + p          // *nix / mac
+                return "file:///" + p                                   // Windows "C:/..."
+            }
+            return row.defaultFolderUrl
+        }
         onAccepted: {
             // 注意：Windows 上 selectedFolder 形如 "file:///C:/Users/..."，
             //       直接 substring(7) 会得到 "/C:/Users/..." 多一个前导斜杠
@@ -148,6 +174,8 @@ Rectangle {
             row.folderPath = Fs.urlToLocalFile(selectedFolder)
             // 直接传 QUrl 给 C++ 端，避免 QML 侧再做字符串处理。
             row.allFiles = Fs.scanVideoFolder(selectedFolder, true)
+            // 通知父级固化"全局上次目录"，供后续新行/再次点 📁 复用
+            row.folderImported(selectedFolder)
         }
     }
 
