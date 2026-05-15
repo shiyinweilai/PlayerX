@@ -590,9 +590,11 @@
             if (!j.ok) throw new Error(j.error || '加载失败');
             archive.folders = Array.isArray(j.folders) ? j.folders : [];
             renderArchiveFolders();
-            // 当前选中的文件夹仍然存在则刷新其内容；否则清空右侧
+            // 当前选中的文件夹仍然存在则刷新其内容；否则默认选中第一个，避免右侧一片空白
             if (archive.currentFolder && archive.folders.find(f => f.name === archive.currentFolder)) {
                 await loadArchiveFiles(archive.currentFolder);
+            } else if (archive.folders.length > 0) {
+                await loadArchiveFiles(archive.folders[0].name);
             } else {
                 archive.currentFolder = '';
                 archive.files = [];
@@ -626,13 +628,14 @@
     }
 
     async function loadArchiveFiles(folder) {
+        const switching = (archive.currentFolder !== folder);
         archive.currentFolder = folder;
         archive.selected.clear();
         renderArchiveFolders(); // 高亮
-        archiveFilesHint.textContent = '加载中…';
-        archiveFilesHint.hidden = false;
-        archiveFilesWrap.hidden = true;
-        archiveFilesToolbar.hidden = true;
+        // 切换文件夹时不再显示"加载中…"占位：保留旧表格，加载完成后一次性刷新
+        if (switching) {
+            archiveFilesHint.hidden = true;
+        }
         try {
             const r = await api('/api/archive/list?folder=' + encodeURIComponent(folder));
             if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -672,13 +675,12 @@
             const checked = archive.selected.has(it.name) ? ' checked' : '';
             return `<tr${checked ? ' class="sel"' : ''}>
                 <td class="col-check"><input type="checkbox" class="arch-row-chk" data-name="${escHtml(it.name)}"${checked}></td>
-                <td><span class="fname" title="${escHtml(it.name)}">${escHtml(it.name)}</span></td>
-                <td class="num">${fmtSize(it.size)}</td>
-                <td class="num">${escHtml(fmtTime(it.mtime))}</td>
-                <td class="actions">
+                <td class="col-fname"><span class="fname" title="${escHtml(it.name)}">${escHtml(it.name)}</span></td>
+                <td class="num col-size">${fmtSize(it.size)}</td>
+                <td class="num col-mtime">${escHtml(fmtTime(it.mtime))}</td>
+                <td class="actions col-actions">
                     <button class="row-act" data-act="preview"  data-name="${escHtml(it.name)}">查看</button>
                     <button class="row-act" data-act="download" data-name="${escHtml(it.name)}">下载</button>
-                    <button class="row-act danger" data-act="delete" data-name="${escHtml(it.name)}">删除</button>
                 </td>
             </tr>`;
         }).join('');

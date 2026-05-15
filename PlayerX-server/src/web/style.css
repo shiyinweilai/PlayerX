@@ -349,20 +349,16 @@ tbody td.actions { text-align: right; }
     border-color: var(--border);
 }
 
-/* 文件名：左侧省略，让 .csv 后缀始终可见 */
+/* 文件名：默认从左起完整显示，超长才末尾省略（可胼看到前缀 .csv 文件名仍可 hover 查看） */
 .fname {
     display: inline-block;
     max-width: 100%;
-    direction: rtl;
-    text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-soft);
     font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
     font-size: 12.5px;
-    /* unicode-bidi + 包裹 LRM 字符避免标点跳到行首 */
-    unicode-bidi: plaintext;
 }
 
 /* 操作列按钮 */
@@ -517,6 +513,7 @@ td.actions .row-act:disabled {
 
 /* ────────── 预览抽屉（CSV 在线查看，右侧滑出，无遮罩） ────────── */
 /* 主题跟随主面板（CSS 变量），系统切浅色时同步浅色 */
+/* 注意：z-index 必须高于归档抽屉（60），否则会被归档遮挡 */
 .preview-drawer {
     position: fixed;
     top: 0; right: 0; bottom: 0;
@@ -525,7 +522,7 @@ td.actions .row-act:disabled {
     color: var(--text);
     border-left: 1px solid var(--border);
     box-shadow: var(--shadow);
-    z-index: 50;
+    z-index: 70;
 
     display: flex;
     flex-direction: column;
@@ -660,7 +657,7 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 .archive-drawer {
     position: fixed;
     top: 0; left: 0; bottom: 0;
-    width: min(1080px, 80vw);
+    width: min(960px, 72vw);
     background: var(--bg-elev-1);
     color: var(--text);
     border-right: 1px solid var(--border);
@@ -797,12 +794,13 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 .archive-spacer { flex: 1 1 auto; }
 
 .archive-files-hint {
-    flex: 1 1 auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    /* 不再撑满整块（避免中间一大片空白），仅作为顶部小字提示 */
+    flex: 0 0 auto;
+    padding: 10px 14px;
     color: var(--text-soft);
-    font-size: 13px;
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--bg-elev-1);
 }
 .archive-files-wrap {
     flex: 1 1 auto;
@@ -812,6 +810,8 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
+    /* 固定表格布局：让文件名列独占剩余空间，不被低优先级列挤压 */
+    table-layout: fixed;
 }
 .archive-files-table thead th {
     position: sticky;
@@ -826,10 +826,23 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 }
 .archive-files-table thead th.num     { text-align: right; }
 .archive-files-table thead th.actions { text-align: center; }
+/* 列宽：复选/大小/最近更新/操作 都固定为合适宽度，文件名列独占剩余 */
+.archive-files-table th.col-check,
+.archive-files-table td.col-check   { width: 40px; }
+.archive-files-table th.num:nth-child(3),
+.archive-files-table td.col-size    { width: 90px;  white-space: nowrap; }
+.archive-files-table th.num:nth-child(4),
+.archive-files-table td.col-mtime   { width: 160px; white-space: nowrap; }
+.archive-files-table th.actions,
+.archive-files-table td.col-actions { width: 150px; white-space: nowrap; }
 .archive-files-table tbody td {
     padding: 8px 12px;
     border-bottom: 1px solid var(--border-soft);
     color: var(--text);
+}
+.archive-files-table tbody td.col-fname {
+    /* 文件名列：独占剩余宽度，正常布局，超长才省略 */
+    overflow: hidden;
 }
 .archive-files-table tbody td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-soft); }
 .archive-files-table tbody tr:hover { background: var(--bg-hover); }
