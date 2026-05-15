@@ -465,12 +465,16 @@ def install(target: str):
     run(["cmake", "--install", bdir])
 
 
-def post_build(target: str, qt_dir: str):
+def post_build(target: str, qt_dir: str, deploy_qt: bool = False):
     """平台相关后处理：
-    macOS  → ad-hoc 签名 .app
+    macOS  → macdeployqt 内嵌 Qt + ad-hoc 签名 .app（仅在 deploy_qt=True 时调用）
     Windows→ strip 调试符号 + 复制 Qt 运行时 DLL（若 Qt 安装目录可见）
+
+    注意：本地开发模式（deploy_qt=False）下，主流程不会调到本函数——
+    那种模式直接用 build tree 里的 .app（依赖本机 brew Qt），
+    无需 install / 重写 rpath / 重签。详见 main() 里的说明。
     """
-    if target == "macos" and IS_MACOS_HOST:
+    if target == "macos" and IS_MACOS_HOST and deploy_qt:
         # 注意：macdeployqt 必须跑在 install 目录下的 .app 上，而不是
         # build 目录的 .app。原因是 build 目录里的 .app 在 cmake --install
         # 时还没被改 rpath，但本脚本的执行顺序是 build → install → post_build，
@@ -1051,9 +1055,19 @@ def main():
     parser.add_argument("--clean",      action="store_true", help="清理后重新构建")
     parser.add_argument("--clean-only", action="store_true", help="仅清理")
     parser.add_argument("--package",    action="store_true",
-                        help="构建后打分发包（macOS=.zip / Windows=Setup+portable）")
+                        help="构建后打分发包（macOS=.zip / Windows=Setup+portable）；macOS 默认会自动跑 macdeployqt")
     parser.add_argument("--package-only", action="store_true",
                         help="跳过编译，仅基于现有 build/install 产物打分发包")
+    # ── macOS Qt 内嵌策略（仅影响 macOS） ──
+    # 默认行为：本地构建为了快不内嵌 Qt（开发机 brew Qt 直接被用）；
+    #          --package / --package-only 路径下默认必须内嵌（要发给别人）。
+    # --deploy   : 即使不打包也强制内嵌 Qt（少数手动验证场景）
+    # --no-deploy: 即使 --package 也跳过 macdeployqt（应急逃生口；自用 zip）
+    parser.add_argument("--deploy",    dest="deploy",    action="store_true",
+                        default=None,
+                        help="macOS：强制运行 macdeployqt 内嵌 Qt（让 .app 自包含，可发给别人）")
+    parser.add_argument("--no-deploy", dest="deploy",    action="store_false",
+                        help="macOS：强制跳过 macdeployqt（即使 --package 也不内嵌，仅供自己机器跑）")
     parser.add_argument("--bump",       default="",
                         help="打包前先把 CMakeLists.txt 的版本号改成 X.Y.Z（默认要求严格递增）")
     parser.add_argument("-f", "--force", "--allow-version-overwrite",
@@ -1073,7 +1087,23 @@ def main():
         _bump_app_version(args.bump, allow_overwrite=args.force)
     elif args.force:
         warn("--force 仅在配合 --bump 时生效，已忽略")
+    # 决策最终是否需要 macdeployqt：
+    # - 显式 --deploy / --no-deploy 优先；
+    # - 否则只在打包路径下默认内嵌 Qt。
+    will_package = args.package or args.package_only
+    if args.deploy is None:
+        deploy_qt = will_package
+    else:
+        deploy_qt = args.deploy
+    if will_package and not deploy_qt:
+        warn("--package 与 --no-deploy 同时指定：生成的 zip 仍依赖本机 Qt，仅适合自己机器使用，请勿对外分发。")
+
     if args.package_only:
+        # package_only 跳过了 build/install/post_build，需要在这里补一次 deploy，
+        # 否则等同于把开发期 .app 直接打成 zip，发给别人会因为找不到 brew Qt 启动失败。
+        if deploy_qt:
+            qt_dir = find_qt6(target)
+            post_build(target, qt_dir, deploy_qt=True)
         package(target); return
     if args.clean:
         clean(target)
@@ -1094,8 +1124,31 @@ def main():
 
     configure(target, build_type, ffmpeg_dir, qt_dir)
     build(target)
-    install(target)
-    post_build(target, qt_dir)
+    # 关键：cmake --install 这一步是为分发打包准备的——
+    #   ① install_name_tool 会把主程序对 Qt 的引用从绝对路径改写为
+    #      @executable_path/../Frameworks/QtXxx；
+    #   ② Qt 自身的 install hook 会把 framework 拷贝进 .app/Contents/Frameworks。
+    # 这一对组合只有在后续会跑 macdeployqt（即 deploy_qt=True）时才需要：
+    # macdeployqt 必须从一份 install 出来的、Frameworks 已就位的 .app 上工作。
+    #
+    # 反之，本地开发自测模式（deploy_qt=False）下，build/out/bin/PlayerX.app
+    # 主程序的 LC_LOAD_DYLIB 仍是 brew Qt 的绝对路径（/opt/homebrew/.../QtCore），
+    # dyld 会直接从 brew Qt 加载，根本不需要 .app 自带 Frameworks 目录，也不
+    # 需要重写 rpath。这种情况下跑 cmake --install 反而有害：
+    #   - 它会把 .app 改成依赖 @executable_path/../Frameworks/QtCore，
+    #   - 同时往 .app 里塞 framework 拷贝，构建时间从 2~3 秒拖到 30 秒+，
+    #   - 一旦 install 阶段中断或下次重跑，二进制和 framework 还会陷入
+    #     "rpath 已改写、但 framework 半套残留 / 签名失效" 的不一致状态，
+    #     导致直接 open 会被 macOS 以 SIGKILL (Code Signature Invalid)
+    #     或 dyld Library missing 干掉。
+    # 所以：只在分发打包路径（deploy_qt=True）下跑 install + post_build；
+    # 本地自测路径直接用 build tree 产物，省时间也避免一致性陷阱。
+    if deploy_qt:
+        install(target)
+        post_build(target, qt_dir, deploy_qt=True)
+    else:
+        info("[本地构建] 跳过 cmake --install / macdeployqt（产物依赖本机 brew Qt，秒级完成）")
+        info("           如需自包含分发包，请加 --package 或 --deploy")
 
     success("PlayerX 构建完成！")
     out = output_path(target)

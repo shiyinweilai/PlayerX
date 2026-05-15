@@ -53,19 +53,59 @@ python3 main.py -p macos
 
 ### 3. 构建
 
+构建脚本区分两种典型场景：**①开发自测**（追求快，依赖本机 Qt）和 **②分发打包**（产物自包含，可发给别人）。
+
+#### 3.1 日常开发自测（推荐，秒级完成）
+
 ```bash
 python3 build.py            # Release 构建
 python3 build.py --debug    # Debug 构建
 python3 build.py --clean    # 清理后重新构建
 ```
 
+默认模式下会**跳过 `macdeployqt`**，生成的 `.app` 直接依赖本机 brew Qt 运行，因此增量编译通常 2~3 秒就能跑完，适合反复改代码自测。
+
 构建产物：
 - `build/out/bin/PlayerX.app`（macOS）
+- `build/install/PlayerX.app`（cmake install 后的副本，发布前的中间产物）
 
 启动：
 ```bash
 open build/out/bin/PlayerX.app
 ```
+
+> ⚠ 这种产物**只能在装了相同 Qt 的开发机上跑**，拷给别人会因找不到 Qt 框架而启动失败。
+
+#### 3.2 分发打包（自包含，可发给别人）
+
+```bash
+python3 build.py --package              # 编译 + 内嵌 Qt + 打 zip
+python3 build.py --package-only         # 跳过编译，仅基于现有产物重打包
+python3 build.py --bump 2.0.18 --package  # 升版本号后再打包
+python3 build.py --bump 2.0.18 -f --package  # 同版本号重打包（覆盖）
+```
+
+打包流程会自动运行 `macdeployqt` 把 Qt framework 内嵌进 `.app`，并把 FFmpeg dylib、QML 模块一并打入 `.app/Contents/Frameworks`，最终输出 zip 到 `build/dist/`。耗时通常 30 秒~2 分钟。
+
+#### 3.3 其它开关
+
+| 开关 | 作用 |
+|---|---|
+| `--deploy` | 不打 zip，但强制运行 `macdeployqt` 内嵌 Qt（用于本机模拟分发版本） |
+| `--no-deploy` | 即使带了 `--package` 也跳过 `macdeployqt`（应急自用，会有警告，⚠ 勿对外发） |
+| `--clean` / `--clean-only` | 清理后重建 / 仅清理 |
+| `--bump X.Y.Z` | 打包前先把 `CMakeLists.txt` 里的版本号改成 `X.Y.Z`（默认要求严格递增） |
+| `-f` / `--force` | 配合 `--bump` 允许相同或更低版本号（同版本重打包专用） |
+
+行为速查：
+
+| 命令 | 跑 `macdeployqt` | 适用场景 |
+|---|:---:|---|
+| `python3 build.py` | ❌ | 日常本地编译自测 |
+| `python3 build.py --package` | ✅ | 给别人发版（自包含 zip） |
+| `python3 build.py --deploy` | ✅ | 不出 zip 也想模拟分发版本 |
+| `python3 build.py --package --no-deploy` | ❌ | 应急：自己机器上"假打包"，⚠ 勿外发 |
+| `python3 build.py --package-only` | ✅ | 只重打包（自动补一次 deploy） |
 
 ## 当前进度
 
