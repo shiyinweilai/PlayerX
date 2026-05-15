@@ -22,8 +22,33 @@
  */
 const express = require('express');
 const path    = require('path');
+const os      = require('os');
 
 const { WEB_DIR, UPLOAD_DIR, ARCHIVE_DIR, ARCHIVE_KEEP, ensureDirs } = require('./src/lib/paths');
+
+// 探测本机所有 IPv4 LAN 地址（排除回环 / link-local 169.254.x.x）；
+// 排序优先：常见家用 / 办公网段（192.168 → 10. → 172.16-31 → 其他）。
+function getLanIPv4s() {
+    const list = [];
+    const ifs = os.networkInterfaces();
+    for (const name of Object.keys(ifs)) {
+        for (const ni of ifs[name] || []) {
+            if (!ni || ni.family !== 'IPv4') continue;
+            if (ni.internal) continue;
+            if (!ni.address || ni.address.startsWith('169.254.')) continue;
+            list.push({ name, address: ni.address });
+        }
+    }
+    const rank = (ip) => {
+        if (ip.startsWith('192.168.')) return 0;
+        if (ip.startsWith('10.'))      return 1;
+        const m = ip.match(/^172\.(\d+)\./);
+        if (m && +m[1] >= 16 && +m[1] <= 31) return 2;
+        return 3;
+    };
+    list.sort((a, b) => rank(a.address) - rank(b.address) || (a.address < b.address ? -1 : 1));
+    return list;
+}
 const { mountApi } = require('./src/api');
 
 // ── 配置 ──────────────────────────────────────────────────────────────
@@ -67,9 +92,22 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`PlayerX server listening on http://0.0.0.0:${PORT}`);
+    const lans = getLanIPv4s();
+    const primary = lans[0] && lans[0].address;
+
+    console.log(`PlayerX server listening on port ${PORT}`);
     console.log(`  uploads dir : ${UPLOAD_DIR}`);
     console.log(`  archive dir : ${ARCHIVE_DIR}  (keep latest ${ARCHIVE_KEEP} per slot)`);
     console.log(`  auth        : disabled (LAN-only)`);
     console.log(`  web panel   : http://localhost:${PORT}/`);
+    if (primary) {
+        console.log(`  LAN access  : http://${primary}:${PORT}/`);
+        if (lans.length > 1) {
+            for (let i = 1; i < lans.length; i++) {
+                console.log(`                http://${lans[i].address}:${PORT}/  (${lans[i].name})`);
+            }
+        }
+    } else {
+        console.log(`  LAN access  : (no external IPv4 detected)`);
+    }
 });

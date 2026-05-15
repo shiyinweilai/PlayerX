@@ -24,6 +24,10 @@ ApplicationWindow {
     title: "PlayerX"
     color: "#101012"
 
+    // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
+    // 用法：菜单「帮助 → 教程…」点击时，会通过 Qt.openUrlExternally(tutorialUrl) 打开默认浏览器
+    property url tutorialUrl: "https://example.com/playerx-tutorial"
+
     // ─── 系统菜单栏（macOS 全局菜单 / Windows 窗口菜单） ──────────────────
     // 仅作为系统级入口，与现有 ToolBar 上的"打开 ▾ / ⚙ 设置 ▾"按钮共存。
     // macOS：自动适配为顶部全局菜单栏（系统原生样式，不接受自定义 background）。
@@ -288,6 +292,16 @@ ApplicationWindow {
             MenuItem {
                 text: qsTr("快捷键…")
                 onTriggered: shortcutsDialog.open()
+            }
+            MenuSeparator {}
+            MenuItem {
+                text: qsTr("教程…")
+                // 占位 URL 见 root.tutorialUrl；点击后用系统默认浏览器打开
+                onTriggered: {
+                    if (!Qt.openUrlExternally(root.tutorialUrl)) {
+                        console.warn("[Help] 无法打开教程链接：", root.tutorialUrl)
+                    }
+                }
             }
             MenuSeparator {}
             MenuItem {
@@ -600,16 +614,9 @@ ApplicationWindow {
                 width: scFlick.width
                 spacing: 14
 
-                // 文件
-                ScSection {
-                    title: qsTr("文件")
-                    ScRow { keys: root._modKey + "O";       desc: qsTr("打开文件（最多 9 路）") }
-                    ScRow { keys: root._modKey + "⇧O";     desc: qsTr("打开文件夹 / 多组对比") }
-                ScRow { keys: root._modKey + "M";       desc: qsTr("打开文件夹 / 多组对比（别名）") }
-                ScRow { keys: root._modKey + "W";       desc: qsTr("关闭所有视频") }
-                ScRow { keys: root._modKey + ",";       desc: qsTr("偏好设置") }
-                    ScRow { keys: root._modKey + "Q";       desc: qsTr("退出 PlayerX") }
-                }
+                // 注：原「文件」分组（⌘O / ⌘⇧O / ⌘M / ⌘W / ⌘, / ⌘Q）已从此对话框移除。
+                // 这些快捷键的实际 Shortcut 绑定仍在前面的 ApplicationShortcut 区段中保留，
+                // 功能不受影响；此处仅不在「快捷键速查」面板里展示，避免与系统菜单/常识冗余。
                 // 播放
                 ScSection {
                     title: qsTr("播放")
@@ -4404,34 +4411,106 @@ ApplicationWindow {
                         return exts.indexOf(ext) >= 0
                     }
 
-                    var collected = []   // 最终 url 列表
+                    // ── 第一遍：把拖入项分流为「文件夹组」与「散文件组」──
+                    // 文件夹判定方式：先用 Fs.scanVideoFolder 试扫，能扫出视频则认定为文件夹。
+                    // 这样既覆盖目录拖拽，又不会把"含视频后缀但实际是文件"的项误判为文件夹。
+                    var folderUrls   = []   // 仅"扫出视频"的文件夹的 url 原样
+                    var fileFromDirs = []   // 文件夹展开后的视频文件路径（散文件兜底用）
+                    var standaloneFiles = []  // 直接拖入的视频散文件 url
 
                     for (var i = 0; i < drop.urls.length; ++i) {
                         var u = drop.urls[i]
-                        // QUrl → 字符串
                         var s = String(u)
-                        // 文件夹判断：先尝试用 Fs.scanVideoFolder（接受 QUrl）
-                        // 若返回非空则视为目录；否则按文件处理。
                         var scanned = []
-                        try {
-                            scanned = Fs.scanVideoFolder(u, true)
-                        } catch (e) { scanned = [] }
+                        try { scanned = Fs.scanVideoFolder(u, true) } catch (e) { scanned = [] }
 
                         if (scanned && scanned.length > 0) {
-                            // 文件夹：收集其中所有视频
-                            for (var j = 0; j < scanned.length; ++j) {
-                                collected.push("file://" + scanned[j])
-                                if (collected.length >= 9) break
-                            }
+                            folderUrls.push(u)
+                            for (var j = 0; j < scanned.length; ++j) fileFromDirs.push("file://" + scanned[j])
                         } else if (hasVideoExt(s)) {
-                            collected.push(s)
+                            standaloneFiles.push(s)
                         }
-                        if (collected.length >= 9) break
+                    }
+
+                    // ── 历史保留：所有"文件夹"路径都写入 MultiGroupDialog 的 lanes 历史 ──
+                    //   - 仅文件夹会进历史，散视频文件不进（与产品需求一致）
+                    //   - addFoldersToHistory 内部去重 + 持久化，幂等
+                    //   - 即便后续走分支 2（旧逻辑），这一步也保证下次打开 Dialog 能看到这些文件夹
+                    if (folderUrls.length > 0) {
+                        try { multiGroupDialog.addFoldersToHistory(folderUrls) } catch (e) {}
+                    }
+
+                    // ── 分支 1：≥2 个文件夹且没有混入散文件 → 走多组对比，每文件夹一路 ──
+                    //    （混入散文件时语义不明，安全退化到旧逻辑，避免丢文件）
+                    if (folderUrls.length >= 2 && standaloneFiles.length === 0) {
+                        if (multiGroupDialog.loadFolders(folderUrls)) return
+                        // 若 loadFolders 失败（例如所有文件夹都为空），退化到旧逻辑兜底
+                    }
+
+                    // ── 分支 2：旧逻辑（单文件夹铺开 / 散文件直开 / 混合场景兜底）──
+                    var collected = []
+                    // 文件夹展开优先
+                    for (var k = 0; k < fileFromDirs.length && collected.length < 9; ++k) {
+                        collected.push(fileFromDirs[k])
+                    }
+                    // 再追加散文件
+                    for (var m = 0; m < standaloneFiles.length && collected.length < 9; ++m) {
+                        collected.push(standaloneFiles[m])
                     }
 
                     if (collected.length === 0) return
                     if (collected.length > 9) collected = collected.slice(0, 9)
                     Engine.openFiles(collected)
+                }
+            }
+        }
+
+        // ─── 播放期间拖拽落区：仅"加入历史"，不打断当前播放 ─────────
+        //   场景：用户在视频已经播放时把若干文件夹从 Finder/Explorer 拖进来，
+        //         期望"打开文件夹/多组对比"对话框里能看到这些新文件夹。
+        //   设计：
+        //     · 仅在 Engine.fileCount > 0（即播放中）启用，与 emptyHero/dropZone 互斥；
+        //     · 仅识别"文件夹"，散视频文件不进历史（与产品需求一致）；
+        //     · 不调用 Engine.openFiles 也不切换正在播放的视频，仅追加到 MultiGroupDialog
+        //       的 lanes 历史并持久化（addFoldersToHistory 内部去重）；
+        //     · 完成后用 _showRatingWarn 给一个轻量 toast 反馈（复用现有 toast 通道）。
+        //   注意：DropArea 默认对鼠标事件透明，覆盖整个 videoArea 不会影响点击/滚动。
+        DropArea {
+            id: liveDropZone
+            anchors.fill: parent
+            visible: Engine.fileCount > 0
+            enabled: visible
+            z: 50  // 高于 cell 网格但低于 ratingToast(z:999)，纯拖拽用，不影响鼠标
+
+            onEntered: function(drag) {
+                if (!drag.hasUrls) { drag.accepted = false; return }
+                drag.accept(Qt.CopyAction)
+            }
+
+            onDropped: function(drop) {
+                if (!drop.hasUrls) return
+
+                // 仅采集"能扫出视频"的文件夹；散文件忽略（不入历史也不打断当前播放）
+                var folderUrls = []
+                for (var i = 0; i < drop.urls.length; ++i) {
+                    var u = drop.urls[i]
+                    var scanned = []
+                    try { scanned = Fs.scanVideoFolder(u, true) } catch (e) { scanned = [] }
+                    if (scanned && scanned.length > 0) folderUrls.push(u)
+                }
+
+                if (folderUrls.length === 0) {
+                    // 拖进来的全是散文件 / 空文件夹 / 无视频 → 静默忽略
+                    return
+                }
+
+                // 追加合并到 MultiGroupDialog lanes 历史（去重 + 持久化）
+                var hit = []
+                try { hit = multiGroupDialog.addFoldersToHistory(folderUrls) || [] } catch (e) { hit = [] }
+
+                // 轻量反馈
+                if (hit.length > 0) {
+                    root._showRatingWarn("已加入 " + hit.length + " 个文件夹到「打开文件夹」历史")
                 }
             }
         }

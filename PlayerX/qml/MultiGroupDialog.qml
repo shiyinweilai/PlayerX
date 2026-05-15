@@ -22,6 +22,20 @@ ApplicationWindow {
     id: dlg
     title: "打开文件夹 / 多组对比"
 
+    // ─── 每次 Dialog 显示时，把独立的「文件夹历史」合并到 lanes 列表 ──
+    // 即使中途 _rowsModel 被 loadFlatFiles 等覆盖式重置，下次打开 Dialog 时
+    // 历史中固化的文件夹路径仍会作为新 lane 出现（默认未勾选），符合"路径固化、
+    // 每次打开加载历史路径，新增就增加一路"的预期行为。
+    onVisibleChanged: {
+        if (visible && !_folderHistMerged) {
+            _folderHistMerged = true
+            try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
+        } else if (!visible) {
+            // 隐藏时复位，下次打开重新合并（确保期间被拖入的新文件夹也能浮现）
+            _folderHistMerged = false
+        }
+    }
+
     // ─── 持久化：记住上次配置的 lanes（文件夹 / 过滤关键字 / 勾选 / 当前索引）───
     // 设计要点：
     //   · 仅存"轻量状态"（文件夹路径、关键字、勾选、当前索引）——不存 allFiles/visibleFiles
@@ -43,8 +57,23 @@ ApplicationWindow {
     readonly property string _persistKey: "multiGroup/lanesJson"
     readonly property string _persistFileName: "multi_group_lanes.json"
 
+    // ─── 独立的「文件夹历史」持久化 ──────────────────────────────────
+    // 设计动机：lanes 持久化会被 loadFlatFiles（添加文件场景）等覆盖式重置，
+    //   一旦用户走过"添加文件"流程，原先拖入过的文件夹路径就会丢失。
+    //   为此用一份**完全独立**的存储仅保存「文件夹路径数组」，作为"路径固化"的真相。
+    // 行为：
+    //   · 拖入文件夹时，addFoldersToHistory 写入此处（去重）；
+    //   · 每次 Dialog 打开（onVisibleChanged → visible=true）时，从此处合并到 _rowsModel —
+    //     已存在同 folderPath 的 lane 跳过；不在的追加为新 lane（默认未勾选，
+    //     不打扰当前已勾选的 lanes）。
+    //   · 容量上限：kMaxLanes（9 条），FIFO 截断（保留最近一次拖入的）。
+    readonly property string _folderHistKey: "multiGroup/folderHistoryJson"
+    readonly property string _folderHistFileName: "multi_group_folder_history.json"
+
     // 避免还原过程中 _syncLaneFromRow 反复触发写盘
     property bool _restoring: false
+    // 避免 onVisibleChanged 在同一次打开中重复合并
+    property bool _folderHistMerged: false
 
     // ── 主路：cache 文件路径（懒计算 + 缓存） ──────────────────────
     property string _cacheFilePath: ""
@@ -57,6 +86,23 @@ ApplicationWindow {
                 if (dir.length > 0) {
                     _cacheFilePath = dir + "/" + _persistFileName
                     return _cacheFilePath
+                }
+            }
+        } catch (e) { /* ignore */ }
+        return ""
+    }
+
+    // 「文件夹历史」cache 文件路径（与 lanes cache 同目录，文件名不同）
+    property string _folderHistCachePath: ""
+    function _folderHistCacheFile() {
+        if (_folderHistCachePath && _folderHistCachePath.length > 0) return _folderHistCachePath
+        try {
+            if (typeof Fs !== "undefined" && Fs
+                && typeof Fs.appCacheDir === "function") {
+                var dir = Fs.appCacheDir() || ""
+                if (dir.length > 0) {
+                    _folderHistCachePath = dir + "/" + _folderHistFileName
+                    return _folderHistCachePath
                 }
             }
         } catch (e) { /* ignore */ }
@@ -123,6 +169,95 @@ ApplicationWindow {
         } catch (e) {
             return ""
         }
+    }
+
+    // ─── 「文件夹历史」三轨读写 ─────────────────────────────────────
+    // 与 lanes 的三轨完全独立，键名/文件名不同，避免误覆盖。
+    function _saveFolderHistory(json) {
+        // ① cache 文件
+        try {
+            var p = _folderHistCacheFile()
+            if (p && p.length > 0 && typeof Fs.writeTextFile === "function") {
+                Fs.writeTextFile(p, json || "")
+            }
+        } catch (e) { /* ignore */ }
+        // ② LocalStorage
+        _lsSave(_folderHistKey, json || "")
+        // ③ Rating QSettings
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.saveString === "function") {
+                Rating.saveString(_folderHistKey, json || "")
+            }
+        } catch (e) { /* ignore */ }
+    }
+    function _loadFolderHistory() {
+        var s = ""
+        // ① cache 文件
+        try {
+            var p = _folderHistCacheFile()
+            if (p && p.length > 0 && typeof Fs.readTextFile === "function") {
+                s = Fs.readTextFile(p) || ""
+            }
+        } catch (e) { s = "" }
+        // ② LocalStorage
+        if (!s || s.length === 0) s = _lsLoad(_folderHistKey) || ""
+        // ③ Rating QSettings
+        if (!s || s.length === 0) {
+            try {
+                if (typeof Rating !== "undefined" && Rating
+                    && typeof Rating.loadString === "function") {
+                    s = Rating.loadString(_folderHistKey, "") || ""
+                }
+            } catch (e) { s = "" }
+        }
+        if (!s || s.length === 0) return []
+        var arr = []
+        try { arr = JSON.parse(s) } catch (e) { return [] }
+        if (!arr || !Array.isArray(arr)) return []
+        // 仅保留字符串元素，去空
+        var out = []
+        for (var i = 0; i < arr.length; ++i) {
+            var v = arr[i]
+            if (typeof v === "string" && v.length > 0) out.push(v)
+        }
+        return out
+    }
+    // 把若干路径追加进「文件夹历史」（去重，FIFO 截断到 kMaxLanes）
+    // 返回最终的历史数组
+    function _appendToFolderHistory(paths) {
+        if (!paths || paths.length === 0) return _loadFolderHistory()
+        var hist = _loadFolderHistory()
+        var seen = {}
+        for (var i = 0; i < hist.length; ++i) seen[hist[i]] = true
+        for (var k = 0; k < paths.length; ++k) {
+            var p = paths[k]
+            if (!p || typeof p !== "string" || p.length === 0) continue
+            if (seen[p]) continue
+            hist.push(p)
+            seen[p] = true
+        }
+        // 超出上限：FIFO 丢弃最早的，保留最近 kMaxLanes 条
+        if (hist.length > kMaxLanes) {
+            hist = hist.slice(hist.length - kMaxLanes)
+        }
+        var json = ""
+        try { json = JSON.stringify(hist) } catch (e) { json = "" }
+        _saveFolderHistory(json)
+        return hist
+    }
+    // 从「文件夹历史」中删除一条路径，并写回持久化
+    function _removeFromFolderHistory(folderPath) {
+        if (!folderPath) return
+        var hist = _loadFolderHistory()
+        var out = []
+        for (var i = 0; i < hist.length; ++i) {
+            if (hist[i] !== folderPath) out.push(hist[i])
+        }
+        if (out.length === hist.length) return  // 无变化
+        var json = ""
+        try { json = JSON.stringify(out) } catch (e) { json = "" }
+        _saveFolderHistory(json)
     }
 
     function _persistLanes() {
@@ -394,10 +529,16 @@ ApplicationWindow {
     function removeLane(i) {
         if (i < 0 || i >= _rowsModel.count) return
         if (_rowsModel.count <= 1) return  // 至少保留 1 行视觉占位
+        // 删除前记录 folderPath，便于同步从「文件夹历史」中也清除（否则下次打开会又合并回来）
+        var lane = _rowsModel.get(i)
+        var fp = (lane && lane.folderPath) ? lane.folderPath : ""
         _rowsModel.remove(i)
         _laneRuntime.splice(i, 1)
         _bumpState()
         _persistLanes()
+        if (fp && fp.length > 0) {
+            try { _removeFromFolderHistory(fp) } catch (e) { /* ignore */ }
+        }
     }
 
     // 由 MultiGroupRow.laneChanged 调用，将当前行 UI 状态写回模型
@@ -541,6 +682,169 @@ ApplicationWindow {
             if (Engine.layoutMode !== 0) Engine.layoutMode = 0
         }
         return ok
+    }
+
+    // ─── 拖拽专用入口：把多个文件夹注入为多路并启动多组对比 ───────
+    // 触发时机：用户从 Finder/Explorer 一次拖入 ≥2 个文件夹到欢迎页。
+    // 语义：
+    //   · 这些文件夹会被「追加合并」进 lanes 列表（去重，最多 kMaxLanes 路），
+    //     即「拖入即写入历史」—— 下次打开 Dialog 时这些路径仍能看到；
+    //   · 启动时：把"本次拖入的这一批"作为参与启动的有效路（其它历史保留但不勾选）。
+    // 入参 urls 元素可以是 file:// QUrl，也可以是本地路径字符串；
+    // 仅扫描出至少 1 个视频的文件夹会被纳入。
+    // 返回：true=已成功启动；false=没有有效文件夹。
+    function loadFolders(urls) {
+        if (!urls || urls.length === 0) return false
+
+        // 1) 先把这一批文件夹追加到历史 lanes（去重 + 持久化）
+        var addedPaths = addFoldersToHistory(urls)
+        if (!addedPaths || addedPaths.length === 0) return false
+
+        // 2) 启动：仅勾选「本次拖入」的那几路；其它历史路设为未勾选（保留但不参与启动）
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (!lane) continue
+            var hit = (addedPaths.indexOf(lane.folderPath) >= 0)
+            if (lane.selected !== hit) {
+                _rowsModel.setProperty(i, "selected", hit)
+            }
+        }
+        _bumpState()
+        _persistLanes()
+        return start()
+    }
+
+    // ─── 把若干文件夹路径「追加合并」进 lanes 历史（仅写入，不启动）──
+    //   · 已存在同路径的 lane → 跳过（不重复添加）
+    //   · 不在历史中且能扫出视频 → 追加为新 lane（默认 selected=true）
+    //   · 总数受 kMaxLanes 限制（满则停止追加）
+    //   · 调用 _persistLanes() 持久化
+    //   · 同时把所有有效文件夹路径写入独立的「文件夹历史」持久化（_appendToFolderHistory），
+    //     即便后续 _rowsModel 被 loadFlatFiles 等覆盖，下次打开 Dialog 也能从文件夹历史
+    //     恢复这些路径（onVisibleChanged → _mergeFolderHistoryIntoLanes()）。
+    //   · 返回「本次实际新增/已存在的目标路径列表」（用于后续勾选锁定）
+    function addFoldersToHistory(urls) {
+        if (!urls || urls.length === 0) return []
+
+        // 收集已有 folderPath 集合（去重用）
+        var existing = {}
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (lane && lane.folderPath && lane.folderPath.length > 0) {
+                existing[lane.folderPath] = true
+            }
+        }
+
+        var hitPaths = []  // 本次涉及到的目标路径（无论是新增还是已存在）
+
+        for (var k = 0; k < urls.length; ++k) {
+            if (_rowsModel.count >= kMaxLanes) break
+            var u = urls[k]
+            if (u === undefined || u === null) continue
+
+            // 规范化：QUrl/字符串都转成本地目录路径，并扫描视频
+            var files = []
+            var folderPath = ""
+            try {
+                if (typeof u === "string") {
+                    var s0 = u
+                    if (s0.indexOf("file://") === 0) folderPath = Fs.urlToLocalFile(s0)
+                    else                              folderPath = s0
+                    files = Fs.scanVideoFolderPath(folderPath, true) || []
+                } else {
+                    files = Fs.scanVideoFolder(u, true) || []
+                    folderPath = Fs.urlToLocalFile(u)
+                }
+            } catch (e) { files = [] }
+
+            if (!folderPath || folderPath.length === 0) continue
+            if (!files || files.length === 0) continue
+
+            // 已在历史中：直接记入 hit，不重复追加
+            if (existing[folderPath]) {
+                if (hitPaths.indexOf(folderPath) < 0) hitPaths.push(folderPath)
+                continue
+            }
+
+            // 新增 lane（与 addLane / loadFlatFiles 注入格式一致）
+            var visible = _filterAndSort(files, "")
+            _laneRuntime.push({ allFiles: files, visibleFiles: visible })
+            _rowsModel.append({
+                selected:     true,
+                folderPath:   folderPath,
+                keyword:      "",
+                currentPath:  visible.length > 0 ? visible[0] : "",
+                currentIndex: visible.length > 0 ? 0 : -1,
+                allCount:     files.length,
+                visibleCount: visible.length
+            })
+            existing[folderPath] = true
+            hitPaths.push(folderPath)
+        }
+
+        if (hitPaths.length > 0) {
+            _bumpState()
+            _persistLanes()
+            // 关键：写入独立的「文件夹历史」（路径固化，不受 lanes 覆盖式重置影响）
+            _appendToFolderHistory(hitPaths)
+        }
+        return hitPaths
+    }
+
+    // ─── 把「文件夹历史」合并到 _rowsModel（视图层）─────────────────
+    // 触发时机：Dialog 每次从隐藏 → 可见时调用一次（onVisibleChanged）。
+    // 行为：
+    //   · 读取独立的「文件夹历史」持久化；
+    //   · 已存在同 folderPath 的 lane → 跳过（保持原 selected/keyword/currentIndex）；
+    //   · 不存在的 → 追加为新 lane，**默认 selected=false**：避免影响当前正在播放的 lanes
+    //     状态；用户在 Dialog 里手动勾选即可启用。
+    //   · 受 kMaxLanes(=9) 上限保护：满则停止追加（历史中靠前的优先）。
+    //   · 合并后会触发一次 _persistLanes() 同步 lanes 持久化。
+    // 返回：本次实际新追加的路径数。
+    function _mergeFolderHistoryIntoLanes() {
+        var hist = _loadFolderHistory()
+        if (!hist || hist.length === 0) return 0
+
+        // 已有 folderPath 集合
+        var existing = {}
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (lane && lane.folderPath && lane.folderPath.length > 0) {
+                existing[lane.folderPath] = true
+            }
+        }
+
+        var added = 0
+        for (var k = 0; k < hist.length; ++k) {
+            if (_rowsModel.count >= kMaxLanes) break
+            var folderPath = hist[k]
+            if (!folderPath || existing[folderPath]) continue
+
+            // 重新扫描；扫不到任何视频就跳过（文件夹被删/移走的情况）
+            var files = []
+            try { files = Fs.scanVideoFolderPath(folderPath, true) || [] } catch (e) { files = [] }
+            if (!files || files.length === 0) continue
+
+            var visible = _filterAndSort(files, "")
+            _laneRuntime.push({ allFiles: files, visibleFiles: visible })
+            _rowsModel.append({
+                selected:     false,                // 历史合并默认不勾选，避免误启动
+                folderPath:   folderPath,
+                keyword:      "",
+                currentPath:  visible.length > 0 ? visible[0] : "",
+                currentIndex: visible.length > 0 ? 0 : -1,
+                allCount:     files.length,
+                visibleCount: visible.length
+            })
+            existing[folderPath] = true
+            added++
+        }
+
+        if (added > 0) {
+            _bumpState()
+            _persistLanes()
+        }
+        return added
     }
 
     // ─── 单路浏览：切换「同时显示 N 个」 ────────────────────────────
