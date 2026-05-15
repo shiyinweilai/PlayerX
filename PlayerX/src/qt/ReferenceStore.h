@@ -90,6 +90,11 @@ public:
     Q_INVOKABLE QStringList allFolders() const;
     Q_INVOKABLE bool isSupportedImage(const QString& path) const;
 
+    // 给"评分汇总"等业务用：枚举给定文件夹下的"视频文件"总数（递归子目录），
+    // 复用与播放器一致的视频扩展名集合，结果与 referenceUrlForVideo 计算出的索引口径一致。
+    // 不存在/不是目录 → 返回 0。
+    Q_INVOKABLE int videoCountInFolder(const QString& folderPath) const;
+
 signals:
     // 参考图发生变化（绑定 / 解绑 / 切换模式）
     void referenceChanged(const QString& folderPath);

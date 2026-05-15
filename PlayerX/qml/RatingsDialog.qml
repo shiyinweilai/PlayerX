@@ -207,6 +207,23 @@ Window {
             d.totalItems = total
             d.latest = dLatest
             d.avg = dCnt > 0 ? Math.round(dSum / dCnt * 10) / 10 : 0
+            // ── 进度统计：用于汇总文案 + 上传前校验 ──────────────────
+            // ratedCount: 该文件夹下"已被评过分（至少 1 次）"的不同视频数 = 已聚合的文件条目数。
+            // totalVideos: 该文件夹下视频文件总数（递归，扩展名口径与播放器一致），
+            //              通过 Reference.videoCountInFolder() 实时枚举文件系统得到。
+            //              当 path 为空（"(未知文件夹)" 兜底）或后端不可用时回退为 ratedCount，
+            //              此时 fullyRated 必然为 true，不会误拦上传。
+            d.ratedCount = d.files.length
+            var tot = d.ratedCount
+            if (d.path && d.path.length > 0 && typeof Reference !== "undefined"
+                    && typeof Reference.videoCountInFolder === "function") {
+                var n2 = Reference.videoCountInFolder(d.path)
+                // 若枚举到的总数比已评数还小（极端情况：文件被移走 / 路径变更），
+                // 至少要把"已评"也算进去，避免出现 1/0 这种诡异显示。
+                if (n2 > tot) tot = n2
+            }
+            d.totalVideos = tot
+            d.fullyRated = (d.totalVideos > 0) && (d.ratedCount >= d.totalVideos)
             folders.push(d)
         }
         // 文件夹之间按 _sortDesc 排（按文件夹内最新时间）
@@ -310,6 +327,29 @@ Window {
             var d = _folders[i]
             if (_isFolderChecked(d.key) && d.path && d.path.length > 0) {
                 out.push(d.path)
+            }
+        }
+        return out
+    }
+    // 收集已勾选、但还未评完的文件夹（用于上传前拦截）。
+    // 返回元素：{ name, path, ratedCount, totalVideos }
+    // 设计原则：不评完不让上传 → 避免云端出现"半成品"打分集合污染统计。
+    function _collectCheckedIncomplete() {
+        var out = []
+        for (var i = 0; i < _folders.length; ++i) {
+            var d = _folders[i]
+            if (!_isFolderChecked(d.key)) continue
+            // path 为空（"(未知文件夹)" 兜底）的不参与校验：它本来也不会上传
+            if (!d.path || d.path.length === 0) continue
+            var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
+            var total = (d.totalVideos === undefined ? rated : d.totalVideos)
+            if (total > 0 && rated < total) {
+                out.push({
+                    name: d.name,
+                    path: d.path,
+                    ratedCount: rated,
+                    totalVideos: total
+                })
             }
         }
         return out
@@ -734,18 +774,52 @@ Window {
                         font.pixelSize: 12
                         elide: Text.ElideRight
                     }
-                    // 汇总：M 文件 · N 条 · 平均 4.2★
+                    // 汇总：已评 X/Y · N 条 · 平均 4.2★
+                    // 设计：把"已评分视频数 / 该文件夹视频总数"放在最前面（用户最关心进度），
+                    //       未评完时用橙红色 + ⚠ 强提醒；评满后用绿色 ✓。
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
                         x: parent.width - 90 + 8
                         width: 90 - 16
-                        text: folderRoot.d
-                              ? (folderRoot.d.files.length + "文件·" + folderRoot.d.totalItems + "条"
-                                  + (folderRoot.d.avg > 0 ? " · " + folderRoot.d.avg + "★" : ""))
-                              : ""
-                        color: folderRoot.d && folderRoot.d.avg > 0 ? "#f5c518" : "#cfcfd4"
+                        text: {
+                            if (!folderRoot.d) return ""
+                            var d = folderRoot.d
+                            var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
+                            var total = (d.totalVideos === undefined ? rated : d.totalVideos)
+                            var head = (d.fullyRated ? "✓ " : "⚠ ") + rated + "/" + total
+                            var tail = " · " + d.totalItems + "条"
+                                + (d.avg > 0 ? " · " + d.avg + "★" : "")
+                            return head + tail
+                        }
+                        color: folderRoot.d
+                                ? (folderRoot.d.fullyRated
+                                    ? (folderRoot.d.avg > 0 ? "#f5c518" : "#5fd17a")
+                                    : "#ffb05c")
+                                : "#cfcfd4"
                         font.pixelSize: 11
                         elide: Text.ElideRight
+                        // 鼠标悬浮看完整解释（按列宽收窄时被 elide 截断）
+                        ToolTip.visible: _sumMA.containsMouse && folderRoot.d !== null
+                        ToolTip.delay: 600
+                        ToolTip.timeout: 8000
+                        ToolTip.text: folderRoot.d
+                                ? qsTr("已评分视频：%1 / %2\n评分记录：%3 条\n平均：%4")
+                                    .arg(folderRoot.d.ratedCount === undefined
+                                            ? folderRoot.d.files.length
+                                            : folderRoot.d.ratedCount)
+                                    .arg(folderRoot.d.totalVideos === undefined
+                                            ? folderRoot.d.files.length
+                                            : folderRoot.d.totalVideos)
+                                    .arg(folderRoot.d.totalItems)
+                                    .arg(folderRoot.d.avg > 0 ? folderRoot.d.avg + " ★" : "—")
+                                : ""
+                        MouseArea {
+                            id: _sumMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            // 不要吃点击：让父容器 folderMA 继续负责展开/收起
+                            acceptedButtons: Qt.NoButton
+                        }
                     }
 
                     // 底部分隔线
@@ -1055,6 +1129,15 @@ Window {
                         rejectDialog.openWith(
                             qsTr("无法上传到云端"),
                             qsTr("还没有勾选任何文件夹，无法确定要上传哪些评分记录。\n请在列表里至少勾选一个文件夹后再点上传。"))
+                        return
+                    }
+
+                    // ── 未评完拦截：勾选的文件夹必须每个都"已评分视频数 == 视频总数"
+                    // 设计动机：云端汇总通常按"文件夹完整评分"维度做统计，
+                    // 半成品上传会让别人无法判断该批数据是否可用。
+                    var incomplete = root._collectCheckedIncomplete()
+                    if (incomplete.length > 0) {
+                        incompleteUploadDialog.openWith(incomplete)
                         return
                     }
                     // 缓存本次勾选，供"保存并上传"/"覆盖上传"等后续入口复用
@@ -1691,6 +1774,150 @@ Window {
         function onUploadConflict(message) {
             uploadConflictDialog._msg = message
             uploadConflictDialog.open()
+        }
+    }
+
+    // 未评完拦截对话框：勾选的文件夹中存在"未把所有视频都评完"的，弹此窗阻止上传。
+    // 设计原则：列出具体哪些文件夹缺多少视频，让用户能精准回去补；不提供"忽略并继续上传"
+    // 入口（避免把"半成品"打分集合污染云端统计）。
+    Dialog {
+        id: incompleteUploadDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 540
+        padding: 0
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        // 由 openWith() 写入，类型：[{ name, path, ratedCount, totalVideos }]
+        property var _items: []
+        function openWith(items) {
+            _items = items || []
+            open()
+        }
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#ffb05c"      // 警示色：与汇总列"未评完"同款
+            border.width: 1
+            radius: 10
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("⚠ 评分尚未完成，无法上传")
+                color: "#ffd9a8"
+                font.pixelSize: 14
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#3a2a1a"
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+            // 顶部说明
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                Layout.topMargin: 16
+                text: qsTr("以下文件夹中还有视频未评分，请先评完所有视频再上传：")
+                color: "#e8e3d8"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.4
+            }
+            // 列表（最多 8 行；超出滚动）
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                Layout.preferredHeight: Math.min(
+                    Math.max(1, incompleteUploadDialog._items.length) * 28 + 12,
+                    8 * 28 + 12)
+                color: "#15151a"
+                border.color: "#2a2a30"
+                border.width: 1
+                radius: 6
+                ListView {
+                    id: _incompleteList
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    clip: true
+                    model: incompleteUploadDialog._items
+                    spacing: 2
+                    delegate: Item {
+                        width: ListView.view.width
+                        height: 26
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 6
+                            anchors.rightMargin: 6
+                            spacing: 10
+                            Text {
+                                Layout.fillWidth: true
+                                text: "📁 " + (modelData.name || "")
+                                color: "#e8e8ea"
+                                font.pixelSize: 12
+                                elide: Text.ElideMiddle
+                                ToolTip.visible: _ma.containsMouse
+                                ToolTip.delay: 500
+                                ToolTip.timeout: 8000
+                                ToolTip.text: modelData.path || ""
+                                MouseArea {
+                                    id: _ma
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    acceptedButtons: Qt.NoButton
+                                }
+                            }
+                            Text {
+                                text: qsTr("已评 %1 / %2（缺 %3）")
+                                        .arg(modelData.ratedCount)
+                                        .arg(modelData.totalVideos)
+                                        .arg(modelData.totalVideos - modelData.ratedCount)
+                                color: "#ffb05c"
+                                font.pixelSize: 12
+                                font.bold: true
+                            }
+                        }
+                    }
+                }
+            }
+            // 底部按钮
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                Layout.topMargin: 4
+                Layout.bottomMargin: 16
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("我知道了")
+                    onClicked: incompleteUploadDialog.close()
+                }
+            }
         }
     }
 

@@ -226,6 +226,13 @@ QStringList ReferenceStore::listVideos(const QString& dir) {
     return out;
 }
 
+int ReferenceStore::videoCountInFolder(const QString& folderPath) const {
+    // 直接复用 listVideos：实现一份扩展名/递归口径，避免上层各自重写出现不一致。
+    // 注意：listVideos 是 static，所以 const 限定符不影响它的调用。
+    if (folderPath.isEmpty()) return 0;
+    return listVideos(folderPath).size();
+}
+
 QPair<int, int> ReferenceStore::videoIndexInDir(const QString& videoPath) {
     if (videoPath.isEmpty()) return {-1, 0};
     QFileInfo fi(videoPath);
