@@ -106,6 +106,15 @@ public slots:
     // 平台用户名兑底（当 currentUser 为空时使用）
     QString systemUserName() const;
 
+    // ── 通用 KV 持久化（QSettings 透传）──────────────────────────
+    // 复用 RatingStore 已有的 QSettings 实例（与 currentUser 等共用同一份 ini 文件），
+    // 给 QML 端任意子模块（如 MultiGroupDialog 的 lanes 配置）提供轻量级
+    // "记一下/读一下"能力，避免每个 QML 子组件都引入 Qt.labs.settings 模块或
+    // 独立 ini 文件。key 推荐用 "module/field" 形式（如 "multiGroup/lanesJson"）。
+    // 写入空字符串等价于"删除该键"，读取不存在的 key 返回 defaultValue。
+    Q_INVOKABLE QString loadString(const QString& key, const QString& defaultValue = {}) const;
+    Q_INVOKABLE void    saveString(const QString& key, const QString& value);
+
     // ──上传配置 ──────────────────────────────────────
     QString uploadServerUrl() const;
     void    setUploadServerUrl(const QString& url);

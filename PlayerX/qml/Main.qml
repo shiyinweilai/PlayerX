@@ -1422,14 +1422,19 @@ ApplicationWindow {
         _refTick;
         return _refDirOf(root.refCurrentVideo)
     }
+    // ─── 参考图：用户手动浏览偏移量 ───────────────────────────────────
+    // 在 folder 模式下，◀ ▶ 按钮可临时偏离"自动同步"的索引。
+    //   · 仅 folder 模式有意义；image 模式忽略。
+    //   · 切到下一组对比时（filesChanged → _refTick++）自动归零，避免越过组边界。
+    property int _refImgOffset: 0
     // 实际渲染用的图片 URL：
-    //   · image 模式：固定图；
-    //   · folder 模式：按 refCurrentVideo 的同序号图片自动取（C++ 端完成索引计算）。
+    //   · image 模式：固定图（offset 无效）；
+    //   · folder 模式：按 refCurrentVideo 的同序号 + _refImgOffset 取图（C++ 端做边界裁剪）。
     readonly property url refCurrentUrl: {
         _refTick;
         if (typeof Reference === "undefined") return ""
         if (root.refCurrentVideo.length === 0) return ""
-        return Reference.referenceUrlForVideo(root.refCurrentVideo)
+        return Reference.referenceUrlForVideoOffset(root.refCurrentVideo, root._refImgOffset)
     }
     readonly property bool refHasCurrent: String(root.refCurrentUrl).length > 0
     // "image" / "folder" / ""（未绑定）
@@ -1444,7 +1449,28 @@ ApplicationWindow {
         _refTick;
         if (typeof Reference === "undefined") return ""
         if (root.refCurrentVideo.length === 0) return ""
-        return Reference.referenceProgressForVideo(root.refCurrentVideo)
+        return Reference.referenceProgressForVideoOffset(root.refCurrentVideo, root._refImgOffset)
+    }
+    // folder 模式下参考图总数；image / 未绑定时为 0
+    readonly property int refImageCount: {
+        _refTick;
+        if (typeof Reference === "undefined") return 0
+        if (root.refCurrentVideo.length === 0) return 0
+        return Reference.referenceImageCountForVideo(root.refCurrentVideo)
+    }
+    // 当前在参考图文件夹里的真实索引（0-based），用于 ◀ ▶ 按钮可用性判断
+    readonly property int refCurrentImageIndex: {
+        var t = root.refProgressText
+        if (!t || t.length === 0) return -1
+        var slash = t.indexOf("/")
+        if (slash < 0) return -1
+        var n = parseInt(t.substring(0, slash).trim(), 10)
+        return isNaN(n) ? -1 : (n - 1)
+    }
+    // 切组时归零偏移
+    Connections {
+        target: Engine
+        function onFilesChanged() { root._refImgOffset = 0 }
     }
 
     // ─── 参考文本（CSV）─────────────────────────────────────────────
@@ -2752,6 +2778,114 @@ ApplicationWindow {
                         }
                     }
                     drop.accepted = false
+                }
+            }
+
+            // ◀ ▶ 浮层切换按钮（仅 folder 模式 / 总数>1 时可见）
+            //   ◀：在自动索引上 -1（夹紧到 0）
+            //   ▶：在自动索引上 +1（夹紧到 N-1）
+            //   悬浮在图片右下角，不占按钮条；点击时图片自动重新加载。
+            Row {
+                id: refImgNavBar
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 6
+                spacing: 4
+                visible: root.refCurrentMode === "folder" && root.refImageCount > 1
+
+                // ── 上一张 ───────────────────────────────────────
+                Rectangle {
+                    id: refPrevBtn
+                    width: 28; height: 24
+                    radius: 3
+                    color: prevMA.pressed ? "#3a3a45"
+                          : prevMA.containsMouse ? "#2a2a32"
+                          : "#1a1a1da0"   // 半透明深底，避免遮挡图片
+                    border.color: refPrevBtn.enabled ? "#5a5a65" : "#2a2a32"
+                    border.width: 1
+                    property bool enabled: root.refCurrentImageIndex > 0
+                    Text {
+                        anchors.centerIn: parent
+                        text: "◀"
+                        font.pixelSize: 12
+                        color: refPrevBtn.enabled ? "#e8e8ec" : "#555"
+                    }
+                    MouseArea {
+                        id: prevMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: refPrevBtn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: {
+                            if (!refPrevBtn.enabled) return
+                            root._refImgOffset -= 1
+                        }
+                    }
+                    ToolTip.visible: prevMA.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "上一张参考图（手动浏览）"
+                }
+
+                // ── 下一张 ───────────────────────────────────────
+                Rectangle {
+                    id: refNextBtn
+                    width: 28; height: 24
+                    radius: 3
+                    color: nextMA.pressed ? "#3a3a45"
+                          : nextMA.containsMouse ? "#2a2a32"
+                          : "#1a1a1da0"
+                    border.color: refNextBtn.enabled ? "#5a5a65" : "#2a2a32"
+                    border.width: 1
+                    property bool enabled: root.refImageCount > 0
+                                            && root.refCurrentImageIndex >= 0
+                                            && root.refCurrentImageIndex < root.refImageCount - 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "▶"
+                        font.pixelSize: 12
+                        color: refNextBtn.enabled ? "#e8e8ec" : "#555"
+                    }
+                    MouseArea {
+                        id: nextMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: refNextBtn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: {
+                            if (!refNextBtn.enabled) return
+                            root._refImgOffset += 1
+                        }
+                    }
+                    ToolTip.visible: nextMA.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "下一张参考图（手动浏览）"
+                }
+
+                // ── 复位按钮（仅 offset!=0 时显示，让用户回到"自动同步"状态）─────
+                Rectangle {
+                    id: refResetBtn
+                    width: 28; height: 24
+                    radius: 3
+                    visible: root._refImgOffset !== 0
+                    color: resetMA.pressed ? "#3a3a45"
+                          : resetMA.containsMouse ? "#2a2a32"
+                          : "#1a1a1da0"
+                    border.color: "#7fe5cc"
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "⟳"
+                        font.pixelSize: 13
+                        color: "#7fe5cc"
+                    }
+                    MouseArea {
+                        id: resetMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root._refImgOffset = 0
+                    }
+                    ToolTip.visible: resetMA.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "回到自动同步索引"
                 }
             }
         }

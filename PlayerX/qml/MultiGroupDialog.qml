@@ -15,11 +15,237 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
+import QtQuick.LocalStorage 2.15
 import PlayerX 1.0
 
 ApplicationWindow {
     id: dlg
     title: "打开文件夹 / 多组对比"
+
+    // ─── 持久化：记住上次配置的 lanes（文件夹 / 过滤关键字 / 勾选 / 当前索引）───
+    // 设计要点：
+    //   · 仅存"轻量状态"（文件夹路径、关键字、勾选、当前索引）——不存 allFiles/visibleFiles
+    //     避免一些路径过多时存储臃胀；打开时重新扫描。
+    //   · 采用 JSON 字符串作为单一存储 key，原子性写回，避免多字段不一致。
+    //   · 首次启动（持久化为空）才走默认 2 路创建逻辑。
+    //   · 调用 _persistLanes() 在：addLane / removeLane / _syncLaneFromRow / loadFlatFiles
+    //     等所有会改变 lanes 的入口。
+    //
+    // ── 三轨存储（按可靠性排序，主路先写先读）──────────────────────
+    //   ① cache 文件：<AppCache>/multi_group_lanes.json  ← 用户可直接打开查看 / 手动备份
+    //      路径：
+    //        macOS:   ~/Library/Caches/PlayerX/multi_group_lanes.json
+    //        Windows: %LOCALAPPDATA%/PlayerX/cache/multi_group_lanes.json
+    //   ② QtQuick.LocalStorage（SQLite，Qt6 自带，无任何部署依赖）
+    //   ③ Rating.saveString → QSettings ini（与评分人/上传配置共用一份）
+    //   写入：①②③ 同时写。读取：① → ② → ③ 顺序兜底。
+    //   任何一路出问题都不影响主流程。
+    readonly property string _persistKey: "multiGroup/lanesJson"
+    readonly property string _persistFileName: "multi_group_lanes.json"
+
+    // 避免还原过程中 _syncLaneFromRow 反复触发写盘
+    property bool _restoring: false
+
+    // ── 主路：cache 文件路径（懒计算 + 缓存） ──────────────────────
+    property string _cacheFilePath: ""
+    function _cacheFile() {
+        if (_cacheFilePath && _cacheFilePath.length > 0) return _cacheFilePath
+        try {
+            if (typeof Fs !== "undefined" && Fs
+                && typeof Fs.appCacheDir === "function") {
+                var dir = Fs.appCacheDir() || ""
+                if (dir.length > 0) {
+                    _cacheFilePath = dir + "/" + _persistFileName
+                    return _cacheFilePath
+                }
+            }
+        } catch (e) { /* ignore */ }
+        return ""
+    }
+    function _fileSave(json) {
+        var p = _cacheFile()
+        if (!p || p.length === 0) return false
+        try {
+            if (typeof Fs.writeTextFile === "function") {
+                return Fs.writeTextFile(p, json || "")
+            }
+        } catch (e) { return false }
+        return false
+    }
+    function _fileLoad() {
+        var p = _cacheFile()
+        if (!p || p.length === 0) return ""
+        try {
+            if (typeof Fs.readTextFile === "function") {
+                return Fs.readTextFile(p) || ""
+            }
+        } catch (e) { return "" }
+        return ""
+    }
+
+    // ── 副路：LocalStorage 帮手 ───────────────────────────────────
+    function _ldb() {
+        // 1MB 上限对单个 JSON 配置项足够（实际 < 10KB）。
+        return LocalStorage.openDatabaseSync(
+            "PlayerX", "1.0", "PlayerX local KV", 1000000)
+    }
+    function _lsSave(key, val) {
+        try {
+            var db = _ldb()
+            db.transaction(function(tx) {
+                tx.executeSql(
+                    "CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+                if (!val || val.length === 0) {
+                    tx.executeSql("DELETE FROM kv WHERE k = ?", [key])
+                } else {
+                    tx.executeSql("INSERT OR REPLACE INTO kv(k, v) VALUES (?, ?)",
+                                  [key, val])
+                }
+            })
+            return true
+        } catch (e) {
+            return false
+        }
+    }
+    function _lsLoad(key) {
+        try {
+            var db = _ldb()
+            var got = ""
+            db.readTransaction(function(tx) {
+                tx.executeSql(
+                    "CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+                var rs = tx.executeSql("SELECT v FROM kv WHERE k = ?", [key])
+                if (rs && rs.rows && rs.rows.length > 0) {
+                    got = rs.rows.item(0).v || ""
+                }
+            })
+            return got
+        } catch (e) {
+            return ""
+        }
+    }
+
+    function _persistLanes() {
+        if (_restoring) return
+        var arr = []
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var l = _rowsModel.get(i)
+            if (!l) continue
+            arr.push({
+                selected:    !!l.selected,
+                folderPath:  l.folderPath || "",
+                keyword:     l.keyword || "",
+                currentIndex: (typeof l.currentIndex === "number") ? l.currentIndex : -1
+            })
+        }
+        var json = ""
+        try { json = JSON.stringify(arr) } catch (e) { json = "" }
+
+        // ① cache 文件（主路：用户可见永久固化）
+        var okFile = _fileSave(json)
+
+        // ② LocalStorage（兜底）
+        _lsSave(_persistKey, json)
+
+        // ③ Rating QSettings（兜底，仅在 C++ 重编译后才有 saveString 方法）
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.saveString === "function") {
+                Rating.saveString(_persistKey, json)
+            }
+        } catch (e) { /* ignore */ }
+
+        if (!okFile) {
+            // 仅做调试日志：cache 写失败时仍有 ②③ 兜底，但用户应该看到提示
+            console.warn("[MultiGroupDialog] cache 文件写入失败：", _cacheFile())
+        }
+    }
+
+    // 尝试恢复上次保存的 lanes；返回是否成功还原了至少 1 行。
+    function _restoreLanes() {
+        var s = ""
+
+        // ① 优先从 cache 文件读
+        s = _fileLoad() || ""
+
+        // ② 回退到 LocalStorage
+        if (!s || s.length === 0) {
+            s = _lsLoad(_persistKey) || ""
+        }
+        // ③ 再回退到 Rating QSettings
+        if (!s || s.length === 0) {
+            try {
+                if (typeof Rating !== "undefined" && Rating
+                    && typeof Rating.loadString === "function") {
+                    s = Rating.loadString(_persistKey, "") || ""
+                }
+            } catch (e) { s = "" }
+        }
+        if (!s || s.length === 0) return false
+
+        var arr = []
+        try { arr = JSON.parse(s) } catch (e) { return false }
+        if (!arr || !Array.isArray(arr) || arr.length === 0) return false
+
+        _restoring = true
+        // 清空现有行（正常首次启动下这里 count == 0）
+        while (_rowsModel.count > 0) {
+            _rowsModel.remove(_rowsModel.count - 1)
+        }
+        _laneRuntime = []
+
+        for (var i = 0; i < arr.length && i < kMaxLanes; ++i) {
+            var rec = arr[i] || {}
+            var folder = rec.folderPath || ""
+            var kw     = rec.keyword || ""
+            var sel    = rec.selected !== false   // 默认 true
+            var savedIdx = (typeof rec.currentIndex === "number") ? rec.currentIndex : -1
+
+            // 重新扫描文件夹（仅当为非空路径时）
+            var allFiles = []
+            if (folder && folder.length > 0) {
+                try { allFiles = Fs.scanVideoFolderPath(folder, true) || [] } catch (e) { allFiles = [] }
+            }
+            // 应用关键字过滤 + 名称升序（与 MultiGroupRow._recomputeVisible 保持一致的默认顺序）
+            var visible = _filterAndSort(allFiles, kw)
+
+            var curIdx = -1
+            if (visible.length > 0) {
+                if (savedIdx >= 0 && savedIdx < visible.length) curIdx = savedIdx
+                else curIdx = 0
+            }
+            var curPath = (curIdx >= 0 && curIdx < visible.length) ? visible[curIdx] : ""
+
+            _laneRuntime.push({ allFiles: allFiles, visibleFiles: visible })
+            _rowsModel.append({
+                selected:    sel,
+                folderPath:  folder,
+                keyword:     kw,
+                currentPath: curPath,
+                currentIndex: curIdx,
+                allCount:    allFiles.length,
+                visibleCount: visible.length
+            })
+        }
+        _restoring = false
+        _bumpState()
+        return _rowsModel.count > 0
+    }
+
+    // 与 MultiGroupRow._recomputeVisible 逻辑同步：默认名称升序、过滤关键字不区分大小写。
+    function _filterAndSort(files, kw) {
+        var arr = (files || []).slice()
+        var k = (kw || "").trim().toLowerCase()
+        if (k.length > 0) {
+            arr = arr.filter(function(p) { return p.toLowerCase().indexOf(k) >= 0 })
+        }
+        arr.sort(function(a, b) {
+            var na = Fs.fileName(a).toLowerCase()
+            var nb = Fs.fileName(b).toLowerCase()
+            return (na < nb) ? -1 : (na > nb ? 1 : 0)
+        })
+        return arr
+    }
 
     // 最多 9 路（与 Engine 上限一致）
     readonly property int kMaxLanes: 9
@@ -162,6 +388,7 @@ ApplicationWindow {
         })
         _laneRuntime.push({ allFiles: [], visibleFiles: [] })
         _bumpState()
+        _persistLanes()
     }
 
     function removeLane(i) {
@@ -170,6 +397,7 @@ ApplicationWindow {
         _rowsModel.remove(i)
         _laneRuntime.splice(i, 1)
         _bumpState()
+        _persistLanes()
     }
 
     // 由 MultiGroupRow.laneChanged 调用，将当前行 UI 状态写回模型
@@ -189,6 +417,7 @@ ApplicationWindow {
             visibleCount: visibleFiles.length
         })
         _bumpState()
+        _persistLanes()
     }
 
     // ─── 对外动作：启动 / 切组 ──────────────────────────────────────
@@ -509,10 +738,12 @@ ApplicationWindow {
     modality: Qt.NonModal
 
     Component.onCompleted: {
-        // 默认 2 行（最常用：左右对比）
+        // 优先从本地记忆还原上次配置；首次启动或还原失败时才创建默认 2 路。
         if (_rowsModel.count === 0) {
-            addLane()
-            addLane()
+            if (!_restoreLanes()) {
+                addLane()
+                addLane()
+            }
         }
     }
 
@@ -555,6 +786,7 @@ ApplicationWindow {
                 Repeater {
                     model: _rowsModel
                     delegate: MultiGroupRow {
+                        id: rowItem
                         Layout.fillWidth: true
                         laneIndex: index
                         selected: model.selected
@@ -562,14 +794,30 @@ ApplicationWindow {
                         keyword: model.keyword
                         currentIndex: model.currentIndex
                         removable: _rowsModel.count > 1
+
+                        // 初始化期内（属性绑定→ onCurrentIndexChanged / onSelectedChanged
+                        // 等会先一步触发 laneChanged）若任由 _syncLaneFromRow 执行，
+                        // 会把"还没注入 allFiles"的空状态写回 _laneRuntime，
+                        // 导致历史导入被误清空（tooltip 还在 / 列表却未导入）。
+                        // 这里用一个本地门闩：onCompleted 注入完 allFiles 之后再放行。
+                        property bool _bootDone: false
+
                         Component.onCompleted: {
-                            // 还原 allFiles / visibleFiles（首次创建时为空，重新加载也无需重建）
+                            // 注入历史扫描结果（_laneRuntime 在 _restoreLanes 中预填）
                             var rt = _laneRuntime[index]
-                            if (rt) {
+                            if (rt && rt.allFiles && rt.allFiles.length > 0) {
                                 allFiles = rt.allFiles
+                                // onAllFilesChanged → _recomputeVisible 会同步刷新 visibleFiles，
+                                // 并保留有效的 currentIndex（_recomputeVisible 已支持保留逻辑）。
+                                // 同步一次给模型，确保 allCount/visibleCount/currentPath 立刻正确：
+                                _syncLaneFromRow(index, selected, folderPath, keyword,
+                                                 allFiles, visibleFiles, currentIndex)
                             }
+                            _bootDone = true
                         }
                         onLaneChanged: {
+                            // 初始化阶段（_bootDone 为 false）忽略，避免空数组覆盖历史
+                            if (!_bootDone) return
                             _syncLaneFromRow(index, selected, folderPath, keyword,
                                              allFiles, visibleFiles, currentIndex)
                         }

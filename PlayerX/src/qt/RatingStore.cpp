@@ -86,6 +86,27 @@ QString RatingStore::systemUserName() const {
     return u;
 }
 
+// ──通用 KV 持久化 ─────────────────────────────────────────────
+// 直接落到 QSettings 默认 scope（与 currentUser / uploadServerUrl 等共用同一份 ini）。
+// 这里没有 Q_PROPERTY 通知，调用方自己负责 set 后再 get 读取。
+
+QString RatingStore::loadString(const QString& key, const QString& defaultValue) const {
+    if (key.isEmpty()) return defaultValue;
+    QSettings s;
+    return s.value(key, defaultValue).toString();
+}
+
+void RatingStore::saveString(const QString& key, const QString& value) {
+    if (key.isEmpty()) return;
+    QSettings s;
+    if (value.isEmpty()) {
+        s.remove(key);
+    } else {
+        s.setValue(key, value);
+    }
+    s.sync();
+}
+
 // 返回导出 CSV 时 FileDialog 默认落脚的目录：系统下载文件夹（~/Downloads）。
 // 如果 QStandardPaths 拿不到（极端定制环境）则退到家目录，避免 Qt 默认落到文件系统根。
 QUrl RatingStore::defaultExportDir() const {

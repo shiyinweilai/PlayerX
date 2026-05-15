@@ -47,6 +47,22 @@ public:
     // QML 端禁止用 url.toString().substring(7) 之类的字符串截断方式，那在 Windows
     // 上会产生 "/C:/..."（多一个前导斜杠）导致扫描失败。
     Q_INVOKABLE QString urlToLocalFile(const QUrl& url) const;
+
+    // ── 应用级 cache 目录 + 通用文本读写 ─────────────────────────
+    // 用于持久化"轻量配置"（lanes JSON、面板状态等），用户可见、可手工清理，
+    // 跨平台一致（macOS 在 ~/Library/Caches/PlayerX，Windows 在 %LOCALAPPDATA%/PlayerX/cache）。
+    // 调用时若目录不存在会自动 mkpath；返回绝对路径，末尾不带斜杠。
+    Q_INVOKABLE QString appCacheDir() const;
+
+    // 写入文本文件（UTF-8，无 BOM，覆盖式）。父目录会自动创建。
+    // 成功返回 true；filePath 为空或写入失败返回 false。
+    Q_INVOKABLE bool writeTextFile(const QString& filePath, const QString& text) const;
+
+    // 读取文本文件（按 UTF-8 解码）。文件不存在或读失败时返回空字符串。
+    Q_INVOKABLE QString readTextFile(const QString& filePath) const;
+
+    // 文件是否存在（filePath 为空返回 false）。
+    Q_INVOKABLE bool fileExists(const QString& filePath) const;
 };
 
 } // namespace rbqt

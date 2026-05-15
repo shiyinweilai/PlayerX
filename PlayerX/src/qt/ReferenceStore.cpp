@@ -415,6 +415,65 @@ QString ReferenceStore::referenceProgressForVideo(const QString& videoPath) cons
     return QString::number(useIdx + 1) + " / " + QString::number(imgs.size());
 }
 
+// ── 偏移版 ───────────────────────────────────────────────────────────────
+// 在"自动索引"基础上 +offset 取图；仅 folder 模式生效。
+// image / 未绑定时退化为对应非偏移版（image 始终返回固定图，无所谓偏移）。
+QUrl ReferenceStore::referenceUrlForVideoOffset(const QString& videoPath, int offset) const {
+    if (videoPath.isEmpty()) return {};
+    QFileInfo fi(videoPath);
+    if (!fi.exists()) return {};
+    const QString folder = normalizeFolder(fi.absolutePath());
+    if (folder.isEmpty()) return {};
+    auto it = m_map.constFind(folder);
+    if (it == m_map.constEnd()) return {};
+
+    if (it->kind == "image") {
+        if (!QFileInfo::exists(it->path)) return {};
+        return QUrl::fromLocalFile(it->path);
+    }
+    if (it->kind == "folder") {
+        const QStringList imgs = listImages(it->path);
+        if (imgs.isEmpty()) return {};
+        auto idx = videoIndexInDir(videoPath);
+        int useIdx = idx.first < 0 ? 0 : idx.first;
+        useIdx += offset;
+        if (useIdx < 0) useIdx = 0;
+        if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
+        return QUrl::fromLocalFile(imgs.at(useIdx));
+    }
+    return {};
+}
+
+QString ReferenceStore::referenceProgressForVideoOffset(const QString& videoPath, int offset) const {
+    if (videoPath.isEmpty()) return {};
+    QFileInfo fi(videoPath);
+    if (!fi.exists()) return {};
+    const QString folder = normalizeFolder(fi.absolutePath());
+    auto it = m_map.constFind(folder);
+    if (it == m_map.constEnd()) return {};
+    if (it->kind != "folder") return {};
+
+    const QStringList imgs = listImages(it->path);
+    if (imgs.isEmpty()) return {};
+    auto idx = videoIndexInDir(videoPath);
+    int useIdx = idx.first < 0 ? 0 : idx.first;
+    useIdx += offset;
+    if (useIdx < 0) useIdx = 0;
+    if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
+    return QString::number(useIdx + 1) + " / " + QString::number(imgs.size());
+}
+
+int ReferenceStore::referenceImageCountForVideo(const QString& videoPath) const {
+    if (videoPath.isEmpty()) return 0;
+    QFileInfo fi(videoPath);
+    if (!fi.exists()) return 0;
+    const QString folder = normalizeFolder(fi.absolutePath());
+    auto it = m_map.constFind(folder);
+    if (it == m_map.constEnd()) return 0;
+    if (it->kind != "folder") return 0;
+    return listImages(it->path).size();
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // (A) 参考图：写入
 // ════════════════════════════════════════════════════════════════════════

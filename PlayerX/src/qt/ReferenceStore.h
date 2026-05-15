@@ -47,6 +47,14 @@ public:
     Q_INVOKABLE QUrl referenceUrlForVideo(const QString& videoPath) const;
     Q_INVOKABLE QString referenceProgressForVideo(const QString& videoPath) const;
 
+    // 在 referenceUrlForVideo / referenceProgressForVideo 计算出的"自动索引"基础上偏移 offset 张
+    // 取参考图（仅 folder 模式生效；越界自动夹紧到 [0, N-1]）。
+    // 用途：侧边栏临时浏览参考图文件夹的相邻图片。
+    Q_INVOKABLE QUrl referenceUrlForVideoOffset(const QString& videoPath, int offset) const;
+    Q_INVOKABLE QString referenceProgressForVideoOffset(const QString& videoPath, int offset) const;
+    // folder 模式下参考图总数；image / 未绑定时为 0；用于 QML 端边界判断
+    Q_INVOKABLE int referenceImageCountForVideo(const QString& videoPath) const;
+
     Q_INVOKABLE bool setReference(const QString& folderPath, const QString& imagePath);
     Q_INVOKABLE bool setReferenceUrl(const QString& folderPath, const QUrl& imageUrl);
     Q_INVOKABLE bool setReferenceFolder(const QString& folderPath, const QString& imageDir);

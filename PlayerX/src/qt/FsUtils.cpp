@@ -5,9 +5,12 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QFile>
 #include <QFileInfo>
 #include <QSet>
+#include <QStandardPaths>
 #include <QStringList>
+#include <QTextStream>
 
 namespace rbqt {
 
@@ -110,6 +113,56 @@ QString FsUtils::fileName(const QString& path) const {
 
 QString FsUtils::urlToLocalFile(const QUrl& url) const {
     return urlToLocal(url);
+}
+
+// ── 应用级 cache 目录 + 通用文本读写 ─────────────────────────────
+
+QString FsUtils::appCacheDir() const {
+    // QStandardPaths::CacheLocation 已自带应用名后缀（依赖
+    // QCoreApplication::applicationName/organizationName，在 main.cpp 已设置）。
+    //   macOS:   ~/Library/Caches/PlayerX
+    //   Windows: %LOCALAPPDATA%/PlayerX/cache
+    //   Linux:   ~/.cache/PlayerX
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (dir.isEmpty()) {
+        // 极端兜底：落到家目录下 .playerx_cache
+        dir = QDir::homePath() + "/.playerx_cache";
+    }
+    QDir d(dir);
+    if (!d.exists()) d.mkpath(".");
+    // 规范化：去尾部斜杠
+    while (dir.endsWith('/') || dir.endsWith('\\')) dir.chop(1);
+    return dir;
+}
+
+bool FsUtils::writeTextFile(const QString& filePath, const QString& text) const {
+    if (filePath.isEmpty()) return false;
+    QFileInfo fi(filePath);
+    QDir parent = fi.absoluteDir();
+    if (!parent.exists()) {
+        if (!parent.mkpath(".")) return false;
+    }
+    QFile f(filePath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    const QByteArray bytes = text.toUtf8();
+    qint64 n = f.write(bytes);
+    f.close();
+    return n == bytes.size();
+}
+
+QString FsUtils::readTextFile(const QString& filePath) const {
+    if (filePath.isEmpty()) return {};
+    QFile f(filePath);
+    if (!f.exists()) return {};
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    const QByteArray bytes = f.readAll();
+    f.close();
+    return QString::fromUtf8(bytes);
+}
+
+bool FsUtils::fileExists(const QString& filePath) const {
+    if (filePath.isEmpty()) return false;
+    return QFileInfo::exists(filePath);
 }
 
 } // namespace rbqt
