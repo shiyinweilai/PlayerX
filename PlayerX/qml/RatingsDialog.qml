@@ -1673,10 +1673,18 @@ Window {
                 uploadAuthErrorDialog.open()
                 return
             }
-            actionToast.show(ok, message)
             if (ok) {
+                // 成功：右下角小 toast 容易被用户漏看（"我点了上传按钮怎么没反应？"），
+                // 改用居中模态成功对话框 + 4s 自动关闭：既醒目，又不打断后续操作太久。
+                // 同时按钮闪一下做次要反馈。
+                uploadSuccessDialog._msg = message || qsTr("上传成功")
+                uploadSuccessDialog.open()
+                uploadSuccessAutoClose.restart()
                 uploadBtn.flash = true
                 uploadFlashTimer.restart()
+            } else {
+                // 失败仍走 toast：失败信息通常较长（地址不对/网络超时），用 toast 容许用户一边看一边改。
+                actionToast.show(false, message)
             }
         }
         // 服务端返回 409：(rater, tag) 重复上传 → 弹覆盖确认
@@ -1684,6 +1692,129 @@ Window {
             uploadConflictDialog._msg = message
             uploadConflictDialog.open()
         }
+    }
+
+    // 上传成功对话框：居中弹出，4s 后自动关闭。
+    // 设计动机：右下角 actionToast 易被忽视；上传是用户的关键操作，需要明确"成功"反馈。
+    Dialog {
+        id: uploadSuccessDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 420
+        padding: 0
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        property string _msg: ""
+
+        Overlay.modal: Rectangle { color: "#80000000" }
+
+        background: Rectangle {
+            color: "#1a2a1f"
+            border.color: "#3aa55a"
+            border.width: 1
+            radius: 10
+            // 阴影
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 12
+            anchors.margins: 20
+            // 用 Item 撑边距而不是给 ColumnLayout 设 margins（QML 不支持）
+            Item { Layout.preferredHeight: 4 }
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                spacing: 12
+                Text {
+                    text: "✅"
+                    font.pixelSize: 28
+                    color: "#5fd17a"
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("上传成功")
+                    color: "#e8f5ec"
+                    font.pixelSize: 16
+                    font.bold: true
+                    elide: Text.ElideRight
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                text: uploadSuccessDialog._msg
+                color: "#cfeede"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.35
+            }
+            // 进度条样式倒计时（视觉提示"几秒后自动关闭"）。
+            // 实现细节：内层 Rectangle 的 width 不能预先用 binding 表达式（会被 onOpened 里的
+            // 命令式赋值打断 → "left-hand side of assignment operator is not an lvalue"）。
+            // 改为：父开门时把 NumberAnimation 启动，由动画把 width 从满变到 0；动画自带 lvalue 写入路径。
+            Rectangle {
+                id: _autoCloseTrack
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                Layout.preferredHeight: 3
+                radius: 2
+                color: "#22381f"
+                Rectangle {
+                    id: _autoCloseBar
+                    height: parent.height
+                    radius: parent.radius
+                    color: "#3aa55a"
+                    width: 0   // 初始 0，开门时由动画把它推到满再线性收缩
+                }
+                NumberAnimation {
+                    id: _autoCloseAnim
+                    target: _autoCloseBar
+                    property: "width"
+                    duration: uploadSuccessAutoClose.interval
+                    easing.type: Easing.Linear
+                    // from/to 在动画启动时即时取值，保证宽度跟随父容器实际像素
+                    from: _autoCloseTrack.width
+                    to: 0
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                Layout.bottomMargin: 16
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("确定")
+                    onClicked: { uploadSuccessAutoClose.stop(); uploadSuccessDialog.close() }
+                }
+            }
+        }
+
+        // 打开时启动倒计时动画（NumberAnimation 自身负责 lvalue 写入）
+        onOpened: {
+            _autoCloseAnim.stop()
+            _autoCloseAnim.start()
+        }
+        onClosed: _autoCloseAnim.stop()
+    }
+
+    Timer {
+        id: uploadSuccessAutoClose
+        interval: 4000
+        repeat: false
+        onTriggered: uploadSuccessDialog.close()
     }
 
     // 鉴权失败对话框：服务器开启了 token 校验、但客户端未配置/配错时，弹强提醒并提供"打开设置"快捷入口。

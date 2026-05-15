@@ -380,8 +380,23 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         return;
     }
 
-    QString rater = currentUser();
-    if (rater.isEmpty()) rater = systemUserName();
+    // ── 必填校验（不再做"用系统用户名 / default tag 兜底"，避免误传）─────────
+    // 设计动机：之前后端会在 user 为空时回退到系统用户名，tag 为空时由服务端兜成
+    // "default"，结果"没填评分人也能上传"。这违反了对话框 UI 上的红色 * 标记，
+    // 且会污染云端数据（多个未填写者匿名汇总到同一份 default tag）。
+    // 现在所有上传入口（按钮/覆盖重传/保存并上传）都在这里统一拒绝。
+    QString rater = currentUser().trimmed();
+    if (rater.isEmpty()) {
+        emit uploadFinished(false,
+            tr("「评分人」为必填项，未填写无法上传。\n请在顶部「评分人 *」输入框填写后再试。"));
+        return;
+    }
+    QString tagVal = uploadTag().trimmed();
+    if (tagVal.isEmpty()) {
+        emit uploadFinished(false,
+            tr("「备注 tag」为必填项，未填写无法上传。\n请在顶部「备注 tag *」输入框填写后再试。"));
+        return;
+    }
 
     const QByteArray csvBytes = buildExportCsvBytes(folderPaths);
     // 仅有表头一行 → 视为空结果。
@@ -445,7 +460,7 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         QHttpPart p;
         p.setHeader(QNetworkRequest::ContentDispositionHeader,
                     QVariant("form-data; name=\"tag\""));
-        p.setBody(uploadTag().toUtf8());
+        p.setBody(tagVal.toUtf8());   // 已在入口处校验非空
         multi->append(p);
     }
     // force 字段：仅在用户“确认覆盖”后重走时为 true
