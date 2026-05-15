@@ -738,11 +738,14 @@ ApplicationWindow {
         var hitPaths = []  // 本次涉及到的目标路径（无论是新增还是已存在）
 
         for (var k = 0; k < urls.length; ++k) {
-            if (_rowsModel.count >= kMaxLanes) break
+            if (_rowsModel.count >= kMaxLanes) {
+                break
+            }
             var u = urls[k]
             if (u === undefined || u === null) continue
 
             // 规范化：QUrl/字符串都转成本地目录路径，并扫描视频
+            // 双路兜底：先按"原类型"扫一次；不行就转成另一种再扫一次。
             var files = []
             var folderPath = ""
             try {
@@ -751,17 +754,42 @@ ApplicationWindow {
                     if (s0.indexOf("file://") === 0) folderPath = Fs.urlToLocalFile(s0)
                     else                              folderPath = s0
                     files = Fs.scanVideoFolderPath(folderPath, true) || []
+                    if (!files || files.length === 0) {
+                        // 兜底：用 url 形式再扫一次
+                        try { files = Fs.scanVideoFolder(s0, true) || [] } catch (e2) { /* ignore */ }
+                    }
                 } else {
-                    files = Fs.scanVideoFolder(u, true) || []
+                    // QUrl 对象
                     folderPath = Fs.urlToLocalFile(u)
+                    files = Fs.scanVideoFolder(u, true) || []
+                    if ((!files || files.length === 0) && folderPath) {
+                        // 兜底：用本地路径再扫一次
+                        try { files = Fs.scanVideoFolderPath(folderPath, true) || [] } catch (e3) { /* ignore */ }
+                    }
                 }
-            } catch (e) { files = [] }
+            } catch (e) {
+                files = []
+            }
 
-            if (!folderPath || folderPath.length === 0) continue
-            if (!files || files.length === 0) continue
+            if (!folderPath || folderPath.length === 0) {
+                continue
+            }
+            if (!files || files.length === 0) {
+                continue
+            }
 
-            // 已在历史中：直接记入 hit，不重复追加
+            // 已在 lanes 中：强制把 selected 置为 true（用户刚拖了一次，意图明确：要使用它），
+            // 其余字段（keyword / currentIndex / currentPath）保留，避免打断当前播放/筛选状态。
             if (existing[folderPath]) {
+                for (var ei = 0; ei < _rowsModel.count; ++ei) {
+                    var el = _rowsModel.get(ei)
+                    if (el && el.folderPath === folderPath) {
+                        if (!el.selected) {
+                            _rowsModel.setProperty(ei, "selected", true)
+                        }
+                        break
+                    }
+                }
                 if (hitPaths.indexOf(folderPath) < 0) hitPaths.push(folderPath)
                 continue
             }
@@ -845,6 +873,44 @@ ApplicationWindow {
             _persistLanes()
         }
         return added
+    }
+
+    // ─── 对外推荐的"打开"入口：合并最新文件夹历史 + 显示窗口 ────────
+    // 仅靠 onVisibleChanged 在某些场景下可能不触发（例如 Window 已 visible=true
+    // 仅被 raise/requestActivate 时），所以外部调用方一律走 showAndRefresh()，
+    // 以保证每次"打开/激活" Dialog 都能把最新的文件夹历史同步进来；
+    // 再叠加 onVisibleChanged 作为兜底。
+    function showAndRefresh() {
+        try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
+        _folderHistMerged = true
+        show()
+        raise()
+        requestActivate()
+    }
+
+    // ─── 拖入文件夹的统一入口 ─────────────────────────────────────
+    // 行为（与"点击打开文件夹"统一）：
+    //   1) 先把全部「文件夹历史」合并进 lanes —— 历史路径默认 **不勾选**；
+    //   2) 再把本次拖入的文件夹追加为新 lane / 命中已有 lane —— 强制 selected=true
+    //      （这正是"刚刚拖入的"那几路 → 默认勾选）；
+    //   3) 显示并置顶 Dialog，等同用户点击工具栏「打开文件夹」入口。
+    // 调用方：dropZone / liveDropZone 在拖入时调用此方法，**不**再静默改播放队列。
+    // 参数：urls —— QUrl 数组或字符串数组（file:// URL 或本地路径均可）。
+    // 返回：本次涉及到的文件夹路径列表（命中 + 新增）。
+    function addFoldersAndShow(urls) {
+        // 1) 历史合并（默认不勾选）
+        try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
+        _folderHistMerged = true
+
+        // 2) 本次拖入：新增的默认勾选；已存在的会被强制改成勾选（见 addFoldersToHistory 内部）
+        var hits = []
+        try { hits = addFoldersToHistory(urls) || [] } catch (e) { hits = [] }
+
+        // 3) 弹出 Dialog
+        show()
+        raise()
+        requestActivate()
+        return hits
     }
 
     // ─── 单路浏览：切换「同时显示 N 个」 ────────────────────────────

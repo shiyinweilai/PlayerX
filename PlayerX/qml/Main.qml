@@ -98,7 +98,7 @@ ApplicationWindow {
             MenuItem {
                 id: miOpenFolder
                 text: qsTr("打开文件夹…")
-                onTriggered: multiGroupDialog.show()
+                onTriggered: multiGroupDialog.showAndRefresh()
             }
             MenuSeparator {}
             // 一次性关闭所有视频（与单路 ✕ 一致；带二次确认）
@@ -421,12 +421,12 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+Shift+O"                      // 打开文件夹 / 多组对比（统一入口）
         context: Qt.ApplicationShortcut
-        onActivated: multiGroupDialog.show()
+        onActivated: multiGroupDialog.showAndRefresh()
     }
     Shortcut {
         sequence: "Ctrl+M"                            // 打开文件夹 / 多组对比（别名快捷键）
         context: Qt.ApplicationShortcut
-        onActivated: multiGroupDialog.show()
+        onActivated: multiGroupDialog.showAndRefresh()
     }
     // 关闭所有视频：⌘W / Ctrl+W（行业惯例的"关闭文档"键，对我们等价于清空所有路）
     Shortcut {
@@ -4272,7 +4272,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: multiGroupDialog.show()
+                            onClicked: multiGroupDialog.showAndRefresh()
                         }
                     }
                 }
@@ -4432,28 +4432,18 @@ ApplicationWindow {
                         }
                     }
 
-                    // ── 历史保留：所有"文件夹"路径都写入 MultiGroupDialog 的 lanes 历史 ──
-                    //   - 仅文件夹会进历史，散视频文件不进（与产品需求一致）
-                    //   - addFoldersToHistory 内部去重 + 持久化，幂等
-                    //   - 即便后续走分支 2（旧逻辑），这一步也保证下次打开 Dialog 能看到这些文件夹
+                    // ── 拖入含文件夹 → 直接打开 MultiGroupDialog（等同点击"打开文件夹"）──
+                    //   · 拖入的文件夹默认勾选；历史文件夹默认不勾选（由 addFoldersAndShow 保证）
+                    //   · 不再静默 "loadFolders 立即播放"，而是把选择权交给用户：
+                    //     在 Dialog 里确认勾选后点击"开始/确认"再启动播放。
+                    //   · 混合（文件夹 + 散文件）时，文件夹优先 → 走 Dialog；散文件被忽略（语义不明）。
                     if (folderUrls.length > 0) {
-                        try { multiGroupDialog.addFoldersToHistory(folderUrls) } catch (e) {}
+                        try { multiGroupDialog.addFoldersAndShow(folderUrls) } catch (e) {}
+                        return
                     }
 
-                    // ── 分支 1：≥2 个文件夹且没有混入散文件 → 走多组对比，每文件夹一路 ──
-                    //    （混入散文件时语义不明，安全退化到旧逻辑，避免丢文件）
-                    if (folderUrls.length >= 2 && standaloneFiles.length === 0) {
-                        if (multiGroupDialog.loadFolders(folderUrls)) return
-                        // 若 loadFolders 失败（例如所有文件夹都为空），退化到旧逻辑兜底
-                    }
-
-                    // ── 分支 2：旧逻辑（单文件夹铺开 / 散文件直开 / 混合场景兜底）──
+                    // ── 仅散文件场景：保留"直接铺开播放"的旧体验 ──
                     var collected = []
-                    // 文件夹展开优先
-                    for (var k = 0; k < fileFromDirs.length && collected.length < 9; ++k) {
-                        collected.push(fileFromDirs[k])
-                    }
-                    // 再追加散文件
                     for (var m = 0; m < standaloneFiles.length && collected.length < 9; ++m) {
                         collected.push(standaloneFiles[m])
                     }
@@ -4504,14 +4494,10 @@ ApplicationWindow {
                     return
                 }
 
-                // 追加合并到 MultiGroupDialog lanes 历史（去重 + 持久化）
-                var hit = []
-                try { hit = multiGroupDialog.addFoldersToHistory(folderUrls) || [] } catch (e) { hit = [] }
-
-                // 轻量反馈
-                if (hit.length > 0) {
-                    root._showRatingWarn("已加入 " + hit.length + " 个文件夹到「打开文件夹」历史")
-                }
+                // 拖入文件夹 → 直接打开 MultiGroupDialog（等同点击"打开文件夹"）：
+                //   · 拖入的文件夹默认勾选；历史文件夹默认不勾选；
+                //   · 不打断当前正在播放的视频，由用户在 Dialog 里确认后再启动新播放。
+                try { multiGroupDialog.addFoldersAndShow(folderUrls) } catch (e) {}
             }
         }
 
