@@ -22,6 +22,11 @@
     const refreshBtn    = $('refreshBtn');
     const mergeLatest   = $('mergeLatestBtn');
     const mergeAll      = $('mergeAllBtn');
+    const selAll        = $('selAll');
+    const selInfo       = $('selInfo');
+    const selCount      = $('selCount');
+    const archiveSelBtn = $('archiveSelBtn');
+    const deleteSelBtn  = $('deleteSelBtn');
 
     const serverStatus  = $('serverStatus');
     const serverStatusText = $('serverStatusText');
@@ -39,6 +44,7 @@
         sortKey: 'mtime',
         sortDesc: true,
         loading: false,     // /api/list 是否正在请求（刷新按钮防抖）
+        selected: new Set(),// 已勾选的文件名
     };
 
     // ────────── 工具 ──────────
@@ -158,8 +164,10 @@
             const userHtml = it.user
                 ? escHtml(it.user)
                 : `<span class="tag-pill muted">anon</span>`;
+            const checked = state.selected.has(it.name) ? ' checked' : '';
             return `
-                <tr>
+                <tr${checked ? ' class="sel"' : ''}>
+                    <td class="col-check"><input type="checkbox" class="row-chk" data-name="${escHtml(it.name)}"${checked}></td>
                     <td>${userHtml}</td>
                     <td>${tagHtml}</td>
                     <td><span class="fname" title="${escHtml(it.name)}">${escHtml(it.name)}</span></td>
@@ -168,10 +176,12 @@
                     <td class="actions">
                         <button class="row-act" data-act="preview" data-name="${escHtml(it.name)}">查看</button>
                         <button class="row-act" data-act="download" data-name="${escHtml(it.name)}">下载</button>
+                        <button class="row-act danger" data-act="delete" data-name="${escHtml(it.name)}">删除</button>
                     </td>
                 </tr>`;
         }).join('');
         tbody.innerHTML = html;
+        syncSelectionUi();
     }
 
     function renderKpi() {
@@ -210,6 +220,140 @@
         }
     }
 
+    // ────────── 删除 ──────────
+    async function deleteFile(name, btn) {
+        if (!name) return;
+        if (!window.confirm(`确定删除这份评分文件吗？\n\n${name}\n\n此操作不可恢复。`)) return;
+        if (btn) btn.disabled = true;
+        try {
+            setStatus('warn', '删除中…');
+            const r = await fetch('/api/files/' + encodeURIComponent(name), { method: 'DELETE' });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            // 如果当前抽屉正在预览该文件，一并关闭
+            if (previewName === name) closePreview();
+            setStatus('ok', '已删除');
+            showToast(`已删除：${name}`, 'ok');
+            await fetchList();
+        } catch (e) {
+            setStatus('err', '删除失败');
+            showToast('删除失败：' + e.message, 'err');
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    // ────────── 勾选 / 批量动作 ──────────
+    function syncSelectionUi() {
+        const n = state.selected.size;
+        if (selCount) selCount.textContent = String(n);
+        if (selInfo)  selInfo.hidden = (n === 0);
+        if (archiveSelBtn) archiveSelBtn.disabled = (n === 0);
+        if (deleteSelBtn)  deleteSelBtn.disabled  = (n === 0);
+
+        // 表头全选复选框：与当前 filtered 可见行联动
+        if (selAll) {
+            const visible = state.filtered;
+            if (visible.length === 0) {
+                selAll.checked = false;
+                selAll.indeterminate = false;
+            } else {
+                let on = 0;
+                for (const it of visible) if (state.selected.has(it.name)) on++;
+                selAll.checked       = (on === visible.length);
+                selAll.indeterminate = (on > 0 && on < visible.length);
+            }
+        }
+    }
+
+    async function archiveSelected() {
+        const names = [...state.selected];
+        if (names.length === 0) return;
+        const def = (() => {
+            const d = new Date();
+            const pad = (x) => String(x).padStart(2, '0');
+            return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
+        })();
+        const folder = window.prompt(
+            `归档选中的 ${names.length} 份文件到哪个文件夹？\n\n仅允许中文 / 字母 / 数字 / . _ - 空格（1~64 位）。`,
+            def,
+        );
+        if (folder == null) return; // 用户取消
+        const f = folder.trim();
+        if (!/^[A-Za-z0-9._\-\u4e00-\u9fa5 ]{1,64}$/.test(f) || f.startsWith('.')) {
+            showToast('归档文件夹名不合法', 'err');
+            return;
+        }
+        archiveSelBtn.disabled = true;
+        try {
+            setStatus('warn', '归档中…');
+            const r = await fetch('/api/archive', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ names, folder: f }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            const ok = j.movedCount || 0;
+            const fail = j.failedCount || 0;
+            // 如果预览抽屉正在预览被归档的文件，关闭
+            for (const m of (j.moved || [])) {
+                if (previewName === m.name) { closePreview(); break; }
+            }
+            // 清理本地勾选
+            for (const m of (j.moved || [])) state.selected.delete(m.name);
+            setStatus('ok', '归档完成');
+            showToast(
+                `归档到 archive/${j.folder}/：成功 ${ok}${fail ? `，失败 ${fail}` : ''}`,
+                fail ? 'warn' : 'ok',
+            );
+            await fetchList();
+            // 若归档抽屉正打开，顺手刷新它，保证刚归档进去的文件立刻可见
+            if (typeof archiveDrawer !== 'undefined' && archiveDrawer
+                && archiveDrawer.classList.contains('open')) {
+                loadArchiveFolders();
+            }
+        } catch (e) {
+            setStatus('err', '归档失败');
+            showToast('归档失败：' + e.message, 'err');
+        } finally {
+            archiveSelBtn.disabled = (state.selected.size === 0);
+        }
+    }
+
+    async function bulkDeleteSelected() {
+        const names = [...state.selected];
+        if (names.length === 0) return;
+        if (!window.confirm(`确定删除选中的 ${names.length} 份评分文件吗？\n\n此操作不可恢复。`)) return;
+        deleteSelBtn.disabled = true;
+        try {
+            setStatus('warn', '删除中…');
+            const r = await fetch('/api/files/bulk-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ names }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            const ok = j.deletedCount || 0;
+            const fail = j.failedCount || 0;
+            for (const n of (j.deleted || [])) {
+                if (previewName === n) { closePreview(); break; }
+            }
+            for (const n of (j.deleted || [])) state.selected.delete(n);
+            setStatus('ok', '已删除');
+            showToast(
+                `已删除 ${ok} 份${fail ? `，失败 ${fail}` : ''}`,
+                fail ? 'warn' : 'ok',
+            );
+            await fetchList();
+        } catch (e) {
+            setStatus('err', '删除失败');
+            showToast('删除失败：' + e.message, 'err');
+        } finally {
+            deleteSelBtn.disabled = (state.selected.size === 0);
+        }
+    }
+
     // ────────── 事件绑定 ──────────
     searchInput.addEventListener('input', applyFilterAndSort);
     refreshBtn.addEventListener('click', () => { fetchList(); });
@@ -228,8 +372,19 @@
         });
     });
 
-    // 行内按钮（事件委托）：预览 / 下载
+    // 行内按钮（事件委托）：预览 / 下载 / 删除
     tbody.addEventListener('click', (e) => {
+        // 勾选复选框
+        const chk = e.target.closest('input.row-chk');
+        if (chk) {
+            const name = chk.dataset.name;
+            if (chk.checked) state.selected.add(name);
+            else             state.selected.delete(name);
+            const tr = chk.closest('tr');
+            if (tr) tr.classList.toggle('sel', chk.checked);
+            syncSelectionUi();
+            return;
+        }
         const btn = e.target.closest('button[data-act]');
         if (!btn) return;
         const name = btn.dataset.name;
@@ -237,8 +392,26 @@
             downloadFile('/api/files/' + encodeURIComponent(name), name);
         } else if (btn.dataset.act === 'preview') {
             openPreview(name);
+        } else if (btn.dataset.act === 'delete') {
+            deleteFile(name, btn);
         }
     });
+
+    // 表头全选：全选/取消当前过滤后的可见行
+    if (selAll) {
+        selAll.addEventListener('click', () => {
+            const on = selAll.checked;
+            for (const it of state.filtered) {
+                if (on) state.selected.add(it.name);
+                else    state.selected.delete(it.name);
+            }
+            // 重新渲染以同步行内 checkbox 状态
+            renderTable();
+        });
+    }
+
+    if (archiveSelBtn) archiveSelBtn.addEventListener('click', archiveSelected);
+    if (deleteSelBtn)  deleteSelBtn.addEventListener('click', bulkDeleteSelected);
 
     // ────────── CSV 预览（右侧抽屉） ──────────
     const previewMask     = $('previewMask');     // 这里复用原有 id，实际是抽屉本体
@@ -248,6 +421,7 @@
     const previewClose    = $('previewClose');
     const previewDownload = $('previewDownload');
     let previewName = '';
+    let previewDownloadUrl = '';
 
     function closePreview() {
         previewMask.classList.remove('open');
@@ -262,16 +436,23 @@
         }, 220);
     }
 
-    async function openPreview(name) {
+    // opts 可选：{ url, downloadUrl, title }
+    //   - url:         预览数据的 GET 接口（默认 /api/preview/<name>）
+    //   - downloadUrl: 抽屉里“下载”按钮要打开的 URL（默认 /api/files/<name>）
+    //   - title:       自定义抽屉标题，默认就是 name
+    async function openPreview(name, opts) {
+        opts = opts || {};
         previewName = name;
+        previewDownloadUrl = opts.downloadUrl || ('/api/files/' + encodeURIComponent(name));
         previewMask.hidden = false;
         // 下一帧再加 open 才会触发 transition
         requestAnimationFrame(() => previewMask.classList.add('open'));
-        previewTitle.textContent = name;
+        previewTitle.textContent = opts.title || name;
         previewMeta.textContent = '';
         previewBody.innerHTML = '<div class="preview-loading">加载中…</div>';
         try {
-            const r = await api('/api/preview/' + encodeURIComponent(name));
+            const url = opts.url || ('/api/preview/' + encodeURIComponent(name));
+            const r = await api(url);
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const j = await r.json();
             if (!j.ok) throw new Error(j.error || '预览失败');
@@ -352,7 +533,7 @@
     previewClose.addEventListener('click', closePreview);
     previewDownload.addEventListener('click', () => {
         if (!previewName) return;
-        downloadFile('/api/files/' + encodeURIComponent(previewName), previewName);
+        downloadFile(previewDownloadUrl || ('/api/files/' + encodeURIComponent(previewName)), previewName);
     });
     document.addEventListener('keydown', (e) => {
         if (previewMask.classList.contains('open') && e.key === 'Escape') closePreview();
@@ -361,6 +542,292 @@
     // 合并下载
     mergeLatest.addEventListener('click', () => downloadFile('/api/merge', 'playerx_latest.csv'));
     mergeAll.addEventListener('click',    () => downloadFile('/api/merge?all=1', 'playerx_all.csv'));
+
+    // ────────── 归档库抽屉 ──────────
+    const archiveDrawer        = $('archiveDrawer');
+    const archiveCloseBtn      = $('archiveClose');
+    const archiveRefreshBtn    = $('archiveRefresh');
+    const openArchiveBtn       = $('openArchiveBtn');
+    const archiveMeta          = $('archiveMeta');
+    const archiveFolderListEl  = $('archiveFolderList');
+    const archiveFoldersEmpty  = $('archiveFoldersEmpty');
+    const archiveFilesHint     = $('archiveFilesHint');
+    const archiveFilesWrap     = $('archiveFilesWrap');
+    const archiveFilesTbody    = $('archiveFilesTbody');
+    const archiveFilesToolbar  = $('archiveFilesToolbar');
+    const archiveSelAll        = $('archiveSelAll');
+    const archiveSelInfo       = $('archiveSelInfo');
+    const archiveSelCount      = $('archiveSelCount');
+    const archiveDelSelBtn     = $('archiveDelSelBtn');
+    const archiveDelFolderBtn  = $('archiveDelFolderBtn');
+
+    const archive = {
+        folders: [],     // [{name,count,size,mtime}]
+        currentFolder: '',
+        files: [],       // [{name,size,mtime}]
+        selected: new Set(),
+    };
+
+    function openArchiveDrawer() {
+        archiveDrawer.hidden = false;
+        requestAnimationFrame(() => archiveDrawer.classList.add('open'));
+        loadArchiveFolders();
+    }
+    function closeArchiveDrawer() {
+        archiveDrawer.classList.remove('open');
+        setTimeout(() => {
+            if (!archiveDrawer.classList.contains('open')) {
+                archiveDrawer.hidden = true;
+            }
+        }, 220);
+    }
+
+    async function loadArchiveFolders() {
+        try {
+            const r = await api('/api/archive/folders');
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || '加载失败');
+            archive.folders = Array.isArray(j.folders) ? j.folders : [];
+            renderArchiveFolders();
+            // 当前选中的文件夹仍然存在则刷新其内容；否则清空右侧
+            if (archive.currentFolder && archive.folders.find(f => f.name === archive.currentFolder)) {
+                await loadArchiveFiles(archive.currentFolder);
+            } else {
+                archive.currentFolder = '';
+                archive.files = [];
+                archive.selected.clear();
+                renderArchiveFiles();
+            }
+        } catch (e) {
+            showToast('归档加载失败：' + e.message, 'err');
+        }
+    }
+
+    function renderArchiveFolders() {
+        const list = archive.folders;
+        archiveFoldersEmpty.hidden = (list.length > 0);
+        const totalFolders = list.length;
+        const totalFiles = list.reduce((s, x) => s + (+x.count || 0), 0);
+        const totalSize  = list.reduce((s, x) => s + (+x.size  || 0), 0);
+        archiveMeta.textContent = `${totalFolders} 个文件夹  ·  ${totalFiles} 份 csv  ·  ${fmtSize(totalSize)}`;
+
+        archiveFolderListEl.innerHTML = list.map(f => {
+            const active = (f.name === archive.currentFolder) ? ' active' : '';
+            const sub = `${f.count} 份  ·  ${fmtSize(f.size)}` + (f.mtime ? `  ·  ${fmtTime(f.mtime)}` : '');
+            return `<li class="archive-folder${active}" data-folder="${escHtml(f.name)}">
+                <span class="folder-icon">📁</span>
+                <span class="folder-meta">
+                    <span class="folder-name">${escHtml(f.name)}</span>
+                    <span class="folder-sub">${escHtml(sub)}</span>
+                </span>
+            </li>`;
+        }).join('');
+    }
+
+    async function loadArchiveFiles(folder) {
+        archive.currentFolder = folder;
+        archive.selected.clear();
+        renderArchiveFolders(); // 高亮
+        archiveFilesHint.textContent = '加载中…';
+        archiveFilesHint.hidden = false;
+        archiveFilesWrap.hidden = true;
+        archiveFilesToolbar.hidden = true;
+        try {
+            const r = await api('/api/archive/list?folder=' + encodeURIComponent(folder));
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || '加载失败');
+            archive.files = Array.isArray(j.items) ? j.items : [];
+            renderArchiveFiles();
+        } catch (e) {
+            archiveFilesHint.textContent = '加载失败：' + e.message;
+            archiveFilesHint.hidden = false;
+            archiveFilesWrap.hidden = true;
+        }
+    }
+
+    function renderArchiveFiles() {
+        if (!archive.currentFolder) {
+            archiveFilesHint.textContent = '从左侧选择一个归档文件夹查看内容。';
+            archiveFilesHint.hidden = false;
+            archiveFilesWrap.hidden = true;
+            archiveFilesToolbar.hidden = true;
+            return;
+        }
+        if (archive.files.length === 0) {
+            archiveFilesHint.textContent = '此文件夹为空。';
+            archiveFilesHint.hidden = false;
+            archiveFilesWrap.hidden = true;
+            archiveFilesToolbar.hidden = false;
+            syncArchiveSelUi();
+            return;
+        }
+        archiveFilesHint.hidden = true;
+        archiveFilesWrap.hidden = false;
+        archiveFilesToolbar.hidden = false;
+
+        const folder = archive.currentFolder;
+        archiveFilesTbody.innerHTML = archive.files.map(it => {
+            const checked = archive.selected.has(it.name) ? ' checked' : '';
+            return `<tr${checked ? ' class="sel"' : ''}>
+                <td class="col-check"><input type="checkbox" class="arch-row-chk" data-name="${escHtml(it.name)}"${checked}></td>
+                <td><span class="fname" title="${escHtml(it.name)}">${escHtml(it.name)}</span></td>
+                <td class="num">${fmtSize(it.size)}</td>
+                <td class="num">${escHtml(fmtTime(it.mtime))}</td>
+                <td class="actions">
+                    <button class="row-act" data-act="preview"  data-name="${escHtml(it.name)}">查看</button>
+                    <button class="row-act" data-act="download" data-name="${escHtml(it.name)}">下载</button>
+                    <button class="row-act danger" data-act="delete" data-name="${escHtml(it.name)}">删除</button>
+                </td>
+            </tr>`;
+        }).join('');
+        syncArchiveSelUi();
+    }
+
+    function syncArchiveSelUi() {
+        const n = archive.selected.size;
+        archiveSelCount.textContent = String(n);
+        archiveSelInfo.hidden = (n === 0);
+        archiveDelSelBtn.disabled = (n === 0);
+        if (archiveSelAll) {
+            const visible = archive.files;
+            if (visible.length === 0) {
+                archiveSelAll.checked = false;
+                archiveSelAll.indeterminate = false;
+            } else {
+                let on = 0;
+                for (const it of visible) if (archive.selected.has(it.name)) on++;
+                archiveSelAll.checked       = (on === visible.length);
+                archiveSelAll.indeterminate = (on > 0 && on < visible.length);
+            }
+        }
+    }
+
+    // 文件夹列表点击：切换当前文件夹
+    archiveFolderListEl.addEventListener('click', (e) => {
+        const li = e.target.closest('li.archive-folder');
+        if (!li) return;
+        const folder = li.dataset.folder;
+        if (folder && folder !== archive.currentFolder) loadArchiveFiles(folder);
+    });
+
+    // 右侧文件行：勾选 + 行内操作
+    archiveFilesTbody.addEventListener('click', (e) => {
+        const chk = e.target.closest('input.arch-row-chk');
+        if (chk) {
+            const name = chk.dataset.name;
+            if (chk.checked) archive.selected.add(name);
+            else             archive.selected.delete(name);
+            const tr = chk.closest('tr');
+            if (tr) tr.classList.toggle('sel', chk.checked);
+            syncArchiveSelUi();
+            return;
+        }
+        const btn = e.target.closest('button[data-act]');
+        if (!btn) return;
+        const name = btn.dataset.name;
+        const folder = archive.currentFolder;
+        if (!folder || !name) return;
+        if (btn.dataset.act === 'download') {
+            downloadFile(`/api/archive/file/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`, name);
+        } else if (btn.dataset.act === 'preview') {
+            openPreview(name, {
+                url:         `/api/archive/preview/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`,
+                downloadUrl: `/api/archive/file/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`,
+                title:       `[${folder}] ${name}`,
+            });
+        } else if (btn.dataset.act === 'delete') {
+            deleteArchivedFile(name, btn);
+        }
+    });
+
+    archiveSelAll.addEventListener('click', () => {
+        const on = archiveSelAll.checked;
+        for (const it of archive.files) {
+            if (on) archive.selected.add(it.name);
+            else    archive.selected.delete(it.name);
+        }
+        renderArchiveFiles();
+    });
+
+    async function deleteArchivedFile(name, btn) {
+        const folder = archive.currentFolder;
+        if (!folder || !name) return;
+        if (!window.confirm(`确定从归档「${folder}」中删除该文件？\n\n${name}\n\n此操作不可恢复。`)) return;
+        if (btn) btn.disabled = true;
+        try {
+            const r = await fetch(
+                `/api/archive/file/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`,
+                { method: 'DELETE' },
+            );
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            archive.selected.delete(name);
+            showToast(`已删除：${name}`, 'ok');
+            // 关闭可能正在预览此文件的抽屉
+            if (previewName === name) closePreview();
+            await loadArchiveFolders();
+        } catch (e) {
+            showToast('删除失败：' + e.message, 'err');
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    archiveDelSelBtn.addEventListener('click', async () => {
+        const folder = archive.currentFolder;
+        const names = [...archive.selected];
+        if (!folder || names.length === 0) return;
+        if (!window.confirm(`确定从归档「${folder}」中删除选中的 ${names.length} 份文件？\n\n此操作不可恢复。`)) return;
+        archiveDelSelBtn.disabled = true;
+        try {
+            const r = await fetch('/api/archive/bulk-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder, names }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            const ok = j.deletedCount || 0, fail = j.failedCount || 0;
+            for (const n of (j.deleted || [])) {
+                archive.selected.delete(n);
+                if (previewName === n) closePreview();
+            }
+            showToast(`已删除 ${ok} 份${fail ? `，失败 ${fail}` : ''}`, fail ? 'warn' : 'ok');
+            await loadArchiveFolders();
+        } catch (e) {
+            showToast('删除失败：' + e.message, 'err');
+        } finally {
+            archiveDelSelBtn.disabled = (archive.selected.size === 0);
+        }
+    });
+
+    archiveDelFolderBtn.addEventListener('click', async () => {
+        const folder = archive.currentFolder;
+        if (!folder) return;
+        if (!window.confirm(`确定删除整个归档文件夹「${folder}」？\n\n该文件夹下的所有 csv 都会被删除，此操作不可恢复。`)) return;
+        archiveDelFolderBtn.disabled = true;
+        try {
+            const r = await fetch('/api/archive/folder/' + encodeURIComponent(folder), { method: 'DELETE' });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            showToast(`已删除文件夹：${folder}（${j.deletedCount || 0} 份）`, 'ok');
+            // 当前预览中若来自该文件夹则关掉
+            closePreview();
+            archive.currentFolder = '';
+            archive.files = [];
+            archive.selected.clear();
+            await loadArchiveFolders();
+        } catch (e) {
+            showToast('删除文件夹失败：' + e.message, 'err');
+        } finally {
+            archiveDelFolderBtn.disabled = false;
+        }
+    });
+
+    openArchiveBtn.addEventListener('click', openArchiveDrawer);
+    archiveCloseBtn.addEventListener('click', closeArchiveDrawer);
+    archiveRefreshBtn.addEventListener('click', () => loadArchiveFolders());
 
     // ────────── 启动 ──────────
     (async function init() {

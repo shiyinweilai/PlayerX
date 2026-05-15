@@ -10,12 +10,16 @@
  * 注：客户端 / Web 面板仍可在请求头里带 X-Token，本服务一律忽略它，
  *      不再返回 401。前端"Token"按钮只是本地软约束，防止误传。
  */
+const express = require('express');
+
 const upload  = require('./upload');
 const list    = require('./list');
 const merge   = require('./merge');
 const files   = require('./files');
 const preview = require('./preview');
 const status  = require('./status');
+const del     = require('./delete');
+const archive = require('./archive');
 
 function mountApi(app) {
     // 不需要鉴权：保留 /api/status 仅用于前端探活与展示版本号
@@ -35,6 +39,23 @@ function mountApi(app) {
 
     app.get('/preview/:name',     preview.handle);
     app.get('/api/preview/:name', preview.handle);
+
+    app.delete('/files/:name',     del.handle);
+    app.delete('/api/files/:name', del.handle);
+
+    // 批量归档 / 批量删除（仅这两条需要 JSON body 解析）
+    const jsonParser = express.json({ limit: '256kb' });
+    app.post('/api/archive',           jsonParser, archive.handleArchive);
+    app.post('/api/files/bulk-delete', jsonParser, archive.handleBulkDelete);
+
+    // 归档浏览 / 下载 / 预览 / 删除
+    app.get('/api/archive/folders',                 archive.handleListFolders);
+    app.get('/api/archive/list',                    archive.handleListFolderFiles);
+    app.get('/api/archive/file/:folder/:name',      archive.handleDownloadArchived);
+    app.get('/api/archive/preview/:folder/:name',   archive.handlePreviewArchived);
+    app.delete('/api/archive/file/:folder/:name',   archive.handleDeleteArchivedFile);
+    app.delete('/api/archive/folder/:folder',       archive.handleDeleteArchiveFolder);
+    app.post('/api/archive/bulk-delete', jsonParser, archive.handleBulkDeleteArchived);
 }
 
 module.exports = { mountApi };

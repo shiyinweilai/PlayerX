@@ -50,8 +50,20 @@
 <section class="toolbar">
     <div class="toolbar-left">
         <input type="search" id="searchInput" placeholder="搜索 评分人 / 标签 / 文件名…" />
+        <span class="sel-info" id="selInfo" hidden>已选 <b id="selCount">0</b> 项</span>
     </div>
     <div class="toolbar-right">
+        <button class="ghost-btn" id="archiveSelBtn" disabled title="把选中的文件归档到指定文件夹">
+            📦 归档选中
+        </button>
+        <button class="ghost-btn danger" id="deleteSelBtn" disabled title="批量删除选中的文件">
+            🗑 删除选中
+        </button>
+        <span class="sep"></span>
+        <button class="ghost-btn" id="openArchiveBtn" title="查看归档库">
+            📂 归档库
+        </button>
+        <span class="sep"></span>
         <button class="primary-btn" id="mergeLatestBtn" title="每个 (评分人, 标签) 仅取最新一份">
             ⬇ 合并下载（最新）
         </button>
@@ -66,6 +78,7 @@
     <table id="filesTable">
         <thead>
             <tr>
+                <th class="col-check"><input type="checkbox" id="selAll" title="全选/取消" /></th>
                 <th class="sortable" data-key="user">评分人</th>
                 <th class="sortable" data-key="tag">标签</th>
                 <th class="sortable" data-key="name">文件名</th>
@@ -95,6 +108,55 @@
 
 <!-- ────────── Toast ────────── -->
 <div class="toast" id="toast" hidden></div>
+
+<!-- ────────── 归档库抽屉（左侧滑出，左右双栏） ────────── -->
+<aside class="archive-drawer" id="archiveDrawer" hidden aria-labelledby="archiveTitle" role="complementary">
+    <div class="archive-head">
+        <span class="archive-title" id="archiveTitle">📂 归档库</span>
+        <span class="archive-meta" id="archiveMeta"></span>
+        <span class="archive-actions">
+            <button class="ghost-btn" id="archiveRefresh" title="刷新归档列表">↻</button>
+            <button class="ghost-btn" id="archiveClose"   title="关闭归档库">×</button>
+        </span>
+    </div>
+    <div class="archive-body">
+        <!-- 左：文件夹列表 -->
+        <aside class="archive-folders" id="archiveFolders">
+            <div class="archive-empty" id="archiveFoldersEmpty" hidden>
+                还没有归档文件夹。<br/>在主列表勾选文件后点击「归档选中」即可创建。
+            </div>
+            <ul class="archive-folder-list" id="archiveFolderList"></ul>
+        </aside>
+        <!-- 右：当前文件夹内容 -->
+        <section class="archive-files" id="archiveFiles">
+            <div class="archive-files-toolbar" id="archiveFilesToolbar" hidden>
+                <span class="sel-info" id="archiveSelInfo" hidden>已选 <b id="archiveSelCount">0</b> 项</span>
+                <span class="archive-spacer"></span>
+                <button class="ghost-btn danger" id="archiveDelSelBtn" disabled title="批量删除选中">
+                    🗑 删除选中
+                </button>
+                <button class="ghost-btn danger" id="archiveDelFolderBtn" title="删除整个文件夹">
+                    ❌ 删除此文件夹
+                </button>
+            </div>
+            <div class="archive-files-hint" id="archiveFilesHint">从左侧选择一个归档文件夹查看内容。</div>
+            <div class="archive-files-wrap" id="archiveFilesWrap" hidden>
+                <table class="archive-files-table" id="archiveFilesTable">
+                    <thead>
+                        <tr>
+                            <th class="col-check"><input type="checkbox" id="archiveSelAll" title="全选/取消" /></th>
+                            <th>文件名</th>
+                            <th class="num">大小</th>
+                            <th class="num">最近更新</th>
+                            <th class="actions">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="archiveFilesTbody"></tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</aside>
 
 <!-- ────────── 预览抽屉（右侧滑出，无遮罩） ────────── -->
 <aside class="preview-drawer" id="previewMask" hidden aria-labelledby="previewTitle" role="complementary">
