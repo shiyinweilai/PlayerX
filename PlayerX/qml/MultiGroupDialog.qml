@@ -367,6 +367,33 @@ ApplicationWindow {
         return _rowsModel.count > 0
     }
 
+    // 自然序字符串比较（与 MultiGroupRow._natCompare 保持同一份实现）：
+    // 把串切成"文本/数字"片段，文本按字典序，数字按数值比，从而保证
+    // "1 < 2 < 10 < 11"。注意 Qt V4 不支持 localeCompare 的 {numeric:true} 选项，
+    // 必须自己实现，否则会退化为字典序。
+    function _natCompare(a, b) {
+        var re = /(\d+)|(\D+)/g
+        var pa = a.toLowerCase().match(re) || []
+        var pb = b.toLowerCase().match(re) || []
+        var n = Math.min(pa.length, pb.length)
+        for (var i = 0; i < n; ++i) {
+            var sa = pa[i], sb = pb[i]
+            var na = /^\d+$/.test(sa)
+            var nb = /^\d+$/.test(sb)
+            if (na && nb) {
+                var va = parseInt(sa, 10)
+                var vb = parseInt(sb, 10)
+                if (va !== vb) return va < vb ? -1 : 1
+                if (sa.length !== sb.length) return sa.length < sb.length ? -1 : 1
+            } else if (na !== nb) {
+                return na ? -1 : 1
+            } else {
+                if (sa !== sb) return sa < sb ? -1 : 1
+            }
+        }
+        return pa.length - pb.length
+    }
+
     // 与 MultiGroupRow._recomputeVisible 逻辑同步：默认名称升序、过滤关键字不区分大小写。
     function _filterAndSort(files, kw) {
         var arr = (files || []).slice()
@@ -375,9 +402,7 @@ ApplicationWindow {
             arr = arr.filter(function(p) { return p.toLowerCase().indexOf(k) >= 0 })
         }
         arr.sort(function(a, b) {
-            var na = Fs.fileName(a).toLowerCase()
-            var nb = Fs.fileName(b).toLowerCase()
-            return (na < nb) ? -1 : (na > nb ? 1 : 0)
+            return _natCompare(Fs.fileName(a), Fs.fileName(b))
         })
         return arr
     }

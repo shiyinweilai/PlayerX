@@ -3,6 +3,7 @@
  */
 #include "FsUtils.h"
 
+#include <QCollator>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -67,7 +68,18 @@ QStringList FsUtils::scanVideoFolderPath(const QString& dirPath, bool recursive)
         seen.insert(abs);
         out << abs;
     }
-    out.sort(Qt::CaseInsensitive);
+    // 自然序排序：让 "1.mp4 < 2.mp4 < 10.mp4"，而不是字典序的 "1 < 10 < 2"。
+    // 与 macOS Finder / Windows Explorer 行为一致，避免用户预览到的顺序
+    // 与图集/帧号顺序错位。注意：路径里只有最后一级文件名才是用户感知的，
+    // 但 QCollator 直接比整条路径也是稳定的（同目录下前缀相同，比较只发生
+    // 在文件名段；跨目录下父目录段优先决定顺序，仍然合理）。
+    QCollator coll;
+    coll.setNumericMode(true);
+    coll.setCaseSensitivity(Qt::CaseInsensitive);
+    std::sort(out.begin(), out.end(),
+              [&coll](const QString& a, const QString& b) {
+                  return coll.compare(a, b) < 0;
+              });
     return out;
 }
 

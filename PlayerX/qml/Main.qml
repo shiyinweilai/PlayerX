@@ -3669,7 +3669,14 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                                 Text {
                                     id: fileNameText
-                                    text: Engine.fileNameAt(cell.playerIdx)
+                                    // 用 Engine.titles[idx] 做响应式绑定（titles 带 NOTIFY filesChanged）。
+                                    // 之前直接调 Engine.fileNameAt(idx) 是函数调用，没有依赖关系，
+                                    // 视频切换后菜单里仍会停留在打开时的快照（如一直显示 "1.mp4"）。
+                                    text: {
+                                        var arr = Engine.titles
+                                        var i = cell.playerIdx
+                                        return (i >= 0 && i < arr.length) ? arr[i] : ""
+                                    }
                                     color: "#dcdcde"
                                     font.pixelSize: 12
                                     elide: Text.ElideMiddle
@@ -3682,8 +3689,12 @@ ApplicationWindow {
                                     ToolTip.delay: 400
                                     ToolTip.timeout: 8000
                                     ToolTip.text: {
-                                        var p = Engine.filePathAt(cell.playerIdx)
-                                        return (p && p.length > 0) ? p : Engine.fileNameAt(cell.playerIdx)
+                                        // 同样用 titles 触发响应；路径再用 filePathAt 取一次（不存在则回退文件名）
+                                        var arr = Engine.titles
+                                        var i = cell.playerIdx
+                                        var p = Engine.filePathAt(i)
+                                        if (p && p.length > 0) return p
+                                        return (i >= 0 && i < arr.length) ? arr[i] : ""
                                     }
                                 }
                             }

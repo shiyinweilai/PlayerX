@@ -126,7 +126,13 @@ Item {
             Text {
                 color: "#dcdcde"
                 font.pixelSize: 11
-                text: view.engine ? view.engine.fileNameAt(view.leftIndex) : ""
+                // 走 titles[idx] 响应式绑定，fileNameAt() 是函数调用不能随 Engine 切视频刷新
+                text: {
+                    if (!view.engine) return ""
+                    var arr = view.engine.titles
+                    var i = view.leftIndex
+                    return (i >= 0 && i < arr.length) ? arr[i] : ""
+                }
                 elide: Text.ElideMiddle
                 Layout.maximumWidth: Math.max(120, view.width / 3)
             }
@@ -196,7 +202,12 @@ Item {
             Text {
                 color: "#dcdcde"
                 font.pixelSize: 11
-                text: view.engine ? view.engine.fileNameAt(view.rightIndex) : ""
+                text: {
+                    if (!view.engine) return ""
+                    var arr = view.engine.titles
+                    var i = view.rightIndex
+                    return (i >= 0 && i < arr.length) ? arr[i] : ""
+                }
                 elide: Text.ElideMiddle
                 Layout.maximumWidth: Math.max(120, view.width / 3)
             }

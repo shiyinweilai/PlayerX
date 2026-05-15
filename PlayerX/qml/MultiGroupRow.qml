@@ -43,6 +43,39 @@ Rectangle {
     radius: 6
     implicitHeight: 40
 
+    // 自然序字符串比较：把串切成"文本/数字"片段，文本按字典序（忽略大小写），
+    // 数字按数值比，从而保证 "1 < 2 < 10 < 11"，与 Finder/Explorer 一致。
+    // 注：这里**不**用 String.prototype.localeCompare(b, undefined, {numeric:true})，
+    //     因为 Qt QML 的 V4 引擎并未实现 ECMA-402 Intl 选项，{numeric:true} 会被
+    //     静默忽略，结果退化为字典序（1, 10, 11, 2, 20, 3 …）。
+    function _natCompare(a, b) {
+        // 拆分为段：数字段 与 非数字段（按 ASCII 数字判断；中文等按文本走）
+        var re = /(\d+)|(\D+)/g
+        var pa = a.toLowerCase().match(re) || []
+        var pb = b.toLowerCase().match(re) || []
+        var n = Math.min(pa.length, pb.length)
+        for (var i = 0; i < n; ++i) {
+            var sa = pa[i], sb = pb[i]
+            var na = /^\d+$/.test(sa)
+            var nb = /^\d+$/.test(sb)
+            if (na && nb) {
+                // 都是数字 → 比数值
+                var va = parseInt(sa, 10)
+                var vb = parseInt(sb, 10)
+                if (va !== vb) return va < vb ? -1 : 1
+                // 数值相等但前导零不同（"01" vs "1"）：长的排后面，保证稳定
+                if (sa.length !== sb.length) return sa.length < sb.length ? -1 : 1
+            } else if (na !== nb) {
+                // 数字段 vs 文本段 → 数字段排前面（"img2" < "imga"）
+                return na ? -1 : 1
+            } else {
+                // 都是文本 → 字典序
+                if (sa !== sb) return sa < sb ? -1 : 1
+            }
+        }
+        return pa.length - pb.length
+    }
+
     // 内部：根据 keyword 重新计算 visibleFiles + currentIndex
     function _recomputeVisible() {
         var kw = keyword.trim().toLowerCase()
@@ -57,20 +90,17 @@ Rectangle {
             }
             src = arr
         }
-        // 应用排序（仅在 QML 层做，不依赖 Fs）
+        // 应用排序（仅在 QML 层做，不依赖 Fs）。
+        // 走 _natCompare 自然序：1, 2, 10, 11 —— 与 Finder/Explorer、图集帧号一致。
         if (sortMode === 1) {
             // 按文件名（不含目录）降序
             src.sort(function(a, b) {
-                var na = Fs.fileName(a).toLowerCase()
-                var nb = Fs.fileName(b).toLowerCase()
-                return (na < nb) ? 1 : (na > nb ? -1 : 0)
+                return -row._natCompare(Fs.fileName(a), Fs.fileName(b))
             })
         } else {
             // 按文件名升序
             src.sort(function(a, b) {
-                var na = Fs.fileName(a).toLowerCase()
-                var nb = Fs.fileName(b).toLowerCase()
-                return (na < nb) ? -1 : (na > nb ? 1 : 0)
+                return row._natCompare(Fs.fileName(a), Fs.fileName(b))
             })
         }
         visibleFiles = src

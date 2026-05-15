@@ -4,6 +4,7 @@
 #include "ReferenceStore.h"
 
 #include <QByteArray>
+#include <QCollator>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -185,7 +186,16 @@ QStringList ReferenceStore::listImages(const QString& dir) {
         if (!inExtList(f.absoluteFilePath(), kImageExts)) continue;
         out << f.absoluteFilePath();
     }
-    out.sort(Qt::CaseInsensitive);
+    // 自然序（1 < 2 < 10），与预览/帧号顺序一致
+    {
+        QCollator coll;
+        coll.setNumericMode(true);
+        coll.setCaseSensitivity(Qt::CaseInsensitive);
+        std::sort(out.begin(), out.end(),
+                  [&coll](const QString& a, const QString& b) {
+                      return coll.compare(a, b) < 0;
+                  });
+    }
     return out;
 }
 
@@ -203,7 +213,16 @@ QStringList ReferenceStore::listVideos(const QString& dir) {
         if (!inExtList(f.absoluteFilePath(), kVideoExts)) continue;
         out << f.absoluteFilePath();
     }
-    out.sort(Qt::CaseInsensitive);
+    // 自然序（1 < 2 < 10），与 Finder/Explorer 一致
+    {
+        QCollator coll;
+        coll.setNumericMode(true);
+        coll.setCaseSensitivity(Qt::CaseInsensitive);
+        std::sort(out.begin(), out.end(),
+                  [&coll](const QString& a, const QString& b) {
+                      return coll.compare(a, b) < 0;
+                  });
+    }
     return out;
 }
 
