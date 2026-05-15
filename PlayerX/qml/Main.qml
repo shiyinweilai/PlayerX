@@ -460,14 +460,16 @@ ApplicationWindow {
 
     // ─── 快捷键对话框专用小组件（必须在 root 顶层作用域、且在使用方之前定义）─────────
     //   行渲染器：按键徽章（等宽字体 + 深色边框） + 描述。
+    //   徽章宽度跟随内容自适应：最小 64（保证 "F"/"R"/"0" 这种单字符键也有足够点击/视觉宽度），
+    //   最大 120（避免 "Ctrl+↓" 这类组合键被截，又不会因为某行特别长而把整列拉宽）。
     component ScRow: RowLayout {
         property string keys: ""
         property string desc: ""
         Layout.fillWidth: true
-        spacing: 14
+        spacing: 10
         Rectangle {
-            Layout.preferredWidth: 160
-            Layout.preferredHeight: kbdText.implicitHeight + 8
+            Layout.preferredWidth: Math.max(64, Math.min(120, kbdText.implicitWidth + 18))
+            Layout.preferredHeight: kbdText.implicitHeight + 6
             radius: 4
             color: "#14141a"
             border.color: "#2a2a32"
@@ -485,7 +487,7 @@ ApplicationWindow {
             Layout.fillWidth: true
             text: desc
             color: "#cfd2d6"
-            font.pixelSize: 13
+            font.pixelSize: 12
             wrapMode: Text.Wrap
         }
     }
@@ -526,7 +528,10 @@ ApplicationWindow {
         standardButtons: Dialog.NoButton
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         // 用 implicitWidth 让对话框自适应到一个稳定宽度，避免随窗口变化抖动
-        implicitWidth: 560
+        // 880 是经验值：两列分组横向并列时，每列约 420（含内边距），既能放下
+        // "切换通道信息叠加（序号 + 文件名）"这类较长描述，又不会让短描述行
+        // 出现大段空白；同时一屏就能装下全部分组，无需滚动条。
+        implicitWidth: 880
         // 背景：深色面板 + 内描边 + 外阴影（用半透明描边模拟，零依赖）
         background: Rectangle {
             color: "#1e1e22"
@@ -600,58 +605,77 @@ ApplicationWindow {
             }
         }
 
-        // 内容：可滚动列；行高紧凑，等宽按键徽章
-        contentItem: Flickable {
-            id: scFlick
-            implicitHeight: Math.min(scCol.implicitHeight, 460)
-            contentWidth: width
-            contentHeight: scCol.implicitHeight
-            clip: true
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        // 内容：两列 GridLayout 横向并列，所有分组一屏直出，无需滚动。
+        // 之所以放弃 Flickable：分组数量稳定（5-6 个）+ 单分组行数少（≤5），
+        // 实测在 880×~360 内能完整容纳，强行加滚动反而让用户以为下方还有
+        // 隐藏内容（默认状态滚动条不显示，容易漏看）。
+        // 行业惯例：VS Code / iTerm2 / DaVinci 的快捷键速查都偏好"一屏直出 + 多列"。
+        contentItem: GridLayout {
+            id: scGrid
+            columns: 2
+            columnSpacing: 28
+            rowSpacing: 14
+            // 让两列等宽：通过 ScSection 的 Layout.fillWidth + Layout.preferredWidth
+            // 在 GridLayout 列内自适应；这里只控行/列间距与对齐方式。
+            // 注：原「文件」分组（⌘O / ⌘⇧O / ⌘M / ⌘W / ⌘, / ⌘Q）已从此对话框移除。
+            // 这些快捷键的实际 Shortcut 绑定仍在前面的 ApplicationShortcut 区段中保留，
+            // 功能不受影响；此处仅不在「快捷键速查」面板里展示，避免与系统菜单/常识冗余。
 
-            ColumnLayout {
-                id: scCol
-                width: scFlick.width
-                spacing: 14
-
-                // 注：原「文件」分组（⌘O / ⌘⇧O / ⌘M / ⌘W / ⌘, / ⌘Q）已从此对话框移除。
-                // 这些快捷键的实际 Shortcut 绑定仍在前面的 ApplicationShortcut 区段中保留，
-                // 功能不受影响；此处仅不在「快捷键速查」面板里展示，避免与系统菜单/常识冗余。
-                // 播放
-                ScSection {
-                    title: qsTr("播放")
-                    ScRow { keys: "Space";  desc: qsTr("暂停 / 继续") }
-                    ScRow { keys: "←  /  →"; desc: qsTr("后退 / 前进 5 秒") }
-                    ScRow { keys: ",  /  ."; desc: qsTr("上一帧 / 下一帧") }
-                    ScRow { keys: "R";       desc: qsTr("回到开头") }
-                }
-                // 倍速
-                ScSection {
-                    title: qsTr("倍速")
-                    ScRow { keys: "-";   desc: qsTr("减速一档") }
-                    ScRow { keys: "=  /  +"; desc: qsTr("加速一档") }
-                    ScRow { keys: "0";   desc: qsTr("复位为 1.0×") }
-                }
-                // 视图
-                ScSection {
-                    title: qsTr("视图")
-                    ScRow { keys: "F"; desc: qsTr("切换全屏") }
-                    ScRow { keys: "V"; desc: qsTr("切换视频信息叠加") }
-                    ScRow { keys: "C"; desc: qsTr("切换通道信息叠加（序号 + 文件名）") }
-                    ScRow { keys: "S"; desc: qsTr("在多路布局间循环切换") }
-                    ScRow { keys: "B"; desc: qsTr("滑动对比模式（仅 2 路）") }
-                }
-                // 路数（数字键）
-                ScSection {
-                    title: qsTr("单路 / 多路")
-                    ScRow { keys: "1 … 9"; desc: qsTr("切到第 N 路单路；再次按下回到上次的多路布局") }
-                }
-                // 多组对比专用
-                ScSection {
-                    title: qsTr("多组对比（仅当多组对比窗口激活时）")
-                    ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组") }
-                    ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组") }
-                }
+            // 左列 1：播放
+            ScSection {
+                title: qsTr("播放")
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
+                ScRow { keys: "Space";  desc: qsTr("暂停 / 继续") }
+                ScRow { keys: "←  /  →"; desc: qsTr("后退 / 前进 5 秒") }
+                ScRow { keys: ",  /  ."; desc: qsTr("上一帧 / 下一帧") }
+                ScRow { keys: "R";       desc: qsTr("回到开头") }
+            }
+            // 右列 1：视图
+            ScSection {
+                title: qsTr("视图")
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
+                ScRow { keys: "F"; desc: qsTr("切换全屏") }
+                ScRow { keys: "V"; desc: qsTr("切换视频信息叠加") }
+                ScRow { keys: "C"; desc: qsTr("切换通道信息叠加（序号 + 文件名）") }
+                ScRow { keys: "S"; desc: qsTr("在多路布局间循环切换") }
+                ScRow { keys: "B"; desc: qsTr("滑动对比模式（仅 2 路）") }
+            }
+            // 左列 2：倍速
+            ScSection {
+                title: qsTr("倍速")
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
+                ScRow { keys: "-";   desc: qsTr("减速一档") }
+                ScRow { keys: "=  /  +"; desc: qsTr("加速一档") }
+                ScRow { keys: "0";   desc: qsTr("复位为 1.0×") }
+            }
+            // 右列 2：单路 / 多路
+            ScSection {
+                title: qsTr("单路 / 多路")
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
+                ScRow { keys: "1 … 9"; desc: qsTr("切到第 N 路单路；再次按下回到上次的多路布局") }
+                // 顺带把"鼠标 hover 工具按钮"的提示放在这里，与数字键功能呼应：
+                // ⤢/⤡ 与数字键 1-9 等价，⋯ 替换本路，✕ 关闭本路。
+                ScRow { keys: "⤢ / ⤡"; desc: qsTr("放大 / 还原本路（每路 hover 工具栏，等同数字键）") }
+                ScRow { keys: "⋯";     desc: qsTr("替换本路视频（hover 显示完整路径）") }
+                ScRow { keys: "✕";     desc: qsTr("关闭本路视频") }
+            }
+            // 左列 3：多组对比
+            ScSection {
+                title: qsTr("多组对比（仅当多组对比窗口激活时）")
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
+                ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组") }
+                ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组") }
+            }
+            // 右列 3 占位：让最后一组左对齐时另一列也保持网格结构稳定
+            // （GridLayout 会自动对齐，这里留空 Item 让视觉更平衡）
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
             }
         }
     }

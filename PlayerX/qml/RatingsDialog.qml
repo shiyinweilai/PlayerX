@@ -1085,9 +1085,24 @@ Window {
                 onClicked: uploadConfigDialog.open()
             }
             PillBtn {
-                text: qsTr("🗑 清空")
+                // 行业惯例：批量操作必须显式勾选目标行才能执行（参考 Finder/资源管理器、邮箱客户端）
+                // 这里只删除"已勾选文件夹"下的评分；未勾选时按钮直接禁用，避免误触。
+                id: removeSelectedBtn
+                // 把已勾选数量直接拼到按钮文案里，比 ToolTip 更直观（PillBtn 是 Rectangle，没有
+                // 标准 hovered 属性，外部用 ToolTip on hovered 会报 ReferenceError）。
+                text: {
+                    var _dep = root._checkedFolders   // 让文案绑定跟随 _checkedFolders 变化
+                    var _dep2 = root._folders
+                    var n = root._checkedFolderCount()
+                    return n > 0
+                            ? qsTr("🗑 删除勾选（%1）").arg(n)
+                            : qsTr("🗑 删除勾选")
+                }
                 danger: true
-                enabled: root._rows.length > 0
+                // 必须有至少 1 个勾选项才能点；既防误触，也避免与"全部清空"语义混淆
+                // 注：_checkedFolderCount() 是函数，需在表达式里显式引用 root._checkedFolders
+                // 、root._folders 这两个 property，才会在勾选变化时重新求值。
+                enabled: (root._checkedFolders, root._folders, root._checkedFolderCount() > 0)
                 onClicked: confirmClearDialog.open()
             }
             Item { Layout.fillWidth: true }
@@ -1292,7 +1307,7 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: 16
                 anchors.rightMargin: 16
-                text: qsTr("清空所有评分？")
+                text: qsTr("删除已勾选文件夹的评分？")
                 color: "#f0f0f3"
                 font.pixelSize: 14
                 font.bold: true
@@ -1318,7 +1333,21 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: 16
                 anchors.rightMargin: 16
-                text: qsTr("此操作将清空本地 ratings.csv 中的全部记录，无法恢复。\n是否继续？")
+                // 把"将删除哪些文件夹/多少条记录"在弹窗里讲清楚，避免用户怀疑是"全清"
+                // 用 (root._checkedFolders, root._folders, ...) 让表达式跟随两个 property 变化重算。
+                text: {
+                    var _dep = root._checkedFolders   // 让绑定依赖到 _checkedFolders
+                    var _dep2 = root._folders         // 同上
+                    var nFolders = root._checkedFolderCount()
+                    // 评分条数：直接累加 d.totalItems（_rebuildGroups 里已预计算）
+                    var nRecs = 0
+                    for (var i = 0; i < root._folders.length; ++i) {
+                        var d = root._folders[i]
+                        if (root._isFolderChecked(d.key)) nRecs += (d.totalItems || 0)
+                    }
+                    return qsTr("将从本地 ratings.csv 删除已勾选的 %1 个文件夹下的全部评分（共 %2 条），\n操作不可恢复，是否继续？")
+                            .arg(nFolders).arg(nRecs)
+                }
                 color: "#cfcfd4"
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
@@ -1351,14 +1380,27 @@ Window {
                     onClicked: confirmClearDialog.reject()
                 }
                 PillBtn {
-                    text: qsTr("确认清空")
+                    text: qsTr("确认删除")
                     danger: true
                     onClicked: confirmClearDialog.accept()
                 }
             }
         }
 
-        onAccepted: { if (typeof Rating !== "undefined") Rating.clearAll() }
+        onAccepted: {
+            if (typeof Rating === "undefined") return
+            var picked = root._collectCheckedFolderPaths()
+            if (picked.length === 0) {
+                rejectDialog.openWith(qsTr("无法删除"), qsTr("请先勾选至少 1 个文件夹"))
+                return
+            }
+            var ok = Rating.removeByFolders(picked)
+            if (ok) {
+                actionToast.show(true, qsTr("已删除 %1 个文件夹的评分").arg(picked.length))
+            } else {
+                actionToast.show(false, qsTr("删除失败：未命中任何记录"))
+            }
+        }
     }
 
     // ── 上传设置对话框（服务器地址 / 可选 Token）────────────────────────────

@@ -576,6 +576,41 @@ bool RatingStore::clearAll() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// 按文件夹批量删除（与 buildExportCsvBytes 的目录命中规则保持一致：
+// 用 file_path 的"绝对父目录"匹配 folderPaths 经 QFileInfo 规整化后的集合）
+// ════════════════════════════════════════════════════════════════════════
+
+bool RatingStore::removeByFolders(const QStringList& folderPaths) {
+    // 空白名单视为非法（避免被误用为"全删"——那种语义请走 clearAll）
+    QSet<QString> allow;
+    for (const QString& p : folderPaths) {
+        const QString t = p.trimmed();
+        if (t.isEmpty()) continue;
+        allow.insert(QFileInfo(t).absoluteFilePath());
+    }
+    if (allow.isEmpty()) return false;
+
+    const QList<QVariantMap> rows = readAll();
+    QList<QVariantMap> kept;
+    kept.reserve(rows.size());
+    int removed = 0;
+    for (const auto& r : rows) {
+        const QString fp = r.value("file_path").toString();
+        if (!fp.isEmpty()) {
+            const QString dir = QFileInfo(fp).absolutePath();
+            if (allow.contains(dir)) { ++removed; continue; }   // 命中 → 删
+        }
+        kept.push_back(r);
+    }
+
+    if (removed == 0) return false;            // 没有命中任何行：不写盘、也不发信号
+
+    if (!writeAll(kept)) return false;
+    emit changed();
+    return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // 在系统文件管理器中定位
 // ════════════════════════════════════════════════════════════════════════
 

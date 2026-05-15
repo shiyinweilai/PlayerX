@@ -100,6 +100,11 @@ public slots:
     // 清空全部评分（保留表头）
     bool clearAll();
 
+    // 按文件夹批量删除：删除所有 file_path 所在目录命中 folderPaths 白名单的行。
+    // folderPaths 为空时不做任何修改并返回 false（避免被误用为"全删"，那种语义请直接走 clearAll）。
+    // 删除成功后会发 changed() 信号；UI 据此刷新表格。
+    Q_INVOKABLE bool removeByFolders(const QStringList& folderPaths);
+
     // 在系统文件管理器中定位 dataFilePath（macOS Finder / Windows 资源管理器）
     void revealInFolder() const;
 
