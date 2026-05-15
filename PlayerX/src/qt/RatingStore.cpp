@@ -218,10 +218,13 @@ int RatingStore::ratingFor(const QString& filePath) const {
 // "汇总友好的精简 CSV"。因为：
 //   1. 多人评分同一份视频时，大家会把各自的 CSV 汇总到一起做横向对比，
 //      file_path（每个人本地路径千差万别）、file_size、quick_hash
-//      属于环境噪音，混进去反而干扰对齐——只留 file_name 即可，
-//      file_name 已经被写成 "<通道号>_<原文件名>" 形式（如 "1_xxx.mp4"），
-//      天然带"通道维度"，多人多组 vlookup 都能对齐。
-//   2. 内部存储的 ISO8601（含毫秒/T 分隔）人眼读起来割裂，导出时统一
+//      属于环境噪音，混进去反而干扰对齐——所以只导出
+//      (updated_at, rater, folder, file_name, stars) 5 列。
+//   2. **新结构（与前端 UI 一致）**：用单独一列 `folder` 表示分组，
+//      `file_name` 不再拼接 "<通道号>_" 前缀，回归原始文件名。
+//      这样后端拿到的 CSV 就能直接按 folder 分组，
+//      与桌面端"评分弹窗按文件夹归并"的视图天然对齐。
+//   3. 内部存储的 ISO8601（含毫秒/T 分隔）人眼读起来割裂，导出时统一
 //      格式化为 "yyyy-MM-dd HH:mm:ss"，与弹窗表格里看到的一致。
 // ════════════════════════════════════════════════════════════════════════
 
@@ -264,13 +267,29 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
     QTextStream ts(&buf, QIODevice::WriteOnly);
     ts.setEncoding(QStringConverter::Utf8);
     ts.setGenerateByteOrderMark(true);
-    ts << "updated_at,rater,file_name,stars\n";
+    ts << "updated_at,rater,folder,file_name,stars\n";
+
+    // 历史本地 CSV 里 file_name 形如 "1_xxx.mp4"（带通道前缀）。
+    // 上传/导出阶段把通道前缀剥掉，只保留原始文件名；通道维度由
+    // file_path 所属目录补齐到 folder 列里。这样新老数据导出格式一致。
+    auto stripChannelPrefix = [](const QString& name) -> QString {
+        // 形如 "<digits>_<rest>"：digits 长度 1~3 即视为通道号前缀，剥掉。
+        // 普通文件名以数字开头但跟着别的字符（比如 "0001_b.mp4"）不会被误剥，
+        // 因为这种命名方式用数字+下划线+其他字符开头，但前缀长度上限 3 位
+        // 加上下划线即可基本避开（业务上通道号最多到几十路）。
+        int i = 0;
+        while (i < name.size() && i < 3 && name.at(i).isDigit()) ++i;
+        if (i > 0 && i < name.size() && name.at(i) == QLatin1Char('_')) {
+            return name.mid(i + 1);
+        }
+        return name;
+    };
 
     const QList<QVariantMap> rows = readAll();
     for (const auto& r : rows) {
+        const QString fp = r.value("file_path").toString();
         if (filter) {
-            // 只看文件所在目录（与 QML 端 _rebuildGroups 的“按目录分组”一致）。
-            const QString fp = r.value("file_path").toString();
+            // 只看文件所在目录（与 QML 端 _rebuildGroups 的"按目录分组"一致）。
             if (fp.isEmpty()) continue;
             const QString dir = QFileInfo(fp).absolutePath();
             if (!allow.contains(dir)) continue;
@@ -282,10 +301,18 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
                                      ? dt.toString("yyyy-MM-dd HH:mm:ss")
                                      : rawTs;
 
-        ts << csvEscape(prettyTs)                          << ","
-           << csvEscape(rater)                             << ","
-           << csvEscape(r.value("file_name").toString())   << ","
-           << r.value("stars").toInt()                     << "\n";
+        // folder = file_path 所在目录的最后一段名字（与 UI 中折叠分组的标题一致）
+        QString folder;
+        if (!fp.isEmpty()) folder = QFileInfo(fp).dir().dirName();
+
+        const QString fileName =
+            stripChannelPrefix(r.value("file_name").toString());
+
+        ts << csvEscape(prettyTs)  << ","
+           << csvEscape(rater)     << ","
+           << csvEscape(folder)    << ","
+           << csvEscape(fileName)  << ","
+           << r.value("stars").toInt() << "\n";
     }
     ts.flush();
     return buf;
@@ -361,8 +388,8 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     // 区分两种空：完全没有评分 vs 过滤后没命中（白名单挑了空文件夹）。
     bool csvEmpty = csvBytes.isEmpty();
     if (!csvEmpty) {
-        // 表头行 = "updated_at,rater,file_name,stars\n"，加 BOM 共 35 字节。
         // 用换行计数判定数据行更稳：数据行数 = 总行数 - 1（表头）。
+        // （新表头：updated_at,rater,folder,file_name,stars）
         int dataLines = csvBytes.count('\n') - 1;
         if (dataLines <= 0) csvEmpty = true;
     }

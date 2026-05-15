@@ -1,5 +1,5 @@
 {
-  "version": "2.0.14",
+  "version": "2.0.15",
   "minSupported": "1.0.0",
   "author": "rbyang",
   "copyright": "Copyright (c) 2026 PlayerX",
@@ -7,12 +7,12 @@
   "mandatory": false,
   "downloads": {
     "win-install": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-Setup-2.0.14.exe",
-      "sha256": "479b817b7f530aecdaf5b20a9311808e3fa99ec246a9d476eae12cf0b0079050"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-Setup-2.0.15.exe",
+      "sha256": "fa5bd9921f71066269a452c29b6b3afb79bf50668fd646ba44d7a31654485e27"
     },
     "win-portable": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.14-win64-portable.zip",
-      "sha256": "5413502c6940c43b0a3d8aa470a30be7b1e07f8b2fcaed3b211d212efc485174"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.15-win64-portable.zip",
+      "sha256": "60ec8d3c7e4033160e12bcb38b764715b2bd40dbd376401a842b12cf9f6d41e1"
     }
   }
 }

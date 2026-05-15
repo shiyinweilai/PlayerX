@@ -166,6 +166,7 @@
                     <td class="num">${fmtSize(it.size)}</td>
                     <td class="num">${escHtml(fmtTime(it.mtime))}</td>
                     <td class="actions">
+                        <button class="row-act" data-act="preview" data-name="${escHtml(it.name)}">查看</button>
                         <button class="row-act" data-act="download" data-name="${escHtml(it.name)}">下载</button>
                     </td>
                 </tr>`;
@@ -227,14 +228,134 @@
         });
     });
 
-    // 行内下载按钮（事件委托）
+    // 行内按钮（事件委托）：预览 / 下载
     tbody.addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-act]');
         if (!btn) return;
+        const name = btn.dataset.name;
         if (btn.dataset.act === 'download') {
-            const name = btn.dataset.name;
             downloadFile('/api/files/' + encodeURIComponent(name), name);
+        } else if (btn.dataset.act === 'preview') {
+            openPreview(name);
         }
+    });
+
+    // ────────── CSV 预览（右侧抽屉） ──────────
+    const previewMask     = $('previewMask');     // 这里复用原有 id，实际是抽屉本体
+    const previewTitle    = $('previewTitle');
+    const previewMeta     = $('previewMeta');
+    const previewBody     = $('previewBody');
+    const previewClose    = $('previewClose');
+    const previewDownload = $('previewDownload');
+    let previewName = '';
+
+    function closePreview() {
+        previewMask.classList.remove('open');
+        // 动画结束后隐藏，避免遮住右侧表格交互
+        setTimeout(() => {
+            if (!previewMask.classList.contains('open')) {
+                previewMask.hidden = true;
+                previewBody.innerHTML = '';
+                previewMeta.textContent = '';
+                previewName = '';
+            }
+        }, 220);
+    }
+
+    async function openPreview(name) {
+        previewName = name;
+        previewMask.hidden = false;
+        // 下一帧再加 open 才会触发 transition
+        requestAnimationFrame(() => previewMask.classList.add('open'));
+        previewTitle.textContent = name;
+        previewMeta.textContent = '';
+        previewBody.innerHTML = '<div class="preview-loading">加载中…</div>';
+        try {
+            const r = await api('/api/preview/' + encodeURIComponent(name));
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || '预览失败');
+            renderPreview(j);
+        } catch (e) {
+            previewBody.innerHTML =
+                '<div class="preview-error">预览失败：' + escHtml(e.message) + '</div>';
+        }
+    }
+
+    function renderPreview(j) {
+        const header = Array.isArray(j.header) ? j.header : [];
+        const rows   = Array.isArray(j.rows)   ? j.rows   : [];
+
+        // 顶部 meta：行数 / 大小 / 时间 / 截断提示
+        const metaParts = [];
+        metaParts.push('共 ' + j.total + ' 行');
+        if (j.truncated) metaParts.push('已展示前 ' + j.shown + ' 行');
+        if (j.size != null) metaParts.push(fmtSize(j.size));
+        if (j.mtime) metaParts.push(fmtTime(j.mtime));
+        previewMeta.textContent = metaParts.join('  ·  ');
+
+        if (header.length === 0) {
+            previewBody.innerHTML = '<div class="preview-loading">文件为空</div>';
+            return;
+        }
+
+        // 哪些列右对齐 / 用等宽数字：stars 列 + 任何全是数字的列
+        const numCols = new Set();
+        header.forEach((h, idx) => {
+            const lc = String(h || '').toLowerCase();
+            if (lc === 'stars' || lc === 'size' || lc === 'file_size') {
+                numCols.add(idx);
+            }
+        });
+
+        const thHtml = header.map((h, i) => {
+            const cls = numCols.has(i) ? ' class="num"' : '';
+            return '<th' + cls + '>' + escHtml(h) + '</th>';
+        }).join('');
+
+        const trHtml = rows.map(r => {
+            const tds = header.map((_, i) => {
+                const v = r[i] == null ? '' : String(r[i]);
+                if (numCols.has(i)) {
+                    // stars 用色块直观显示
+                    if (header[i] && header[i].toLowerCase() === 'stars') {
+                        const n = parseInt(v, 10);
+                        const lbl = Number.isFinite(n) ? renderStars(n) : escHtml(v);
+                        return '<td class="num stars-cell">' + lbl + '</td>';
+                    }
+                    return '<td class="num">' + escHtml(v) + '</td>';
+                }
+                return '<td>' + escHtml(v) + '</td>';
+            }).join('');
+            return '<tr>' + tds + '</tr>';
+        }).join('');
+
+        previewBody.innerHTML =
+            '<div class="preview-table-wrap">' +
+              '<table class="preview-table">' +
+                '<thead><tr>' + thHtml + '</tr></thead>' +
+                '<tbody>' + trHtml + '</tbody>' +
+              '</table>' +
+            '</div>';
+    }
+
+    function renderStars(n) {
+        if (n < 0) n = 0; if (n > 5) n = 5;
+        const filled = '★'.repeat(n);
+        const empty  = '☆'.repeat(5 - n);
+        return '<span class="stars" title="' + n + ' / 5">' +
+               '<span class="stars-filled">' + filled + '</span>' +
+               '<span class="stars-empty">'  + empty  + '</span>' +
+               '</span>';
+    }
+
+    previewClose.addEventListener('click', closePreview);
+    previewDownload.addEventListener('click', () => {
+        if (!previewName) return;
+        downloadFile('/api/files/' + encodeURIComponent(previewName), previewName);
+    });
+    document.addEventListener('keydown', (e) => {
+        if (previewMask.classList.contains('open') && e.key === 'Escape') closePreview();
     });
 
     // 合并下载

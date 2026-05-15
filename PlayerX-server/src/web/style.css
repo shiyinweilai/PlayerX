@@ -251,7 +251,7 @@ thead th {
 thead th.sortable { cursor: pointer; }
 thead th.sortable:hover { color: var(--text-soft); }
 thead th.num { text-align: right; }
-thead th.actions { width: 160px; text-align: right; }
+thead th.actions { width: 200px; text-align: right; }
 
 /* 列宽：评分人 16% / 标签 16% / 文件名 自适应 / 大小 90px / 时间 170px / 操作 160px */
 thead th:nth-child(1), tbody td:nth-child(1) { width: 16%; }
@@ -450,3 +450,143 @@ td.actions .row-act:hover { background: var(--bg-hover); border-color: var(--acc
 }
 .toast.ok  { border-color: rgba(48,209,88,.55); }
 .toast.err { border-color: rgba(255,69,58,.55); color: var(--danger); }
+
+/* ────────── 预览抽屉（CSV 在线查看，右侧滑出，无遮罩） ────────── */
+.preview-drawer {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(900px, 70vw);
+    /* 强制深色面板，不跟随系统浅色，避免又出现"白底锁屏" */
+    background: #16171c;
+    color: #ecedf3;
+    border-left: 1px solid #2a2b33;
+    box-shadow: -10px 0 30px rgba(0,0,0,.45);
+    z-index: 50;
+
+    display: flex;
+    flex-direction: column;
+
+    /* 默认在屏幕外，点击"查看"后通过 .open 滑入 */
+    transform: translateX(100%);
+    transition: transform .22s ease;
+
+    /* 关键：不要遮罩、不要阻塞页面其他交互 */
+}
+.preview-drawer.open { transform: translateX(0); }
+
+.preview-drawer .preview-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: #1c1d23;
+    border-bottom: 1px solid #2a2b33;
+    flex-shrink: 0;
+}
+.preview-drawer .preview-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: #ecedf3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+    unicode-bidi: plaintext;
+    flex: 0 1 auto;
+    max-width: 40%;
+    font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+.preview-drawer .preview-meta {
+    flex: 1 1 auto;
+    color: #a8a9b3;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.preview-drawer .preview-actions {
+    flex-shrink: 0;
+    display: inline-flex;
+    gap: 6px;
+}
+.preview-drawer .preview-actions .ghost-btn {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+    background: #1c1d23;
+    border: 1px solid #2a2b33;
+    color: #ecedf3;
+}
+.preview-drawer .preview-actions .ghost-btn:hover {
+    background: #21222a;
+    border-color: #0a84ff;
+    color: #0a84ff;
+}
+
+.preview-drawer .preview-body {
+    flex: 1 1 auto;
+    overflow: auto;
+    background: #16171c;
+}
+.preview-loading,
+.preview-error {
+    padding: 40px 24px;
+    text-align: center;
+    color: #6f707a;
+    font-size: 13px;
+}
+.preview-error { color: #ff453a; }
+
+.preview-table-wrap {
+    width: 100%;
+    overflow: auto;
+}
+table.preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: auto;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    color: #ecedf3;
+}
+table.preview-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #1c1d23;
+    color: #a8a9b3;
+    text-transform: none;
+    letter-spacing: 0;
+    border-bottom: 1px solid #2a2b33;
+    padding: 8px 12px;
+    white-space: nowrap;
+    font-weight: 600;
+    text-align: left;
+}
+table.preview-table thead th.num { text-align: right; }
+table.preview-table tbody td {
+    padding: 7px 12px;
+    border-bottom: 1px solid #1f2027;
+    color: #ecedf3;
+    white-space: nowrap;
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+table.preview-table tbody td.num { text-align: right; color: #a8a9b3; }
+table.preview-table tbody tr:hover { background: #21222a; }
+
+/* stars 列彩色显示 */
+.stars-cell .stars {
+    display: inline-flex;
+    gap: 1px;
+    letter-spacing: 1px;
+}
+.stars-filled { color: #ff9f0a; }
+.stars-empty  { color: #6f707a; }
+
+/* 小屏：抽屉占满 */
+@media (max-width: 640px) {
+    .preview-drawer { width: 100vw; }
+}

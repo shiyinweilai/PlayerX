@@ -14,6 +14,7 @@ const upload  = require('./upload');
 const list    = require('./list');
 const merge   = require('./merge');
 const files   = require('./files');
+const preview = require('./preview');
 const status  = require('./status');
 
 function mountApi(app) {
@@ -31,6 +32,9 @@ function mountApi(app) {
 
     app.get('/files/:name',     files.handle);
     app.get('/api/files/:name', files.handle);
+
+    app.get('/preview/:name',     preview.handle);
+    app.get('/api/preview/:name', preview.handle);
 }
 
 module.exports = { mountApi };

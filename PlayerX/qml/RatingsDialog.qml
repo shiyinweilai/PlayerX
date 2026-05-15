@@ -37,6 +37,23 @@ Window {
     // 当前用户名输入的临时缓冲（防止每按一键都触发 setCurrentUser）
     property string _userBuffer: ""
 
+    // ── 必填项校验：触发拒绝弹窗时，对应输入框红框闪烁 1.6s ──
+    property bool _invalidUser: false
+    property bool _invalidTag:  false
+    Timer {
+        id: _invalidResetTimer
+        interval: 1600
+        onTriggered: { root._invalidUser = false; root._invalidTag = false }
+    }
+    // 统一入口：弹"拒绝上传"模态 + 红框高亮 + 抢焦点
+    function _rejectUpload(reason, focusTarget, kind) {
+        if (kind === "user") root._invalidUser = true
+        else if (kind === "tag") root._invalidTag = true
+        _invalidResetTimer.restart()
+        rejectDialog.openWith(qsTr("无法上传到云端"), reason)
+        if (focusTarget) focusTarget.forceActiveFocus()
+    }
+
     // 表格数据：弹窗每次打开 / Rating.changed 时刷新
     property var _rows: []
     // 时间列排序方向：true = 新→旧（默认，与 C++ 端 getAllRatings 一致），false = 旧→新
@@ -364,14 +381,21 @@ Window {
                     selectByMouse: true
                     background: Rectangle {
                         color: "#26262a"
-                        border.color: userField.activeFocus ? "#3a7afe" : "#3a3a42"
-                        border.width: 1
+                        // 无效高亮（红）优先于聚焦色（蓝）
+                        border.color: root._invalidUser ? "#f5222d"
+                                    : userField.activeFocus ? "#3a7afe" : "#3a3a42"
+                        border.width: root._invalidUser ? 2 : 1
                         radius: 4
+                        Behavior on border.color { ColorAnimation { duration: 160 } }
                     }
                     onEditingFinished: {
                         if (typeof Rating !== "undefined") {
                             Rating.currentUser = text.trim()
                         }
+                    }
+                    onTextChanged: {
+                        // 用户开始输入即清掉无效态，避免一直闪红
+                        if (root._invalidUser && text.trim().length > 0) root._invalidUser = false
                     }
                 }
                 // 备注 tag：同一评分人多轮提交时的区分标签。
@@ -392,9 +416,11 @@ Window {
                     selectByMouse: true
                     background: Rectangle {
                         color: "#26262a"
-                        border.color: tagField.activeFocus ? "#3a7afe" : "#3a3a42"
-                        border.width: 1
+                        border.color: root._invalidTag ? "#f5222d"
+                                    : tagField.activeFocus ? "#3a7afe" : "#3a3a42"
+                        border.width: root._invalidTag ? 2 : 1
                         radius: 4
+                        Behavior on border.color { ColorAnimation { duration: 160 } }
                     }
                     // 实时同步：每次键入都立刻写回 Rating.uploadTag，
                     // 避免“改完 tag 直接点上传按钮，但首次点击还在用旧值”的时序问题
@@ -404,6 +430,8 @@ Window {
                                 && Rating.uploadTag !== text.trim()) {
                             Rating.uploadTag = text.trim()
                         }
+                        // 用户开始输入即清掉无效态
+                        if (root._invalidTag && text.trim().length > 0) root._invalidTag = false
                     }
                 }
                 Text {
@@ -1004,13 +1032,16 @@ Window {
                     var raterText = userField.text.trim()
                     var tagText   = tagField.text.trim()
                     if (raterText.length === 0) {
-                        actionToast.show(false, qsTr("请先填写「评分人」后再上传云端"))
-                        userField.forceActiveFocus()
+                        // 升级：模态拒绝弹窗 + 输入框红框闪烁，避免右下角小 toast 被忽略
+                        root._rejectUpload(
+                            qsTr("「评分人」为必填项，未填写将无法识别上传来源。\n请在顶部「评分人 *」输入框填写后再点上传。"),
+                            userField, "user")
                         return
                     }
                     if (tagText.length === 0) {
-                        actionToast.show(false, qsTr("请先填写「备注 tag」后再上传云端"))
-                        tagField.forceActiveFocus()
+                        root._rejectUpload(
+                            qsTr("「备注 tag」为必填项，用于在云端区分同一评分人的多次上传。\n请在顶部「备注 tag *」输入框填写后再点上传。"),
+                            tagField, "tag")
                         return
                     }
                     // 校验通过：把评分人值落库（避免 onEditingFinished 还没触发）
@@ -1021,7 +1052,9 @@ Window {
                     // ── 必须至少勾选一个文件夹再上传
                     var picked = root._collectCheckedFolderPaths()
                     if (picked.length === 0) {
-                        actionToast.show(false, qsTr("请先勾选至少一个文件夹后再上传"))
+                        rejectDialog.openWith(
+                            qsTr("无法上传到云端"),
+                            qsTr("还没有勾选任何文件夹，无法确定要上传哪些评分记录。\n请在列表里至少勾选一个文件夹后再点上传。"))
                         return
                     }
                     // 缓存本次勾选，供"保存并上传"/"覆盖上传"等后续入口复用
@@ -1114,6 +1147,114 @@ Window {
     }
 
     // ── 清空确认对话框（深色主题，全自定义 header/footer，避免 Basic 主题白底）────
+    // ── 上传被拒绝（强提示）：评分人/tag/勾选缺失时弹这个，红边 + 模态 ──
+    // 比起右下角小 toast，强制要求用户点"知道了"，避免漏看导致以为已上传。
+    Dialog {
+        id: rejectDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 420
+        padding: 0
+
+        property string _title: ""
+        property string _msg: ""
+        function openWith(title, msg) {
+            _title = title || qsTr("无法继续")
+            _msg = msg || ""
+            open()
+        }
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#f5222d"      // 红边强调"被拒绝"
+            border.width: 1
+            radius: 8
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                spacing: 8
+                Text {
+                    text: "⛔"
+                    color: "#f5222d"
+                    font.pixelSize: 16
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: rejectDialog._title
+                    color: "#f0f0f3"
+                    font.pixelSize: 14
+                    font.bold: true
+                    elide: Text.ElideRight
+                }
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a30"
+            }
+        }
+
+        contentItem: Item {
+            implicitHeight: rejMsg.implicitHeight + 32
+            Text {
+                id: rejMsg
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                text: rejectDialog._msg
+                color: "#cfcfd4"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.35
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a30"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("知道了")
+                    onClicked: rejectDialog.close()
+                }
+            }
+        }
+    }
+
     Dialog {
         id: confirmClearDialog
         modal: true

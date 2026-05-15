@@ -49,7 +49,7 @@ function handle(req, res) {
             res.write('\n' + lines.slice(1).join('\n'));
         }
     }
-    if (first) res.write('\uFEFFupdated_at,rater,file_name,stars\n');
+    if (first) res.write('\uFEFFupdated_at,rater,folder,file_name,stars\n');
     res.end();
 }
 

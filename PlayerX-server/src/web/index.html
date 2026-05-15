@@ -96,6 +96,21 @@
 <!-- ────────── Toast ────────── -->
 <div class="toast" id="toast" hidden></div>
 
+<!-- ────────── 预览抽屉（右侧滑出，无遮罩） ────────── -->
+<aside class="preview-drawer" id="previewMask" hidden aria-labelledby="previewTitle" role="complementary">
+    <div class="preview-head">
+        <span class="preview-title" id="previewTitle">CSV 预览</span>
+        <span class="preview-meta" id="previewMeta"></span>
+        <span class="preview-actions">
+            <button class="ghost-btn" id="previewDownload" title="下载原文件">下载</button>
+            <button class="ghost-btn" id="previewClose" title="关闭预览">×</button>
+        </span>
+    </div>
+    <div class="preview-body" id="previewBody">
+        <div class="preview-loading">加载中…</div>
+    </div>
+</aside>
+
 <script src="/web/app.js"></script>
 </body>
 </html>
