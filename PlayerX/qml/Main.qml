@@ -1803,6 +1803,9 @@ ApplicationWindow {
                 enabled: Engine.duration > 0
                 // 相对快退：每路在自己当前位置 -5s，独立时钟的路不被对齐到主时钟
                 onClicked: Engine.seekRelative(-5)
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("快退 5 秒（←）")
             }
             // 上一帧
             FlatButton {
@@ -1811,6 +1814,9 @@ ApplicationWindow {
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
                 onClicked: Engine.stepFrame(-1)
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("上一帧（,）")
             }
             // 播放/暂停按钮：固定宽度，避免图标切换时旁边按钮抖动
             FlatButton {
@@ -1821,6 +1827,10 @@ ApplicationWindow {
                 text: Engine.playing ? "⏸" : "▶"
                 font.pixelSize: 16
                 onClicked: Engine.togglePause()
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: Engine.playing ? qsTr("暂停（Space）")
+                                              : qsTr("播放（Space）")
             }
             // 下一帧
             FlatButton {
@@ -1829,6 +1839,9 @@ ApplicationWindow {
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
                 onClicked: Engine.stepFrame(1)
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("下一帧（.）")
             }
             // 快进 5 秒
             FlatButton {
@@ -1838,6 +1851,9 @@ ApplicationWindow {
                 enabled: Engine.duration > 0
                 // 相对快进：每路在自己当前位置 +5s，独立时钟的路不被对齐到主时钟
                 onClicked: Engine.seekRelative(5)
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("快进 5 秒（→）")
             }
             // 全局重置：所有路 seek 回 0（与快捷键 R 等价）
             FlatButton {
@@ -1847,6 +1863,9 @@ ApplicationWindow {
                 font.pixelSize: 16
                 enabled: Engine.fileCount > 0
                 onClicked: Engine.seek(0)
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("全部重置到开头（R）")
             }
 
             // ── 多组对比模式专用：上一组 / 下一组 + 组号指示 ──
@@ -1858,6 +1877,9 @@ ApplicationWindow {
                 font.pixelSize: 14
                 enabled: multiGroupDialog.active
                 onClicked: multiGroupDialog.prevGroup()
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("上一组（Ctrl+↑）")
             }
             FlatButton {
                 text: "⏭"
@@ -1866,6 +1888,9 @@ ApplicationWindow {
                 font.pixelSize: 14
                 enabled: multiGroupDialog.active
                 onClicked: multiGroupDialog.nextGroup()
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("下一组（Ctrl+↓）")
             }
             // ── 单视频浏览模式专用：宫格切换（1/2/4/6/9） ──
             // 仅在 singleLaneMode（即来源为单文件夹或"添加文件"等单路情形）下显示。
@@ -1878,6 +1903,9 @@ ApplicationWindow {
                 font.pixelSize: 13
                 enabled: multiGroupDialog.singleLaneMode
                 onClicked: viewCountMenu.popup(viewCountBtn, 0, viewCountBtn.height)
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("切换宫格数量（1 / 2 / 4 / 6 / 9）")
                 Menu {
                     id: viewCountMenu
                     Repeater {
