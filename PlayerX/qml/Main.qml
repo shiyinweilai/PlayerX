@@ -26,7 +26,7 @@ ApplicationWindow {
 
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
     // 用法：菜单「帮助 → 教程…」点击时，会通过 Qt.openUrlExternally(tutorialUrl) 打开默认浏览器
-    property url tutorialUrl: "https://example.com/playerx-tutorial"
+    property url tutorialUrl: "https://iwiki.woa.com/p/4020492089"
 
     // ─── 系统菜单栏（macOS 全局菜单 / Windows 窗口菜单） ──────────────────
     // 仅作为系统级入口，与现有 ToolBar 上的"打开 ▾ / ⚙ 设置 ▾"按钮共存。
