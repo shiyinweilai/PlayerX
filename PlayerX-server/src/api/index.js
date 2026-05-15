@@ -33,6 +33,10 @@ function mountApi(app) {
 
     app.get('/merge',     merge.handle);
     app.get('/api/merge', merge.handle);
+    // 选中合并下载：names 太长时走 POST body
+    const jsonParserMerge = express.json({ limit: '1mb' });
+    app.post('/merge',     jsonParserMerge, merge.handle);
+    app.post('/api/merge', jsonParserMerge, merge.handle);
 
     app.get('/files/:name',     files.handle);
     app.get('/api/files/:name', files.handle);
@@ -56,6 +60,10 @@ function mountApi(app) {
     app.delete('/api/archive/file/:folder/:name',   archive.handleDeleteArchivedFile);
     app.delete('/api/archive/folder/:folder',       archive.handleDeleteArchiveFolder);
     app.post('/api/archive/bulk-delete', jsonParser, archive.handleBulkDeleteArchived);
+
+    // 归档合并下载（GET：全部；POST 带 body.names：仅子集）
+    app.get('/api/archive/merge/:folder',  archive.handleMergeArchived);
+    app.post('/api/archive/merge/:folder', jsonParser, archive.handleMergeArchived);
 }
 
 module.exports = { mountApi };

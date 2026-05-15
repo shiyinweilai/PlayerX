@@ -64,8 +64,8 @@
             📂 归档库
         </button>
         <span class="sep"></span>
-        <button class="primary-btn" id="mergeLatestBtn" title="每个 (评分人, 标签) 仅取最新一份">
-            ⬇ 合并下载（最新）
+        <button class="primary-btn" id="mergeLatestBtn" disabled title="勾选若干文件后，把它们合并为一个 csv 下载">
+            ⬇ 合并下载（选中）
         </button>
         <button class="ghost-btn" id="mergeAllBtn" title="合并所有 csv（含历史）">
             ⬇ 合并全部
@@ -132,6 +132,13 @@
             <div class="archive-files-toolbar" id="archiveFilesToolbar" hidden>
                 <span class="sel-info" id="archiveSelInfo" hidden>已选 <b id="archiveSelCount">0</b> 项</span>
                 <span class="archive-spacer"></span>
+                <button class="ghost-btn" id="archiveDownloadSelBtn" disabled title="批量下载选中（zip 不支持，按顺序逐个下载）">
+                    ⬇ 下载选中
+                </button>
+                <button class="primary-btn" id="archiveMergeBtn" title="合并下载：未选中时合并整个文件夹，选中时仅合并所选">
+                    ⬇ 合并下载
+                </button>
+                <span class="sep"></span>
                 <button class="ghost-btn danger" id="archiveDelSelBtn" disabled title="批量删除选中">
                     🗑 删除选中
                 </button>

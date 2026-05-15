@@ -23,9 +23,35 @@ const fs   = require('fs');
 const path = require('path');
 
 const { UPLOAD_DIR, ARCHIVE_DIR, ensureDirs } = require('../lib/paths');
+const { parseName }                           = require('../lib/slug');
 
 const NAME_RE   = /^[A-Za-z0-9._\-\u4e00-\u9fa5]+\.csv$/;
 const FOLDER_RE = /^[A-Za-z0-9._\-\u4e00-\u9fa5 ]{1,64}$/;
+
+// CSV 字段转义：含逗号/引号/换行时用双引号包裹并把引号翻倍
+function csvCell(v) {
+    const s = (v == null ? '' : String(v));
+    if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+}
+
+// 给 csv 文本按行追加 tag 列；首份保留并扩展表头，其余跳过表头
+function appendTagToCsv(text, tag, withHeader) {
+    const cell = csvCell(tag);
+    const lines = text.split(/\r?\n/);
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (i === 0) {
+            if (!withHeader) continue;
+            out.push(line.length === 0 ? line : line + ',tag');
+            continue;
+        }
+        if (line.length === 0) { out.push(line); continue; }
+        out.push(line + ',' + cell);
+    }
+    return out.join('\n');
+}
 
 function ensureArchive() {
     ensureDirs();
@@ -407,6 +433,77 @@ function handleBulkDeleteArchived(req, res) {
     });
 }
 
+// GET/POST /api/archive/merge/:folder
+// 合并某归档文件夹下的 csv 一键下载：
+//   - 默认：合并文件夹下全部 csv
+//   - 传 names（GET ?names=a.csv,b.csv 或 POST body { names:[...] }）：仅合并该子集
+function handleMergeArchived(req, res) {
+    ensureArchive();
+    const folderRaw = (req.params.folder || '').toString();
+    const dir = resolveArchiveFolder(folderRaw);
+    if (!dir) return res.status(400).json({ ok: false, error: 'invalid folder' });
+    if (!fs.existsSync(dir)) return res.status(404).json({ ok: false, error: 'folder not found' });
+
+    // 收集 names（可选）
+    let requested = [];
+    if (req.body && Array.isArray(req.body.names)) {
+        requested = req.body.names.map(x => String(x || '').trim()).filter(Boolean);
+    } else if (req.query && req.query.names) {
+        const q = req.query.names;
+        if (Array.isArray(q)) requested = q.map(x => String(x || '').trim()).filter(Boolean);
+        else                  requested = String(q).split(',').map(s => s.trim()).filter(Boolean);
+    }
+
+    let entries = [];
+    try {
+        entries = fs.readdirSync(dir).filter(n => n.toLowerCase().endsWith('.csv') && NAME_RE.test(n));
+    } catch (_) { entries = []; }
+
+    let files;
+    if (requested.length > 0) {
+        const set = new Set(entries);
+        const seen = new Set();
+        files = [];
+        for (const n of requested) {
+            if (!NAME_RE.test(n)) continue;
+            if (!set.has(n))      continue;
+            if (seen.has(n))      continue;
+            seen.add(n);
+            files.push(n);
+        }
+        files.sort();
+    } else {
+        files = entries.slice().sort();
+    }
+
+    const outName = `archive_${folderRaw}${requested.length > 0 ? '_selected' : ''}.csv`
+        .replace(/[^A-Za-z0-9._\-\u4e00-\u9fa5]/g, '_');
+
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="${outName}"`);
+
+    let first = true;
+    for (const n of files) {
+        let txt;
+        try { txt = fs.readFileSync(path.join(dir, n), 'utf8'); }
+        catch (_) { continue; }
+        if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
+        const meta = parseName(n) || {};
+        const tag = meta.tag || '';
+        const out = appendTagToCsv(txt, tag, first);
+        if (out.length === 0) continue;
+        if (first) {
+            res.write('\uFEFF');
+            res.write(out);
+            first = false;
+        } else {
+            res.write('\n' + out);
+        }
+    }
+    if (first) res.write('\uFEFFupdated_at,rater,folder,file_name,stars,tag\n');
+    res.end();
+}
+
 module.exports = {
     handleArchive,
     handleBulkDelete,
@@ -417,4 +514,5 @@ module.exports = {
     handleDeleteArchivedFile,
     handleDeleteArchiveFolder,
     handleBulkDeleteArchived,
+    handleMergeArchived,
 };

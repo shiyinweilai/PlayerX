@@ -195,11 +195,11 @@
         kpiSize.textContent  = fmtSize(total);
     }
 
-    // ────────── 下载 ──────────
-    async function downloadFile(url, fallbackName) {
+    // ────────── 下载（POST 形态：把响应直接保存为文件） ──────────
+    async function downloadResponse(promiseOrResp, fallbackName) {
         try {
             setStatus('warn', '下载中…');
-            const r = await api(url);
+            const r = await Promise.resolve(promiseOrResp);
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const blob = await r.blob();
             let name = fallbackName || 'download.csv';
@@ -218,6 +218,11 @@
             setStatus('err', '下载失败');
             showToast('下载失败：' + e.message, 'err');
         }
+    }
+
+    // ────────── 下载 ──────────
+    async function downloadFile(url, fallbackName) {
+        return downloadResponse(api(url), fallbackName);
     }
 
     // ────────── 删除 ──────────
@@ -249,6 +254,8 @@
         if (selInfo)  selInfo.hidden = (n === 0);
         if (archiveSelBtn) archiveSelBtn.disabled = (n === 0);
         if (deleteSelBtn)  deleteSelBtn.disabled  = (n === 0);
+        // 合并下载（选中）：未选中时禁用
+        if (mergeLatest) mergeLatest.disabled = (n === 0);
 
         // 表头全选复选框：与当前 filtered 可见行联动
         if (selAll) {
@@ -540,7 +547,21 @@
     });
 
     // 合并下载
-    mergeLatest.addEventListener('click', () => downloadFile('/api/merge', 'playerx_latest.csv'));
+    mergeLatest.addEventListener('click', () => {
+        const names = [...state.selected];
+        if (names.length === 0) {
+            showToast('请先勾选要合并的文件', 'warn');
+            return;
+        }
+        downloadResponse(
+            fetch('/api/merge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ names }),
+            }),
+            'playerx_selected.csv',
+        );
+    });
     mergeAll.addEventListener('click',    () => downloadFile('/api/merge?all=1', 'playerx_all.csv'));
 
     // ────────── 归档库抽屉 ──────────
@@ -560,6 +581,8 @@
     const archiveSelCount      = $('archiveSelCount');
     const archiveDelSelBtn     = $('archiveDelSelBtn');
     const archiveDelFolderBtn  = $('archiveDelFolderBtn');
+    const archiveDownloadSelBtn= $('archiveDownloadSelBtn');
+    const archiveMergeBtn      = $('archiveMergeBtn');
 
     const archive = {
         folders: [],     // [{name,count,size,mtime}]
@@ -692,6 +715,14 @@
         archiveSelCount.textContent = String(n);
         archiveSelInfo.hidden = (n === 0);
         archiveDelSelBtn.disabled = (n === 0);
+        if (archiveDownloadSelBtn) archiveDownloadSelBtn.disabled = (n === 0);
+        if (archiveMergeBtn) {
+            // 合并下载：选中时合并所选；未选中时合并整个文件夹（只要文件夹有文件就可用）
+            archiveMergeBtn.disabled = (archive.files.length === 0);
+            archiveMergeBtn.textContent = (n > 0)
+                ? `⬇ 合并下载选中（${n}）`
+                : '⬇ 合并下载（全部）';
+        }
         if (archiveSelAll) {
             const visible = archive.files;
             if (visible.length === 0) {
@@ -830,6 +861,52 @@
     openArchiveBtn.addEventListener('click', openArchiveDrawer);
     archiveCloseBtn.addEventListener('click', closeArchiveDrawer);
     archiveRefreshBtn.addEventListener('click', () => loadArchiveFolders());
+
+    // 下载选中：浏览器无原生 zip，按顺序逐个触发下载
+    if (archiveDownloadSelBtn) {
+        archiveDownloadSelBtn.addEventListener('click', async () => {
+            const folder = archive.currentFolder;
+            const names = [...archive.selected];
+            if (!folder || names.length === 0) return;
+            archiveDownloadSelBtn.disabled = true;
+            try {
+                for (const n of names) {
+                    await downloadFile(
+                        `/api/archive/file/${encodeURIComponent(folder)}/${encodeURIComponent(n)}`,
+                        n,
+                    );
+                    // 给浏览器一点时间处理多文件下载
+                    await new Promise((r) => setTimeout(r, 120));
+                }
+            } finally {
+                archiveDownloadSelBtn.disabled = (archive.selected.size === 0);
+            }
+        });
+    }
+
+    // 合并下载：未选中=合并整个文件夹；选中=仅合并所选
+    if (archiveMergeBtn) {
+        archiveMergeBtn.addEventListener('click', () => {
+            const folder = archive.currentFolder;
+            if (!folder) return;
+            const names = [...archive.selected];
+            if (names.length > 0) {
+                downloadResponse(
+                    fetch('/api/archive/merge/' + encodeURIComponent(folder), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ names }),
+                    }),
+                    `archive_${folder}_selected.csv`,
+                );
+            } else {
+                downloadFile(
+                    '/api/archive/merge/' + encodeURIComponent(folder),
+                    `archive_${folder}.csv`,
+                );
+            }
+        });
+    }
 
     // ────────── 启动 ──────────
     (async function init() {
