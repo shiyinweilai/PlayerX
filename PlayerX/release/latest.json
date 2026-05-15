@@ -1,18 +1,14 @@
 {
-  "version": "2.0.15",
+  "version": "2.0.17",
   "minSupported": "1.0.0",
   "author": "rbyang",
   "copyright": "Copyright (c) 2026 PlayerX",
   "notes": "PlayerX 2.0.5 is a major update that includes performance improvements, bug fixes, and new features such as support for additional video formats and enhanced user interface.",
   "mandatory": false,
   "downloads": {
-    "win-install": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-Setup-2.0.15.exe",
-      "sha256": "fa5bd9921f71066269a452c29b6b3afb79bf50668fd646ba44d7a31654485e27"
-    },
-    "win-portable": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.15-win64-portable.zip",
-      "sha256": "60ec8d3c7e4033160e12bcb38b764715b2bd40dbd376401a842b12cf9f6d41e1"
+    "mac-arm64": {
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.17-arm64-mac.zip",
+      "sha256": "f434f11be9887503f887655514e59a92931370997f905cb3c9438fea598c757c"
     }
   }
 }

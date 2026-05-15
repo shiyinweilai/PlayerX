@@ -441,6 +441,27 @@ def build(target: str):
 
 def install(target: str):
     bdir = build_dir_for(target)
+    idir = install_dir_for(target)
+
+    # 关键：每次安装前必须把旧的 install 目录清掉。
+    # 原因：CMake 在 install 阶段会用 install_name_tool 自动改写产物里的
+    # LC_RPATH（删除构建机的 brew Qt / ffmpeg 绝对路径，添加
+    # @executable_path/../Frameworks）。这套改写只对
+    # "build tree → 干净的 install tree" 这种全新拷贝才正确：
+    #   * 第一次安装：源 binary 里有 /opt/homebrew/opt/qt/lib 这条 rpath，
+    #     install_name_tool -delete_rpath 能找到，OK；
+    #   * 第二次安装：install 目录里已经是上次部署后的 binary，里面已经
+    #     没有 /opt/homebrew/opt/qt/lib 这条 rpath 了，install_name_tool
+    #     -delete_rpath 找不到目标，整个 cmake --install 直接 abort，表现是：
+    #       error: install_name_tool: no LC_RPATH load command with path:
+    #              /opt/homebrew/opt/qt/lib found ...
+    #       error: install_name_tool: "-add_rpath ...Frameworks" would duplicate path
+    # 删掉旧 install 目录，让每次 install 都从 build tree 全量拷贝一份
+    # 干净的二进制，rpath 改写就永远不会出现增量错位。
+    if os.path.isdir(idir):
+        info(f"清理旧的 install 目录: {idir}")
+        shutil.rmtree(idir, ignore_errors=True)
+
     run(["cmake", "--install", bdir])
 
 
@@ -450,15 +471,61 @@ def post_build(target: str, qt_dir: str):
     Windows→ strip 调试符号 + 复制 Qt 运行时 DLL（若 Qt 安装目录可见）
     """
     if target == "macos" and IS_MACOS_HOST:
-        bdir = build_dir_for(target)
-        bin_dir = os.path.join(bdir, "bin")
+        # 注意：macdeployqt 必须跑在 install 目录下的 .app 上，而不是
+        # build 目录的 .app。原因是 build 目录里的 .app 在 cmake --install
+        # 时还没被改 rpath，但本脚本的执行顺序是 build → install → post_build，
+        # install 之后 build/out/bin/PlayerX.app 已经被 install_name_tool
+        # 改写过 LC_RPATH 了；如果再让 macdeployqt 处理它，第二次重打包时
+        # 它扫到的全是 @rpath/QtXxx.framework 但搜索路径里没有 brew Qt 的
+        # 实际位置，会报：
+        #     ERROR: Cannot resolve rpath "@rpath/QtQml.framework/..."
+        # install 目录是每次 install() 重新清空+全量拷贝出来的，binary
+        # 里仍然保留 brew Qt 的绝对路径，macdeployqt 才能正确解析依赖。
+        idir = install_dir_for(target)
+        bin_dir = idir
         if os.path.isdir(bin_dir):
             for entry in os.listdir(bin_dir):
                 if entry.endswith(".app"):
                     app_path = os.path.join(bin_dir, entry)
+
+                    # ── 关键步骤：用 macdeployqt 把 Qt 框架/插件/QML 模块内嵌进 .app ──
+                    # 不做这一步，主程序依赖会残留 /opt/homebrew/.../Qt*.framework
+                    # 之类的绝对路径。开发机本地能跑（brew Qt 在 /opt/homebrew 下），
+                    # 但分发到没装 brew Qt 的用户机上，dyld 会因
+                    #   "Library not loaded: /opt/homebrew/.../QtQuickControls2.framework"
+                    # 在启动期 SIGABRT。macdeployqt 会把 framework 复制到
+                    # Contents/Frameworks/ 并把依赖改写为 @rpath/...，使 .app 自包含。
+                    macdeploy = os.path.join(qt_dir, "bin", "macdeployqt") if qt_dir else ""
+                    if not macdeploy or not os.path.isfile(macdeploy):
+                        macdeploy = shutil.which("macdeployqt") or ""
+                    if not macdeploy:
+                        error("未找到 macdeployqt，无法生成可分发的 .app；"
+                              "请确认 Qt6 安装完整（brew install qt 或设置 QT6_DIR）")
+                        sys.exit(1)
+
+                    qml_src = os.path.join(SOURCE_DIR, "qml")
+                    info(f"运行 macdeployqt 内嵌 Qt 运行时: {entry}")
+                    deploy_cmd = [
+                        macdeploy, app_path,
+                        "-always-overwrite",
+                        "-verbose=1",
+                    ]
+                    # 项目使用了大量 QtQuick.Controls / 自定义 QML，
+                    # 必须显式 -qmldir 让 macdeployqt 扫到所有 import 并打包对应 QML 模块。
+                    if os.path.isdir(qml_src):
+                        deploy_cmd.append(f"-qmldir={qml_src}")
+                    r = subprocess.run(deploy_cmd)
+                    if r.returncode != 0:
+                        error("macdeployqt 失败，生成的 .app 在其他机器上无法启动")
+                        sys.exit(1)
+                    success("macdeployqt 完成（Qt 已内嵌到 .app）")
+
+                    # macdeployqt 会改写大量二进制依赖，旧的 ad-hoc 签名随之失效，
+                    # 必须重新整体签一次（--deep 覆盖所有内嵌 framework / dylib / 插件）。
                     info(f"对 {entry} 进行 ad-hoc 签名...")
                     subprocess.run(
-                        ["codesign", "--sign", "-", "--force", "--deep", app_path],
+                        ["codesign", "--sign", "-", "--force", "--deep",
+                         "--timestamp=none", app_path],
                         check=False
                     )
                     success("签名完成")
@@ -773,8 +840,11 @@ def _ensure_release_dir() -> str:
 
 def package_macos(version: str) -> dict:
     """打 macOS .zip 分发包（ditto 保留签名/扩展属性，行业标准做法）。"""
-    bdir = build_dir_for("macos")
-    bin_dir = os.path.join(bdir, "bin")
+    # 必须从 install 目录取 .app，而不是 build/out/bin。
+    # 因为 macdeployqt 是在 post_build 阶段对 install 目录的 .app 做的内嵌处理，
+    # build/out/bin/PlayerX.app 仍依赖构建机本地的 brew Qt，分发到别人机器上必崩。
+    idir = install_dir_for("macos")
+    bin_dir = idir
     app = None
     for entry in os.listdir(bin_dir) if os.path.isdir(bin_dir) else []:
         if entry.endswith(".app"):
