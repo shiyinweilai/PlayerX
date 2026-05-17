@@ -47,6 +47,12 @@ Rectangle {
     // 通过 📁 对话框成功选择了文件夹（accepted）。父级据此固化"全局上次目录"，
     // 让后续新增行/再次打开此对话框都从这里起步。
     signal folderImported(url folderUrl)
+    // 通过 📁 对话框选择了文件夹但「尚未应用」：把决策交给父级。
+    //   · folderUrl: 用户选择的目录 URL；
+    //   · apply:     一个 callable —— 父级在「不重复 / 用户确认」时调用，
+    //                即可真正写入本路 folderPath/allFiles 并触发 folderImported。
+    // 父级若不调 apply 即视为"取消"，本路保持原状。
+    signal folderRequested(url folderUrl, var apply)
     // ─── 视觉 ───────────────────────────────────────────────────────
     color: "#1a1a1d"
     border.color: "#2c2c32"
@@ -167,15 +173,23 @@ Rectangle {
             return row.defaultFolderUrl
         }
         onAccepted: {
-            // 注意：Windows 上 selectedFolder 形如 "file:///C:/Users/..."，
-            //       直接 substring(7) 会得到 "/C:/Users/..." 多一个前导斜杠
-            //       导致 QFileInfo 判定不存在 → 扫描结果为空。
-            //       必须通过 Fs.urlToLocalFile() 让 Qt 自己处理跨平台 URL → path 转换。
-            row.folderPath = Fs.urlToLocalFile(selectedFolder)
-            // 直接传 QUrl 给 C++ 端，避免 QML 侧再做字符串处理。
-            row.allFiles = Fs.scanVideoFolder(selectedFolder, true)
-            // 通知父级固化"全局上次目录"，供后续新行/再次点 📁 复用
-            row.folderImported(selectedFolder)
+            // 把"真正的应用"封装为闭包，交给父级决定是否调用：
+            //   · 父级若发现该路径已被其它路占用 → 弹确认；
+            //   · 用户确认 / 不重复 → 父级会调 apply()；用户取消 → 不调用。
+            var folderUrl = selectedFolder
+            var apply = function() {
+                // 注意：Windows 上 selectedFolder 形如 "file:///C:/Users/..."，
+                //       直接 substring(7) 会得到 "/C:/Users/..." 多一个前导斜杠
+                //       导致 QFileInfo 判定不存在 → 扫描结果为空。
+                //       必须通过 Fs.urlToLocalFile() 让 Qt 自己处理跨平台 URL → path 转换。
+                row.folderPath = Fs.urlToLocalFile(folderUrl)
+                // 直接传 QUrl 给 C++ 端，避免 QML 侧再做字符串处理。
+                row.allFiles = Fs.scanVideoFolder(folderUrl, true)
+                // 通知父级固化"全局上次目录"，供后续新行/再次点 📁 复用
+                row.folderImported(folderUrl)
+            }
+            // 发给父级（MultiGroupDialog._onRowPickedFolder 会路由到确认逻辑）
+            row.folderRequested(folderUrl, apply)
         }
     }
 
@@ -340,8 +354,12 @@ Rectangle {
                 color: "#cfcfd2"
                 font.pixelSize: 12
                 verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideMiddle
-                text: row.currentName()
+                // 显示绝对路径，过长时从开头省略（保留更具辨识度的尾部文件名 + 末级目录）
+                elide: Text.ElideLeft
+                text: {
+                    var p = row.currentPath()
+                    return p.length > 0 ? p : row.currentName()
+                }
             }
             MouseArea {
                 id: nameHover

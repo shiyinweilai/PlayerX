@@ -15,6 +15,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
+import QtQuick.Dialogs
 import QtQuick.LocalStorage 2.15
 import PlayerX 1.0
 
@@ -591,6 +592,250 @@ ApplicationWindow {
         if (_laneRuntime.length > n) _laneRuntime = _laneRuntime.slice(0, n)
     }
 
+    // 空态占位卡点击后弹出的「首路文件夹选择」对话框。
+    // 选中后复用 addFoldersToHistory，同一路径的扫描 / 去重 / 持久化逻辑。
+    FolderDialog {
+        id: firstFolderDlg
+        title: "选择要导入的文件夹"
+        currentFolder: dlg.effectiveDefaultFolderUrl
+        onAccepted: {
+            // selectedFolder 是 QUrl，addFoldersWithConfirm 内部已兼容 url / 本地路径，
+            // 并会在检测到与已有路重复时弹出确认（让用户选择「再开一路」或「仅勾选已有」）。
+            addFoldersWithConfirm([ selectedFolder ])
+            // 同时固化「全局上次导入目录」，后续新增/打开都从这里起始
+            try { _saveLastImportFolder(selectedFolder) } catch (e) { /* ignore */ }
+        }
+    }
+
+    // ─── 「重复目录」确认对话框 ─────────────────────────────────
+    // 触发时机：
+    //   1) 拖拽 / 空态点 ➕ / 选文件夹 → 检测到目标路径已经存在于 lanes；
+    //   2) 已有路 → 在 Row 内点 📁 选了和「其它路」相同的目录。
+    // 行为：
+    //   · 「再开一路」：调用强制版 addFoldersToHistory(...,{allowDuplicate:true})，
+    //     给用户多一条与已有路同目录的新路（刻意制造同源对比）；
+    //   · 「取消」：保持当前 lanes 不变（行内场景下连本路也不修改）。
+    // 状态由 _pendingDup 暂存，避免使用 Promise/异步链。
+    Dialog {
+        id: dupConfirmDialog
+        modal: true
+        // 居中到主窗口
+        anchors.centerIn: parent
+        title: "重复导入提示"
+        standardButtons: Dialog.NoButton
+        // 暗色主题适配
+        background: Rectangle {
+            color: "#1f1f24"
+            border.color: "#3a3a45"
+            border.width: 1
+            radius: 6
+        }
+        // 关闭时若仍未决议（窗口外点击/Esc），按"取消"语义处理
+        onClosed: {
+            if (_pendingDup && !_pendingDup._resolved) {
+                _resolveDupCancel()
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label {
+                Layout.fillWidth: true
+                Layout.maximumWidth: 460
+                wrapMode: Text.WordWrap
+                color: "#e8e8ec"
+                font.pixelSize: 13
+                text: {
+                    if (!_pendingDup) return ""
+                    var paths = _pendingDup.dupPaths || []
+                    if (paths.length === 0) return ""
+                    var head = paths.length === 1
+                        ? ("以下文件夹已经在列表中：\n" + paths[0])
+                        : ("以下 " + paths.length + " 个文件夹已经在列表中：\n" + paths.join("\n"))
+                    var tail = _pendingDup.mode === "row"
+                        ? "\n\n是否仍然把当前路设为该目录？"
+                        : "\n\n是否仍然再开一路（同目录可用于重复对比）？"
+                    return head + tail
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "取消"
+                    onClicked: { _resolveDupCancel(); dupConfirmDialog.close() }
+                    background: Rectangle {
+                        color: parent.down ? "#3a3a45"
+                              : parent.hovered ? "#2a2a32"
+                                              : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#e8e8ec"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 28
+                    implicitWidth: 70
+                }
+                Button {
+                    text: _pendingDup && _pendingDup.mode === "row" ? "确认覆盖本路" : "再开一路"
+                    onClicked: { _resolveDupConfirm(); dupConfirmDialog.close() }
+                    background: Rectangle {
+                        color: parent.down ? "#0d8b73"
+                              : parent.hovered ? "#119c80"
+                                              : "#0fa085"
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 28
+                    implicitWidth: 110
+                }
+            }
+        }
+    }
+
+    // 待决议的重复确认上下文（同一时刻仅一份）。
+    // 字段：
+    //   · mode: "batch" | "row"
+    //   · dupPaths: 重复路径集合（用于文案展示）
+    //   · dupUrls:  与 dupPaths 对应的原始 url 列表（用于走"再开一路"时强制新增）
+    //   · onConfirm / onCancel: 决议回调
+    //   · _resolved: 防止 onClosed 二次触发
+    property var _pendingDup: null
+
+    function _resolveDupConfirm() {
+        if (!_pendingDup || _pendingDup._resolved) return
+        _pendingDup._resolved = true
+        var ctx = _pendingDup
+        _pendingDup = null
+        try { if (ctx.onConfirm) ctx.onConfirm() } catch (e) { /* ignore */ }
+    }
+    function _resolveDupCancel() {
+        if (!_pendingDup || _pendingDup._resolved) return
+        _pendingDup._resolved = true
+        var ctx = _pendingDup
+        _pendingDup = null
+        try { if (ctx.onCancel) ctx.onCancel() } catch (e) { /* ignore */ }
+    }
+
+    // ─── 带「重复目录确认」的批量加路入口 ───────────────────────────
+    // 把 urls 拆为 freshUrls / dupUrls：
+    //   · freshUrls 立刻走 addFoldersToHistory 正常追加；
+    //   · dupUrls 非空 → 弹 dupConfirmDialog：
+    //       - 用户「再开一路」  → 走强制版 addFoldersToHistory(dupUrls,{allowDuplicate:true})；
+    //       - 用户「取消」      → 沿用旧行为，仅把已存在路 selected=true（拖拽零反馈不友好）。
+    function addFoldersWithConfirm(urls) {
+        if (!urls || urls.length === 0) return []
+        // 当前 lanes 中已存在的 folderPath 集
+        var existing = {}
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (lane && lane.folderPath && lane.folderPath.length > 0) {
+                existing[lane.folderPath] = true
+            }
+        }
+
+        var freshUrls = []
+        var dupUrls = []
+        var dupPaths = []
+        for (var k = 0; k < urls.length; ++k) {
+            var u = urls[k]
+            var p = ""
+            try {
+                if (typeof u === "string") {
+                    p = (u.indexOf("file://") === 0) ? Fs.urlToLocalFile(u) : u
+                } else {
+                    p = Fs.urlToLocalFile(u)
+                }
+            } catch (e) { p = "" }
+            if (existing[p]) {
+                dupUrls.push(u)
+                if (dupPaths.indexOf(p) < 0) dupPaths.push(p)
+            } else {
+                freshUrls.push(u)
+            }
+        }
+
+        // 1) 先处理新路径（不需要确认）
+        var hits = []
+        if (freshUrls.length > 0) {
+            try { hits = addFoldersToHistory(freshUrls) || [] } catch (e) { hits = [] }
+        }
+
+        // 2) 没有重复 → 直接结束
+        if (dupUrls.length === 0) return hits
+
+        // 3) 有重复 → 弹确认（异步；返回值仅包含已经同步处理的 fresh 部分）
+        _pendingDup = {
+            mode: "batch",
+            dupPaths: dupPaths,
+            dupUrls: dupUrls,
+            _resolved: false,
+            onConfirm: function() {
+                try {
+                    addFoldersToHistory(dupUrls, { allowDuplicate: true })
+                } catch (e) { /* ignore */ }
+            },
+            onCancel: function() {
+                // 兜底：保留旧的"重复时仅勾选已有"行为，避免拖拽完全没反馈
+                try { addFoldersToHistory(dupUrls) } catch (e) { /* ignore */ }
+            }
+        }
+        dupConfirmDialog.open()
+        // 把重复路径也并入 hits 返回，便于 addFoldersAndShow 等需要"涉及到的路径"语义的调用方
+        for (var di = 0; di < dupPaths.length; ++di) {
+            if (hits.indexOf(dupPaths[di]) < 0) hits.push(dupPaths[di])
+        }
+        return hits
+    }
+
+    // ─── 行内「📁 选到与别路相同目录」的确认入口 ──────────────────
+    // 由 MultiGroupRow.folderRequested(folderUrl, apply) 触发：
+    //   · 不重复 → 立即 apply()。
+    //   · 与「其它路」重复 → 弹确认；用户确认后 apply()，取消则保持 row 原状。
+    // 注意：这里"重复"指的是与「其它路」相同；若与本路自身的 folderPath 相同，
+    //       视为同样目录的重新扫描请求 → 也直接 apply（视为刷新）。
+    function _confirmRowFolderPick(laneIdx, folderUrl, apply) {
+        if (typeof apply !== "function") return
+        if (laneIdx < 0 || laneIdx >= _rowsModel.count) { apply(); return }
+        var newPath = ""
+        try { newPath = Fs.urlToLocalFile(folderUrl) } catch (e) { newPath = "" }
+        if (!newPath || newPath.length === 0) { apply(); return }
+
+        var dupOther = false
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            if (i === laneIdx) continue
+            var l = _rowsModel.get(i)
+            if (l && l.folderPath === newPath) { dupOther = true; break }
+        }
+
+        if (!dupOther) { apply(); return }
+
+        // 弹确认：用户确认 → 让 row 自己 apply（写 folderPath/allFiles + 触发 folderImported）
+        _pendingDup = {
+            mode: "row",
+            dupPaths: [ newPath ],
+            dupUrls: [ folderUrl ],
+            _resolved: false,
+            onConfirm: function() { try { apply() } catch (e) { /* ignore */ } },
+            onCancel:  function() { /* 保持 row 原状 */ }
+        }
+        dupConfirmDialog.open()
+    }
+
     // 增加一路（默认 keyword 用 _a / _b / _c …帮助快速配置）
     function addLane() {
         if (_rowsModel.count >= kMaxLanes) return
@@ -615,7 +860,8 @@ ApplicationWindow {
 
     function removeLane(i) {
         if (i < 0 || i >= _rowsModel.count) return
-        if (_rowsModel.count <= 1) return  // 至少保留 1 行视觉占位
+        // 允许删到 0 路：删完后会显示一个大占位卡（点击新增 / 拖入文件夹），
+        // 不再强制保留 1 行；旧版本里的 "if (count <= 1) return" 限制已移除。
         // 删除前记录 folderPath，便于同步从「文件夹历史」中也清除（否则下次打开会又合并回来）
         var lane = _rowsModel.get(i)
         var fp = (lane && lane.folderPath) ? lane.folderPath : ""
@@ -810,8 +1056,11 @@ ApplicationWindow {
     //     即便后续 _rowsModel 被 loadFlatFiles 等覆盖，下次打开 Dialog 也能从文件夹历史
     //     恢复这些路径（onVisibleChanged → _mergeFolderHistoryIntoLanes()）。
     //   · 返回「本次实际新增/已存在的目标路径列表」（用于后续勾选锁定）
-    function addFoldersToHistory(urls) {
+    //   · opts.allowDuplicate=true 时：对已存在 folderPath 也走「新增一路」分支
+    //     （而不是跳过/仅勾选）。供「确认重复导入」流程使用。
+    function addFoldersToHistory(urls, opts) {
         if (!urls || urls.length === 0) return []
+        var allowDup = !!(opts && opts.allowDuplicate)
 
         // 收集已有 folderPath 集合（去重用）
         var existing = {}
@@ -865,9 +1114,12 @@ ApplicationWindow {
                 continue
             }
 
-            // 已在 lanes 中：强制把 selected 置为 true（用户刚拖了一次，意图明确：要使用它），
-            // 其余字段（keyword / currentIndex / currentPath）保留，避免打断当前播放/筛选状态。
-            if (existing[folderPath]) {
+            // 已在 lanes 中：
+            //   · 默认行为：强制把 selected 置为 true（用户刚拖了一次，意图明确：要使用它），
+            //     其余字段（keyword / currentIndex / currentPath）保留，避免打断当前播放/筛选状态。
+            //   · allowDuplicate=true：跳过该分支，继续走下方的「新增一路」逻辑，
+            //     让用户得到一条与已有路同目录的新路（典型场景：刻意做同源对比）。
+            if (existing[folderPath] && !allowDup) {
                 for (var ei = 0; ei < _rowsModel.count; ++ei) {
                     var el = _rowsModel.get(ei)
                     if (el && el.folderPath === folderPath) {
@@ -989,9 +1241,10 @@ ApplicationWindow {
         try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
         _folderHistMerged = true
 
-        // 2) 本次拖入：新增的默认勾选；已存在的会被强制改成勾选（见 addFoldersToHistory 内部）
+        // 2) 本次拖入：新增的默认勾选；已存在的会触发"重复目录"确认
+        //    （让用户决定再开一路还是仅勾选已有）。
         var hits = []
-        try { hits = addFoldersToHistory(urls) || [] } catch (e) { hits = [] }
+        try { hits = addFoldersWithConfirm(urls) || [] } catch (e) { hits = [] }
 
         // 3) 弹出 Dialog
         show()
@@ -1206,6 +1459,70 @@ ApplicationWindow {
         }
     }
 
+    // ─── 全局拖拽承接区（有通路时启用） ───────────────────────────
+    // 设计目标：用户进入 Dialog 后即使已经有若干路，也可以**直接把系统文件夹拖到对话框任意位置**
+    //         （而不必先删空所有路、或先点 ➕ 再点 📁）。
+    // 与 emptyDropArea 关系：
+    //   · 空态时此区禁用（enabled=false），避免和 emptyDropArea 抢事件；
+    //   · 有通路时此区生效，覆盖整个对话框；行内若有自己的 DropArea 会优先（嵌套子 DropArea 优先），
+    //     当前 MultiGroupRow 没有 DropArea，所以拖到任意位置都会落到这里。
+    DropArea {
+        id: globalDropArea
+        anchors.fill: parent
+        z: -1  // 放到内容下层：视觉上完全不影响布局/点击；DropArea 处理拖拽事件不依赖 z
+        enabled: _rowsModel.count > 0
+        onEntered: function(drag) {
+            if (!drag.hasUrls) { drag.accepted = false; return }
+            drag.accept(Qt.CopyAction)
+        }
+        onDropped: function(drop) {
+            if (!drop.hasUrls || drop.urls.length === 0) {
+                drop.accepted = false
+                return
+            }
+            // 复用「批量加路 + 重复目录确认」入口：
+            //   · 文件夹扫描 / file:// → 本地路径；
+            //   · 已存在 lane → 弹「重复目录」确认（再开一路 / 取消）；
+            //   · 写入文件夹历史 + 持久化；
+            //   · 自动跳过到达 kMaxLanes 上限的多余路径。
+            addFoldersWithConfirm(drop.urls)
+            drop.accept(Qt.CopyAction)
+        }
+    }
+
+    // 拖入时的高亮蒙层（仅可视反馈，不接收事件）。
+    // 用 anchors.fill 覆盖整个窗口，containsDrag 触发时画一圈高亮内描边 + 中央提示，
+    // 让用户清晰知道"松手即可新增一路"。
+    Rectangle {
+        id: globalDropHint
+        anchors.fill: parent
+        z: 9999
+        visible: globalDropArea.enabled && globalDropArea.containsDrag
+        color: "#330fa085"  // 半透明高亮叠色
+        border.color: "#0fa085"
+        border.width: 2
+        radius: 0
+        // 不接收任何事件，保证不干扰底下控件
+        // （DropArea / MouseArea / keyboard 全部继续工作）
+        Rectangle {
+            anchors.centerIn: parent
+            width: hintLabel.implicitWidth + 28
+            height: 40
+            radius: 6
+            color: "#1f1f24"
+            border.color: "#0fa085"
+            border.width: 1
+            Label {
+                id: hintLabel
+                anchors.centerIn: parent
+                text: "松开以新增一路（最多 " + kMaxLanes + " 路）"
+                color: "#7fe5cc"
+                font.pixelSize: 13
+                font.bold: true
+            }
+        }
+    }
+
     // ─── 内容布局 ───────────────────────────────────────────────────
     ColumnLayout {
         anchors.fill: parent
@@ -1240,6 +1557,13 @@ ApplicationWindow {
 
             ColumnLayout {
                 width: rowsScroll.availableWidth
+                // 仅在「空态」时把 ColumnLayout 撑满 ScrollView 可见区，
+                // 以便占位卡通过 Layout.fillHeight 铺满剩余空间；
+                // 有通道时使用 implicitHeight，保持原本从顶部依次排列的布局，
+                // 避免行被垂直居中/拉伸。
+                height: _rowsModel.count === 0
+                        ? rowsScroll.availableHeight
+                        : implicitHeight
                 spacing: 8
 
                 Repeater {
@@ -1252,7 +1576,8 @@ ApplicationWindow {
                         folderPath: model.folderPath
                         keyword: model.keyword
                         currentIndex: model.currentIndex
-                        removable: _rowsModel.count > 1
+                        // 任何一路都允许删除（含最后一路）；删到 0 路后会显示空态占位卡。
+                        removable: true
                         // 关键：让"📁 选择文件夹"对话框的起始目录跟随全局上一次导入目录。
                         // 已选过 folderPath 的行内部会优先用自身 folderPath，所以这里的值
                         // 只对"未导入过的新行 / 全新打开"两种情况生效。
@@ -1262,6 +1587,10 @@ ApplicationWindow {
                         // 任意一路成功选完文件夹 → 固化为新的全局上次目录
                         onFolderImported: function(folderUrl) {
                             dlg._saveLastImportFolder(folderUrl)
+                        }
+                        // 用户在该路上「选了」文件夹但还没应用 → 路由到父级做重复确认
+                        onFolderRequested: function(folderUrl, apply) {
+                            dlg._confirmRowFolderPick(index, folderUrl, apply)
                         }
 
                         // 初始化期内（属性绑定→ onCurrentIndexChanged / onSelectedChanged
@@ -1294,11 +1623,98 @@ ApplicationWindow {
                     }
                 }
 
-                // ➕ 新增一行
+                // ─── 空状态占位卡（仅当一路都没有时显示）─────────────────
+                // 设计目标：用户删除完所有路后，给一个清晰、显眼的入口，
+                //   · 整卡可点 → 等价于「➕ 新增一路」（弹出该路自己的文件夹选择对话框）；
+                //   · 支持把系统文件夹直接拖到这里：复用 addFoldersToHistory(urls)，
+                //     一次拖多个文件夹会按 kMaxLanes 上限批量新增。
+                Rectangle {
+                    id: emptyDropCard
+                    visible: _rowsModel.count === 0
+                    Layout.fillWidth: true
+                    // 未选任何路时让占位卡铺满列表区域，视觉上更明显、点击热区更大
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 140
+                    radius: 8
+                    color: emptyDropArea.containsDrag ? "#1f3a33"
+                          : (emptyMouseArea.containsMouse ? "#23232a" : "#1a1a1f")
+                    border.color: emptyDropArea.containsDrag ? "#0fa085" : "#3a3a45"
+                    border.width: 1
+
+                    // 虚线感：用一层略浅的内描边模拟（QML 没有原生 dashed border）
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        color: "transparent"
+                        radius: 6
+                        border.color: emptyDropArea.containsDrag ? "#0fa085" : "#4a4a55"
+                        border.width: 1
+                    }
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: 4
+                        Label {
+                            text: "➕"
+                            color: emptyDropArea.containsDrag ? "#7fe5cc" : "#9ec1ee"
+                            font.pixelSize: 22
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Label {
+                            text: emptyDropArea.containsDrag
+                                  ? "松开以添加文件夹"
+                                  : "点击新增一路 / 拖拽文件夹到这里"
+                            color: "#cfcfd6"
+                            font.pixelSize: 13
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Label {
+                            text: "（支持一次拖入多个文件夹，最多 " + kMaxLanes + " 路）"
+                            color: "#777"
+                            font.pixelSize: 11
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+
+                    MouseArea {
+                        id: emptyMouseArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        // 未选任何路时，点「新增一路」不需要「先增空行再点 📁」两步，
+                        // 直接弹出文件夹选择对话框，选完后复用 addFoldersToHistory 一步到位。
+                        onClicked: firstFolderDlg.open()
+                    }
+
+                    DropArea {
+                        id: emptyDropArea
+                        anchors.fill: parent
+                        // 仅接受包含 url 的拖拽（系统文件/文件夹），过滤掉文本之类。
+                        onEntered: function(drag) {
+                            if (!drag.hasUrls) { drag.accepted = false; return }
+                            drag.accept(Qt.CopyAction)
+                        }
+                        onDropped: function(drop) {
+                            if (!drop.hasUrls || drop.urls.length === 0) {
+                                drop.accepted = false
+                                return
+                            }
+                            // 复用现成的「批量加路」入口：内部会做
+                            //   · 文件夹扫描 / file:// → 本地路径；
+                            //   · 已存在 lane → 弹「重复目录」确认（再开一路 / 取消）；
+                            //   · 写入文件夹历史 + 持久化。
+                            addFoldersWithConfirm(drop.urls)
+                            drop.accept(Qt.CopyAction)
+                        }
+                    }
+                }
+
+                // ➕ 新增一行（已经有路时显示；空态下让位给上面的占位卡）
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 36
                     spacing: 12
+                    visible: _rowsModel.count > 0
                     Button {
                         id: addLaneBtn
                         text: "➕ 新增一路"

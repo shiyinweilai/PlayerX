@@ -8,7 +8,7 @@
   "downloads": {
     "mac-arm64": {
       "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.20-arm64-mac.zip",
-      "sha256": "521879d2226cc89f99aec9292c56ae34d2994e3d0a75c976bd05d01f45a60c4d"
+      "sha256": "8759e27b25ed647d959360096852bf3c6c939a3c1ff983c3293b272fecc21499"
     }
   }
 }
