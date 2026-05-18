@@ -130,8 +130,20 @@ public slots:
     // 删除成功后会发 changed() 信号；UI 据此刷新表格。
     Q_INVOKABLE bool removeByFolders(const QStringList& folderPaths);
 
+    // 按文件夹批量归档：与 removeByFolders 命中规则完全一致，但行会先被**搬出**到
+    //   <AppData>/PlayerX/archive/ratings_<mode>__<yyyyMMdd_HHmmss>.csv
+    // 然后才从主 CSV 删除；表头与主 CSV 一致，方便日后人工合并/审计。
+    // 失败时主 CSV 不会被破坏（先写归档文件，归档文件落盘成功后再回写主 CSV）。
+    // 成功返回 true，并发 changed() 信号；同时通过返回值之外的副作用（CSV 文件）保留数据。
+    // 与 removeByFolders 一样：folderPaths 为空 / off 模式 / 没命中任何行 → 返回 false。
+    Q_INVOKABLE bool archiveByFolders(const QStringList& folderPaths);
+
     // 在系统文件管理器中定位 dataFilePath（macOS Finder / Windows 资源管理器）
     void revealInFolder() const;
+
+    // 在系统文件管理器中打开归档目录（<AppData>/PlayerX/archive/）。
+    // 目录不存在时会自动建立，便于用户即使一次都没归档过也能"看一眼归档目录在哪"。
+    Q_INVOKABLE void revealArchiveFolder() const;
 
     // 平台用户名兑底（当 currentUser 为空时使用）
     QString systemUserName() const;

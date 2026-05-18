@@ -750,6 +750,96 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// 按文件夹批量归档（与 removeByFolders 命中规则一致；命中行先备份到 archive 目录，再从主 CSV 删除）
+//
+// 归档文件路径：<AppData>/PlayerX/archive/ratings_<mode>__<yyyyMMdd_HHmmss>.csv
+//   - 表头与主 CSV 完全一致（updated_at,rater,file_name,file_path,file_size,quick_hash,stars）
+//   - UTF-8 with BOM，便于 Excel 直接打开
+//   - 按时间戳分文件，多次归档不互相覆盖
+//   - 同一秒内重复归档极小概率撞名，则在文件名末尾追加序号（_2 / _3 ...）兜底
+//
+// 时序保证：先写好归档文件，再回写主 CSV。任一步失败都不会破坏主 CSV。
+// ════════════════════════════════════════════════════════════════════════
+
+bool RatingStore::archiveByFolders(const QStringList& folderPaths) {
+    // 与 removeByFolders 同样的入参校验
+    QSet<QString> allow;
+    for (const QString& p : folderPaths) {
+        const QString t = p.trimmed();
+        if (t.isEmpty()) continue;
+        allow.insert(QFileInfo(t).absoluteFilePath());
+    }
+    if (allow.isEmpty()) return false;
+
+    const QString modeNow = currentMode();
+    if (modeNow.isEmpty() || modeNow == QStringLiteral("off")) return false;
+
+    // 命中筛选
+    const QList<QVariantMap> rows = readAll();
+    QList<QVariantMap> kept;
+    QList<QVariantMap> picked;
+    kept.reserve(rows.size());
+    picked.reserve(rows.size());
+    for (const auto& r : rows) {
+        const QString fp = r.value("file_path").toString();
+        if (!fp.isEmpty()) {
+            const QString dir = QFileInfo(fp).absolutePath();
+            if (allow.contains(dir)) { picked.push_back(r); continue; }
+        }
+        kept.push_back(r);
+    }
+    if (picked.isEmpty()) return false;
+
+    // 准备归档目录（必要时建立）
+    const QString archiveDir = QDir(m_baseDir).filePath(QStringLiteral("archive"));
+    if (!QDir().mkpath(archiveDir)) return false;
+
+    // 计算归档文件名（同秒撞名时追加 _N 序号）
+    const QString stamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+    QString archivePath;
+    {
+        const QString base = QStringLiteral("ratings_%1__%2").arg(modeNow, stamp);
+        QString candidate = QDir(archiveDir).filePath(base + ".csv");
+        int suffix = 2;
+        while (QFileInfo::exists(candidate)) {
+            candidate = QDir(archiveDir).filePath(
+                QStringLiteral("%1_%2.csv").arg(base).arg(suffix++));
+        }
+        archivePath = candidate;
+    }
+
+    // 先写归档（先成功，后再删主 CSV，保证失败不破坏数据）
+    {
+        QFile f(archivePath);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+            return false;
+        QTextStream ts(&f);
+        ts.setEncoding(QStringConverter::Utf8);
+        ts.setGenerateByteOrderMark(true);
+        ts << kCsvHeader << "\n";
+        for (const auto& r : picked) {
+            ts << csvEscape(r.value("updated_at").toString()) << ","
+               << csvEscape(r.value("rater").toString())      << ","
+               << csvEscape(r.value("file_name").toString())  << ","
+               << csvEscape(r.value("file_path").toString())  << ","
+               << r.value("file_size").toLongLong()           << ","
+               << csvEscape(r.value("quick_hash").toString()) << ","
+               << r.value("stars").toInt()                    << "\n";
+        }
+        ts.flush();
+        f.close();
+    }
+
+    // 回写主 CSV：失败时尝试删除已生成的归档文件，避免出现“数据双份在两个文件”的歧义
+    if (!writeAll(kept)) {
+        QFile::remove(archivePath);
+        return false;
+    }
+    emit changed();
+    return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // 在系统文件管理器中定位
 // ════════════════════════════════════════════════════════════════════════
 
@@ -770,6 +860,17 @@ void RatingStore::revealInFolder() const {
 #else
     QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
 #endif
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 在系统文件管理器中打开归档目录（archive/）。目录不存在时自动建立，
+// 让用户即使一次都没归档过也能"先看一眼归档目录在哪"。
+// ════════════════════════════════════════════════════════════════════════
+
+void RatingStore::revealArchiveFolder() const {
+    const QString archiveDir = QDir(m_baseDir).filePath(QStringLiteral("archive"));
+    QDir().mkpath(archiveDir);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(archiveDir));
 }
 
 // ════════════════════════════════════════════════════════════════════════

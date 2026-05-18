@@ -1235,6 +1235,31 @@ Window {
                 onClicked: uploadConfigDialog.open()
             }
             PillBtn {
+                // 与"删除勾选"互补：把已勾选文件夹的评分搬到 archive/ 目录下的独立 CSV，
+                // 主表里看不到，但磁盘里仍可查（适合"这一批已交差，本地不再展示"的场景）。
+                // 不是 danger 风格，避免和"删除"按钮视觉撞车。
+                id: archiveSelectedBtn
+                text: {
+                    var _dep = root._checkedFolders
+                    var _dep2 = root._folders
+                    var n = root._checkedFolderCount()
+                    return n > 0
+                            ? qsTr("📦 归档勾选（%1）").arg(n)
+                            : qsTr("📦 归档勾选")
+                }
+                enabled: (root._checkedFolders, root._folders, root._checkedFolderCount() > 0)
+                onClicked: confirmArchiveDialog.open()
+            }
+            PillBtn {
+                // 常驻入口：和"归档勾选"配对，无需先勾选/先归档即可点击。
+                // C++ 侧 revealArchiveFolder() 在目录不存在时会自动建立，所以即使从未归档过，
+                // 用户也能直接打开归档目录确认"东西到底放哪"，避免"必须先归档才能找到入口"的鸡生蛋问题。
+                text: qsTr("📂 归档目录")
+                onClicked: {
+                    if (typeof Rating !== "undefined") Rating.revealArchiveFolder()
+                }
+            }
+            PillBtn {
                 // 行业惯例：批量操作必须显式勾选目标行才能执行（参考 Finder/资源管理器、邮箱客户端）
                 // 这里只删除"已勾选文件夹"下的评分；未勾选时按钮直接禁用，避免误触。
                 id: removeSelectedBtn
@@ -1549,6 +1574,133 @@ Window {
                 actionToast.show(true, qsTr("已删除 %1 个文件夹的评分").arg(picked.length))
             } else {
                 actionToast.show(false, qsTr("删除失败：未命中任何记录"))
+            }
+        }
+    }
+
+    // ── 归档确认对话框（与"删除"对称：搬出而不是销毁，主表里看不到但磁盘还在）────
+    Dialog {
+        id: confirmArchiveDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 420
+        padding: 0
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#2e2e34"
+            border.width: 1
+            radius: 8
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                text: qsTr("归档已勾选文件夹的评分？")
+                color: "#f0f0f3"
+                font.pixelSize: 14
+                font.bold: true
+                elide: Text.ElideRight
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a30"
+            }
+        }
+
+        contentItem: Item {
+            implicitHeight: _archMsg.implicitHeight + 32
+            Text {
+                id: _archMsg
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                text: {
+                    var _dep = root._checkedFolders
+                    var _dep2 = root._folders
+                    var nFolders = root._checkedFolderCount()
+                    var nRecs = 0
+                    for (var i = 0; i < root._folders.length; ++i) {
+                        var d = root._folders[i]
+                        if (root._isFolderChecked(d.key)) nRecs += (d.totalItems || 0)
+                    }
+                    return qsTr("将把已勾选的 %1 个文件夹下的全部评分（共 %2 条）搬到归档目录：\n  %3/archive/ratings_<模式>__<时间戳>.csv\n主表里不再显示，但磁盘里仍可查阅，是否继续？")
+                            .arg(nFolders).arg(nRecs)
+                            // 显示用户数据根目录的父路径（去掉文件名部分），方便用户复制路径
+                            .arg(((typeof Rating !== "undefined") ? Rating.dataFilePath : "")
+                                 .replace(/\/[^\/]*$/, ""))
+                }
+                color: "#cfcfd4"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.35
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a30"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                // 注："打开归档目录"已上提到主弹窗底部按钮区作为常驻入口，
+                // 这里不再重复放置，避免双重入口造成困惑。
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("取消")
+                    onClicked: confirmArchiveDialog.reject()
+                }
+                PillBtn {
+                    text: qsTr("确认归档")
+                    onClicked: confirmArchiveDialog.accept()
+                }
+            }
+        }
+
+        onAccepted: {
+            if (typeof Rating === "undefined") return
+            var picked = root._collectCheckedFolderPaths()
+            if (picked.length === 0) {
+                rejectDialog.openWith(qsTr("无法归档"), qsTr("请先勾选至少 1 个文件夹"))
+                return
+            }
+            var ok = Rating.archiveByFolders(picked)
+            if (ok) {
+                actionToast.show(true, qsTr("已归档 %1 个文件夹的评分").arg(picked.length))
+            } else {
+                actionToast.show(false, qsTr("归档失败：未命中任何记录或写盘失败"))
             }
         }
     }
