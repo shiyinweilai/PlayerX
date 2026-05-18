@@ -168,6 +168,79 @@ button {
 }
 .danger-btn:hover { background: rgba(255,69,58,.10); }
 
+/* ────────── 模式 Tab ────────── */
+.mode-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gap-2);
+    padding: var(--gap-4) var(--gap-6) 0;
+}
+.mode-tab {
+    appearance: none;
+    background: var(--bg-elev-1);
+    border: 1px solid var(--border-soft);
+    color: var(--text-soft);
+    padding: 6px 14px;
+    height: 30px;
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: background .15s, border-color .15s, color .15s;
+}
+.mode-tab:hover { border-color: var(--border); color: var(--text); }
+.mode-tab.is-active {
+    background: rgba(10,132,255,.14);
+    border-color: rgba(10,132,255,.45);
+    color: var(--accent);
+}
+.mode-tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 18px;
+    padding: 0 6px;
+    background: var(--bg-elev-2);
+    color: var(--text-dim);
+    border-radius: 999px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+.mode-tab.is-active .mode-tab-count {
+    background: rgba(10,132,255,.18);
+    color: var(--accent);
+}
+
+/* ────────── 模式胶囊（行内 / 预览均可复用） ────────── */
+.mode-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 11.5px;
+    line-height: 18px;
+    white-space: nowrap;
+}
+.mode-pill.mode-aigc {
+    background: rgba(10,132,255,.12);
+    color: var(--accent);
+    border-color: rgba(10,132,255,.30);
+}
+.mode-pill.mode-subjective {
+    background: rgba(255,159,10,.14);
+    color: #ff9f0a;
+    border-color: rgba(255,159,10,.35);
+}
+.mode-pill.mode-off {
+    background: var(--bg-elev-2);
+    color: var(--text-dim);
+    border-color: var(--border);
+}
+
 /* ────────── KPI 卡片 ────────── */
 .cards {
     display: grid;

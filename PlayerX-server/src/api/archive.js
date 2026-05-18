@@ -35,20 +35,21 @@ function csvCell(v) {
     return s;
 }
 
-// 给 csv 文本按行追加 tag 列；首份保留并扩展表头，其余跳过表头
-function appendTagToCsv(text, tag, withHeader) {
-    const cell = csvCell(tag);
+// 给 csv 文本按行追加 tag, mode 两列；首份保留并扩展表头，其余跳过表头
+function appendTagModeToCsv(text, tag, mode, withHeader) {
+    const tagCell  = csvCell(tag);
+    const modeCell = csvCell(mode);
     const lines = text.split(/\r?\n/);
     const out = [];
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (i === 0) {
             if (!withHeader) continue;
-            out.push(line.length === 0 ? line : line + ',tag');
+            out.push(line.length === 0 ? line : line + ',tag,mode');
             continue;
         }
         if (line.length === 0) { out.push(line); continue; }
-        out.push(line + ',' + cell);
+        out.push(line + ',' + tagCell + ',' + modeCell);
     }
     return out.join('\n');
 }
@@ -489,8 +490,9 @@ function handleMergeArchived(req, res) {
         catch (_) { continue; }
         if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
         const meta = parseName(n) || {};
-        const tag = meta.tag || '';
-        const out = appendTagToCsv(txt, tag, first);
+        const tag  = meta.tag  || '';
+        const mode = meta.mode || 'aigc';
+        const out = appendTagModeToCsv(txt, tag, mode, first);
         if (out.length === 0) continue;
         if (first) {
             res.write('\uFEFF');
@@ -500,7 +502,7 @@ function handleMergeArchived(req, res) {
             res.write('\n' + out);
         }
     }
-    if (first) res.write('\uFEFFupdated_at,rater,folder,file_name,stars,tag\n');
+    if (first) res.write('\uFEFFupdated_at,rater,folder,file_name,stars,tag,mode\n');
     res.end();
 }
 

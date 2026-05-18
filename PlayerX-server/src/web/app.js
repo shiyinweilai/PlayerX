@@ -61,6 +61,8 @@
         sortDesc: true,
         loading: false,     // /api/list 是否正在请求（刷新按钮防抖）
         selected: new Set(),// 已勾选的文件名
+        mode: '',           // 当前选中的模式 Tab（'' = 全部）
+        modes: {},          // 后端返回的各模式计数，用于 Tab 徽章
     };
 
     // ────────── 工具 ──────────
@@ -374,12 +376,24 @@
         state.loading = true;
         refreshBtn.disabled = true;
         try {
-            const r = await api('/api/list');
+            // 带上当前 Tab 的 mode；空串 = 全部。
+            // 后端同时返回 modes 汇总，包含全部模式的计数，以保证 Tab 徽章始终是全量实际值。
+            const url = state.mode
+                ? '/api/list?mode=' + encodeURIComponent(state.mode)
+                : '/api/list';
+            const r = await api(url);
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const j = await r.json();
             state.items = Array.isArray(j.items) ? j.items : [];
+            state.modes = (j.modes && typeof j.modes === 'object') ? j.modes : {};
+            // 切换 Tab 后，不在当前模式下的勾选项丢弃，避免“隐形勾选”脱同。
+            const visible = new Set(state.items.map(it => it.name));
+            for (const n of [...state.selected]) {
+                if (!visible.has(n)) state.selected.delete(n);
+            }
             applyFilterAndSort();
             renderKpi();
+            renderModeTabs();
             setStatus('ok', '已连接');
         } catch (e) {
             setStatus('err', '加载失败');
@@ -430,12 +444,14 @@
             const userHtml = it.user
                 ? escHtml(it.user)
                 : `<span class="tag-pill muted">anon</span>`;
+            const modeHtml = renderModePill(it.mode);
             const checked = state.selected.has(it.name) ? ' checked' : '';
             return `
                 <tr${checked ? ' class="sel"' : ''}>
                     <td class="col-check"><input type="checkbox" class="row-chk" data-name="${escHtml(it.name)}"${checked}></td>
                     <td>${userHtml}</td>
                     <td>${tagHtml}</td>
+                    <td>${modeHtml}</td>
                     <td><span class="fname" title="${escHtml(it.name)}">${escHtml(it.name)}</span></td>
                     <td class="num">${fmtSize(it.size)}</td>
                     <td class="num">${escHtml(fmtTime(it.mtime))}</td>
@@ -450,10 +466,39 @@
         syncSelectionUi();
     }
 
+    // 模式胶囊：不同模式走不同颜色，走不同 CSS 变量。
+    function renderModePill(mode) {
+        const m = (mode || 'aigc').toLowerCase();
+        const labelMap = { aigc: 'AIGC', subjective: '主观', off: '关闭' };
+        const label = labelMap[m] || m;
+        return `<span class="mode-pill mode-${escHtml(m)}" title="评分模式：${escHtml(m)}">${escHtml(label)}</span>`;
+    }
+
+    // 根据 modes 汇总刷新顶部 Tab 徽章。
+    function renderModeTabs() {
+        const tabs = document.querySelectorAll('#modeTabs .mode-tab');
+        if (!tabs.length) return;
+        const counts = state.modes || {};
+        let total = 0;
+        for (const k in counts) total += (+counts[k] || 0);
+        tabs.forEach(t => {
+            const m = t.dataset.mode || '';
+            const span = t.querySelector('.mode-tab-count');
+            if (span) {
+                const v = m === '' ? total : (+counts[m] || 0);
+                span.textContent = v;
+            }
+            const active = (m === state.mode);
+            t.classList.toggle('is-active', active);
+            t.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+    }
+
     function renderKpi() {
         const arr = state.items;
         const users = new Set(arr.map(x => x.user || ''));
-        const tags  = new Set(arr.map(x => `${x.user}__${x.tag}`));
+        // (user, tag, mode) 三元组才是一个独立的评分组，不同模式不能被合并计。
+        const tags  = new Set(arr.map(x => `${x.user}__${x.tag}__${x.mode || 'aigc'}`));
         const total = arr.reduce((s, x) => s + (+x.size || 0), 0);
         kpiCount.textContent = arr.length;
         kpiUsers.textContent = users.size;
@@ -779,10 +824,11 @@
             const tds = header.map((_, i) => {
                 const v = r[i] == null ? '' : String(r[i]);
                 if (numCols.has(i)) {
-                    // stars 用色块直观显示
+                    // stars 用色块直观显示；上限从同一行的 mode 列（若有）推断
                     if (header[i] && header[i].toLowerCase() === 'stars') {
                         const n = parseInt(v, 10);
-                        const lbl = Number.isFinite(n) ? renderStars(n) : escHtml(v);
+                        const max = inferMaxStars(header, r);
+                        const lbl = Number.isFinite(n) ? renderStars(n, max) : escHtml(v);
                         return '<td class="num stars-cell">' + lbl + '</td>';
                     }
                     return '<td class="num">' + escHtml(v) + '</td>';
@@ -801,14 +847,28 @@
             '</div>';
     }
 
-    function renderStars(n) {
-        if (n < 0) n = 0; if (n > 5) n = 5;
+    function renderStars(n, max) {
+        const cap = Number.isFinite(max) && max > 0 ? max : 5;
+        if (n < 0) n = 0; if (n > cap) n = cap;
         const filled = '★'.repeat(n);
-        const empty  = '☆'.repeat(5 - n);
-        return '<span class="stars" title="' + n + ' / 5">' +
+        const empty  = '☆'.repeat(cap - n);
+        return '<span class="stars" title="' + n + ' / ' + cap + '">' +
                '<span class="stars-filled">' + filled + '</span>' +
                '<span class="stars-empty">'  + empty  + '</span>' +
                '</span>';
+    }
+
+    // 从预览表格中推断当前行的最大星级：
+    //   - 优先看同行 mode 列（后端 ／merge 输出都会携带）
+    //   - 取不到则倆馆为 5（AIGC 默认）
+    function inferMaxStars(header, row) {
+        const idx = header.findIndex(h => String(h || '').toLowerCase() === 'mode');
+        if (idx >= 0) {
+            const m = String((row && row[idx]) || '').trim().toLowerCase();
+            if (m === 'subjective') return 3;
+            if (m === 'aigc')       return 5;
+        }
+        return 5;
     }
 
     previewClose.addEventListener('click', closePreview);
@@ -836,7 +896,13 @@
             'playerx_selected.csv',
         );
     });
-    mergeAll.addEventListener('click',    () => downloadFile('/api/merge?all=1', 'playerx_all.csv'));
+    // 合并全部：跟随当前 Tab 限定 mode，避免两个模式被一起合出。
+    mergeAll.addEventListener('click',    () => {
+        const params = new URLSearchParams({ all: '1' });
+        if (state.mode) params.set('mode', state.mode);
+        const fileTag = state.mode ? `_${state.mode}` : '';
+        downloadFile('/api/merge?' + params.toString(), `playerx_all${fileTag}.csv`);
+    });
 
     // ────────── 归档库抽屉 ──────────
     const archiveDrawer        = $('archiveDrawer');
@@ -1184,6 +1250,20 @@
                     `archive_${folder}.csv`,
                 );
             }
+        });
+    }
+
+    // 模式 Tab 切换：点一下重拉列表，能够看到所选模式下的只读记录
+    const modeTabsEl = $('modeTabs');
+    if (modeTabsEl) {
+        modeTabsEl.addEventListener('click', (e) => {
+            const btn = e.target.closest('.mode-tab');
+            if (!btn) return;
+            const m = btn.dataset.mode || '';
+            if (m === state.mode) return;
+            state.mode = m;
+            renderModeTabs();
+            fetchList();
         });
     }
 
