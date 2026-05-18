@@ -1,4 +1,5 @@
 node_modules/
 uploads/
+archives/
 *.log
 .DS_Store
