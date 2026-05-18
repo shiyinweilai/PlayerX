@@ -420,6 +420,9 @@ ApplicationWindow {
         }
         var json = ""
         try { json = JSON.stringify(arr) } catch (e) { json = "" }
+        try { console.log("[MGD] _persistLanes mode=", (Rating ? Rating.currentMode : "?"),
+                          " file=", _cacheFile(),
+                          " json=", json) } catch (e) { /* ignore */ }
 
         // ① cache 文件（主路：用户可见永久固化）
         var okFile = _fileSave(json)
@@ -444,6 +447,8 @@ ApplicationWindow {
     // 尝试恢复上次保存的 lanes；返回是否成功还原了至少 1 行。
     function _restoreLanes() {
         var s = ""
+        try { console.log("[MGD] _restoreLanes BEGIN mode=", (Rating ? Rating.currentMode : "?"),
+                          " cacheFile=", _cacheFile()) } catch (e) {}
 
         // ① 优先从 cache 文件读
         s = _fileLoad() || ""
@@ -514,11 +519,15 @@ ApplicationWindow {
                 } catch (e) { /* ignore */ }
             }
         }
-        if (!s || s.length === 0) return false
+        if (!s || s.length === 0) {
+            try { console.log("[MGD] _restoreLanes EMPTY (no snapshot)") } catch (e) {}
+            return false
+        }
 
         var arr = []
         try { arr = JSON.parse(s) } catch (e) { return false }
         if (!arr || !Array.isArray(arr) || arr.length === 0) return false
+        try { console.log("[MGD] _restoreLanes DATA=", s) } catch (e) {}
 
         _restoring = true
         // 清空现有行（正常首次启动下这里 count == 0）
@@ -1009,6 +1018,39 @@ ApplicationWindow {
                 Button {
                     text: "接着评分"
                     onClicked: {
+                        // 把 _collectResumeInfo 推荐的 idx 写回 row，
+                        // 让 start() 从"上次最后一次评分的下一个"开始播放。
+                        // 仅当推荐 idx 比当前 row.currentIndex 大时才覆盖（不回退）。
+                        try {
+                            var info = resumeChoiceDialog._info || {}
+                            var its = info.items || []
+                            for (var ii = 0; ii < its.length; ++ii) {
+                                var it = its[ii] || {}
+                                var li = (typeof it._laneIndex === "number") ? it._laneIndex : -1
+                                var ri = (typeof it._recommendIdx === "number") ? it._recommendIdx : -1
+                                if (li < 0 || li >= _rowsModel.count) continue
+                                if (ri < 0) continue
+                                var lane = _rowsModel.get(li)
+                                if (!lane) continue
+                                var rt = _laneRuntime[li]
+                                if (!rt || !rt.visibleFiles) continue
+                                if (ri >= rt.visibleFiles.length) continue
+                                if (typeof lane.currentIndex === "number" && lane.currentIndex >= ri) continue
+                                _rowsModel.set(li, {
+                                    selected:    lane.selected,
+                                    folderPath:  lane.folderPath || "",
+                                    keyword:     lane.keyword || "",
+                                    currentPath: rt.visibleFiles[ri],
+                                    currentIndex: ri,
+                                    allCount:    lane.allCount || (rt.allFiles ? rt.allFiles.length : 0),
+                                    visibleCount: lane.visibleCount || rt.visibleFiles.length
+                                })
+                                var rowItem = (typeof rowsRepeater !== "undefined" && rowsRepeater)
+                                              ? rowsRepeater.itemAt(li) : null
+                                if (rowItem && rowItem.currentIndex !== ri) rowItem.currentIndex = ri
+                            }
+                            _persistLanes()
+                        } catch (e) { /* 安全降级：进入 start() */ }
                         resumeChoiceDialog.close()
                         if (start()) dlg.close()
                     }
@@ -1237,11 +1279,20 @@ ApplicationWindow {
     //   不会影响其他模式的进度。
     //
     // _collectResumeInfo() 返回 { hasProgress, items: [{label, idx, total}, ...] }
-    //   · hasProgress：是否至少一路 currentIndex > 0
+    //   · hasProgress：当前模式下是否存在"上次的进度"。判定方式有两条路（任一即可）：
+    //       (a) row.currentIndex > 0 —— 沿用旧逻辑：用户翻过组、navigate 写过盘
+    //       (b) 当前模式 CSV (Rating.ratingFor) 中存在该 lane 任意 visible 文件的评分
+    //           —— 兼容"评了第一个就退出 app"的场景：此时 currentIndex 仍是 0，
+    //              但用户实质已有进度；用 ratingFor 查一下就能识别。
+    //              并把 idx 提升为"最后一个已评分项的下一个"，做最贴近用户预期的"继续评分"。
     //   · items：每路一条，仅含"勾选+有效"的路；用于弹窗罗列展示
     function _collectResumeInfo() {
         var items = []
         var hasProgress = false
+        // 是否能向 RatingStore 查评分
+        var canQueryRating = (typeof Rating !== "undefined" && Rating
+                              && typeof Rating.ratingFor === "function"
+                              && Rating.currentMode !== "off")
         for (var i = 0; i < _rowsModel.count; ++i) {
             var l = _rowsModel.get(i)
             if (!l || !l.selected) continue
@@ -1249,6 +1300,26 @@ ApplicationWindow {
             var total = l.visibleCount || 0
             var idx   = (typeof l.currentIndex === "number" && l.currentIndex >= 0)
                             ? l.currentIndex : 0
+
+            // 通过 RatingStore 探测该 lane 已评分的最大 visible 索引（含 0 = 已取消评分行）
+            // 注意：ratingFor 命中时返回 0..maxStars；未命中返回 -1。
+            // 任一命中即视为"有进度"，并把推荐 idx 提到 lastRated + 1（不超过 total-1）。
+            var lastRated = -1
+            if (canQueryRating) {
+                var rt = _laneRuntime[i]
+                var vis = (rt && rt.visibleFiles) ? rt.visibleFiles : []
+                for (var v = 0; v < vis.length; ++v) {
+                    var got = -1
+                    try { got = Rating.ratingFor(vis[v]) } catch (e) { got = -1 }
+                    if (got >= 0) lastRated = v
+                }
+            }
+            if (lastRated >= 0) {
+                hasProgress = true
+                // 推荐到下一个未评分项；若已评到最后一个，停在最后
+                var nextIdx = Math.min(lastRated + 1, Math.max(0, total - 1))
+                if (nextIdx > idx) idx = nextIdx
+            }
             // 文件名（不带路径）
             var name = ""
             try {
@@ -1277,10 +1348,19 @@ ApplicationWindow {
                 folderLabel: folderLabel,
                 fileName: name,
                 idx: idx,
-                total: total
+                total: total,
+                // 给"接着评分"分支用：把推荐 idx 同步回 row 时需要它
+                _laneIndex: i,
+                _recommendIdx: idx
             })
             if (idx > 0) hasProgress = true
         }
+        // 调试日志：定位"为什么没弹窗"问题。看 Qt 控制台输出即可。
+        try {
+            console.log("[MGD] _collectResumeInfo mode=", (Rating ? Rating.currentMode : "?"),
+                        " items=", JSON.stringify(items),
+                        " hasProgress=", hasProgress)
+        } catch (e) { /* ignore */ }
         return { hasProgress: hasProgress, items: items }
     }
 
@@ -1346,6 +1426,7 @@ ApplicationWindow {
     function _startWithResumeCheck() {
         if (!canStart) return false
         var info = _collectResumeInfo()
+        try { console.log("[MGD] _startWithResumeCheck hasProgress=", info.hasProgress) } catch (e) {}
         if (!info.hasProgress) {
             // 无进度，直接启动
             if (start()) dlg.close()
@@ -1752,6 +1833,8 @@ ApplicationWindow {
         laneSnapshotPaths = [ rt.visibleFiles[pageStart] ]
         laneSnapshotIndexes = [ pageStart ]
         Engine.layoutMode = _layoutModeFor(take)
+        // 切宫格数会改变 currentIndex（按页对齐），同步落盘，避免重启后丢失。
+        _persistLanes()
         return true
     }
 
@@ -1819,6 +1902,11 @@ ApplicationWindow {
             laneSnapshotIndexes = [ pageStart ]
             // 末页不足 N 时降级 layoutMode 兼容显示
             Engine.layoutMode = _layoutModeFor(take)
+            // 进度落盘：写入 cache／存储层，避免 app 重启后丢进度。
+            // （不加这一句时，navigate 仅在内存里改 row.currentIndex，
+            //   重启后 _restoreLanes 拿到的还是旧值，_collectResumeInfo
+            //   会误判 hasProgress=false、不弹续评分对话框。）
+            _persistLanes()
             return true
         }
 
@@ -1855,7 +1943,15 @@ ApplicationWindow {
         }
         var urls = Fs.toFileUrls(paths)
         if (urls.length < 1) return false
-        return Engine.openFiles(urls)
+        var okOpen = Engine.openFiles(urls)
+        if (okOpen) {
+            // 进度落盘：写入 cache／存储层，避免 app 重启后丢进度。
+            // 同 singleLaneMode 分支一样，不加这一句时多组对比下
+            // navigate 后的进度也不会进入持久化，重启后“继续评分？”
+            // 对话框将不会被触发。
+            _persistLanes()
+        }
+        return okOpen
     }
     function nextGroup() { return navigate(1) }
     function prevGroup() { return navigate(-1) }
