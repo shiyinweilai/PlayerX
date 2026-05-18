@@ -3,3 +3,4 @@ uploads/
 archives/
 *.log
 .DS_Store
+package-lock.json
