@@ -37,6 +37,40 @@ ApplicationWindow {
         }
     }
 
+    // ─── 评分模式切换时按新槽位重载 lanes ─────────────────────────
+    // 时序：用户在 Main.qml / 顶部菜单切到「AIGC / 主观 / off」 →
+    //   Rating.currentMode 变化 → 这里被触发。
+    // _persistKey / _persistFileName 是 readonly property，绑定到 Rating.currentMode，
+    // 此时已经指向新模式槽位；旧模式的快照在切换前每次 lane 改动都已 _persistLanes
+    // 落库，无需再补写。
+    // 行为：从新模式槽位读快照覆盖到当前 lanes；若新模式之前没用过（槽位为空），
+    //   保持当前 lanes 不变 —— 这给"刚切到新模式直接复用当前选路"留了空间，但
+    //   一旦发生任何改动，就会以新模式槽位独立记录，互不干扰。
+    Connections {
+        target: (typeof Rating !== "undefined") ? Rating : null
+        ignoreUnknownSignals: true
+        function onCurrentModeChanged() {
+            // 防御：还原期间不要再触发 _restoreLanes（_restoring 在内部已判，
+            // 但模式切换通常发生在用户已交互后，此处一般 _restoring=false）
+            if (_restoring) return
+            try {
+                // 读新槽位；为空则不动当前 lanes
+                var s = _fileLoad() || ""
+                if (!s || s.length === 0) s = _lsLoad(_persistKey) || ""
+                if (!s || s.length === 0) {
+                    try {
+                        if (Rating && typeof Rating.loadString === "function") {
+                            s = Rating.loadString(_persistKey, "") || ""
+                        }
+                    } catch (e) { s = "" }
+                }
+                if (s && s.length > 0) {
+                    _restoreLanes()  // 走完整还原流程（含视图刷新）
+                }
+            } catch (e) { /* ignore */ }
+        }
+    }
+
     // ─── 持久化：记住上次配置的 lanes（文件夹 / 过滤关键字 / 勾选 / 当前索引）───
     // 设计要点：
     //   · 仅存"轻量状态"（文件夹路径、关键字、勾选、当前索引）——不存 allFiles/visibleFiles
@@ -55,8 +89,46 @@ ApplicationWindow {
     //   ③ Rating.saveString → QSettings ini（与评分人/上传配置共用一份）
     //   写入：①②③ 同时写。读取：① → ② → ③ 顺序兜底。
     //   任何一路出问题都不影响主流程。
-    readonly property string _persistKey: "multiGroup/lanesJson"
-    readonly property string _persistFileName: "multi_group_lanes.json"
+    //
+    // ── 按「评分模式」分桶 ────────────────────────────────────────
+    //   背景：同一个文件夹在 AIGC / 主观 / off 三种模式下可能播放进度不同
+    //   （比如 AIGC 评到第 4 个，主观还没开始评）。如果共用一份 lanes 快照，
+    //   切模式后会把上一种模式的 currentIndex 串过来，造成"接错"。
+    //   做法：把当前模式作为命名空间拼进 key/文件名里：
+    //      key      → "multiGroup/lanesJson/<mode>"
+    //      filename → "multi_group_lanes_<mode>.json"
+    //   其中 <mode> ∈ { off, aigc, subjective }（未知值兜底为 off）。
+    //   兼容旧数据：首次进入时若发现"旧的 multi_group_lanes.json / multiGroup/lanesJson"
+    //   存在但当前模式槽位为空，则把它整体迁到当前模式槽位（一次性）。
+    function _modeSlug() {
+        try {
+            if (typeof Rating === "undefined" || !Rating) return "off"
+            var m = Rating.currentMode || "off"
+            if (m === "aigc" || m === "subjective" || m === "off") return m
+            return "off"
+        } catch (e) { return "off" }
+    }
+    // 当前模式的人类可读标签，用于弹窗"作用域提示"
+    function _modeLabel() {
+        var m = _modeSlug()
+        if (m === "aigc")       return "AIGC 评分"
+        if (m === "subjective") return "传统主观评分"
+        return "未启用评分"
+    }
+    // 旧版本用的固定 key / 文件名：仅用于一次性迁移，迁完即删
+    readonly property string _legacyPersistKey:      "multiGroup/lanesJson"
+    readonly property string _legacyPersistFileName: "multi_group_lanes.json"
+    // 当前模式对应的 key / 文件名（绑定到 Rating.currentMode，模式切换时自动失效）
+    readonly property string _persistKey: {
+        var m = (typeof Rating !== "undefined" && Rating) ? (Rating.currentMode || "off") : "off"
+        if (m !== "aigc" && m !== "subjective") m = "off"
+        return "multiGroup/lanesJson/" + m
+    }
+    readonly property string _persistFileName: {
+        var m = (typeof Rating !== "undefined" && Rating) ? (Rating.currentMode || "off") : "off"
+        if (m !== "aigc" && m !== "subjective") m = "off"
+        return "multi_group_lanes_" + m + ".json"
+    }
 
     // ─── 独立的「文件夹历史」持久化 ──────────────────────────────────
     // 设计动机：lanes 持久化会被 loadFlatFiles（添加文件场景）等覆盖式重置，
@@ -138,18 +210,28 @@ ApplicationWindow {
     // 避免 onVisibleChanged 在同一次打开中重复合并
     property bool _folderHistMerged: false
 
-    // ── 主路：cache 文件路径（懒计算 + 缓存） ──────────────────────
-    property string _cacheFilePath: ""
+    // ── 主路：cache 文件路径 ──────────────────────────────────────
+    // 注意：_persistFileName 跟随 Rating.currentMode 变化，因此**不能缓存**结果，
+    // 否则模式切换后还在写入旧模式的文件。每次调用都现拼。
     function _cacheFile() {
-        if (_cacheFilePath && _cacheFilePath.length > 0) return _cacheFilePath
         try {
             if (typeof Fs !== "undefined" && Fs
                 && typeof Fs.appCacheDir === "function") {
                 var dir = Fs.appCacheDir() || ""
                 if (dir.length > 0) {
-                    _cacheFilePath = dir + "/" + _persistFileName
-                    return _cacheFilePath
+                    return dir + "/" + _persistFileName
                 }
+            }
+        } catch (e) { /* ignore */ }
+        return ""
+    }
+    // 旧版本固定文件名的路径——仅用于一次性迁移读取
+    function _legacyCacheFile() {
+        try {
+            if (typeof Fs !== "undefined" && Fs
+                && typeof Fs.appCacheDir === "function") {
+                var dir = Fs.appCacheDir() || ""
+                if (dir.length > 0) return dir + "/" + _legacyPersistFileName
             }
         } catch (e) { /* ignore */ }
         return ""
@@ -378,6 +460,59 @@ ApplicationWindow {
                     s = Rating.loadString(_persistKey, "") || ""
                 }
             } catch (e) { s = "" }
+        }
+        // ④ 兼容旧版本：当前模式无快照 → 读旧固定 key/文件名作为初始值，
+        //    并迁移到当前模式槽位 + 立即清旧位，避免下次切到其它模式时
+        //    被同一份旧数据污染（关键：旧数据只能落到"首次切到的模式"，
+        //    其它模式仍以"空快照 → 默认 2 路"作为起点）。
+        if (!s || s.length === 0) {
+            var legacy = ""
+            // legacy ① 旧 cache 文件
+            try {
+                var lp = _legacyCacheFile()
+                if (lp && lp.length > 0 && typeof Fs.readTextFile === "function") {
+                    legacy = Fs.readTextFile(lp) || ""
+                }
+            } catch (e) { legacy = "" }
+            // legacy ② 旧 LocalStorage key
+            if (!legacy || legacy.length === 0) {
+                legacy = _lsLoad(_legacyPersistKey) || ""
+            }
+            // legacy ③ 旧 QSettings key
+            if (!legacy || legacy.length === 0) {
+                try {
+                    if (typeof Rating !== "undefined" && Rating
+                        && typeof Rating.loadString === "function") {
+                        legacy = Rating.loadString(_legacyPersistKey, "") || ""
+                    }
+                } catch (e) { legacy = "" }
+            }
+            if (legacy && legacy.length > 0) {
+                s = legacy
+                // 把旧数据"复制"到当前模式槽位
+                _fileSave(s)
+                _lsSave(_persistKey, s)
+                try {
+                    if (typeof Rating !== "undefined" && Rating
+                        && typeof Rating.saveString === "function") {
+                        Rating.saveString(_persistKey, s)
+                    }
+                } catch (e) { /* ignore */ }
+                // 清旧位：避免下次进入"其它模式"时重复迁移
+                try {
+                    var lp2 = _legacyCacheFile()
+                    if (lp2 && lp2.length > 0 && typeof Fs.writeTextFile === "function") {
+                        Fs.writeTextFile(lp2, "")
+                    }
+                } catch (e) { /* ignore */ }
+                _lsSave(_legacyPersistKey, "")
+                try {
+                    if (typeof Rating !== "undefined" && Rating
+                        && typeof Rating.saveString === "function") {
+                        Rating.saveString(_legacyPersistKey, "")
+                    }
+                } catch (e) { /* ignore */ }
+            }
         }
         if (!s || s.length === 0) return false
 
@@ -710,6 +845,163 @@ ApplicationWindow {
         }
     }
 
+    // ─── 「接着评分 / 重置进度」选择弹窗 ──────────────────────────
+    // 触发：启动按钮（_startWithResumeCheck）检测到当前模式有进度时弹出。
+    // 作用域提示：标题/副标题强调"仅作用于当前模式（如 AIGC 评分）"，避免误以为
+    //   重置会清掉其它模式的进度。
+    // 行为：
+    //   · 接着评分：直接调 start() 然后关 dlg。
+    //   · 重置进度：把"勾选+有效"路的 currentIndex 全部归零，再 start() + 关 dlg。
+    //                 重置只写到当前模式槽位（_persistKey 已绑定 Rating.currentMode）。
+    Dialog {
+        id: resumeChoiceDialog
+        modal: true
+        anchors.centerIn: parent
+        title: "继续评分？"
+        standardButtons: Dialog.NoButton
+        property var _info: null   // _collectResumeInfo 的返回值
+        background: Rectangle {
+            color: "#1f1f24"
+            border.color: "#3a3a45"
+            border.width: 1
+            radius: 6
+        }
+        contentItem: ColumnLayout {
+            spacing: 10
+            // 作用域提示
+            Label {
+                Layout.fillWidth: true
+                Layout.maximumWidth: 520
+                text: "当前模式：" + _modeLabel()
+                color: "#0fa085"
+                font.pixelSize: 13
+                font.bold: true
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.maximumWidth: 520
+                wrapMode: Text.WordWrap
+                color: "#bdbdc4"
+                font.pixelSize: 12
+                text: "检测到此模式上次的播放进度。是否接着上次的位置继续？\n注：「重置进度」会清空 " + _modeLabel() + " 模式下\"参与启动的这些文件夹\"的评分记录，进度自然回到第 1 个；不会影响其它评分模式、其它文件夹，也不会影响\"归档\"中的数据。"
+            }
+            // 进度明细：每路一行
+            Frame {
+                Layout.fillWidth: true
+                Layout.maximumWidth: 520
+                background: Rectangle {
+                    color: "#15151a"
+                    border.color: "#2c2c33"
+                    border.width: 1
+                    radius: 4
+                }
+                ColumnLayout {
+                    spacing: 4
+                    width: parent.width
+                    Repeater {
+                        model: resumeChoiceDialog._info ? (resumeChoiceDialog._info.items || []) : []
+                        delegate: RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Label {
+                                Layout.fillWidth: true
+                                elide: Text.ElideMiddle
+                                color: "#e8e8ec"
+                                font.pixelSize: 12
+                                text: {
+                                    var folder = (modelData.folderLabel && modelData.folderLabel.length > 0)
+                                                    ? modelData.folderLabel : "（无文件夹）"
+                                    return folder + " · " + (modelData.fileName || "—")
+                                }
+                            }
+                            Label {
+                                color: modelData.idx > 0 ? "#0fa085" : "#888"
+                                font.pixelSize: 12
+                                font.bold: modelData.idx > 0
+                                text: (modelData.idx + 1) + " / " + (modelData.total || 0)
+                            }
+                        }
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "取消"
+                    onClicked: resumeChoiceDialog.close()
+                    background: Rectangle {
+                        color: parent.down ? "#3a3a45"
+                              : parent.hovered ? "#2a2a32"
+                                              : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#e8e8ec"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 28
+                    implicitWidth: 70
+                }
+                Button {
+                    text: "重置进度"
+                    onClicked: {
+                        _resetSelectedLanesProgress()
+                        resumeChoiceDialog.close()
+                        if (start()) dlg.close()
+                    }
+                    background: Rectangle {
+                        color: parent.down ? "#a04040"
+                              : parent.hovered ? "#bf4848"
+                                              : "#8a3030"
+                        border.color: "#bf4848"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 28
+                    implicitWidth: 90
+                }
+                Button {
+                    text: "接着评分"
+                    onClicked: {
+                        resumeChoiceDialog.close()
+                        if (start()) dlg.close()
+                    }
+                    background: Rectangle {
+                        color: parent.down ? "#0d8b73"
+                              : parent.hovered ? "#119c80"
+                                              : "#0fa085"
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 28
+                    implicitWidth: 90
+                }
+            }
+        }
+    }
+
     // 待决议的重复确认上下文（同一时刻仅一份）。
     // 字段：
     //   · mode: "batch" | "row"
@@ -902,6 +1194,133 @@ ApplicationWindow {
     //   · 勾选 1 路  → 单视频浏览模式（只打开 currentPath 这一个），active=true，
     //                  「上一组/下一组」在该路 visibleFiles 内循环切换
     //   · 勾选 >=2 路 → 多组对比（每路 currentPath 组 url 列表），active=true
+
+    // ─── 进度续看：「接着评分 / 重置」交互辅助 ───────────────────
+    // 设计动机：
+    //   每个评分模式（aigc / subjective / off）独立记录每路 currentIndex。
+    //   切到某模式 + 选好文件夹后，点「启动」时如果检测到当前模式的
+    //   选中路里有任何 currentIndex > 0 的进度，弹出选择：
+    //     · 接着评分 → 保留当前 currentIndex 直接 start()
+    //     · 重置进度 → 把所有"勾选+有效"路的 currentIndex 重置为 0，再 start()
+    //   重置仅作用于当前模式槽位（_persistKey/_persistFileName 已按模式派生），
+    //   不会影响其他模式的进度。
+    //
+    // _collectResumeInfo() 返回 { hasProgress, items: [{label, idx, total}, ...] }
+    //   · hasProgress：是否至少一路 currentIndex > 0
+    //   · items：每路一条，仅含"勾选+有效"的路；用于弹窗罗列展示
+    function _collectResumeInfo() {
+        var items = []
+        var hasProgress = false
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var l = _rowsModel.get(i)
+            if (!l || !l.selected) continue
+            if (!l.currentPath || l.currentPath.length === 0) continue
+            var total = l.visibleCount || 0
+            var idx   = (typeof l.currentIndex === "number" && l.currentIndex >= 0)
+                            ? l.currentIndex : 0
+            // 文件名（不带路径）
+            var name = ""
+            try {
+                var p = l.currentPath
+                var k = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"))
+                name = (k >= 0) ? p.substring(k + 1) : p
+            } catch (e) { name = "" }
+            // 路径标签：取文件夹尾部目录名 + 关键字（如有）
+            var folderLabel = ""
+            try {
+                var fp = l.folderPath || ""
+                if (fp.length > 0) {
+                    var fk = Math.max(fp.lastIndexOf("/"), fp.lastIndexOf("\\"))
+                    folderLabel = (fk >= 0) ? fp.substring(fk + 1) : fp
+                }
+            } catch (e) { folderLabel = "" }
+            if (l.keyword && l.keyword.length > 0) {
+                folderLabel = folderLabel + "（" + l.keyword + "）"
+            }
+            items.push({
+                folderLabel: folderLabel,
+                fileName: name,
+                idx: idx,
+                total: total
+            })
+            if (idx > 0) hasProgress = true
+        }
+        return { hasProgress: hasProgress, items: items }
+    }
+
+    // 重置当前模式下「参与启动」的这些文件夹的评分进度。
+    //
+    // 行为（新语义）：
+    //   1) 调 Rating.removeByFolders(folderPaths) —— 在当前模式的 CSV 中
+    //      物理删除这些文件夹下所有视频的评分记录（不影响其它模式 CSV，
+    //      也不影响"归档"目录里的数据，归档存放路径与主 CSV 隔离）；
+    //   2) 把这些路的 row.currentIndex / model.currentIndex 归零，
+    //      currentPath 置为 visibleFiles[0]，并写持久化（让 _restoreLanes
+    //      下次也能从 0 开始）；
+    //   3) 进度信息不再依赖"上次播放索引"——评分记录都没了，
+    //      自然就从第 1 个开始。
+    //
+    // 仅作用于"勾选 + 有效（folderPath 非空 / visibleFiles 非空）"的路；
+    // 未勾选/未参与启动的历史路保持不变。
+    function _resetSelectedLanesProgress() {
+        // ① 先收集要清空的文件夹列表（仅勾选 + 有 folderPath 的路）
+        var folders = []
+        for (var j = 0; j < _rowsModel.count; ++j) {
+            var lj = _rowsModel.get(j)
+            if (!lj || !lj.selected) continue
+            if (!lj.folderPath || lj.folderPath.length === 0) continue
+            folders.push(lj.folderPath)
+        }
+        // ② 调 RatingStore 物理删除当前模式下这些文件夹的评分记录
+        //    Rating 单例 + removeByFolders 在 RatingsDialog 中已是稳定接口；
+        //    返回值仅用于日志，不影响后续进度归零（即使没有任何记录命中也继续走）。
+        if (folders.length > 0 && typeof Rating !== "undefined"
+                && typeof Rating.removeByFolders === "function") {
+            try { Rating.removeByFolders(folders) } catch (e) { /* 安全降级 */ }
+        }
+        // ③ 把每条勾选路的进度归零（row + model 双写，保证 row 内部 property 也立即生效）
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var l = _rowsModel.get(i)
+            if (!l || !l.selected) continue
+            var rt = _laneRuntime[i]
+            if (!rt || !rt.visibleFiles || rt.visibleFiles.length === 0) continue
+            var ri = (typeof rowsRepeater !== "undefined" && rowsRepeater)
+                        ? rowsRepeater.itemAt(i) : null
+            // 直接写 model（保底，避免 row.currentIndex 已是 0 时 onCurrentIndexChanged 不触发）
+            var firstPath = rt.visibleFiles[0] || ""
+            _rowsModel.set(i, {
+                selected:    l.selected,
+                folderPath:  l.folderPath || "",
+                keyword:     l.keyword || "",
+                currentPath: firstPath,
+                currentIndex: 0,
+                allCount:    l.allCount || (rt.allFiles ? rt.allFiles.length : 0),
+                visibleCount: l.visibleCount || rt.visibleFiles.length
+            })
+            // 强制把 row 内部 currentIndex 也归零（绕开 binding 失效的极端场景）
+            if (ri && ri.currentIndex !== 0) ri.currentIndex = 0
+        }
+        _bumpState()
+        _persistLanes()
+    }
+    // 启动按钮入口：先检查进度，再决定是否弹"接着 / 重置"
+    // 返回 true → 已直接启动；false → 已弹窗（启动延后到用户选择）
+    // 调用方：启动按钮 onClicked。dlg.close() 由弹窗回调里负责。
+    property bool _startedFromResumeDialog: false
+    function _startWithResumeCheck() {
+        if (!canStart) return false
+        var info = _collectResumeInfo()
+        if (!info.hasProgress) {
+            // 无进度，直接启动
+            if (start()) dlg.close()
+            return true
+        }
+        // 有进度 → 弹窗
+        resumeChoiceDialog._info = info
+        resumeChoiceDialog.open()
+        return false
+    }
+
     function start() {
         if (!canStart) return false
 
@@ -1583,6 +2002,7 @@ ApplicationWindow {
                 spacing: 8
 
                 Repeater {
+                    id: rowsRepeater
                     model: _rowsModel
                     delegate: MultiGroupRow {
                         id: rowItem
@@ -1865,7 +2285,9 @@ ApplicationWindow {
                 }
                 enabled: canStart
                 onClicked: {
-                    if (start()) dlg.close()
+                    // 先走「接着评分 / 重置」检查；无进度则直接启动并关 dlg。
+                    // 有进度时弹窗，弹窗按钮内部已自行处理 start() + dlg.close()。
+                    _startWithResumeCheck()
                 }
                 background: Rectangle {
                     color: !startBtn.enabled ? "#1a1a1d"

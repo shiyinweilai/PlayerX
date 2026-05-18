@@ -53,6 +53,27 @@ static const ModeDef* findMode(const QString& id) {
     }
     return nullptr;
 }
+
+// 把 "文件夹路径" 规整成与 QFileInfo(file_path).absolutePath() 同形态的键，
+// 用于 buildExportCsvBytes / removeByFolders / archiveByFolders 三处的 set 命中。
+//
+// 规整内容：
+//   1) trim；
+//   2) 去掉末尾的 '/' 或 '\\'（FolderDialog 选出的路径常带末尾斜杠，会让
+//      QFileInfo("/x/y/").absoluteFilePath() 返回 "/x/y/" 与目录侧的
+//      "/x/y" 不匹配，是这次重置进度未生效的真正原因）；
+//   3) 走 QFileInfo::absoluteFilePath() 统一到绝对形态；
+//   4) 再用 QDir::cleanPath 折叠 "//"、"."、".."。
+// 仅针对 "目录路径"，不要对文件路径用。
+static QString normalizeFolderForMatch(const QString& raw) {
+    QString t = raw.trimmed();
+    while (t.size() > 1
+           && (t.endsWith(QLatin1Char('/')) || t.endsWith(QLatin1Char('\\')))) {
+        t.chop(1);
+    }
+    if (t.isEmpty()) return QString();
+    return QDir::cleanPath(QFileInfo(t).absoluteFilePath());
+}
 }  // namespace
 
 // ════════════════════════════════════════════════════════════════════════
@@ -348,9 +369,9 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
     const bool filter = !folderPaths.isEmpty();
     if (filter) {
         for (const QString& p : folderPaths) {
-            const QString t = p.trimmed();
-            if (t.isEmpty()) continue;
-            allow.insert(QFileInfo(t).absoluteFilePath());
+            const QString k = normalizeFolderForMatch(p);
+            if (k.isEmpty()) continue;
+            allow.insert(k);
         }
     }
 
@@ -382,7 +403,7 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
         if (filter) {
             // 只看文件所在目录（与 QML 端 _rebuildGroups 的"按目录分组"一致）。
             if (fp.isEmpty()) continue;
-            const QString dir = QFileInfo(fp).absolutePath();
+            const QString dir = QDir::cleanPath(QFileInfo(fp).absolutePath());
             if (!allow.contains(dir)) continue;
         }
         const QString rawTs = r.value("updated_at").toString();
@@ -724,9 +745,9 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths) {
     // 空白名单视为非法（避免被误用为"全删"——那种语义请走 clearAll）
     QSet<QString> allow;
     for (const QString& p : folderPaths) {
-        const QString t = p.trimmed();
-        if (t.isEmpty()) continue;
-        allow.insert(QFileInfo(t).absoluteFilePath());
+        const QString k = normalizeFolderForMatch(p);
+        if (k.isEmpty()) continue;
+        allow.insert(k);
     }
     if (allow.isEmpty()) return false;
 
@@ -737,7 +758,7 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths) {
     for (const auto& r : rows) {
         const QString fp = r.value("file_path").toString();
         if (!fp.isEmpty()) {
-            const QString dir = QFileInfo(fp).absolutePath();
+            const QString dir = QDir::cleanPath(QFileInfo(fp).absolutePath());
             if (allow.contains(dir)) { ++removed; continue; }   // 命中 → 删
         }
         kept.push_back(r);
@@ -873,9 +894,9 @@ bool RatingStore::archiveByFolders(const QStringList& folderPaths,
     // 与 removeByFolders 同样的入参校验
     QSet<QString> allow;
     for (const QString& p : folderPaths) {
-        const QString t = p.trimmed();
-        if (t.isEmpty()) continue;
-        allow.insert(QFileInfo(t).absoluteFilePath());
+        const QString k = normalizeFolderForMatch(p);
+        if (k.isEmpty()) continue;
+        allow.insert(k);
     }
     if (allow.isEmpty()) return false;
 
@@ -891,7 +912,7 @@ bool RatingStore::archiveByFolders(const QStringList& folderPaths,
     for (const auto& r : rows) {
         const QString fp = r.value("file_path").toString();
         if (!fp.isEmpty()) {
-            const QString dir = QFileInfo(fp).absolutePath();
+            const QString dir = QDir::cleanPath(QFileInfo(fp).absolutePath());
             if (allow.contains(dir)) { picked.push_back(r); continue; }
         }
         kept.push_back(r);
