@@ -1533,7 +1533,10 @@ ApplicationWindow {
     // 切组时归零偏移
     Connections {
         target: Engine
-        function onFilesChanged() { root._refImgOffset = 0 }
+        function onFilesChanged() {
+            root._refImgOffset = 0
+            root._refTextOffset = 0
+        }
     }
 
     // ─── 参考文本（CSV）─────────────────────────────────────────────
@@ -1541,11 +1544,15 @@ ApplicationWindow {
     //   refTextData : { image, zh, en, raw, row, total }
     //   refTextLang : "zh" / "en"，UI 偏好（持久化在 Settings 里，session 内共享）
     property string refTextLang: "zh"
+    // 文本端"手动浏览"偏移：与参考图 _refImgOffset 一一对应。
+    //   ◀ ▶ 在自动同步行的基础上 ±1（C++ 端做边界裁剪）；
+    //   切换对比组（onFilesChanged）时归零，回到自动同步状态。
+    property int _refTextOffset: 0
     readonly property var refTextData: {
         _refTick;
         if (typeof Reference === "undefined") return ({})
         if (root.refCurrentVideo.length === 0) return ({})
-        return Reference.referenceTextForVideo(root.refCurrentVideo) || ({})
+        return Reference.referenceTextForVideoOffset(root.refCurrentVideo, root._refTextOffset) || ({})
     }
     readonly property bool refTextHasCurrent: {
         var d = root.refTextData
@@ -1564,7 +1571,23 @@ ApplicationWindow {
         _refTick;
         if (typeof Reference === "undefined") return ""
         if (root.refCurrentVideo.length === 0) return ""
-        return Reference.textProgressForVideo(root.refCurrentVideo)
+        return Reference.textProgressForVideoOffset(root.refCurrentVideo, root._refTextOffset)
+    }
+    // csv 模式下文本总行数（用于 ◀ ▶ 边界判断）
+    readonly property int refTextRowCount: {
+        _refTick;
+        if (typeof Reference === "undefined") return 0
+        if (root.refCurrentVideo.length === 0) return 0
+        return Reference.textRowCountForVideo(root.refCurrentVideo)
+    }
+    // 当前展示行号（0-based）：解析 refTextProgress 里的 "N / M"，无则返回 -1
+    readonly property int refTextCurrentRow: {
+        var t = root.refTextProgress
+        if (!t || t.length === 0) return -1
+        var slash = t.indexOf("/")
+        if (slash < 0) return -1
+        var n = parseInt(t.substring(0, slash).trim(), 10)
+        return isNaN(n) ? -1 : (n - 1)
     }
     // 当前展示的纯文本：按 refTextLang 优先，失败回退另一语言
     readonly property string refTextDisplay: {
@@ -3271,6 +3294,115 @@ ApplicationWindow {
                         }
                     }
                     drop.accepted = false
+                }
+            }
+
+            // ◀ ▶ 浮层切换按钮（仅 csv 模式 / 总行数>1 时可见）
+            //   ◀：在自动行号上 -1（夹紧到 0）
+            //   ▶：在自动行号上 +1（夹紧到 M-1）
+            //   悬浮在文本框右下角，不占按钮条；点击时文本自动重新加载。
+            //   样式与图片端 ◀ ▶ 完全对齐。
+            Row {
+                id: refTextNavBar
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 6
+                spacing: 4
+                visible: root.refTextKind === "csv" && root.refTextRowCount > 1
+
+                // ── 上一行 ───────────────────────────────────────
+                Rectangle {
+                    id: refTextPrevBtn
+                    width: 28; height: 24
+                    radius: 3
+                    color: textPrevMA.pressed ? "#3a3a45"
+                          : textPrevMA.containsMouse ? "#2a2a32"
+                          : "#1a1a1da0"   // 半透明深底，避免遮挡文字
+                    border.color: refTextPrevBtn.enabled ? "#5a5a65" : "#2a2a32"
+                    border.width: 1
+                    property bool enabled: root.refTextCurrentRow > 0
+                    Text {
+                        anchors.centerIn: parent
+                        text: "◀"
+                        font.pixelSize: 12
+                        color: refTextPrevBtn.enabled ? "#e8e8ec" : "#555"
+                    }
+                    MouseArea {
+                        id: textPrevMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: refTextPrevBtn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: {
+                            if (!refTextPrevBtn.enabled) return
+                            root._refTextOffset -= 1
+                        }
+                    }
+                    ToolTip.visible: textPrevMA.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "上一行参考文本（手动浏览）"
+                }
+
+                // ── 下一行 ───────────────────────────────────────
+                Rectangle {
+                    id: refTextNextBtn
+                    width: 28; height: 24
+                    radius: 3
+                    color: textNextMA.pressed ? "#3a3a45"
+                          : textNextMA.containsMouse ? "#2a2a32"
+                          : "#1a1a1da0"
+                    border.color: refTextNextBtn.enabled ? "#5a5a65" : "#2a2a32"
+                    border.width: 1
+                    property bool enabled: root.refTextRowCount > 0
+                                            && root.refTextCurrentRow >= 0
+                                            && root.refTextCurrentRow < root.refTextRowCount - 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "▶"
+                        font.pixelSize: 12
+                        color: refTextNextBtn.enabled ? "#e8e8ec" : "#555"
+                    }
+                    MouseArea {
+                        id: textNextMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: refTextNextBtn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: {
+                            if (!refTextNextBtn.enabled) return
+                            root._refTextOffset += 1
+                        }
+                    }
+                    ToolTip.visible: textNextMA.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "下一行参考文本（手动浏览）"
+                }
+
+                // ── 复位按钮（仅 offset!=0 时显示，让用户回到"自动同步"状态）─────
+                Rectangle {
+                    id: refTextResetBtn
+                    width: 28; height: 24
+                    radius: 3
+                    visible: root._refTextOffset !== 0
+                    color: textResetMA.pressed ? "#3a3a45"
+                          : textResetMA.containsMouse ? "#2a2a32"
+                          : "#1a1a1da0"
+                    border.color: "#7fe5cc"
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "⟳"
+                        font.pixelSize: 13
+                        color: "#7fe5cc"
+                    }
+                    MouseArea {
+                        id: textResetMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root._refTextOffset = 0
+                    }
+                    ToolTip.visible: textResetMA.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "回到自动同步行号"
                 }
             }
         }

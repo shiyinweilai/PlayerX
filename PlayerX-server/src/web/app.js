@@ -865,7 +865,7 @@
         const idx = header.findIndex(h => String(h || '').toLowerCase() === 'mode');
         if (idx >= 0) {
             const m = String((row && row[idx]) || '').trim().toLowerCase();
-            if (m === 'subjective') return 3;
+            if (m === 'subjective') return 2;
             if (m === 'aigc')       return 5;
         }
         return 5;

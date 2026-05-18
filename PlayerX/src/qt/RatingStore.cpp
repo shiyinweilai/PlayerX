@@ -42,7 +42,7 @@ constexpr const char* kSettingsUploadTagKey = "rating/uploadTag";
 struct ModeDef { const char* id; const char* label; int maxStars; };
 static const ModeDef kModeTable[] = {
     {"aigc",       "主观评分",     5},
-    {"subjective", "质量比较", 3},
+    {"subjective", "质量比较", 2},
 };
 static constexpr int kModeCount = sizeof(kModeTable) / sizeof(kModeTable[0]);
 

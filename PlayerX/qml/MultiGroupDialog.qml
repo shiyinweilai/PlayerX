@@ -2704,7 +2704,7 @@ ApplicationWindow {
                                     }
 
                                     // 星星：点击即评分；评分后驻留显示，便于回看分数。
-                                    // 颗数随当前评分模式 maxStars（AIGC=5 / 主观=3）动态变化。
+                    // 颗数随当前评分模式 maxStars（AIGC=5 / 主观=2）动态变化。
                                     Row {
                                         spacing: 2
                                         Repeater {

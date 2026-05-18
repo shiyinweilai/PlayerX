@@ -592,6 +592,13 @@ QString ReferenceStore::textPathOf(const QString& folderPath) const {
 }
 
 QVariantMap ReferenceStore::referenceTextForVideo(const QString& videoPath) const {
+    return referenceTextForVideoOffset(videoPath, 0);
+}
+
+// ── 偏移版 ───────────────────────────────────────────────────────────────
+// 在"自动索引"基础上 +offset 取行；仅 csv 模式生效。
+// 越界自动夹紧到 [0, M-1]；未绑定 / 无行 → 返回空 map。
+QVariantMap ReferenceStore::referenceTextForVideoOffset(const QString& videoPath, int offset) const {
     QVariantMap out;
     if (videoPath.isEmpty()) return out;
     QFileInfo fi(videoPath);
@@ -606,9 +613,11 @@ QVariantMap ReferenceStore::referenceTextForVideo(const QString& videoPath) cons
     const QList<QVariantMap> rows = parseCsv(it->textPath);
     if (rows.isEmpty()) return out;
 
-    // 取视频在文件夹中的序号
+    // 取视频在文件夹中的序号 + offset，并钳制到 [0, M-1]
     auto idx = videoIndexInDir(videoPath);
     int useIdx = idx.first < 0 ? 0 : idx.first;
+    useIdx += offset;
+    if (useIdx < 0) useIdx = 0;
     if (useIdx >= rows.size()) useIdx = rows.size() - 1;
 
     const QVariantMap& row = rows.at(useIdx);
@@ -649,12 +658,28 @@ QVariantMap ReferenceStore::referenceTextForVideo(const QString& videoPath) cons
 }
 
 QString ReferenceStore::textProgressForVideo(const QString& videoPath) const {
-    const QVariantMap m = referenceTextForVideo(videoPath);
+    return textProgressForVideoOffset(videoPath, 0);
+}
+
+QString ReferenceStore::textProgressForVideoOffset(const QString& videoPath, int offset) const {
+    const QVariantMap m = referenceTextForVideoOffset(videoPath, offset);
     if (m.isEmpty()) return {};
     const int row = m.value("row").toInt();
     const int total = m.value("total").toInt();
     if (row <= 0 || total <= 0) return {};
     return QString::number(row) + " / " + QString::number(total);
+}
+
+int ReferenceStore::textRowCountForVideo(const QString& videoPath) const {
+    if (videoPath.isEmpty()) return 0;
+    QFileInfo fi(videoPath);
+    if (!fi.exists()) return 0;
+    const QString folder = normalizeFolder(fi.absolutePath());
+    auto it = m_map.constFind(folder);
+    if (it == m_map.constEnd()) return 0;
+    if (it->textKind != "csv") return 0;
+    if (!QFileInfo::exists(it->textPath)) return 0;
+    return parseCsv(it->textPath).size();
 }
 
 bool ReferenceStore::setReferenceCsv(const QString& folderPath, const QString& csvPath) {

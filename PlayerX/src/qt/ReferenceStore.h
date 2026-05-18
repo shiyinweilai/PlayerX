@@ -79,6 +79,14 @@ public:
     // 简易进度文本："N / M"
     Q_INVOKABLE QString textProgressForVideo(const QString& videoPath) const;
 
+    // 在 referenceTextForVideo / textProgressForVideo 计算出的"自动索引"基础上偏移 offset 行
+    // 取参考文本（仅 csv 模式生效；越界自动夹紧到 [0, M-1]）。
+    // 用途：侧边栏临时浏览参考文本相邻行（与参考图 ◀ ▶ 行为对齐）。
+    Q_INVOKABLE QVariantMap referenceTextForVideoOffset(const QString& videoPath, int offset) const;
+    Q_INVOKABLE QString textProgressForVideoOffset(const QString& videoPath, int offset) const;
+    // csv 模式下文本总行数（不含表头）；未绑定 / 解析失败时为 0；用于 QML 端边界判断
+    Q_INVOKABLE int textRowCountForVideo(const QString& videoPath) const;
+
     // 绑定一个 csv 文件
     Q_INVOKABLE bool setReferenceCsv(const QString& folderPath, const QString& csvPath);
     Q_INVOKABLE bool setReferenceCsvUrl(const QString& folderPath, const QUrl& csvUrl);
