@@ -1407,8 +1407,15 @@ ApplicationWindow {
 
     // 当前组号 / 总组数（仅显示用）
     //   · 单路浏览模式：按页计算，groupCount = ceil(total / viewCount), groupIndex = floor(cur / viewCount)
-    //   · 多组对比模式：基于"最长那路的 visibleFiles"
+    //   · 多组对比模式：仅统计「已勾选 selected=true」的路，取它们 visibleFiles.length 的最大值。
+    //
+    // 兼容历史记忆：_restoreLanes 会把"上次会话"的所有路（含未勾选的）一并还原到
+    // _rowsModel/_laneRuntime，这些未勾选/未参与启动的路不应影响计数显示。
+    // 旧实现遍历整个 _laneRuntime 取 max，会被历史残留路（如曾经一路 20 个视频）污染，
+    // 出现"行内 1/2 共 2，但底部 2/20"的不一致；这里改为只看 selected=true 的路。
+    // 注意：保留历史记忆功能本身不变，只是计数过滤掉未勾选的路。
     function groupCount() {
+        var _ = stateBumper
         if (singleLaneMode) {
             var i = activeLaneIndex
             if (i < 0 || i >= _laneRuntime.length) return 0
@@ -1418,13 +1425,18 @@ ApplicationWindow {
             return Math.ceil(rt.visibleFiles.length / step)
         }
         var maxN = 0
-        for (var k = 0; k < _laneRuntime.length; ++k) {
+        var n = Math.min(_rowsModel.count, _laneRuntime.length)
+        for (var k = 0; k < n; ++k) {
+            var lane = _rowsModel.get(k)
+            if (!lane || !lane.selected) continue
             var rtM = _laneRuntime[k]
-            if (rtM && rtM.visibleFiles.length > maxN) maxN = rtM.visibleFiles.length
+            if (rtM && rtM.visibleFiles && rtM.visibleFiles.length > maxN)
+                maxN = rtM.visibleFiles.length
         }
         return maxN
     }
     function groupIndex() {
+        var _ = stateBumper
         if (singleLaneMode) {
             var i = activeLaneIndex
             if (i < 0 || i >= _rowsModel.count) return -1
@@ -1433,9 +1445,10 @@ ApplicationWindow {
             var step = Math.max(1, viewCount)
             return Math.floor(Math.max(0, lane.currentIndex) / step)
         }
+        // 多组模式：取第一个「已勾选且 currentIndex>=0」的路当前位置
         for (var j = 0; j < _rowsModel.count; ++j) {
             var ln = _rowsModel.get(j)
-            if (ln && ln.selected) return ln.currentIndex
+            if (ln && ln.selected && ln.currentIndex >= 0) return ln.currentIndex
         }
         if (_rowsModel.count === 0) return -1
         return _rowsModel.get(0).currentIndex

@@ -1937,6 +1937,10 @@ ApplicationWindow {
                 color: "#9a9aa8"
                 font.pixelSize: 11
                 text: {
+                    // 显式触达 stateBumper：MultiGroupDialog 内部状态变更（增删路、勾选、
+                    // 重新扫描文件夹等）都会 _bumpState()，从而让本绑定重算，避免出现
+                    // "行内 1/2 共 2，底部却 2/20" 这类历史残留导致的不一致。
+                    var _bump = multiGroupDialog.stateBumper
                     if (!multiGroupDialog.active) return ""
                     var n = multiGroupDialog.groupCount()
                     var i = multiGroupDialog.groupIndex()
