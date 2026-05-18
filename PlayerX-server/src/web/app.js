@@ -1267,11 +1267,108 @@
         });
     }
 
+    // ────────── 列宽拖拽（主表 #filesTable） ──────────
+    // 让用户像 Finder/资源管理器那样能直接拖动列宽：
+    //   - 通过 <colgroup><col data-col="..."> 控制宽度，避免与 nth-child 选择器耦合；
+    //   - 文件名列（data-col="name"）不直接拖宽，它由 table-layout:fixed 自动占据剩余空间；
+    //   - 拖动相邻列时，文件名列会自然让出 / 收回空间，符合直觉；
+    //   - 自定义宽度持久化到 localStorage，刷新后恢复。
+    const COL_WIDTHS_KEY = 'PlayerX.colWidths.v1';
+    const COL_MIN_WIDTH = 60;     // 最小列宽，避免拖到 0 让内容糊在一起
+    const COL_MAX_WIDTH = 800;    // 上限，防误操作把单列拉得过宽
+
+    function loadSavedColWidths() {
+        try {
+            const raw = localStorage.getItem(COL_WIDTHS_KEY);
+            if (!raw) return {};
+            const obj = JSON.parse(raw);
+            return (obj && typeof obj === 'object') ? obj : {};
+        } catch (_) { return {}; }
+    }
+    function saveColWidth(colKey, px) {
+        const cur = loadSavedColWidths();
+        cur[colKey] = px;
+        try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(cur)); } catch (_) {}
+    }
+    function applySavedColWidths(table) {
+        const saved = loadSavedColWidths();
+        const cols = table.querySelectorAll('colgroup > col[data-col]');
+        cols.forEach(col => {
+            const k = col.dataset.col;
+            // 文件名列从不写死宽度，让它继续吃剩余空间；即便用户「不小心」改过也忽略
+            if (k === 'name') return;
+            if (saved[k]) col.style.width = saved[k] + 'px';
+        });
+    }
+
+    function initColumnResizing(table) {
+        if (!table || table.dataset.resizableInit === '1') return;
+        table.dataset.resizableInit = '1';
+
+        // 先把保存过的宽度灌进去
+        applySavedColWidths(table);
+
+        const ths = table.querySelectorAll('thead th[data-col]');
+        ths.forEach(th => {
+            const colKey = th.dataset.col;
+            // 文件名列不需要拖（它是「弹性列」，由邻列让出来），其余列都给一个手柄
+            if (colKey === 'name') return;
+            // 操作列在最右，再挂手柄会越界出表格右边缘，体验差且没意义，跳过
+            if (colKey === 'actions') return;
+            // 复选列太窄也没必要拖，跳过
+            if (colKey === 'check') return;
+
+            const grip = document.createElement('span');
+            grip.className = 'col-resizer';
+            grip.title = '拖动以调整列宽';
+            // 阻止冒泡到 th 的排序点击逻辑（th.sortable 会触发排序）
+            grip.addEventListener('click', (e) => { e.stopPropagation(); });
+            grip.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                startColResize(table, colKey, e.clientX, grip);
+            });
+            th.appendChild(grip);
+        });
+    }
+
+    function startColResize(table, colKey, startX, gripEl) {
+        const col = table.querySelector(`colgroup > col[data-col="${colKey}"]`);
+        if (!col) return;
+        // 起始宽度优先取 col.style.width；没有的话退回到对应 th 的实际宽
+        const th = table.querySelector(`thead th[data-col="${colKey}"]`);
+        const startWidth = parseInt(col.style.width, 10) || (th ? th.getBoundingClientRect().width : 100);
+
+        document.body.classList.add('col-resizing');
+        gripEl.classList.add('is-dragging');
+
+        const onMove = (ev) => {
+            const dx = ev.clientX - startX;
+            let w = Math.round(startWidth + dx);
+            if (w < COL_MIN_WIDTH) w = COL_MIN_WIDTH;
+            if (w > COL_MAX_WIDTH) w = COL_MAX_WIDTH;
+            col.style.width = w + 'px';
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.classList.remove('col-resizing');
+            gripEl.classList.remove('is-dragging');
+            // 落点写入 localStorage
+            const finalW = parseInt(col.style.width, 10);
+            if (finalW > 0) saveColWidth(colKey, finalW);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }
+
     // ────────── 启动 ──────────
     (async function init() {
         await fetchStatus();
         await fetchAuthInfo();   // 拉取鉴权状态，更新顶栏登录按钮和管理按钮的锁定态
         await fetchList();
         updateAuthUi();          // 列表渲染后再刷一次（同步行内删除按钮的锁定态）
+        // 表头是静态的，初始化一次即可；列宽的持久化由 localStorage 维护
+        initColumnResizing(document.getElementById('filesTable'));
     })();
 })();

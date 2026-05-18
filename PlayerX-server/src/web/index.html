@@ -124,19 +124,37 @@
 
 <!-- ────────── 列表表格 ────────── -->
 <section class="table-wrap">
+    <!--
+      关于列宽控制：
+        1. table-layout 走 fixed（见 style.css），所有列宽都由 <colgroup> 内的 <col> 决定；
+           「文件名」列不指定 width，自动占据剩余空间，避免长文件名被挤成 "rbyang_…"。
+        2. JS 侧（initColumnResizing）会读取 localStorage 中保存的用户自定义宽度
+           覆盖到 <col> 上，并在 <th> 右侧叠一个拖拽手柄，支持鼠标拖动调宽。
+        3. data-col 用于 JS 定位对应的 <col>，保持 HTML 列与 col 顺序一致即可。
+    -->
     <table id="filesTable">
+        <colgroup>
+            <col data-col="check" style="width:44px"  />
+            <col data-col="user"  style="width:110px" />
+            <col data-col="tag"   style="width:130px" />
+            <col data-col="mode"  style="width:80px"  />
+            <col data-col="name"  /> <!-- 文件名：占满剩余 -->
+            <col data-col="size"  style="width:80px"  />
+            <col data-col="mtime" style="width:160px" />
+            <col data-col="actions" style="width:200px" />
+        </colgroup>
         <thead>
             <tr>
-                <th class="col-check"><input type="checkbox" id="selAll" title="全选/取消" /></th>
-                <th class="sortable" data-key="user">评分人</th>
-                <th class="sortable" data-key="tag">标签</th>
-                <th class="sortable" data-key="mode">模式</th>
-                <th class="sortable" data-key="name">文件名</th>
-                <th class="sortable num" data-key="size">大小</th>
-                <th class="sortable num" data-key="mtime">最近更新 ⋎</th>
-                <th class="actions">操作</th>
+                <th class="col-check" data-col="check"><input type="checkbox" id="selAll" title="全选/取消" /></th>
+                <th class="sortable" data-key="user" data-col="user">评分人</th>
+                <th class="sortable" data-key="tag"  data-col="tag">标签</th>
+                <th class="sortable" data-key="mode" data-col="mode">模式</th>
+                <th class="sortable" data-key="name" data-col="name">文件名</th>
+                <th class="sortable num" data-key="size"  data-col="size">大小</th>
+                <th class="sortable num" data-key="mtime" data-col="mtime">最近更新 ⋎</th>
+                <th class="actions" data-col="actions">操作</th>
             </tr>
-        </thead>        <tbody id="filesTbody">
+        </thead>        </thead>        <tbody id="filesTbody">
             <!-- 动态填充 -->
         </tbody>
     </table>

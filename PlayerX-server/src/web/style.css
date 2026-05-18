@@ -374,17 +374,41 @@ thead th {
     background: var(--bg-elev-1);
     border-bottom: 1px solid var(--border-soft);
     user-select: none;
+    /* 让列拖拽手柄能 absolute 定位到 th 右边缘 */
+    position: relative;
 }
 thead th.sortable { cursor: pointer; }
 thead th.sortable:hover { color: var(--text-soft); }
 thead th.num { text-align: right; }
-thead th.actions { width: 200px; text-align: right; }
+thead th.actions { text-align: right; }
 
-/* 列宽：评分人 16% / 标签 16% / 文件名 自适应 / 大小 90px / 时间 170px / 操作 160px */
-thead th:nth-child(1), tbody td:nth-child(1) { width: 16%; }
-thead th:nth-child(2), tbody td:nth-child(2) { width: 16%; }
-thead th:nth-child(4), tbody td:nth-child(4) { width: 90px; }
-thead th:nth-child(5), tbody td:nth-child(5) { width: 170px; }
+/*
+ * 列宽控制说明：
+ *   - 默认宽度由 index.html 中的 <colgroup><col style="width:..."> 指定。
+ *   - 文件名列（data-col="name"）不指定 width，由 table-layout:fixed 自动占据剩余空间。
+ *   - 用户拖拽列宽时，JS 会更新对应 <col> 的 style.width，并写入 localStorage。
+ *   - 这里不再用脆弱的 nth-child 选择器（HTML 列顺序变更会错位）。
+ */
+
+/* 列拖拽手柄：贴在每个 th 的右边缘，宽度足够好抓但不抢点击 */
+.col-resizer {
+    position: absolute;
+    top: 0;
+    right: -3px;        /* 跨过单元格边线，让两侧都能 hover 命中 */
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 2;
+    /* 默认透明，hover/拖拽时显蓝条，给用户「这里可拖」的视觉反馈 */
+    background: transparent;
+    transition: background-color .12s;
+}
+.col-resizer:hover,
+.col-resizer.is-dragging { background: var(--accent); }
+
+/* 拖拽进行中：全局禁用文本选择 + 强制 col-resize 光标，避免手感断裂 */
+body.col-resizing { cursor: col-resize !important; user-select: none !important; }
+body.col-resizing * { cursor: col-resize !important; }
 
 tbody td {
     padding: 10px 14px;

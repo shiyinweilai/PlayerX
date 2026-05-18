@@ -6,7 +6,7 @@
  *   - 写操作（删除 / 归档 / 批量删除）必须登录后才能执行
  *
  * 实现：
- *   - 管理员密码：环境变量 PLAYERX_ADMIN_PASSWORD，默认 'admin123'
+ *   - 管理员密码：环境变量 PLAYERX_ADMIN_PASSWORD，默认 'playerx168'
  *   - 登录接口：POST /api/admin/login  body: { password }  → 返回 { ok, token }
  *   - 鉴权：客户端请求头 X-Admin-Token 携带返回的 token
  *   - token 存内存（重启失效，无需持久化），登出从 Set 中移除
@@ -15,7 +15,7 @@ const crypto = require('crypto');
 
 function resolveAdminPassword() {
     const raw = process.env.PLAYERX_ADMIN_PASSWORD;
-    if (raw === undefined) return 'admin123';
+    if (raw === undefined) return 'playerx168';
     return String(raw); // 允许显式空字符串 = 关闭鉴权
 }
 
