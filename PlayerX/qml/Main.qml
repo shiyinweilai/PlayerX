@@ -639,7 +639,7 @@ ApplicationWindow {
                 ScRow { keys: "F"; desc: qsTr("切换全屏") }
                 ScRow { keys: "V"; desc: qsTr("切换视频信息叠加") }
                 ScRow { keys: "C"; desc: qsTr("切换通道信息叠加（序号 + 文件名）") }
-                ScRow { keys: "S"; desc: qsTr("在多路布局间循环切换") }
+                ScRow { keys: "S"; desc: qsTr("多路视频时切换布局如1xN / 2x2 / 3x3") }
                 ScRow { keys: "B"; desc: qsTr("滑动对比模式（仅 2 路）") }
             }
             // 左列 2：倍速
@@ -4336,9 +4336,19 @@ ApplicationWindow {
                 }
 
                 // ── 操作说明 ──────────────────────────────────────
+                // 设计说明（图1 → 当前版本）：
+                //   旧版仅展示 4 行"打开 / 播放 / 视图 / 路·速"的极简速览，再用一个
+                //   「查看全部快捷键 →（F1）」链接跳转到 shortcutsDialog。
+                //   现在快捷键数量稳定（≤5 组、共十几行），首页空态有足够留白，干脆
+                //   直接平铺展示全部分组，无需二次跳转；同时保留 F1 入口，便于
+                //   未来扩展更多快捷键时仍可单独打开速查面板。
+                //   组件复用：直接使用 root 顶层定义的 ScSection / ScRow，与 F1
+                //   对话框 100% 一致；这样以后只要维护一份内容，两处自动同步。
                 Rectangle {
                     Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredWidth: 498   // 240*2 + 18 ，与按钮组对齐
+                    // 宽度 720：与 shortcutsDialog 的两列网格留白接近，
+                    // 单行最长描述「切换通道信息叠加（序号 + 文件名）」也能一行放下。
+                    Layout.preferredWidth: 720
                     color: "#14141820"
                     radius: 8
                     border.color: "#2a2a32"
@@ -4369,56 +4379,86 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                             Layout.fillWidth: true
                         }
-                        // ── 速览：四组高频快捷键（分组 + 等宽按键徽章）──
-                        //    完整列表见「帮助 → 快捷键…」或按 F1 / ?。
-                        //    `_modKey` 在 macOS 上自动显示 ⌘，其它平台显示 Ctrl。
+
+                        // 分隔线：让"拖拽提示文案"与"快捷键分组"的视觉层级清晰一些
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.topMargin: 6
+                            Layout.bottomMargin: 2
+                            height: 1
+                            color: "#2a2a32"
+                        }
+
+                        // ── 全量快捷键：两列 × 多分组（与 F1 对话框完全一致）──
+                        //   左列：播放 / 倍速 / 多组对比
+                        //   右列：视图 / 单路 · 多路
+                        //   使用 ScSection + ScRow（root 顶层 inline component），
+                        //   保证视觉与 shortcutsDialog 完全一致；后续扩展只需改两处之一。
                         GridLayout {
                             Layout.fillWidth: true
                             Layout.topMargin: 4
                             columns: 2
                             columnSpacing: 28
-                            rowSpacing: 6
+                            rowSpacing: 12
 
-                            // 文件
-                            RowLayout {
-                                spacing: 8
-                                Text { text: "打开";       color: "#cfd2d6"; font.pixelSize: 12; Layout.preferredWidth: 56 }
-                                Text { text: root._modKey + "O"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
-                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
-                                Text { text: root._modKey + "⇧O"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                            // 左列 1：播放
+                            ScSection {
+                                title: qsTr("播放")
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignTop
+                                ScRow { keys: "Space";    desc: qsTr("暂停 / 继续") }
+                                ScRow { keys: "←  /  →";  desc: qsTr("后退 / 前进 5 秒") }
+                                ScRow { keys: ",  /  .";  desc: qsTr("上一帧 / 下一帧") }
+                                ScRow { keys: "R";        desc: qsTr("回到开头") }
                             }
-                            // 播放
-                            RowLayout {
-                                spacing: 8
-                                Text { text: "播放";       color: "#cfd2d6"; font.pixelSize: 12; Layout.preferredWidth: 56 }
-                                Text { text: "Space";       color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
-                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
-                                Text { text: "← →";        color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
-                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
-                                Text { text: ", .";         color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                            // 右列 1：视图
+                            ScSection {
+                                title: qsTr("视图")
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignTop
+                                ScRow { keys: "F"; desc: qsTr("切换全屏") }
+                                ScRow { keys: "V"; desc: qsTr("切换视频信息叠加") }
+                                ScRow { keys: "C"; desc: qsTr("切换通道信息叠加（序号 + 文件名）") }
+                                ScRow { keys: "S"; desc: qsTr("多路视频时切换布局如1xN / 2x2 / 3x3") }
+                                ScRow { keys: "B"; desc: qsTr("滑动对比模式（仅 2 路）") }
                             }
-                            // 视图
-                            RowLayout {
-                                spacing: 8
-                                Text { text: "视图";       color: "#cfd2d6"; font.pixelSize: 12; Layout.preferredWidth: 56 }
-                                Text { text: "F";  color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
-                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
-                                Text { text: "V/C"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
-                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
-                                Text { text: "S";  color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
-                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
-                                Text { text: "B";  color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                            // 左列 2：倍速
+                            ScSection {
+                                title: qsTr("倍速")
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignTop
+                                ScRow { keys: "-";        desc: qsTr("减速一档") }
+                                ScRow { keys: "=  /  +";  desc: qsTr("加速一档") }
+                                ScRow { keys: "0";        desc: qsTr("复位为 1.0×") }
                             }
-                            // 路数 / 倍速
-                            RowLayout {
-                                spacing: 8
-                                Text { text: "路 / 速";   color: "#cfd2d6"; font.pixelSize: 12; Layout.preferredWidth: 56 }
-                                Text { text: "1…9"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
-                                Text { text: "·"; color: "#5a5a62"; font.pixelSize: 12 }
-                                Text { text: "− = 0"; color: "#9aa0a6"; font.pixelSize: 12; font.family: "Menlo, Consolas, monospace" }
+                            // 右列 2：单路 / 多路
+                            ScSection {
+                                title: qsTr("单路 / 多路")
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignTop
+                                ScRow { keys: "1 … 9"; desc: qsTr("切到第 N 路单路；再次按下回到上次的多路布局") }
+                                ScRow { keys: "⤢ / ⤡"; desc: qsTr("放大 / 还原本路（每路 hover 工具栏，等同数字键）") }
+                                ScRow { keys: "⋯";     desc: qsTr("替换本路视频（hover 显示完整路径）") }
+                                ScRow { keys: "✕";     desc: qsTr("关闭本路视频") }
+                            }
+                            // 左列 3：多组对比
+                            ScSection {
+                                title: qsTr("多组对比（仅当多组对比窗口激活时）")
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignTop
+                                ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组") }
+                                ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组") }
+                            }
+                            // 右列 3：占位，让网格视觉对齐（与 shortcutsDialog 处理方式一致）
+                            Item {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 1
                             }
                         }
+
                         // 入口：跳转到「快捷键…」对话框
+                        // 当前所有快捷键已经在上方平铺展示，这里仍保留 F1 入口，
+                        // 一是兼容老用户的 F1 习惯，二是为将来"快捷键变多需要滚动的弹窗"留出口。
                         Item {
                             Layout.fillWidth: true
                             Layout.topMargin: 4
