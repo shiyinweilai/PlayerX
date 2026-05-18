@@ -131,19 +131,66 @@ public slots:
     Q_INVOKABLE bool removeByFolders(const QStringList& folderPaths);
 
     // 按文件夹批量归档：与 removeByFolders 命中规则完全一致，但行会先被**搬出**到
-    //   <AppData>/PlayerX/archive/ratings_<mode>__<yyyyMMdd_HHmmss>.csv
+    //   <AppData>/PlayerX/archive/<mode>/<batchName>/ratings.csv
     // 然后才从主 CSV 删除；表头与主 CSV 一致，方便日后人工合并/审计。
     // 失败时主 CSV 不会被破坏（先写归档文件，归档文件落盘成功后再回写主 CSV）。
+    //
+    // batchName：批次文件夹名（用户在 UI 输入，例如 "v2.1_第一轮"）。
+    //   - 为空时使用 defaultArchiveBatchName(currentMode()) 兜底；
+    //   - 自动剔除非法字符（/ \\ : * ? " < > |）；
+    //   - 同名已存在时在末尾追加 _2 / _3 序号防止覆盖。
+    //
     // 成功返回 true，并发 changed() 信号；同时通过返回值之外的副作用（CSV 文件）保留数据。
     // 与 removeByFolders 一样：folderPaths 为空 / off 模式 / 没命中任何行 → 返回 false。
-    Q_INVOKABLE bool archiveByFolders(const QStringList& folderPaths);
+    Q_INVOKABLE bool archiveByFolders(const QStringList& folderPaths,
+                                      const QString& batchName = {});
+
+    // 推荐的默认批次名：<mode>_yyyyMMdd_HHmmss。
+    // 用法：QML 弹"确认归档"对话框前，先用它填充输入框默认值。
+    Q_INVOKABLE QString defaultArchiveBatchName(const QString& mode = {}) const;
+
+    // 列出指定模式下所有归档批次（按时间倒序，新→旧）。
+    // 返回 [{ name, path, count, latest, raters[], modifiedAt }, ...]：
+    //   · name        : 批次文件夹名（QML 端显示用）
+    //   · path        : 该批次 ratings.csv 的绝对路径
+    //   · count       : CSV 行数（不含表头）
+    //   · latest      : 该批次中 updated_at 的最大值（ISO8601 字符串）
+    //   · raters      : 评分人去重列表
+    //   · modifiedAt  : 该 CSV 文件的最后修改时间（ISO8601 字符串）
+    // mode 为空 → 使用 currentMode()；off / 不存在的 mode → 返回空列表。
+    Q_INVOKABLE QVariantList listArchiveBatches(const QString& mode = {}) const;
+
+    // 读取某批次 CSV 全部行；返回结构与 getAllRatings 一致（列名相同），
+    // updated_at 倒序。批次不存在 / 读不到 → 返回空列表。
+    Q_INVOKABLE QVariantList loadArchiveBatch(const QString& mode,
+                                              const QString& batchName) const;
+
+    // 删除某批次（连同 ratings.csv 与所在文件夹一起删除，不可逆）。
+    // 成功返回 true。
+    Q_INVOKABLE bool deleteArchiveBatch(const QString& mode,
+                                        const QString& batchName);
+
+    // 行级删除：从某批次 CSV 中删除 file_path ∈ filePathsToRemove 的所有行。
+    // 删完若该批次为空，会一并把空文件夹清理掉，避免下拉里残留无意义批次。
+    // 成功返回 true（即使没命中任何行也返回 true，调用方根据 deleted 数判断）。
+    Q_INVOKABLE bool removeArchiveRows(const QString& mode,
+                                       const QString& batchName,
+                                       const QStringList& filePathsToRemove);
+
+    // 把某归档批次另存为单 CSV（用户选定路径），与 exportToFile 风格一致：
+    // 精简列 updated_at,rater,file_name,stars，UTF-8 with BOM。
+    Q_INVOKABLE bool exportArchiveBatch(const QString& mode,
+                                        const QString& batchName,
+                                        const QString& targetPath) const;
 
     // 在系统文件管理器中定位 dataFilePath（macOS Finder / Windows 资源管理器）
     void revealInFolder() const;
 
-    // 在系统文件管理器中打开归档目录（<AppData>/PlayerX/archive/）。
+    // 在系统文件管理器中打开归档目录。
+    //   - mode 为空 → 打开归档根目录 <AppData>/PlayerX/archive/
+    //   - mode 非空 → 打开 <AppData>/PlayerX/archive/<mode>/
     // 目录不存在时会自动建立，便于用户即使一次都没归档过也能"看一眼归档目录在哪"。
-    Q_INVOKABLE void revealArchiveFolder() const;
+    Q_INVOKABLE void revealArchiveFolder(const QString& mode = {}) const;
 
     // 平台用户名兑底（当 currentUser 为空时使用）
     QString systemUserName() const;
@@ -201,10 +248,13 @@ private:
     // 读全部行，文件不存在返回空列表
     QList<QVariantMap> readAll() const;
 
-    // CSV 字段安全转义
+public:
+    // CSV 字段安全转义（公开仅供归档子模块复用，UI 不应直接调用）
     static QString csvEscape(const QString& s);
     // CSV 单行解析（支持 "..." 内含逗号/双引号转义）
     static QStringList parseCsvLine(const QString& line);
+
+private:
 
     // 计算 file_size 与 quickHash（前后各 1MB + size 的简短指纹）
     static qint64 fileSizeOf(const QString& path);

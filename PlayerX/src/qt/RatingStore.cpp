@@ -19,6 +19,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
@@ -750,18 +751,125 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// 按文件夹批量归档（与 removeByFolders 命中规则一致；命中行先备份到 archive 目录，再从主 CSV 删除）
+// 归档目录布局（v2 — 按批次文件夹组织）
 //
-// 归档文件路径：<AppData>/PlayerX/archive/ratings_<mode>__<yyyyMMdd_HHmmss>.csv
-//   - 表头与主 CSV 完全一致（updated_at,rater,file_name,file_path,file_size,quick_hash,stars）
-//   - UTF-8 with BOM，便于 Excel 直接打开
-//   - 按时间戳分文件，多次归档不互相覆盖
-//   - 同一秒内重复归档极小概率撞名，则在文件名末尾追加序号（_2 / _3 ...）兜底
+// 物理目录结构：
+//   <AppData>/PlayerX/archive/
+//   ├── aigc/
+//   │   ├── 20260518_201906/
+//   │   │   └── ratings.csv
+//   │   └── v2.1_第一轮/
+//   │       └── ratings.csv
+//   └── subjective/
+//       └── ...
+//
+// 设计动机：
+//   - 同一文件夹下的视频可被归档多次（例如先归档"v1 评分"，再重新打分后归档"v2 评分"），
+//     按"文件夹"而非"单 CSV"组织，给同一视频多次评分留出共存空间；
+//   - 一个批次一个独立目录，未来若要附带截图/元信息（report.json、screenshot/）也好扩展；
+//   - 按 mode 隔离批次，避免 AIGC 和主观评分的批次混在同一下拉里。
+// ════════════════════════════════════════════════════════════════════════
+
+namespace {
+// 归档根目录：<AppData>/PlayerX/archive
+inline QString archiveRootIn(const QString& baseDir) {
+    return QDir(baseDir).filePath(QStringLiteral("archive"));
+}
+// 归档某模式根目录：<AppData>/PlayerX/archive/<mode>
+inline QString archiveModeDirIn(const QString& baseDir, const QString& mode) {
+    return QDir(archiveRootIn(baseDir)).filePath(mode);
+}
+// 归档某批次目录：<AppData>/PlayerX/archive/<mode>/<batchName>
+inline QString archiveBatchDirIn(const QString& baseDir,
+                                 const QString& mode,
+                                 const QString& batchName) {
+    return QDir(archiveModeDirIn(baseDir, mode)).filePath(batchName);
+}
+// 归档某批次的 CSV 路径
+inline QString archiveBatchCsvIn(const QString& baseDir,
+                                 const QString& mode,
+                                 const QString& batchName) {
+    return QDir(archiveBatchDirIn(baseDir, mode, batchName))
+                .filePath(QStringLiteral("ratings.csv"));
+}
+// 把用户输入的批次名清洗成跨平台合法的目录名
+//   - 去掉首尾空白
+//   - 把 / \\ : * ? " < > |  替换成 "_"
+//   - 长度限制 80 字（防止文件路径超长）
+//   - 全空白 → 退化为 "_unnamed"
+QString sanitizeBatchName(const QString& raw) {
+    QString s = raw.trimmed();
+    if (s.isEmpty()) return QStringLiteral("_unnamed");
+    static const QRegularExpression badChars(QStringLiteral("[\\/:*?\"<>|]"));
+    s.replace(badChars, QStringLiteral("_"));
+    if (s.size() > 80) s = s.left(80);
+    if (s.trimmed().isEmpty()) s = QStringLiteral("_unnamed");
+    return s;
+}
+// 从批次 CSV 中读所有行（与 RatingStore::readAll 同样的格式）
+QList<QVariantMap> readBatchCsv(const QString& csvPath) {
+    QList<QVariantMap> out;
+    if (csvPath.isEmpty()) return out;
+    QFile f(csvPath);
+    if (!f.exists()) return out;
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return out;
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    bool firstLine = true;
+    while (!ts.atEnd()) {
+        QString line = ts.readLine();
+        if (firstLine) { firstLine = false; continue; }
+        if (line.trimmed().isEmpty()) continue;
+        QStringList cols = RatingStore::parseCsvLine(line);
+        if (cols.size() < 7) continue;
+        QVariantMap row;
+        row["updated_at"] = cols.value(0);
+        row["rater"]      = cols.value(1);
+        row["file_name"]  = cols.value(2);
+        row["file_path"]  = cols.value(3);
+        row["file_size"]  = cols.value(4).toLongLong();
+        row["quick_hash"] = cols.value(5);
+        row["stars"]      = cols.value(6).toInt();
+        out.push_back(row);
+    }
+    return out;
+}
+// 把行集写入批次 CSV（覆盖式，含 BOM 与表头）
+bool writeBatchCsv(const QString& csvPath, const QList<QVariantMap>& rows) {
+    QFile f(csvPath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts.setGenerateByteOrderMark(true);
+    ts << kCsvHeader << "\n";
+    for (const auto& r : rows) {
+        ts << RatingStore::csvEscape(r.value("updated_at").toString()) << ","
+           << RatingStore::csvEscape(r.value("rater").toString())      << ","
+           << RatingStore::csvEscape(r.value("file_name").toString())  << ","
+           << RatingStore::csvEscape(r.value("file_path").toString())  << ","
+           << r.value("file_size").toLongLong()                        << ","
+           << RatingStore::csvEscape(r.value("quick_hash").toString()) << ","
+           << r.value("stars").toInt()                                 << "\n";
+    }
+    return true;
+}
+// 递归删除批次目录（连同 ratings.csv 与可能的附属文件）
+bool removeBatchDir(const QString& baseDir, const QString& mode, const QString& batchName) {
+    const QString dir = archiveBatchDirIn(baseDir, mode, batchName);
+    QDir d(dir);
+    if (!d.exists()) return true;       // 已经没有，视为成功
+    return d.removeRecursively();
+}
+}  // namespace
+
+// ════════════════════════════════════════════════════════════════════════
+// 按文件夹批量归档（v2 — 写到 archive/<mode>/<batchName>/ratings.csv）
 //
 // 时序保证：先写好归档文件，再回写主 CSV。任一步失败都不会破坏主 CSV。
 // ════════════════════════════════════════════════════════════════════════
 
-bool RatingStore::archiveByFolders(const QStringList& folderPaths) {
+bool RatingStore::archiveByFolders(const QStringList& folderPaths,
+                                   const QString& batchName) {
     // 与 removeByFolders 同样的入参校验
     QSet<QString> allow;
     for (const QString& p : folderPaths) {
@@ -790,52 +898,185 @@ bool RatingStore::archiveByFolders(const QStringList& folderPaths) {
     }
     if (picked.isEmpty()) return false;
 
-    // 准备归档目录（必要时建立）
-    const QString archiveDir = QDir(m_baseDir).filePath(QStringLiteral("archive"));
-    if (!QDir().mkpath(archiveDir)) return false;
-
-    // 计算归档文件名（同秒撞名时追加 _N 序号）
-    const QString stamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-    QString archivePath;
+    // 计算批次目录名（用户给空 → 用默认时间戳；同名追加 _N 序号防覆盖）
+    QString batch = sanitizeBatchName(
+        batchName.isEmpty() ? defaultArchiveBatchName(modeNow) : batchName);
     {
-        const QString base = QStringLiteral("ratings_%1__%2").arg(modeNow, stamp);
-        QString candidate = QDir(archiveDir).filePath(base + ".csv");
+        const QString modeDir = archiveModeDirIn(m_baseDir, modeNow);
+        if (!QDir().mkpath(modeDir)) return false;
+        QString candidate = batch;
         int suffix = 2;
-        while (QFileInfo::exists(candidate)) {
-            candidate = QDir(archiveDir).filePath(
-                QStringLiteral("%1_%2.csv").arg(base).arg(suffix++));
+        while (QFileInfo::exists(QDir(modeDir).filePath(candidate))) {
+            candidate = QStringLiteral("%1_%2").arg(batch).arg(suffix++);
         }
-        archivePath = candidate;
+        batch = candidate;
     }
+
+    const QString batchDir = archiveBatchDirIn(m_baseDir, modeNow, batch);
+    if (!QDir().mkpath(batchDir)) return false;
+    const QString archivePath = archiveBatchCsvIn(m_baseDir, modeNow, batch);
 
     // 先写归档（先成功，后再删主 CSV，保证失败不破坏数据）
-    {
-        QFile f(archivePath);
-        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
-            return false;
-        QTextStream ts(&f);
-        ts.setEncoding(QStringConverter::Utf8);
-        ts.setGenerateByteOrderMark(true);
-        ts << kCsvHeader << "\n";
-        for (const auto& r : picked) {
-            ts << csvEscape(r.value("updated_at").toString()) << ","
-               << csvEscape(r.value("rater").toString())      << ","
-               << csvEscape(r.value("file_name").toString())  << ","
-               << csvEscape(r.value("file_path").toString())  << ","
-               << r.value("file_size").toLongLong()           << ","
-               << csvEscape(r.value("quick_hash").toString()) << ","
-               << r.value("stars").toInt()                    << "\n";
-        }
-        ts.flush();
-        f.close();
-    }
+    if (!writeBatchCsv(archivePath, picked)) return false;
 
     // 回写主 CSV：失败时尝试删除已生成的归档文件，避免出现“数据双份在两个文件”的歧义
     if (!writeAll(kept)) {
         QFile::remove(archivePath);
+        QDir(batchDir).removeRecursively();
         return false;
     }
     emit changed();
+    return true;
+}
+
+// 推荐的默认批次名：<mode>_yyyyMMdd_HHmmss
+QString RatingStore::defaultArchiveBatchName(const QString& mode) const {
+    const QString m = mode.isEmpty() ? currentMode() : mode;
+    const QString tag = (m.isEmpty() || m == QStringLiteral("off")) ? QStringLiteral("rating") : m;
+    return QStringLiteral("%1_%2").arg(
+        tag, QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
+}
+
+// 列出指定模式下所有归档批次（按 modifiedAt 倒序）
+QVariantList RatingStore::listArchiveBatches(const QString& mode) const {
+    QVariantList out;
+    const QString m = mode.isEmpty() ? currentMode() : mode;
+    if (m.isEmpty() || m == QStringLiteral("off")) return out;
+    if (!findMode(m)) return out;
+
+    const QString modeDir = archiveModeDirIn(m_baseDir, m);
+    QDir d(modeDir);
+    if (!d.exists()) return out;
+
+    const QFileInfoList subs = d.entryInfoList(
+        QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);   // QDir::Time = 修改时间倒序
+
+    for (const QFileInfo& sub : subs) {
+        const QString name = sub.fileName();
+        const QString csv  = archiveBatchCsvIn(m_baseDir, m, name);
+        if (!QFileInfo::exists(csv)) continue;       // 没有 ratings.csv 的目录跳过
+
+        const QList<QVariantMap> rows = readBatchCsv(csv);
+        QString latest;
+        QSet<QString> raterSet;
+        for (const auto& r : rows) {
+            const QString u = r.value("updated_at").toString();
+            if (u > latest) latest = u;
+            const QString rt = r.value("rater").toString();
+            if (!rt.isEmpty()) raterSet.insert(rt);
+        }
+        QStringList raters = raterSet.values();
+        std::sort(raters.begin(), raters.end());
+
+        QVariantMap entry;
+        entry["name"]       = name;
+        entry["path"]       = csv;
+        entry["count"]      = rows.size();
+        entry["latest"]     = latest;
+        entry["raters"]     = raters;
+        entry["modifiedAt"] = sub.lastModified().toString(Qt::ISODate);
+        out.push_back(entry);
+    }
+    return out;
+}
+
+// 读取某批次 CSV 的所有行（updated_at 倒序）
+QVariantList RatingStore::loadArchiveBatch(const QString& mode,
+                                           const QString& batchName) const {
+    QVariantList out;
+    const QString m = mode.isEmpty() ? currentMode() : mode;
+    if (m.isEmpty() || m == QStringLiteral("off") || batchName.isEmpty()) return out;
+    if (!findMode(m)) return out;
+
+    const QString csv = archiveBatchCsvIn(m_baseDir, m, batchName);
+    QList<QVariantMap> rows = readBatchCsv(csv);
+    std::sort(rows.begin(), rows.end(), [](const QVariantMap& a, const QVariantMap& b) {
+        return a.value("updated_at").toString() > b.value("updated_at").toString();
+    });
+    for (const auto& r : rows) out.push_back(r);
+    return out;
+}
+
+// 删除某批次（连目录一起删）
+bool RatingStore::deleteArchiveBatch(const QString& mode, const QString& batchName) {
+    const QString m = mode.isEmpty() ? currentMode() : mode;
+    if (m.isEmpty() || m == QStringLiteral("off") || batchName.isEmpty()) return false;
+    if (!findMode(m)) return false;
+
+    const bool ok = removeBatchDir(m_baseDir, m, batchName);
+    if (ok) emit changed();
+    return ok;
+}
+
+// 行级删除：从某批次 CSV 中按 file_path 白名单删行
+bool RatingStore::removeArchiveRows(const QString& mode,
+                                    const QString& batchName,
+                                    const QStringList& filePathsToRemove) {
+    const QString m = mode.isEmpty() ? currentMode() : mode;
+    if (m.isEmpty() || m == QStringLiteral("off") || batchName.isEmpty()) return false;
+    if (!findMode(m)) return false;
+    if (filePathsToRemove.isEmpty()) return true;   // 没要删任何行 → 视为成功 no-op
+
+    QSet<QString> drop;
+    for (const QString& fp : filePathsToRemove) {
+        const QString t = fp.trimmed();
+        if (!t.isEmpty()) drop.insert(t);
+    }
+    if (drop.isEmpty()) return true;
+
+    const QString csv = archiveBatchCsvIn(m_baseDir, m, batchName);
+    if (!QFileInfo::exists(csv)) return false;
+
+    const QList<QVariantMap> rows = readBatchCsv(csv);
+    QList<QVariantMap> kept;
+    kept.reserve(rows.size());
+    int removed = 0;
+    for (const auto& r : rows) {
+        if (drop.contains(r.value("file_path").toString())) {
+            ++removed;
+            continue;
+        }
+        kept.push_back(r);
+    }
+    if (removed == 0) return true;   // 没命中也算成功
+
+    if (kept.isEmpty()) {
+        // 删空了 → 整个批次目录一并清掉，避免下拉里残留
+        if (!removeBatchDir(m_baseDir, m, batchName)) return false;
+    } else {
+        if (!writeBatchCsv(csv, kept)) return false;
+    }
+    emit changed();
+    return true;
+}
+
+// 把某归档批次另存为单 CSV（精简列：updated_at,rater,file_name,stars）
+bool RatingStore::exportArchiveBatch(const QString& mode,
+                                     const QString& batchName,
+                                     const QString& targetPath) const {
+    const QString m = mode.isEmpty() ? currentMode() : mode;
+    if (m.isEmpty() || m == QStringLiteral("off") || batchName.isEmpty()) return false;
+    if (!findMode(m)) return false;
+    if (targetPath.isEmpty()) return false;
+
+    const QString csv = archiveBatchCsvIn(m_baseDir, m, batchName);
+    const QList<QVariantMap> rows = readBatchCsv(csv);
+
+    QFile f(targetPath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts.setGenerateByteOrderMark(true);
+    ts << "updated_at,rater,file_name,stars\n";
+    for (const auto& r : rows) {
+        QString upd = r.value("updated_at").toString();
+        QDateTime dt = QDateTime::fromString(upd, Qt::ISODate);
+        if (dt.isValid()) upd = dt.toString("yyyy-MM-dd HH:mm:ss");
+        ts << csvEscape(upd) << ","
+           << csvEscape(r.value("rater").toString())     << ","
+           << csvEscape(r.value("file_name").toString()) << ","
+           << r.value("stars").toInt()                   << "\n";
+    }
     return true;
 }
 
@@ -867,10 +1108,17 @@ void RatingStore::revealInFolder() const {
 // 让用户即使一次都没归档过也能"先看一眼归档目录在哪"。
 // ════════════════════════════════════════════════════════════════════════
 
-void RatingStore::revealArchiveFolder() const {
-    const QString archiveDir = QDir(m_baseDir).filePath(QStringLiteral("archive"));
-    QDir().mkpath(archiveDir);
-    QDesktopServices::openUrl(QUrl::fromLocalFile(archiveDir));
+void RatingStore::revealArchiveFolder(const QString& mode) const {
+    const QString root = archiveRootIn(m_baseDir);
+    QDir().mkpath(root);
+    QString target = root;
+    const QString m = mode.trimmed();
+    if (!m.isEmpty() && m != QStringLiteral("off") && findMode(m)) {
+        const QString sub = archiveModeDirIn(m_baseDir, m);
+        QDir().mkpath(sub);
+        target = sub;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(target));
 }
 
 // ════════════════════════════════════════════════════════════════════════

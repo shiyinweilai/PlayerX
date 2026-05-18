@@ -58,6 +58,18 @@ Window {
     property var _rows: []
     // 时间列排序方向：true = 新→旧（默认，与 C++ 端 getAllRatings 一致），false = 旧→新
     property bool _sortDesc: true
+
+    // ── 视图模式（"current" / "archive"）─────────────────────────────────
+    // current：浏览当前模式 CSV（可编辑、可归档、可上传），与原行为一致
+    // archive：浏览某个归档批次（只读账本，仅支持导出 / 行级删除 / 删整批）
+    // 切换 Tab 时会重置 _checkedFolders、清空选择，避免跨 Tab 误操作。
+    property string _viewMode: "current"
+    // 归档 Tab 当前选中的批次名（首次打开自动取最新一批）
+    property string _archiveBatch: ""
+    // 归档 Tab 缓存的批次列表（[{name, count, latest, raters, modifiedAt, path}]）
+    property var _archiveBatches: []
+    // 便捷判断
+    readonly property bool _isArchiveView: _viewMode === "archive"
     // 当前评分模式的星级上限（决定“有效评分”区间与子项星条渲染长度）。
     // off 模式下Rating.maxStars==0，本处兜底 5。
     readonly property int _maxStars:
@@ -368,9 +380,50 @@ Window {
         return out
     }
     function _refresh() {
-        var raw = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
-        _rows = _applySort(raw)
+        var raw
+        if (root._viewMode === "archive") {
+            // 先确保批次列表是最新的
+            _refreshArchiveList(false)
+            // 没批次：清空表格；有批次：读当前选中批次
+            if (!root._archiveBatch || root._archiveBatches.length === 0) {
+                raw = []
+            } else if (typeof Rating !== "undefined") {
+                raw = Rating.loadArchiveBatch(Rating.currentMode, root._archiveBatch)
+            } else {
+                raw = []
+            }
+        } else {
+            raw = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
+        }
+        _rows = _applySort(raw || [])
         _rebuildGroups()
+    }
+    // 重新拉取归档批次列表；keepSelection=true 表示沿用 _archiveBatch（前提是它仍存在），
+    // false 时若当前选中失效则自动落到第一项。
+    function _refreshArchiveList(keepSelection) {
+        if (typeof Rating === "undefined") { root._archiveBatches = []; root._archiveBatch = ""; return }
+        var list = Rating.listArchiveBatches(Rating.currentMode) || []
+        root._archiveBatches = list
+        // 校验当前选中是否还在
+        var stillThere = false
+        for (var i = 0; i < list.length; ++i) {
+            if (list[i].name === root._archiveBatch) { stillThere = true; break }
+        }
+        if (!stillThere) {
+            root._archiveBatch = (list.length > 0) ? list[0].name : ""
+        } else if (!keepSelection && list.length > 0) {
+            // 不保留选择 → 默认落到最新一批
+            root._archiveBatch = list[0].name
+        }
+    }
+    // 切换视图模式（current ↔ archive）；切换时清掉勾选、上传白名单缓存，避免跨 Tab 残留
+    function _switchView(mode) {
+        if (mode === root._viewMode) return
+        root._viewMode = mode
+        root._checkedFolders = ({})
+        root._lastUploadFolders = []
+        if (mode === "archive") _refreshArchiveList(false)
+        _refresh()
     }
     function _toggleTimeSort() {
         _sortDesc = !_sortDesc
@@ -455,6 +508,242 @@ Window {
                         }
                     }
                 }
+            }
+        }
+
+        // ── 次级 Tab：当前 / 归档 ─────────────────────────────────────────
+        // 设计动机：归档批次承载"打分快照"，与当前评分账本逻辑分离。
+        // 同一文件夹可被归档多次（重新打分前先归档），归档区按"批次文件夹"分桶展示。
+        // 当前 Tab：可读写，可勾选/上传/归档/删除（保持原行为）
+        // 归档 Tab：只读账本，可导出/行级删除/删整批
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            // 「当前 / 归档」分段切换器
+            Row {
+                spacing: 0
+                Repeater {
+                    model: [
+                        { id: "current", label: qsTr("当前") },
+                        { id: "archive", label: qsTr("归档") }
+                    ]
+                    delegate: Rectangle {
+                        property var tabData: modelData
+                        property bool selected: root._viewMode === tabData.id
+                        property int  archCount: tabData.id === "archive" ? root._archiveBatches.length : 0
+                        radius: 0
+                        // 第一个左圆角，最后一个右圆角，中间方角
+                        Component.onCompleted: {
+                            if (index === 0) { topLeftRadius = 6; bottomLeftRadius = 6 }
+                            if (index === 1) { topRightRadius = 6; bottomRightRadius = 6 }
+                        }
+                        height: 28
+                        implicitWidth: tabLabel.implicitWidth + 26
+                        color: selected ? "#3a3a44"
+                              : tabMA.containsMouse ? "#2c2c34"
+                                                    : "#222226"
+                        border.color: selected ? "#5a5a66" : "#3a3a42"
+                        border.width: 1
+                        Text {
+                            id: tabLabel
+                            anchors.centerIn: parent
+                            text: tabData.id === "archive" && archCount > 0
+                                  ? tabData.label + "（" + archCount + "）"
+                                  : tabData.label
+                            color: selected ? "#ffffff" : "#cfcfd4"
+                            font.pixelSize: 12
+                            font.bold: selected
+                        }
+                        MouseArea {
+                            id: tabMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root._switchView(tabData.id)
+                        }
+                    }
+                }
+            }
+
+            // 归档 Tab 专属：批次下拉
+            ComboBox {
+                id: archiveBatchSelector
+                visible: root._isArchiveView
+                Layout.preferredWidth: 320
+                // 与同行「当前/归档」Tab(28) 及「删除整批」按钮(26) 对齐，
+                // 避免默认 ComboBox 高度(~40)在工具行里"鹤立鸡群"。
+                Layout.preferredHeight: 28
+                Layout.alignment: Qt.AlignVCenter
+                implicitHeight: 28
+                padding: 0
+                model: root._archiveBatches
+                textRole: "name"
+                // 同步选中：选中项变化时刷新表格
+                // 直接用 binding 表达式：list 或 _archiveBatch 任一变化都自动重算 currentIndex
+                currentIndex: {
+                    var list = root._archiveBatches
+                    var name  = root._archiveBatch
+                    for (var i = 0; i < list.length; ++i) {
+                        if (list[i].name === name) return i
+                    }
+                    return list.length > 0 ? 0 : -1
+                }
+                onActivated: function(idx) {
+                    if (idx >= 0 && idx < root._archiveBatches.length) {
+                        var picked = root._archiveBatches[idx].name
+                        if (picked !== root._archiveBatch) {
+                            root._archiveBatch = picked
+                            root._checkedFolders = ({})
+                            root._refresh()
+                        }
+                    }
+                }
+                delegate: ItemDelegate {
+                    id: batchItemDel
+                    width: archiveBatchSelector.width
+                    height: 38
+                    // 标记当前选中项，便于 contentItem/background 高亮
+                    readonly property bool _isCurrent:
+                        archiveBatchSelector.currentIndex === index
+                    contentItem: Column {
+                        spacing: 2
+                        leftPadding: 10
+                        rightPadding: 10
+                        Text {
+                            text: modelData.name
+                            color: batchItemDel._isCurrent ? "#9ab8ff" : "#e8e8ec"
+                            font.pixelSize: 12
+                            font.bold: true
+                            elide: Text.ElideRight
+                            width: archiveBatchSelector.width - 20
+                        }
+                        Text {
+                            text: qsTr("%1 条 · %2").arg(modelData.count || 0)
+                                                    .arg((modelData.modifiedAt || "").replace("T", " ").substring(0, 19))
+                            color: "#9aa0a6"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                            width: archiveBatchSelector.width - 20
+                        }
+                    }
+                    // 背景：非选中默认透明（贴 popup 深色背景），hover/选中时给一层高亮，
+                    // 避免使用默认浅色 ItemDelegate 背景带来的"白条"。
+                    background: Rectangle {
+                        color: batchItemDel._isCurrent
+                               ? "#2c3a5a"
+                               : (batchItemDel.hovered ? "#2f2f36" : "transparent")
+                        radius: 3
+                    }
+                }
+                contentItem: Text {
+                    leftPadding: 10
+                    rightPadding: archiveBatchSelector.indicator.width + 10
+                    text: {
+                        var b = null
+                        for (var i = 0; i < root._archiveBatches.length; ++i)
+                            if (root._archiveBatches[i].name === root._archiveBatch) { b = root._archiveBatches[i]; break }
+                        if (!b) return qsTr("（无归档批次）")
+                        return b.name + "  ·  " + (b.count || 0) + qsTr(" 条")
+                    }
+                    color: "#e8e8ec"
+                    font.pixelSize: 12
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    color: "#26262a"
+                    border.color: archiveBatchSelector.activeFocus ? "#3a7afe" : "#3a3a42"
+                    border.width: 1
+                    radius: 4
+                }
+                // ── 自定义右侧下拉箭头（深色三角），覆盖原生 macOS 双向箭头 ──
+                // 默认 indicator 是系统主题 Image，会渲染成浅色双箭头；这里替换成
+                // 单一向下三角，与对话框整体深色一致。
+                indicator: Canvas {
+                    x: archiveBatchSelector.width - width - 8
+                    y: (archiveBatchSelector.height - height) / 2
+                    width: 10
+                    height: 6
+                    contextType: "2d"
+                    onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.reset()
+                        ctx.fillStyle = "#9aa0a6"
+                        ctx.beginPath()
+                        ctx.moveTo(0, 0)
+                        ctx.lineTo(width, 0)
+                        ctx.lineTo(width / 2, height)
+                        ctx.closePath()
+                        ctx.fill()
+                    }
+                }
+                // ── popup：弹出层整体深色 ──
+                // ComboBox 默认 popup 走系统主题，macOS 上是白底。这里完全自定义：
+                //   · 背景 Rectangle 用与对话框一致的深灰
+                //   · ListView 滚动条 / item 高亮全部走我们自己的 delegate 深色样式
+                popup: Popup {
+                    y: archiveBatchSelector.height + 2
+                    width: archiveBatchSelector.width
+                    implicitHeight: Math.min(contentItem.implicitHeight + 8, 320)
+                    padding: 4
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: archiveBatchSelector.popup.visible ? archiveBatchSelector.delegateModel : null
+                        currentIndex: archiveBatchSelector.highlightedIndex
+                        ScrollIndicator.vertical: ScrollIndicator { }
+                    }
+                    background: Rectangle {
+                        color: "#26262a"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 6
+                    }
+                }
+            }
+            // 归档 Tab：「删除整批」按钮，与下拉同行右侧
+            Rectangle {
+                visible: root._isArchiveView && root._archiveBatch.length > 0
+                radius: 14
+                height: 26
+                implicitWidth: deleteBatchLabel.implicitWidth + 22
+                color: deleteBatchMA.containsMouse ? "#3a1f22" : "#2a1d20"
+                border.color: "#7a3a3a"
+                border.width: 1
+                Text {
+                    id: deleteBatchLabel
+                    anchors.centerIn: parent
+                    text: qsTr("🗑 删除整批")
+                    color: "#ff8a8a"
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: deleteBatchMA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: confirmDeleteBatchDialog.open()
+                }
+            }
+            Item { Layout.fillWidth: true }
+            // 归档 Tab：批次摘要（评分人列表 / 最后修改时间）
+            Text {
+                visible: root._isArchiveView && root._archiveBatch.length > 0
+                text: {
+                    for (var i = 0; i < root._archiveBatches.length; ++i) {
+                        var b = root._archiveBatches[i]
+                        if (b.name === root._archiveBatch) {
+                            var raters = (b.raters || []).join(", ")
+                            return qsTr("评分人：%1").arg(raters || "—")
+                        }
+                    }
+                    return ""
+                }
+                color: "#9aa0a6"
+                font.pixelSize: 11
+                elide: Text.ElideRight
+                Layout.maximumWidth: 280
             }
         }
 
@@ -1136,9 +1425,21 @@ Window {
             spacing: 8
             PillBtn {
                 id: exportBtn
-                text: qsTr("📤 导出 CSV…")
+                // 归档 Tab 时按钮文案改为"导出此批次"，意图更明确
+                text: root._isArchiveView
+                       ? (root._archiveBatch.length > 0
+                            ? qsTr("📤 导出此批次…")
+                            : qsTr("📤 导出 CSV…"))
+                       : qsTr("📤 导出 CSV…")
                 emphasized: true
-                onClicked: exportDialog.open()
+                enabled: !root._isArchiveView || root._archiveBatch.length > 0
+                onClicked: {
+                    if (root._isArchiveView) {
+                        exportArchiveDialog.open()
+                    } else {
+                        exportDialog.open()
+                    }
+                }
                 // 闪烁复位：flash=true 后 1.6s 自动关闭
                 Timer {
                     id: exportFlashTimer
@@ -1147,6 +1448,9 @@ Window {
                 }
             }
             PillBtn {
+                // 归档 Tab 不接云端上传（本轮先不做，避免后端目录结构跟着改），
+                // 只在当前 Tab 显示
+                visible: !root._isArchiveView
                 // 上传到后端服务器：
                 //   ・ 未配置地址时 → 先弹设置对话框让用户填 URL/Token
                 //   ・ 配置后点击 → 直接走上传。上传中 disable，避免连点重复提交
@@ -1155,9 +1459,60 @@ Window {
                 text: (typeof Rating !== "undefined" && Rating.uploading)
                       ? qsTr("☁ 上传中…")
                       : qsTr("☁ 上传到云端")
-                enabled: typeof Rating !== "undefined"
-                         && !Rating.uploading
-                         && root._rows.length > 0
+                // ── 启用条件分两层：
+                // 1) 真·硬约束（绑定层就置灰，本地直接卡住）：
+                //    - 至少勾选 1 个文件夹（picked > 0）
+                //    - 勾选的文件夹全部已评完（incomplete == 0）
+                // 2) 软约束（点击层兜底拦截）：评分人/备注 tag 必填、网络上传中等
+                //    保留 onClicked 中的 _collectCheckedIncomplete() 兜底，避免 binding
+                //    没及时刷新时漏拦。
+                // 依赖 _checkedFolders / _folders 两个 property 变化触发重算。
+                enabled: {
+                    var _dep1 = root._checkedFolders
+                    var _dep2 = root._folders
+                    if (typeof Rating === "undefined") return false
+                    if (Rating.uploading) return false
+                    if (root._rows.length === 0) return false
+                    if (root._checkedFolderCount() === 0) return false
+                    if (root._collectCheckedIncomplete().length > 0) return false
+                    return true
+                }
+                // 鼠标悬浮看具体原因，避免用户对着灰按钮一脸懵。
+                // 注意：PillBtn 内置 MouseArea 在 enabled=false 时会一并禁用 hover 检测，
+                // 这里独立挂一个 hoverArea，acceptedButtons=NoButton 不抢点击，仅作 hover 驱动。
+                MouseArea {
+                    id: uploadHoverArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.NoButton  // 不吃点击，让 PillBtn 自己的 MouseArea 处理
+                    cursorShape: parent.enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                }
+                ToolTip.visible: uploadHoverArea.containsMouse && !enabled
+                                 && !(typeof Rating !== "undefined" && Rating.uploading)
+                ToolTip.delay: 400
+                ToolTip.timeout: 6000
+                ToolTip.text: {
+                    var _dep1 = root._checkedFolders
+                    var _dep2 = root._folders
+                    if (typeof Rating === "undefined") return ""
+                    if (Rating.uploading) return ""
+                    if (root._rows.length === 0)
+                        return qsTr("当前还没有任何评分记录")
+                    if (root._checkedFolderCount() === 0)
+                        return qsTr("请先在列表里勾选要上传的文件夹")
+                    var inc = root._collectCheckedIncomplete()
+                    if (inc.length > 0) {
+                        // 列出未评完的文件夹（最多 3 个，超出 …）
+                        var lines = []
+                        for (var i = 0; i < inc.length && i < 3; ++i) {
+                            lines.push("• " + inc[i].name
+                                       + " （" + inc[i].ratedCount + "/" + inc[i].totalVideos + "）")
+                        }
+                        if (inc.length > 3) lines.push("…还有 " + (inc.length - 3) + " 个")
+                        return qsTr("以下勾选的文件夹尚未评完，无法上传：\n") + lines.join("\n")
+                    }
+                    return ""
+                }
                 onClicked: {
                     if (typeof Rating === "undefined") return
                     // 防御性兜底：把焦点中的输入框（tag / 评分人）强制提交，
@@ -1231,14 +1586,17 @@ Window {
             }
             PillBtn {
                 // “⚙ 设置”：独立入口，避免“双击上传按钮”这种隐藏交互被错过
+                visible: !root._isArchiveView
                 text: qsTr("⚙ 上传设置")
                 onClicked: uploadConfigDialog.open()
             }
             PillBtn {
-                // 与"删除勾选"互补：把已勾选文件夹的评分搬到 archive/ 目录下的独立 CSV，
-                // 主表里看不到，但磁盘里仍可查（适合"这一批已交差，本地不再展示"的场景）。
+                // 与"删除勾选"互补：把已勾选文件夹的评分搬到 archive/<mode>/<batchName>/ 子目录下，
+                // 主表里不再显示，但归档 Tab 可查。
+                // 改造点：归档前会先弹"批次名输入"对话框，让用户给本次归档命名。
                 // 不是 danger 风格，避免和"删除"按钮视觉撞车。
                 id: archiveSelectedBtn
+                visible: !root._isArchiveView
                 text: {
                     var _dep = root._checkedFolders
                     var _dep2 = root._folders
@@ -1248,20 +1606,21 @@ Window {
                             : qsTr("📦 归档勾选")
                 }
                 enabled: (root._checkedFolders, root._folders, root._checkedFolderCount() > 0)
-                onClicked: confirmArchiveDialog.open()
-            }
-            PillBtn {
-                // 常驻入口：和"归档勾选"配对，无需先勾选/先归档即可点击。
-                // C++ 侧 revealArchiveFolder() 在目录不存在时会自动建立，所以即使从未归档过，
-                // 用户也能直接打开归档目录确认"东西到底放哪"，避免"必须先归档才能找到入口"的鸡生蛋问题。
-                text: qsTr("📂 归档目录")
                 onClicked: {
-                    if (typeof Rating !== "undefined") Rating.revealArchiveFolder()
+                    // 给输入框填默认批次名（<mode>_yyyyMMdd_HHmmss）
+                    if (typeof Rating !== "undefined") {
+                        confirmArchiveDialog._batchName = Rating.defaultArchiveBatchName(Rating.currentMode)
+                    } else {
+                        confirmArchiveDialog._batchName = ""
+                    }
+                    confirmArchiveDialog.open()
                 }
             }
+
             PillBtn {
                 // 行业惯例：批量操作必须显式勾选目标行才能执行（参考 Finder/资源管理器、邮箱客户端）
-                // 这里只删除"已勾选文件夹"下的评分；未勾选时按钮直接禁用，避免误触。
+                // 当前 Tab：删除"已勾选文件夹"下的评分（写当前 CSV）
+                // 归档 Tab：从当前批次 CSV 中删除"已勾选文件夹"下的评分行
                 id: removeSelectedBtn
                 // 把已勾选数量直接拼到按钮文案里，比 ToolTip 更直观（PillBtn 是 Rectangle，没有
                 // 标准 hovered 属性，外部用 ToolTip on hovered 会报 ReferenceError）。
@@ -1520,6 +1879,10 @@ Window {
                         var d = root._folders[i]
                         if (root._isFolderChecked(d.key)) nRecs += (d.totalItems || 0)
                     }
+                    if (root._isArchiveView) {
+                        return qsTr("将从归档批次 %1 中删除已勾选 %2 个文件夹下的全部评分（共 %3 条），\n操作不可恢复，是否继续？")
+                                .arg(root._archiveBatch).arg(nFolders).arg(nRecs)
+                    }
                     return qsTr("将从本地 ratings.csv 删除已勾选的 %1 个文件夹下的全部评分（共 %2 条），\n操作不可恢复，是否继续？")
                             .arg(nFolders).arg(nRecs)
                 }
@@ -1569,6 +1932,30 @@ Window {
                 rejectDialog.openWith(qsTr("无法删除"), qsTr("请先勾选至少 1 个文件夹"))
                 return
             }
+            if (root._isArchiveView) {
+                // 归档 Tab：从批次 CSV 中按 file_path 删除选中文件夹下的所有行
+                var pickedSet = {}
+                for (var pi = 0; pi < picked.length; ++pi) pickedSet[picked[pi]] = true
+                var fpList = []
+                for (var fi = 0; fi < root._folders.length; ++fi) {
+                    var d = root._folders[fi]
+                    if (!pickedSet[d.path]) continue
+                    for (var gi = 0; gi < d.files.length; ++gi) {
+                        var g = d.files[gi]
+                        if (g.path && g.path.length > 0) fpList.push(g.path)
+                    }
+                }
+                var ok = Rating.removeArchiveRows(Rating.currentMode, root._archiveBatch, fpList)
+                if (ok) {
+                    actionToast.show(true, qsTr("已从归档批次中删除 %1 个文件夹的记录").arg(picked.length))
+                    root._checkedFolders = ({})
+                    // 批次可能被删空 → 自动落到下一个批次
+                    root._refreshArchiveList(true)
+                } else {
+                    actionToast.show(false, qsTr("删除失败"))
+                }
+                return
+            }
             var ok = Rating.removeByFolders(picked)
             if (ok) {
                 actionToast.show(true, qsTr("已删除 %1 个文件夹的评分").arg(picked.length))
@@ -1583,8 +1970,10 @@ Window {
         id: confirmArchiveDialog
         modal: true
         anchors.centerIn: parent
-        width: 420
+        width: 460
         padding: 0
+        // 输入缓冲区（点击"📦 归档勾选"时由外部填默认时间戳名）
+        property string _batchName: ""
 
         Overlay.modal: Rectangle { color: "#aa000000" }
 
@@ -1627,15 +2016,14 @@ Window {
             }
         }
 
-        contentItem: Item {
-            implicitHeight: _archMsg.implicitHeight + 32
+        contentItem: ColumnLayout {
+            spacing: 10
             Text {
                 id: _archMsg
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.leftMargin: 16
-                anchors.rightMargin: 16
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 14
                 text: {
                     var _dep = root._checkedFolders
                     var _dep2 = root._folders
@@ -1645,17 +2033,53 @@ Window {
                         var d = root._folders[i]
                         if (root._isFolderChecked(d.key)) nRecs += (d.totalItems || 0)
                     }
-                    return qsTr("将把已勾选的 %1 个文件夹下的全部评分（共 %2 条）搬到归档目录：\n  %3/archive/ratings_<模式>__<时间戳>.csv\n主表里不再显示，但磁盘里仍可查阅，是否继续？")
+                    return qsTr("将把已勾选的 %1 个文件夹下的全部评分（共 %2 条）搬到一个新批次中。\n归档后这部分数据从「当前」表里清除，可在「归档」Tab 下随时查阅。")
                             .arg(nFolders).arg(nRecs)
-                            // 显示用户数据根目录的父路径（去掉文件名部分），方便用户复制路径
-                            .arg(((typeof Rating !== "undefined") ? Rating.dataFilePath : "")
-                                 .replace(/\/[^\/]*$/, ""))
                 }
                 color: "#cfcfd4"
                 font.pixelSize: 13
                 wrapMode: Text.WordWrap
                 lineHeight: 1.35
             }
+            // ── 批次名输入框 ────────────────────────────────────────────
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                spacing: 4
+                Text {
+                    text: qsTr("批次名（可改）")
+                    color: "#9aa0a6"
+                    font.pixelSize: 11
+                }
+                TextField {
+                    id: archiveBatchField
+                    Layout.fillWidth: true
+                    text: confirmArchiveDialog._batchName
+                    color: "#e8e8ec"
+                    placeholderText: qsTr("默认：<模式>_yyyyMMdd_HHmmss")
+                    placeholderTextColor: "#6a6a72"
+                    selectByMouse: true
+                    background: Rectangle {
+                        color: "#26262a"
+                        border.color: archiveBatchField.activeFocus ? "#3a7afe" : "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    onTextChanged: confirmArchiveDialog._batchName = text
+                }
+                Text {
+                    text: qsTr("将存放在：%1/archive/%2/<批次名>/ratings.csv")
+                          .arg(((typeof Rating !== "undefined") ? Rating.dataFilePath : "")
+                               .replace(/\/[^\/]*$/, ""))
+                          .arg((typeof Rating !== "undefined") ? Rating.currentMode : "")
+                    color: "#6a6a72"
+                    font.pixelSize: 10
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+            }
+            Item { Layout.preferredHeight: 4 }
         }
 
         footer: Rectangle {
@@ -1675,8 +2099,6 @@ Window {
                 anchors.topMargin: 12
                 anchors.bottomMargin: 12
                 spacing: 8
-                // 注："打开归档目录"已上提到主弹窗底部按钮区作为常驻入口，
-                // 这里不再重复放置，避免双重入口造成困惑。
                 Item { Layout.fillWidth: true }
                 PillBtn {
                     text: qsTr("取消")
@@ -1696,11 +2118,146 @@ Window {
                 rejectDialog.openWith(qsTr("无法归档"), qsTr("请先勾选至少 1 个文件夹"))
                 return
             }
-            var ok = Rating.archiveByFolders(picked)
+            var batch = (confirmArchiveDialog._batchName || "").trim()
+            var ok = Rating.archiveByFolders(picked, batch)
             if (ok) {
                 actionToast.show(true, qsTr("已归档 %1 个文件夹的评分").arg(picked.length))
+                root._checkedFolders = ({})        // 归档后清掉勾选，避免误操作再删一次
+                // 让用户能立刻在"归档"Tab 看到这一批
+                root._refreshArchiveList(false)
             } else {
                 actionToast.show(false, qsTr("归档失败：未命中任何记录或写盘失败"))
+            }
+        }
+    }
+
+    // ── 删除整批归档确认对话框（与"删除勾选"互补：删除整个批次目录，不可恢复）────
+    Dialog {
+        id: confirmDeleteBatchDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 420
+        padding: 0
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#7a3a3a"
+            border.width: 1
+            radius: 8
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                text: qsTr("删除整个归档批次？")
+                color: "#ff8a8a"
+                font.pixelSize: 14
+                font.bold: true
+                elide: Text.ElideRight
+            }
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1; color: "#2a2a30"
+            }
+        }
+
+        contentItem: Item {
+            implicitHeight: _delBatchMsg.implicitHeight + 32
+            Text {
+                id: _delBatchMsg
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16; anchors.rightMargin: 16
+                text: qsTr("将永久删除归档批次「%1」及其所有评分记录，此操作不可恢复，是否继续？")
+                        .arg(root._archiveBatch)
+                color: "#cfcfd4"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.35
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1; color: "#2a2a30"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16; anchors.rightMargin: 16
+                anchors.topMargin: 12; anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("取消")
+                    onClicked: confirmDeleteBatchDialog.reject()
+                }
+                PillBtn {
+                    text: qsTr("永久删除")
+                    danger: true
+                    onClicked: confirmDeleteBatchDialog.accept()
+                }
+            }
+        }
+
+        onAccepted: {
+            if (typeof Rating === "undefined" || !root._archiveBatch) return
+            var name = root._archiveBatch
+            var ok = Rating.deleteArchiveBatch(Rating.currentMode, name)
+            if (ok) {
+                actionToast.show(true, qsTr("已删除归档批次「%1」").arg(name))
+                root._archiveBatch = ""
+                root._checkedFolders = ({})
+                root._refreshArchiveList(false)
+            } else {
+                actionToast.show(false, qsTr("删除归档批次失败"))
+            }
+        }
+    }
+
+    // ── 导出此归档批次：用户指定保存路径（与主"导出"按钮逻辑同源，但走 exportArchiveBatch）────
+    FileDialog {
+        id: exportArchiveDialog
+        title: qsTr("导出归档批次为 CSV")
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["CSV (*.csv)"]
+        defaultSuffix: "csv"
+        currentFolder: (typeof Rating !== "undefined") ? Rating.defaultExportDir : ""
+        currentFile: {
+            var name = "PlayerX_archive"
+            var u = (typeof Rating !== "undefined") ? Rating.currentUser : ""
+            if (u && u.length > 0) name += "_" + u
+            if (root._archiveBatch && root._archiveBatch.length > 0)
+                name += "_" + root._archiveBatch
+            var dir = (typeof Rating !== "undefined") ? Rating.defaultExportDir.toString() : ""
+            if (dir.length > 0) {
+                if (dir.charAt(dir.length - 1) !== "/") dir += "/"
+                return dir + name + ".csv"
+            }
+            return name + ".csv"
+        }
+        onAccepted: {
+            if (typeof Rating === "undefined") return
+            var fp = selectedFile.toString().replace(/^file:\/\//, "")
+            // Windows 下 selectedFile 可能形如 file:///C:/xxx，需要再剥一次开头的 /
+            if (fp.length > 2 && fp.charAt(0) === "/" && fp.charAt(2) === ":") fp = fp.substring(1)
+            var ok = Rating.exportArchiveBatch(Rating.currentMode, root._archiveBatch, fp)
+            if (ok) {
+                actionToast.show(true, qsTr("已导出到 %1").arg(fp))
+            } else {
+                actionToast.show(false, qsTr("导出失败"))
             }
         }
     }
