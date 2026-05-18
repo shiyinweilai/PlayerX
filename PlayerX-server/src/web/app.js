@@ -40,6 +40,14 @@
     const loginOkBtn    = $('loginOkBtn');
     const loginCancelBtn= $('loginCancelBtn');
 
+    // 上传 Token 设置弹窗
+    const tokenSettingsBtn = $('tokenSettingsBtn');
+    const tokenMask        = $('tokenMask');
+    const tokenInput       = $('tokenInput');
+    const tokenErr         = $('tokenErr');
+    const tokenSaveBtn     = $('tokenSaveBtn');
+    const tokenCancelBtn   = $('tokenCancelBtn');
+
     const kpiCount = $('kpiCount');
     const kpiUsers = $('kpiUsers');
     const kpiTags  = $('kpiTags');
@@ -142,6 +150,10 @@
                     adminLoginBtn.title = '登录后才能执行删除 / 归档等管理操作';
                 }
             }
+        }
+        // “上传 Token ”按钮仅在管理员登录后可见
+        if (tokenSettingsBtn) {
+            tokenSettingsBtn.hidden = !(auth.enabled && logged);
         }
         // 主列表的批量按钮：未登录时统一锁死并提示
         const lockTip = '需要管理员登录后才能操作';
@@ -265,6 +277,74 @@
     });
     if (loginMask) loginMask.addEventListener('click', (e) => {
         if (e.target === loginMask) closeLoginDialog(); // 点遮罩关闭
+    });
+
+    // ────────── 上传 Token 设置弹窗 ──────────
+    function openTokenDialog() {
+        if (!tokenMask) return;
+        tokenErr.hidden = true;
+        tokenErr.textContent = '';
+        tokenInput.value = '';
+        tokenInput.placeholder = '加载中…';
+        tokenMask.hidden = false;
+        // 拉当前 token
+        adminFetch('/api/settings/upload-token').then(async (r) => {
+            if (r.status === 401) { tokenMask.hidden = true; return; }
+            const j = await r.json().catch(() => ({}));
+            if (r.ok && j.ok) {
+                tokenInput.value = j.token || '';
+                tokenInput.placeholder = '如：123456';
+                setTimeout(() => { tokenInput.focus(); tokenInput.select(); }, 30);
+            } else {
+                tokenErr.textContent = j.error || '读取 Token 失败';
+                tokenErr.hidden = false;
+            }
+        }).catch((e) => {
+            tokenErr.textContent = '网络错误：' + e.message;
+            tokenErr.hidden = false;
+        });
+    }
+    function closeTokenDialog() {
+        if (tokenMask) tokenMask.hidden = true;
+    }
+    async function saveUploadToken() {
+        const v = (tokenInput.value || '').trim();
+        // 留空 = 关闭鉴权，二次确认
+        if (!v && !confirm('Token 留空将关闭上传鉴权（任何人都能上传），确定继续？')) {
+            return;
+        }
+        tokenSaveBtn.disabled = true;
+        try {
+            const r = await adminFetch('/api/settings/upload-token', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: v }),
+            });
+            if (r.status === 401) return;
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) {
+                tokenErr.textContent = j.error || '保存失败';
+                tokenErr.hidden = false;
+                return;
+            }
+            closeTokenDialog();
+            showToast(v ? `上传 Token 已更新为 ${v}` : '上传鉴权已关闭', 'ok');
+        } catch (e) {
+            tokenErr.textContent = '网络错误：' + e.message;
+            tokenErr.hidden = false;
+        } finally {
+            tokenSaveBtn.disabled = false;
+        }
+    }
+    if (tokenSettingsBtn) tokenSettingsBtn.addEventListener('click', openTokenDialog);
+    if (tokenCancelBtn)   tokenCancelBtn.addEventListener('click', closeTokenDialog);
+    if (tokenSaveBtn)     tokenSaveBtn.addEventListener('click', saveUploadToken);
+    if (tokenInput) tokenInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveUploadToken();
+        if (e.key === 'Escape') closeTokenDialog();
+    });
+    if (tokenMask) tokenMask.addEventListener('click', (e) => {
+        if (e.target === tokenMask) closeTokenDialog();
     });
 
     // 用拦截器在写操作前提示登录：未登录时点击锁定按钮就直接弹登录窗

@@ -952,3 +952,40 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     cursor: not-allowed;
     pointer-events: auto; /* 仍然要响应 hover/title */
 }
+
+/* ────────── 上传 Token 设置弹窗 ────────── */
+.token-box .muted-tip { color: var(--muted, #86868b); }
+.token-box code {
+    background: rgba(0, 0, 0, .06);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+.token-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+}
+.token-row .token-label {
+    flex: 0 0 80px;
+    color: var(--muted, #86868b);
+    font-size: 13px;
+}
+.token-row input[type="text"] {
+    flex: 1;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, .15);
+    background: rgba(0, 0, 0, .02);
+    color: inherit;
+    font-size: 14px;
+    outline: none;
+    transition: border-color .15s, background .15s;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.token-row input[type="text"]:focus {
+    border-color: var(--primary, #0071e3);
+    background: #fff;
+}

@@ -24,7 +24,7 @@ const express = require('express');
 const path    = require('path');
 const os      = require('os');
 
-const { WEB_DIR, UPLOAD_DIR, ARCHIVE_DIR, ARCHIVE_KEEP, ensureDirs } = require('./src/lib/paths');
+const { WEB_DIR, UPLOAD_DIR, ARCHIVE_DIR, ARCHIVE_KEEP, ensureDirs, getUploadToken } = require('./src/lib/paths');
 
 // 探测本机所有 IPv4 LAN 地址（排除回环 / link-local 169.254.x.x）；
 // 排序优先：常见家用 / 办公网段（192.168 → 10. → 172.16-31 → 其他）。
@@ -98,7 +98,11 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`PlayerX server listening on port ${PORT}`);
     console.log(`  uploads dir : ${UPLOAD_DIR}`);
     console.log(`  archive dir : ${ARCHIVE_DIR}  (keep latest ${ARCHIVE_KEEP} per slot)`);
-    console.log(`  auth        : disabled (LAN-only)`);
+    {
+        const tk = getUploadToken();
+        if (tk) console.log(`  upload token: enabled (current = "${tk}")`);
+        else    console.log(`  upload token: DISABLED (anyone can upload)`);
+    }
     console.log(`  web panel   : http://localhost:${PORT}/`);
     if (primary) {
         console.log(`  LAN access  : http://${primary}:${PORT}/`);

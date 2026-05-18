@@ -4,3 +4,4 @@ archives/
 *.log
 .DS_Store
 package-lock.json
+config.json

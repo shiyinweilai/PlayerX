@@ -9,23 +9,24 @@
  */
 const express = require('express');
 
-const upload  = require('./upload');
-const list    = require('./list');
-const merge   = require('./merge');
-const files   = require('./files');
-const preview = require('./preview');
-const status  = require('./status');
-const del     = require('./delete');
-const archive = require('./archive');
-const auth    = require('./auth');
+const upload   = require('./upload');
+const list     = require('./list');
+const merge    = require('./merge');
+const files    = require('./files');
+const preview  = require('./preview');
+const status   = require('./status');
+const del      = require('./delete');
+const archive  = require('./archive');
+const auth     = require('./auth');
+const settings = require('./settings');
 
 function mountApi(app) {
     // ── 公开接口 ─────────────────────────────────────────────
     app.get('/api/status', status.makeHandler());
 
-    // 上传（来自 PlayerX 客户端，无需管理员鉴权）
-    app.post('/upload',     upload.multerMiddleware, upload.handle);
-    app.post('/api/upload', upload.multerMiddleware, upload.handle);
+    // 上传（来自 PlayerX 客户端）：先校验 X-Token，再走 multer 解析文件
+    app.post('/upload',     upload.checkUploadToken, upload.multerMiddleware, upload.handle);
+    app.post('/api/upload', upload.checkUploadToken, upload.multerMiddleware, upload.handle);
 
     // 列表 / 下载 / 合并下载 / 预览：匿名可访问
     app.get('/list',     list.handle);
@@ -63,6 +64,10 @@ function mountApi(app) {
 
     app.delete('/files/:name',     auth.requireAdmin, del.handle);
     app.delete('/api/files/:name', auth.requireAdmin, del.handle);
+
+    // 上传 Token 设置（仅管理员可读写）
+    app.get('/api/settings/upload-token', auth.requireAdmin, settings.handleGet);
+    app.put('/api/settings/upload-token', auth.requireAdmin, jsonParser, settings.handlePut);
 
     app.post('/api/archive',           auth.requireAdmin, jsonParser, archive.handleArchive);
     app.post('/api/files/bulk-delete', auth.requireAdmin, jsonParser, archive.handleBulkDelete);

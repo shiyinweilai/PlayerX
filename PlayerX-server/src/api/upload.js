@@ -13,12 +13,21 @@ const fs     = require('fs');
 const path   = require('path');
 const multer = require('multer');
 
-const { UPLOAD_DIR, MAX_BYTES, ensureDirs } = require('../lib/paths');
-const { safeSlug, tsNow }                   = require('../lib/slug');
-const { findExisting, archiveExisting }     = require('../lib/store');
+const { UPLOAD_DIR, MAX_BYTES, ensureDirs, getUploadToken } = require('../lib/paths');
+const { safeSlug, tsNow }                                   = require('../lib/slug');
+const { findExisting, archiveExisting }                     = require('../lib/store');
 
 // 先把上传内容缓存到内存，业务侧根据冲突情况再决定怎么落盘。
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_BYTES } });
+
+// 提取请求中的 token：优先取 X-Token 头（PlayerX 客户端在用），兜底再看 query/body
+function _extractToken(req) {
+    const h = req.header('X-Token') || req.header('x-token');
+    if (h) return String(h);
+    if (req.query && req.query.token) return String(req.query.token);
+    if (req.body  && req.body.token)  return String(req.body.token);
+    return '';
+}
 
 function handle(req, res) {
     if (!req.file) return res.status(400).json({ ok: false, error: 'missing file field' });
@@ -66,4 +75,25 @@ function handle(req, res) {
     console.log(`[upload] ${filename} (${size} bytes, archived=${archived.length}) from ${req.ip}`);
 }
 
-module.exports = { multerMiddleware: upload.single('file'), handle };
+// Upload token 校验：作为独立中间件，挂在 multer 之前，
+// 这样 token 错误时不会浪费带宽读取 multipart 文件。
+function checkUploadToken(req, res, next) {
+    const expected = getUploadToken();
+    if (!expected) return next();   // 配置为空 → 关闭鉴权
+    const got = _extractToken(req);
+    if (got !== expected) {
+        return res.status(401).json({
+            ok: false,
+            error: 'INVALID_TOKEN',
+            message: '上传被拒绝：token 不匹配，请向管理员获取正确的 token',
+        });
+    }
+    next();
+}
+
+module.exports = {
+    multerMiddleware: upload.single('file'),
+    checkUploadToken,
+    handle,
+};
+
