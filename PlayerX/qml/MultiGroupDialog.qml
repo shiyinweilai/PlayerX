@@ -866,6 +866,37 @@ ApplicationWindow {
             border.width: 1
             radius: 6
         }
+        // 默认 header 是系统样式的白底标题栏，这里接管为深色，与整体主题一致。
+        header: Rectangle {
+            color: "#1f1f24"
+            implicitHeight: 36
+            radius: 6
+            // 只让顶部两个角圆，避免与下方内容出现双重圆角
+            Rectangle {
+                anchors {
+                    left: parent.left; right: parent.right; bottom: parent.bottom
+                }
+                height: parent.radius
+                color: parent.color
+            }
+            Label {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                text: resumeChoiceDialog.title
+                color: "#e8e8ec"
+                font.pixelSize: 14
+                font.bold: true
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+            }
+            // 底部分隔线
+            Rectangle {
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                height: 1
+                color: "#2c2c33"
+            }
+        }
         contentItem: ColumnLayout {
             spacing: 10
             // 作用域提示
@@ -1225,14 +1256,19 @@ ApplicationWindow {
                 var k = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"))
                 name = (k >= 0) ? p.substring(k + 1) : p
             } catch (e) { name = "" }
-            // 路径标签：取文件夹尾部目录名 + 关键字（如有）
+            // 路径标签：直接用"完整文件夹路径"，与打开话框选中的展示对齐；
+            // 只做“去掉末尾 '/' 与 '\\' ”的轻量规整（FolderDialog 返回的
+            // 路径为 `/x/y/` 形式，去尾杠后含义一致）。
+            // 超长路径依靠 Label.elide=ElideMiddle 自然省略。
             var folderLabel = ""
             try {
                 var fp = l.folderPath || ""
-                if (fp.length > 0) {
-                    var fk = Math.max(fp.lastIndexOf("/"), fp.lastIndexOf("\\"))
-                    folderLabel = (fk >= 0) ? fp.substring(fk + 1) : fp
+                while (fp.length > 1
+                       && (fp.charAt(fp.length - 1) === "/"
+                           || fp.charAt(fp.length - 1) === "\\")) {
+                    fp = fp.substring(0, fp.length - 1)
                 }
+                folderLabel = fp
             } catch (e) { folderLabel = "" }
             if (l.keyword && l.keyword.length > 0) {
                 folderLabel = folderLabel + "（" + l.keyword + "）"
