@@ -32,6 +32,14 @@
     const serverStatusText = $('serverStatusText');
     const appVer        = $('appVer');
 
+    // 管理员登录相关
+    const adminLoginBtn = $('adminLoginBtn');
+    const loginMask     = $('loginMask');
+    const loginInput    = $('loginInput');
+    const loginErr      = $('loginErr');
+    const loginOkBtn    = $('loginOkBtn');
+    const loginCancelBtn= $('loginCancelBtn');
+
     const kpiCount = $('kpiCount');
     const kpiUsers = $('kpiUsers');
     const kpiTags  = $('kpiTags');
@@ -89,6 +97,184 @@
         return fetch(pathname, Object.assign({
             headers: { 'Accept': 'application/json' },
         }, opts || {}));
+    }
+
+    // ────────── 管理员登录 / 鉴权 ──────────
+    const auth = {
+        token: localStorage.getItem('px_admin_token') || '',
+        enabled: true, // 默认假设启用，启动时再请求确认
+    };
+    const isLoggedIn = () => !!auth.token;
+
+    // 给写操作专用：自动带上 X-Admin-Token，拿到 401 时清掉本地 token 并提示
+    async function adminFetch(pathname, opts) {
+        opts = opts || {};
+        const headers = Object.assign({}, opts.headers || {});
+        if (auth.token) headers['X-Admin-Token'] = auth.token;
+        const r = await fetch(pathname, Object.assign({}, opts, { headers }));
+        if (r.status === 401) {
+            // 服务端拒绝：清掉本地 token，弹登录
+            auth.token = '';
+            localStorage.removeItem('px_admin_token');
+            updateAuthUi();
+            showToast('该操作需要管理员登录', 'err');
+            openLoginDialog();
+        }
+        return r;
+    }
+
+    // 同步管理类按钮（删除 / 归档 / 批量）的可用性 + 视觉锁定态
+    function updateAuthUi() {
+        const logged = isLoggedIn();
+        // 顶栏按钮
+        if (adminLoginBtn) {
+            if (!auth.enabled) {
+                adminLoginBtn.hidden = true; // 服务端关闭了鉴权，不显示按钮
+            } else {
+                adminLoginBtn.hidden = false;
+                if (logged) {
+                    adminLoginBtn.textContent = '👤 已登录（点击退出）';
+                    adminLoginBtn.classList.add('is-logged');
+                    adminLoginBtn.title = '点击退出管理员登录';
+                } else {
+                    adminLoginBtn.textContent = '🔒 用户登录';
+                    adminLoginBtn.classList.remove('is-logged');
+                    adminLoginBtn.title = '登录后才能执行删除 / 归档等管理操作';
+                }
+            }
+        }
+        // 主列表的批量按钮：未登录时统一锁死并提示
+        const lockTip = '需要管理员登录后才能操作';
+        const setLock = (btn, locked) => {
+            if (!btn) return;
+            if (locked) {
+                btn.classList.add('lock-disabled');
+                btn.dataset.lockTip = lockTip;
+                btn.title = lockTip;
+            } else {
+                btn.classList.remove('lock-disabled');
+                delete btn.dataset.lockTip;
+                btn.title = '';
+            }
+        };
+        if (auth.enabled && !logged) {
+            setLock(archiveSelBtn, true);
+            setLock(deleteSelBtn, true);
+        } else {
+            setLock(archiveSelBtn, false);
+            setLock(deleteSelBtn, false);
+        }
+        // 行内 "删除" 按钮：通过 class 标记，由 syncSelectionUi/render 后再统一处理
+        document.querySelectorAll('button.row-act.danger[data-act="delete"]').forEach(b => {
+            if (auth.enabled && !logged) {
+                b.classList.add('lock-disabled');
+                b.title = lockTip;
+            } else {
+                b.classList.remove('lock-disabled');
+                b.title = '';
+            }
+        });
+        // 归档抽屉的删除/批删按钮
+        const archDelSel    = document.getElementById('archiveDelSelBtn');
+        const archDelFolder = document.getElementById('archiveDelFolderBtn');
+        if (auth.enabled && !logged) {
+            setLock(archDelSel, true);
+            setLock(archDelFolder, true);
+        } else {
+            setLock(archDelSel, false);
+            setLock(archDelFolder, false);
+        }
+    }
+
+    function openLoginDialog() {
+        if (!loginMask) return;
+        loginErr.hidden = true;
+        loginErr.textContent = '';
+        loginInput.value = '';
+        loginMask.hidden = false;
+        setTimeout(() => loginInput.focus(), 50);
+    }
+    function closeLoginDialog() {
+        if (!loginMask) return;
+        loginMask.hidden = true;
+    }
+    async function doAdminLogin() {
+        const pwd = loginInput.value || '';
+        if (!pwd.trim()) { loginErr.textContent = '请输入密码'; loginErr.hidden = false; return; }
+        loginOkBtn.disabled = true;
+        try {
+            const r = await fetch('/api/admin/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: pwd }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) {
+                loginErr.textContent = j.error || '登录失败';
+                loginErr.hidden = false;
+                loginInput.select();
+                return;
+            }
+            auth.token = j.token || '';
+            if (auth.token) localStorage.setItem('px_admin_token', auth.token);
+            closeLoginDialog();
+            updateAuthUi();
+            showToast('登录成功，可以执行管理操作了', 'ok');
+        } catch (e) {
+            loginErr.textContent = '网络错误：' + e.message;
+            loginErr.hidden = false;
+        } finally {
+            loginOkBtn.disabled = false;
+        }
+    }
+    async function doAdminLogout() {
+        const tk = auth.token;
+        auth.token = '';
+        localStorage.removeItem('px_admin_token');
+        updateAuthUi();
+        try {
+            await fetch('/api/admin/logout', {
+                method: 'POST',
+                headers: tk ? { 'X-Admin-Token': tk } : {},
+            });
+        } catch (_) { /* 忽略 */ }
+        showToast('已退出登录', 'ok');
+    }
+    async function fetchAuthInfo() {
+        try {
+            const r = await fetch('/api/admin/auth-info');
+            const j = await r.json();
+            auth.enabled = !!j.authEnabled;
+        } catch (_) {
+            auth.enabled = true;
+        }
+        updateAuthUi();
+    }
+
+    if (adminLoginBtn) {
+        adminLoginBtn.addEventListener('click', () => {
+            if (isLoggedIn()) doAdminLogout();
+            else              openLoginDialog();
+        });
+    }
+    if (loginCancelBtn) loginCancelBtn.addEventListener('click', closeLoginDialog);
+    if (loginOkBtn)     loginOkBtn.addEventListener('click', doAdminLogin);
+    if (loginInput) loginInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') doAdminLogin();
+        if (e.key === 'Escape') closeLoginDialog();
+    });
+    if (loginMask) loginMask.addEventListener('click', (e) => {
+        if (e.target === loginMask) closeLoginDialog(); // 点遮罩关闭
+    });
+
+    // 用拦截器在写操作前提示登录：未登录时点击锁定按钮就直接弹登录窗
+    function guardWrite(actionFn, btn) {
+        if (auth.enabled && !isLoggedIn()) {
+            showToast('该操作需要管理员登录', 'warn');
+            openLoginDialog();
+            return false;
+        }
+        return true;
     }
 
     async function fetchStatus() {
@@ -232,7 +418,8 @@
         if (btn) btn.disabled = true;
         try {
             setStatus('warn', '删除中…');
-            const r = await fetch('/api/files/' + encodeURIComponent(name), { method: 'DELETE' });
+            const r = await adminFetch('/api/files/' + encodeURIComponent(name), { method: 'DELETE' });
+            if (r.status === 401) { if (btn) btn.disabled = false; return; }
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
             // 如果当前抽屉正在预览该文件，一并关闭
@@ -270,11 +457,15 @@
                 selAll.indeterminate = (on > 0 && on < visible.length);
             }
         }
+
+        // 鉴权联动：按钮 disabled 状态刷新后，同步未登录的锁定提示
+        if (typeof updateAuthUi === 'function') updateAuthUi();
     }
 
     async function archiveSelected() {
         const names = [...state.selected];
         if (names.length === 0) return;
+        if (!guardWrite()) return;
         const def = (() => {
             const d = new Date();
             const pad = (x) => String(x).padStart(2, '0');
@@ -293,11 +484,12 @@
         archiveSelBtn.disabled = true;
         try {
             setStatus('warn', '归档中…');
-            const r = await fetch('/api/archive', {
+            const r = await adminFetch('/api/archive', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ names, folder: f }),
             });
+            if (r.status === 401) { archiveSelBtn.disabled = (state.selected.size === 0); return; }
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
             const ok = j.movedCount || 0;
@@ -330,11 +522,12 @@
     async function bulkDeleteSelected() {
         const names = [...state.selected];
         if (names.length === 0) return;
+        if (!guardWrite()) return;
         if (!window.confirm(`确定删除选中的 ${names.length} 份评分文件吗？\n\n此操作不可恢复。`)) return;
         deleteSelBtn.disabled = true;
         try {
             setStatus('warn', '删除中…');
-            const r = await fetch('/api/files/bulk-delete', {
+            const r = await adminFetch('/api/files/bulk-delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ names }),
@@ -400,6 +593,7 @@
         } else if (btn.dataset.act === 'preview') {
             openPreview(name);
         } else if (btn.dataset.act === 'delete') {
+            if (!guardWrite()) return;
             deleteFile(name, btn);
         }
     });
@@ -735,9 +929,8 @@
                 archiveSelAll.indeterminate = (on > 0 && on < visible.length);
             }
         }
+        if (typeof updateAuthUi === 'function') updateAuthUi();
     }
-
-    // 文件夹列表点击：切换当前文件夹
     archiveFolderListEl.addEventListener('click', (e) => {
         const li = e.target.closest('li.archive-folder');
         if (!li) return;
@@ -787,13 +980,15 @@
     async function deleteArchivedFile(name, btn) {
         const folder = archive.currentFolder;
         if (!folder || !name) return;
+        if (!guardWrite()) return;
         if (!window.confirm(`确定从归档「${folder}」中删除该文件？\n\n${name}\n\n此操作不可恢复。`)) return;
         if (btn) btn.disabled = true;
         try {
-            const r = await fetch(
+            const r = await adminFetch(
                 `/api/archive/file/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`,
                 { method: 'DELETE' },
             );
+            if (r.status === 401) { if (btn) btn.disabled = false; return; }
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
             archive.selected.delete(name);
@@ -811,14 +1006,16 @@
         const folder = archive.currentFolder;
         const names = [...archive.selected];
         if (!folder || names.length === 0) return;
+        if (!guardWrite()) return;
         if (!window.confirm(`确定从归档「${folder}」中删除选中的 ${names.length} 份文件？\n\n此操作不可恢复。`)) return;
         archiveDelSelBtn.disabled = true;
         try {
-            const r = await fetch('/api/archive/bulk-delete', {
+            const r = await adminFetch('/api/archive/bulk-delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ folder, names }),
             });
+            if (r.status === 401) { archiveDelSelBtn.disabled = (archive.selected.size === 0); return; }
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
             const ok = j.deletedCount || 0, fail = j.failedCount || 0;
@@ -838,10 +1035,12 @@
     archiveDelFolderBtn.addEventListener('click', async () => {
         const folder = archive.currentFolder;
         if (!folder) return;
+        if (!guardWrite()) return;
         if (!window.confirm(`确定删除整个归档文件夹「${folder}」？\n\n该文件夹下的所有 csv 都会被删除，此操作不可恢复。`)) return;
         archiveDelFolderBtn.disabled = true;
         try {
-            const r = await fetch('/api/archive/folder/' + encodeURIComponent(folder), { method: 'DELETE' });
+            const r = await adminFetch('/api/archive/folder/' + encodeURIComponent(folder), { method: 'DELETE' });
+            if (r.status === 401) { archiveDelFolderBtn.disabled = false; return; }
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
             showToast(`已删除文件夹：${folder}（${j.deletedCount || 0} 份）`, 'ok');
@@ -911,6 +1110,8 @@
     // ────────── 启动 ──────────
     (async function init() {
         await fetchStatus();
+        await fetchAuthInfo();   // 拉取鉴权状态，更新顶栏登录按钮和管理按钮的锁定态
         await fetchList();
+        updateAuthUi();          // 列表渲染后再刷一次（同步行内删除按钮的锁定态）
     })();
 })();

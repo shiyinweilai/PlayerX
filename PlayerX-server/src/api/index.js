@@ -3,12 +3,9 @@
  *
  * 对外暴露 mountApi(app)：
  *   - 把所有业务接口挂到 Express app
- *   - 服务端不做鉴权（局域网内部使用，简化部署与排障）
- *   - 同时保留旧路径（/upload /list /merge）兼容历史客户端，
- *     新增带前缀的 /api/* 给 Web 面板使用
- *
- * 注：客户端 / Web 面板仍可在请求头里带 X-Token，本服务一律忽略它，
- *      不再返回 401。前端"Token"按钮只是本地软约束，防止误传。
+ *   - 读操作（list / files / merge / preview / 归档浏览 / 归档下载 / 归档合并）匿名可访问
+ *   - 写操作（删除 / 归档 / 批量删除 / 删除归档文件 / 删除归档文件夹）需要管理员登录
+ *   - 同时保留旧路径（/upload /list /merge）兼容历史客户端
  */
 const express = require('express');
 
@@ -20,20 +17,22 @@ const preview = require('./preview');
 const status  = require('./status');
 const del     = require('./delete');
 const archive = require('./archive');
+const auth    = require('./auth');
 
 function mountApi(app) {
-    // 不需要鉴权：保留 /api/status 仅用于前端探活与展示版本号
+    // ── 公开接口 ─────────────────────────────────────────────
     app.get('/api/status', status.makeHandler());
 
+    // 上传（来自 PlayerX 客户端，无需管理员鉴权）
     app.post('/upload',     upload.multerMiddleware, upload.handle);
     app.post('/api/upload', upload.multerMiddleware, upload.handle);
 
+    // 列表 / 下载 / 合并下载 / 预览：匿名可访问
     app.get('/list',     list.handle);
     app.get('/api/list', list.handle);
 
     app.get('/merge',     merge.handle);
     app.get('/api/merge', merge.handle);
-    // 选中合并下载：names 太长时走 POST body
     const jsonParserMerge = express.json({ limit: '1mb' });
     app.post('/merge',     jsonParserMerge, merge.handle);
     app.post('/api/merge', jsonParserMerge, merge.handle);
@@ -44,25 +43,35 @@ function mountApi(app) {
     app.get('/preview/:name',     preview.handle);
     app.get('/api/preview/:name', preview.handle);
 
-    app.delete('/files/:name',     del.handle);
-    app.delete('/api/files/:name', del.handle);
-
-    // 批量归档 / 批量删除（仅这两条需要 JSON body 解析）
-    const jsonParser = express.json({ limit: '256kb' });
-    app.post('/api/archive',           jsonParser, archive.handleArchive);
-    app.post('/api/files/bulk-delete', jsonParser, archive.handleBulkDelete);
-
-    // 归档浏览 / 下载 / 预览 / 删除
+    // 归档浏览 / 下载 / 预览 / 合并：匿名可访问
     app.get('/api/archive/folders',                 archive.handleListFolders);
     app.get('/api/archive/list',                    archive.handleListFolderFiles);
     app.get('/api/archive/file/:folder/:name',      archive.handleDownloadArchived);
     app.get('/api/archive/preview/:folder/:name',   archive.handlePreviewArchived);
-    app.delete('/api/archive/file/:folder/:name',   archive.handleDeleteArchivedFile);
-    app.delete('/api/archive/folder/:folder',       archive.handleDeleteArchiveFolder);
-    app.post('/api/archive/bulk-delete', jsonParser, archive.handleBulkDeleteArchived);
+    app.get('/api/archive/merge/:folder',           archive.handleMergeArchived);
 
-    // 归档合并下载（GET：全部；POST 带 body.names：仅子集）
-    app.get('/api/archive/merge/:folder',  archive.handleMergeArchived);
+    // ── 管理员登录 / 登出 ─────────────────────────────────────
+    const jsonAuth = express.json({ limit: '8kb' });
+    app.post('/api/admin/login',  jsonAuth, auth.handleAdminLogin);
+    app.post('/api/admin/logout',           auth.handleAdminLogout);
+    app.get('/api/admin/auth-info', (_req, res) => {
+        res.json({ ok: true, authEnabled: auth.isAuthEnabled() });
+    });
+
+    // ── 受保护接口（写操作）────────────────────────────────────
+    const jsonParser = express.json({ limit: '256kb' });
+
+    app.delete('/files/:name',     auth.requireAdmin, del.handle);
+    app.delete('/api/files/:name', auth.requireAdmin, del.handle);
+
+    app.post('/api/archive',           auth.requireAdmin, jsonParser, archive.handleArchive);
+    app.post('/api/files/bulk-delete', auth.requireAdmin, jsonParser, archive.handleBulkDelete);
+
+    app.delete('/api/archive/file/:folder/:name', auth.requireAdmin, archive.handleDeleteArchivedFile);
+    app.delete('/api/archive/folder/:folder',     auth.requireAdmin, archive.handleDeleteArchiveFolder);
+    app.post('/api/archive/bulk-delete',          auth.requireAdmin, jsonParser, archive.handleBulkDeleteArchived);
+
+    // 归档合并：POST 形态（带 names 子集）也允许匿名访问，仅是合并下载
     app.post('/api/archive/merge/:folder', jsonParser, archive.handleMergeArchived);
 }
 

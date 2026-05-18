@@ -870,3 +870,85 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     background: rgba(255,69,58,.12);
     color: var(--danger);
 }
+
+/* ────────── 管理员登录弹窗 ────────── */
+.login-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    backdrop-filter: blur(2px);
+}
+.login-mask[hidden] { display: none; }
+
+.login-box {
+    width: 360px;
+    max-width: calc(100vw - 32px);
+    background: var(--bg, #fff);
+    color: var(--fg, #1d1d1f);
+    border-radius: 12px;
+    padding: 22px 22px 18px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .35);
+    border: 1px solid rgba(0, 0, 0, .08);
+}
+.login-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+.login-sub {
+    font-size: 12px;
+    color: var(--muted, #86868b);
+    line-height: 1.55;
+    margin-bottom: 14px;
+}
+.login-box input[type="password"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(0, 0, 0, .15);
+    background: rgba(0, 0, 0, .02);
+    color: inherit;
+    font-size: 14px;
+    outline: none;
+    transition: border-color .15s, background .15s;
+}
+.login-box input[type="password"]:focus {
+    border-color: var(--primary, #0071e3);
+    background: #fff;
+}
+.login-err {
+    margin-top: 8px;
+    color: var(--danger, #ff3b30);
+    font-size: 12px;
+    line-height: 1.4;
+}
+.login-actions {
+    margin-top: 14px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* 已登录态徽章 */
+#adminLoginBtn.is-logged {
+    border-color: rgba(48, 209, 88, .55);
+    color: #1f8a3a;
+    background: rgba(48, 209, 88, .12);
+}
+#adminLoginBtn.is-logged:hover {
+    background: rgba(48, 209, 88, .2);
+}
+
+/* 未登录时管理操作按钮的"被禁用 + 提示"视觉 */
+.row-act.lock-disabled,
+.ghost-btn.lock-disabled,
+.primary-btn.lock-disabled {
+    opacity: .45;
+    cursor: not-allowed;
+    pointer-events: auto; /* 仍然要响应 hover/title */
+}

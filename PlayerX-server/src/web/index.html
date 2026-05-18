@@ -18,9 +18,24 @@
         <span class="status-pill" id="serverStatus">
             <span class="dot"></span><span id="serverStatusText">连接中…</span>
         </span>
+        <button class="ghost-btn" id="adminLoginBtn" title="登录后才能执行删除 / 归档等管理操作">🔒 用户登录</button>
         <button class="ghost-btn" id="refreshBtn" title="刷新列表">↻</button>
     </div>
 </header>
+
+<!-- ────────── 登录小弹窗（点击「用户登录」时才显示） ────────── -->
+<div class="login-mask" id="loginMask" hidden>
+    <div class="login-box" role="dialog" aria-labelledby="loginTitle">
+        <div class="login-title" id="loginTitle">🔒 管理员登录</div>
+        <div class="login-sub">登录后可执行删除 / 归档等管理操作。普通查看 / 下载无需登录。</div>
+        <input type="password" id="loginInput" autocomplete="current-password" placeholder="请输入管理员密码" />
+        <div class="login-err" id="loginErr" hidden></div>
+        <div class="login-actions">
+            <button class="ghost-btn" id="loginCancelBtn">取消</button>
+            <button class="primary-btn" id="loginOkBtn">登录</button>
+        </div>
+    </div>
+</div>
 
 <!-- ────────── 概览卡片 ────────── -->
 <section class="cards">
