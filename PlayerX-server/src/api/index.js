@@ -24,9 +24,15 @@ function mountApi(app) {
     // ── 公开接口 ─────────────────────────────────────────────
     app.get('/api/status', status.makeHandler());
 
-    // 上传（来自 PlayerX 客户端）：先校验 X-Token，再走 multer 解析文件
-    app.post('/upload',     upload.checkUploadToken, upload.multerMiddleware, upload.handle);
-    app.post('/api/upload', upload.checkUploadToken, upload.multerMiddleware, upload.handle);
+    // ── 上传路径兼容 ──────────────────────────────────────────
+    // 用户在播放器「上传设置」里很容易只填基址（如 http://host:8765 或带尾斜杠），
+    // 不带 /upload 路径。为避免请求被静态中间件吞掉变成"看似成功实际没收到"，
+    // 这里把以下所有 path 上的 POST 都路由到上传 handler：
+    //   POST /  /upload  /upload/  /api/upload  /api/upload/
+    // （客户端侧也已做归一化补 /upload，这里是双保险）
+    const uploadChain = [upload.checkUploadToken, upload.multerMiddleware, upload.handle];
+    const uploadPaths = ['/', '/upload', '/upload/', '/api/upload', '/api/upload/'];
+    for (const p of uploadPaths) app.post(p, ...uploadChain);
 
     // 列表 / 下载 / 合并下载 / 预览：匿名可访问
     app.get('/list',     list.handle);

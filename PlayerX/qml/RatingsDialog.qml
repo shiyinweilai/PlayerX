@@ -58,6 +58,10 @@ Window {
     property var _rows: []
     // 时间列排序方向：true = 新→旧（默认，与 C++ 端 getAllRatings 一致），false = 旧→新
     property bool _sortDesc: true
+    // 当前评分模式的星级上限（决定“有效评分”区间与子项星条渲染长度）。
+    // off 模式下Rating.maxStars==0，本处兜底 5。
+    readonly property int _maxStars:
+        (typeof Rating !== "undefined" && Rating.maxStars > 0) ? Rating.maxStars : 5
 
     // ── 分组（VSCode 风格三层树：文件夹 → 文件 → 评分记录）─────────
     // _folders: [{ key:'dir:<dir>', name, path, files:[file...], latest, avg, totalItems }]
@@ -158,7 +162,12 @@ Window {
             var sum = 0, cnt = 0
             for (var j = 0; j < g.items.length; ++j) {
                 var s = parseInt(g.items[j].stars) || 0
-                if (s >= 1 && s <= 5) { sum += s; ++cnt }
+                // 超出当前模式上限的钉到 maxStars（防御旧数据/手改误值）
+                if (s >= 1) {
+                    if (s > root._maxStars) s = root._maxStars
+                    sum += s
+                    ++cnt
+                }
             }
             g.avg = cnt > 0 ? Math.round(sum / cnt * 10) / 10 : 0
         }
@@ -201,7 +210,11 @@ Window {
                 if ((fg.latest || "") > dLatest) dLatest = fg.latest || ""
                 for (var q = 0; q < fg.items.length; ++q) {
                     var sc = parseInt(fg.items[q].stars) || 0
-                    if (sc >= 1 && sc <= 5) { dSum += sc; ++dCnt }
+                    if (sc >= 1) {
+                        if (sc > root._maxStars) sc = root._maxStars
+                        dSum += sc
+                        ++dCnt
+                    }
                 }
             }
             d.totalItems = total
@@ -377,6 +390,8 @@ Window {
         target: (typeof Rating !== "undefined") ? Rating : null
         ignoreUnknownSignals: true
         function onChanged() { root._refresh() }
+        // 模式切换：重读该模式下的数据 + 重建表格（_refresh 内部会调 _rebuildGroups）
+        function onCurrentModeChanged() { root._refresh() }
     }
 
     // ── 总体布局：上(配置区) / 中(表格) / 下(操作栏) ────────────
@@ -385,12 +400,62 @@ Window {
         anchors.margins: 14
         spacing: 10
 
-        // ── 标题 ────
-        Text {
-            text: "📊  " + qsTr("视频评分数据")
-            color: "#e8e8ec"
-            font.pixelSize: 16
-            font.bold: true
+        // ── 标题 + 模式切换 ────
+        // 设计动机：评分数据按“AIGC评分 / 传统主观评分”独立存储，应该让用户一眼看到当前正在看哪一份。
+        // 这里用“胶囊 Tab”式切换器：默认从 Rating.modeList 动态生成，未来加新模式不需动 QML。
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+            Text {
+                text: "📊  " + qsTr("视频评分数据")
+                color: "#e8e8ec"
+                font.pixelSize: 16
+                font.bold: true
+            }
+            Item { Layout.fillWidth: true }
+            // 模式切换器：Repeater 生成一组互斥胶囊开关
+            Row {
+                spacing: 6
+                Repeater {
+                    model: (typeof Rating !== "undefined") ? Rating.modeList : []
+                    delegate: Rectangle {
+                        property var modeData: modelData
+                        property bool selected: (typeof Rating !== "undefined") && Rating.currentMode === modeData.id
+                        radius: 14
+                        height: 26
+                        // 实际宽度由内容决定（使用 implicit）
+                        implicitWidth: modeLabel.implicitWidth + 22
+                        color: selected ? "#0fa085"
+                              : modeMA.containsMouse ? "#2c2c34"
+                                                     : "#222226"
+                        border.color: selected ? "#0fa085" : "#3a3a42"
+                        border.width: 1
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 6
+                            Text {
+                                id: modeLabel
+                                text: modeData.label + "  ·  " + modeData.maxStars + "星"
+                                color: selected ? "#ffffff" : "#cfcfd4"
+                                font.pixelSize: 12
+                                font.bold: selected
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                        MouseArea {
+                            id: modeMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (typeof Rating !== "undefined" && Rating.currentMode !== modeData.id) {
+                                    Rating.currentMode = modeData.id
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // ── 评分人 / 数据文件路径 ────
@@ -1018,9 +1083,11 @@ Window {
                                     if (!itemRoot.r) return ""
                                     var s = parseInt(itemRoot.r.stars) || 0
                                     if (s <= 0) return "—"
+                                    var capN = root._maxStars
+                                    if (s > capN) s = capN
                                     var out = ""
                                     for (var i = 0; i < s; ++i) out += "★"
-                                    for (var j = s; j < 5; ++j) out += "☆"
+                                    for (var j = s; j < capN; ++j) out += "☆"
                                     return out
                                 }
                                 color: itemRoot.r && (parseInt(itemRoot.r.stars) || 0) > 0

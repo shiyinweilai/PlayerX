@@ -10,7 +10,7 @@ const path = require('path');
 const { UPLOAD_DIR, ARCHIVE_DIR, ARCHIVE_KEEP, ensureDirs } = require('./paths');
 const { parseName } = require('./slug');
 
-// 列出 uploads/ 中所有 csv（[{name,user,tag,size,mtime}]，按 mtime 倒序）
+// 列出 uploads/ 中所有 csv（[{name,user,tag,mode,size,mtime}]，按 mtime 倒序）
 function listAll() {
     ensureDirs();
     return fs.readdirSync(UPLOAD_DIR)
@@ -22,6 +22,8 @@ function listAll() {
                 name: n,
                 user: meta.user || '',
                 tag:  meta.tag  || '',
+                // mode 默认 'aigc'（parseName 已做过兼容，这里双保险）
+                mode: meta.mode || 'aigc',
                 size: st.size,
                 mtime: st.mtime,
             };
@@ -29,17 +31,26 @@ function listAll() {
         .sort((a, b) => b.mtime - a.mtime);
 }
 
-// 同 (user, tag) 已存在的 csv 文件列表（按 mtime 倒序）
-function findExisting(user, tag) {
-    return listAll().filter(it => it.user === user && it.tag === tag);
+// 同 (user, tag, mode) 已存在的 csv 文件列表（按 mtime 倒序）。
+// mode 传 undefined / null 时全匠区配送 — 供推迟兼容（不推荐新代码依赖）。
+function findExisting(user, tag, mode) {
+    return listAll().filter(it => {
+        if (it.user !== user) return false;
+        if (it.tag  !== tag)  return false;
+        if (mode === undefined || mode === null) return true;
+        return it.mode === mode;
+    });
 }
 
-// 把 (user, tag) 现有文件全部归档到 archive/<user>__<tag>/，并裁剪到 ARCHIVE_KEEP 份
-function archiveExisting(user, tag) {
-    const slot = path.join(ARCHIVE_DIR, `${user}__${tag || 'default'}`);
+// 把 (user, tag, mode) 现有文件全部归档到 archive/<user>__<tag>__<mode>/，并裁剪到 ARCHIVE_KEEP 份
+function archiveExisting(user, tag, mode) {
+    const slot = path.join(
+        ARCHIVE_DIR,
+        `${user}__${tag || 'default'}__${mode || 'aigc'}`,
+    );
     fs.mkdirSync(slot, { recursive: true });
     const moved = [];
-    for (const it of findExisting(user, tag)) {
+    for (const it of findExisting(user, tag, mode)) {
         const dst = path.join(slot, it.name);
         try {
             fs.renameSync(path.join(UPLOAD_DIR, it.name), dst);

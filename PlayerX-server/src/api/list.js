@@ -11,6 +11,7 @@ function handle(_req, res) {
         name:  it.name,
         user:  it.user,
         tag:   it.tag,
+        mode:  it.mode || 'aigc',
         size:  it.size,
         mtime: it.mtime.toISOString(),
     }));

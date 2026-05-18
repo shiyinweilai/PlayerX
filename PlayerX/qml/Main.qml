@@ -1392,12 +1392,17 @@ ApplicationWindow {
     property var cellRatings: []
 
     // 「评分模式」全局开关（UI 层）。
-    // 真值由 MultiGroupDialog 内部「⚙️配置 → 开启评分」勾选项控制；
-    // 这里通过 Binding 反向同步到主窗，使每个 cell 的顶部胶囊条
-    // 能根据它决定是否常驻显示 5 颗星（未开启 → 仍只在 ⋯ 菜单的旧位置；
-    // 已开启 → 直接把星条挂在 #帧号 · 时间戳 旁边，所有 cell 一眼可见）。
+    // 真值由 Rating.currentMode 派生：mode != "off" 即为评分态；
+    // 这里通过 readonly + 访问 Rating.currentMode 让顶部胶囊条 channelBar
+    // 能根据它决定是否常驻显示星条（未开启 → 隐藏；已开启 → 直接把星条挂在
+    // #帧号 · 时间戳 旁边，所有 cell 一眼可见）。
     // 默认 false：不打扰只看视频、不评分的常规使用。
-    property bool reviewMode: false
+    readonly property bool reviewMode:
+        (typeof Rating !== "undefined") && Rating.currentMode !== "off"
+    // 当前评分模式的星级上限（UI 渲染与快捷键均依赖它）。
+    // off 模式 maxStars=0，但本处仅供UI使用；UI 上 reviewMode=false 会隐藏星条。
+    readonly property int reviewMaxStars:
+        (typeof Rating !== "undefined") ? Rating.maxStars : 5
 
 
     // -1 表示未选中——默认就是 -1，避免一打开应用就有一路被高亮，造成视觉干扰。
@@ -2583,7 +2588,13 @@ ApplicationWindow {
     // 快捷键评分专用：不走 setRatingAt（那里含 toggle 语义，给鼠标点星条用），
     // 这里一律“强制覆盖写入”：不管以前是几星，按下 Shift+N 就是 N 星，
     // 避免“首次评分出现已清除评分”、“连按两下变 0 分”这些迷惑场景。
+    // 超过当前模式 maxStars 的会被自动钉到上限（如主观模式 Shift+5 → 实际写 3）。
     function _writeRating(idx, score) {
+        // 超出当前模式上限时仅 UI 层钉一下，避免 cellRatings 写出 "5" 但后端实际存为 3
+        // 造成“UI 与实际不一致”。RatingStore::recordRating 内部也会再截一次、双保险。
+        var cap = root.reviewMaxStars
+        if (cap > 0 && score > cap) score = cap
+        if (score < 0) score = 0
         var arr = root.cellRatings.slice()
         while (arr.length <= idx) arr.push(0)
         arr[idx] = score
@@ -2629,15 +2640,21 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Shift+0"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
                onActivated: root._clearRatingForActive() }
-    Shortcut { sequence: "Shift+1"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+    Shortcut { sequence: "Shift+1"; context: Qt.ApplicationShortcut
+               enabled: Engine.fileCount > 0 && root.reviewMaxStars >= 1
                onActivated: root._setRatingForActive(1) }
-    Shortcut { sequence: "Shift+2"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+    Shortcut { sequence: "Shift+2"; context: Qt.ApplicationShortcut
+               enabled: Engine.fileCount > 0 && root.reviewMaxStars >= 2
                onActivated: root._setRatingForActive(2) }
-    Shortcut { sequence: "Shift+3"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+    Shortcut { sequence: "Shift+3"; context: Qt.ApplicationShortcut
+               enabled: Engine.fileCount > 0 && root.reviewMaxStars >= 3
                onActivated: root._setRatingForActive(3) }
-    Shortcut { sequence: "Shift+4"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+    // 主观模式 maxStars=3，4/5 这两个快捷键会被 disable，避免误操作写出超限评分。
+    Shortcut { sequence: "Shift+4"; context: Qt.ApplicationShortcut
+               enabled: Engine.fileCount > 0 && root.reviewMaxStars >= 4
                onActivated: root._setRatingForActive(4) }
-    Shortcut { sequence: "Shift+5"; context: Qt.ApplicationShortcut; enabled: Engine.fileCount > 0
+    Shortcut { sequence: "Shift+5"; context: Qt.ApplicationShortcut
+               enabled: Engine.fileCount > 0 && root.reviewMaxStars >= 5
                onActivated: root._setRatingForActive(5) }
     // 选中切换（不改布局，仅改 selectedIdx + Engine.activeIndex）：[ 上一路 / ] 下一路，循环。
     // 即使 fileCount == 1，也允许按 ] 让 selectedIdx 从 -1 进入 0（"用键盘进入选中状态"）。
@@ -3632,7 +3649,8 @@ ApplicationWindow {
                                     return (typeof v === "number" && v > 0) ? v : 0
                                 }
                                 Repeater {
-                                    model: 5
+                                    // 当前模式的星级上限：AIGC=5 / 主观=3；Rating 实例不在时兜底 5
+                                    model: root.reviewMaxStars > 0 ? root.reviewMaxStars : 5
                                     delegate: Item {
                                         width: 14
                                         height: 14
@@ -4678,15 +4696,8 @@ ApplicationWindow {
         }
     }
 
-    // 把对话框里的「开启评分」勾选项反向同步到主窗 root.reviewMode：
-    // 这是单向绑定（dlg → root），目的是让顶部胶囊条 channelBar 能据此
-    // 切换"是否常驻显示 5 颗星"。Binding 比 Connections 更直观、且能在
-    // dlg 还未实例化时安全求值（initial false → 默认隐藏星条）。
-    Binding {
-        target: root
-        property: "reviewMode"
-        value: multiGroupDialog.reviewMode
-    }
+    // dlg.reviewMode 现在是 readonly 并从 Rating.currentMode 直接派生，
+    // 主窗 root.reviewMode 也从 Rating.currentMode 直接派生，不再需要 Binding 中转。
 
     // ─── 评分数据查看 / 导出 / 清空面板 ───────────────────────
     // 仅在「文件 ▸ 评分数据…」时 open()；与播放完全解耦。

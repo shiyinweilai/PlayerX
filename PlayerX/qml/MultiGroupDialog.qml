@@ -492,7 +492,10 @@ ApplicationWindow {
     //   - onGoToRate      : function() 用户点"去评分"时的回调（通常关掉 dlg、聚焦主窗）
     //   - setRatingAt     : function(idx, score) 提醒弹窗内联评分时调用（复用主窗 _writeRating）
     // 三者任一为 null 时 reviewMode 直接跳过提醒、按原逻辑翻组，安全降级。
-    property bool reviewMode: false
+    //
+    // 真值由 Rating.currentMode 派生：!= "off" → 评分态。
+    // 这样"配置 → 选某种评分模式"的下拉菜单天然成为唯一来源，减少同步成本。
+    readonly property bool reviewMode: (typeof Rating !== "undefined") && Rating.currentMode !== "off"
     property var  unratedChecker: null
     property var  getCellLabel: null
     property var  onGoToRate: null
@@ -1762,10 +1765,20 @@ ApplicationWindow {
             Layout.fillWidth: true
             spacing: 8
 
-            // ⚙️ 配置：当前仅一个开关（评分模式），未来可扩展
+            // ⚙️ 配置：当前仅一个评分模式切换器，未来可扩展
+            // reviewMode = (当前模式 != "off")，点中进入评分态；btn 文案 / 边框全从 Rating.currentMode 补。
             Button {
                 id: configBtn
-                text: reviewMode ? "⚙️ 评分模式" : "⚙️ 配置"
+                text: {
+                    if (typeof Rating === "undefined") return "⚙️ 配置"
+                    if (Rating.currentMode === "off") return "⚙️ 配置"
+                    // 从 modeList 里查当前模式的 label
+                    var ml = Rating.modeList || []
+                    for (var i = 0; i < ml.length; ++i) {
+                        if (ml[i].id === Rating.currentMode) return "⚙️ " + ml[i].label
+                    }
+                    return "⚙️ 配置"
+                }
                 onClicked: {
                     // 在按钮正上方弹出（上拉菜单式）
                     var p = configBtn.mapToItem(null, 0, 0)
@@ -1789,7 +1802,7 @@ ApplicationWindow {
                     verticalAlignment: Text.AlignVCenter
                 }
                 implicitHeight: 30
-                implicitWidth: reviewMode ? 110 : 90
+                implicitWidth: reviewMode ? 140 : 90
             }
 
             Label {
@@ -1864,13 +1877,17 @@ ApplicationWindow {
         }
     }
 
-    // ─── 配置上拉菜单：极简深色，仅一个「开启评分」勾选项 ─────────
-    // 风格参考系统右键菜单 / 文件菜单：无标题、无说明、点击直接切换，
+    // ─── 配置上拉菜单：选择评分模式（关闭 / AIGC 评分 / 传统主观评分）─────
+    // 风格参考系统右键菜单 / 文件菜单：无标题、按项高、点击后选中，
     // 失焦自动隐藏（Qt.Popup flag 已自带）。
     Window {
         id: settingsPopup
-        width: 200
-        height: 38
+        // 文案项数 = modeList.length + 1（"关闭" 项）；每项 32px + 上下 padding 8
+        width: 220
+        height: {
+            var n = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList.length : 2
+            return (n + 1) * 32 + 8
+        }
         flags: Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
         color: "transparent"
         modality: Qt.NonModal
@@ -1882,53 +1899,105 @@ ApplicationWindow {
             border.width: 1
             radius: 6
 
-            // 单行菜单项：✓ + 开启评分
-            Rectangle {
-                id: reviewItem
+            ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 4
-                radius: 4
-                color: reviewItemMA.containsMouse ? "#2c2c34" : "transparent"
+                spacing: 0
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    spacing: 8
-
-                    // 左侧勾选标记（开启时显示 ✓，否则空 24px 占位，对齐文字）
-                    Text {
-                        Layout.preferredWidth: 16
-                        text: dlg.reviewMode ? "✓" : ""
-                        color: "#0fa085"
-                        font.pixelSize: 14
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                // "关闭" 项：off 模式
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 28
+                    radius: 4
+                    color: offMA.containsMouse ? "#2c2c34" : "transparent"
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        spacing: 8
+                        Text {
+                            Layout.preferredWidth: 16
+                            text: (typeof Rating !== "undefined" && Rating.currentMode === "off") ? "✓" : ""
+                            color: "#0fa085"
+                            font.pixelSize: 14
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: "关闭评分"
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                        }
                     }
-                    Text {
-                        Layout.fillWidth: true
-                        text: "开启评分"
-                        color: "#e8e8ec"
-                        font.pixelSize: 13
-                        verticalAlignment: Text.AlignVCenter
+                    MouseArea {
+                        id: offMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (typeof Rating !== "undefined") Rating.currentMode = "off"
+                            settingsPopup.close()
+                        }
                     }
                 }
 
-                MouseArea {
-                    id: reviewItemMA
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        dlg.reviewMode = !dlg.reviewMode
-                        settingsPopup.close()
+                // 从 Rating.modeList 生成各评分模式项
+                Repeater {
+                    model: (typeof Rating !== "undefined") ? Rating.modeList : []
+                    delegate: Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 28
+                        radius: 4
+                        property var modeData: modelData
+                        property bool _hover: itemMA.containsMouse
+                        color: _hover ? "#2c2c34" : "transparent"
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            spacing: 8
+                            Text {
+                                Layout.preferredWidth: 16
+                                text: (typeof Rating !== "undefined" && Rating.currentMode === modeData.id) ? "✓" : ""
+                                color: "#0fa085"
+                                font.pixelSize: 14
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: modeData.label
+                                color: "#e8e8ec"
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            // 右侧辅助文案：星级上限（如 "5 星" / "3 星"），让用户一眼明白差异
+                            Text {
+                                text: modeData.maxStars + " 星"
+                                color: "#7a7a82"
+                                font.pixelSize: 11
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                        MouseArea {
+                            id: itemMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (typeof Rating !== "undefined") Rating.currentMode = modeData.id
+                                settingsPopup.close()
+                            }
+                        }
                     }
                 }
             }
         }
     }
-
     // ─── 未评分提醒弹窗：评分模式下翻组前的拦截 UI ─────────────
     // 列出当前组未评分的通道，每行右侧内联 5 颗星可直接评分；
     // 评完后该项从列表移除，全部评完时「去评分」变「继续翻组」。
@@ -2067,11 +2136,12 @@ ApplicationWindow {
                                         }
                                     }
 
-                                    // 5 颗星星：点击即评分；评分后驻留显示，便于回看分数
+                                    // 星星：点击即评分；评分后驻留显示，便于回看分数。
+                                    // 颗数随当前评分模式 maxStars（AIGC=5 / 主观=3）动态变化。
                                     Row {
                                         spacing: 2
                                         Repeater {
-                                            model: 5
+                                            model: (typeof Rating !== "undefined" && Rating.maxStars > 0) ? Rating.maxStars : 5
                                             delegate: Rectangle {
                                                 // 同样把内层 index 显式抬出来，避免闭包陷阱
                                                 property int starOrder: index    // 0..4

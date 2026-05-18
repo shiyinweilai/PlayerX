@@ -31,9 +31,27 @@ namespace {
 constexpr const char* kCsvHeader =
     "updated_at,rater,file_name,file_path,file_size,quick_hash,stars";
 constexpr const char* kSettingsUserKey      = "rating/user";
+constexpr const char* kSettingsModeKey      = "rating/mode";
 constexpr const char* kSettingsUploadUrlKey = "rating/uploadUrl";
 constexpr const char* kSettingsUploadTokKey = "rating/uploadToken";
 constexpr const char* kSettingsUploadTagKey = "rating/uploadTag";
+
+// 评分模式表：未来加新模式只要在这里追加一项，
+// QML 会通过 modeList 自动拿到所有字段生成 UI。
+struct ModeDef { const char* id; const char* label; int maxStars; };
+static const ModeDef kModeTable[] = {
+    {"aigc",       "AIGC 评分",     5},
+    {"subjective", "传统主观评分", 3},
+};
+static constexpr int kModeCount = sizeof(kModeTable) / sizeof(kModeTable[0]);
+
+static const ModeDef* findMode(const QString& id) {
+    if (id.isEmpty()) return nullptr;
+    for (int i = 0; i < kModeCount; ++i) {
+        if (id == QLatin1String(kModeTable[i].id)) return &kModeTable[i];
+    }
+    return nullptr;
+}
 }  // namespace
 
 // ════════════════════════════════════════════════════════════════════════
@@ -46,11 +64,24 @@ RatingStore::RatingStore(QObject* parent) : QObject(parent) {
         base = QDir::homePath() + "/.PlayerX";
     }
     QDir().mkpath(base);
-    m_dataFile = QDir(base).filePath("ratings.csv");
+    m_baseDir = base;
 
-    // 不存在则建空文件 + 表头；存在但首行非表头不强行覆盖（用户可能手动改过）
-    if (!QFileInfo::exists(m_dataFile)) {
-        QFile f(m_dataFile);
+    // 预热默认模式的文件（首启动即生成 ratings_aigc.csv，
+    // 避免 UI 首次读取 dataFilePath 时拿到一个不存在的路径）。
+    ensureFileForMode(currentMode());
+}
+
+// 按 mode 路由 CSV 文件：
+//   - mode == "off" 或不在表里 → 返回空串（调用方需自行兼容）
+//   - 其他 → ratings_<mode>.csv，不存在则创建空文件 + 表头
+QString RatingStore::ensureFileForMode(const QString& mode) const {
+    if (mode.isEmpty() || mode == QStringLiteral("off")) return {};
+    if (!findMode(mode)) return {};
+
+    const QString fp = QDir(m_baseDir).filePath(
+        QStringLiteral("ratings_%1.csv").arg(mode));
+    if (!QFileInfo::exists(fp)) {
+        QFile f(fp);
         if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream ts(&f);
             ts.setEncoding(QStringConverter::Utf8);
@@ -58,6 +89,11 @@ RatingStore::RatingStore(QObject* parent) : QObject(parent) {
             ts << kCsvHeader << "\n";
         }
     }
+    return fp;
+}
+
+QString RatingStore::dataFilePath() const {
+    return ensureFileForMode(currentMode());
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -84,6 +120,54 @@ QString RatingStore::systemUserName() const {
     if (u.isEmpty()) u = qEnvironmentVariable("USERNAME");  // Windows
     if (u.isEmpty()) u = "unknown";
     return u;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 评分模式：QSettings 持久化，默认 "aigc"
+// ════════════════════════════════════════════════════════════════════════
+
+QString RatingStore::currentMode() const {
+    QSettings s;
+    QString m = s.value(kSettingsModeKey, QStringLiteral("aigc")).toString().trimmed();
+    // 兼容性兜底：值不在表里且不是 "off" 时回退到 aigc，避免脏数据卡死 UI。
+    if (m == QStringLiteral("off")) return m;
+    if (!findMode(m)) return QStringLiteral("aigc");
+    return m;
+}
+
+void RatingStore::setCurrentMode(const QString& mode) {
+    QString m = mode.trimmed();
+    // 仅允许：在 modeList 中的合法 id，或 "off"。
+    if (m != QStringLiteral("off") && !findMode(m)) return;
+    QSettings s;
+    if (s.value(kSettingsModeKey).toString() == m) return;
+    s.setValue(kSettingsModeKey, m);
+    s.sync();
+    // 切换 mode 后保证目标文件存在（off 模式 ensureFileForMode 直接返回空串）。
+    ensureFileForMode(m);
+    emit currentModeChanged();
+    // dataFilePath 与 totalCount 视图也要刷新；后者依赖 changed 信号。
+    emit changed();
+}
+
+int RatingStore::maxStars() const {
+    const QString m = currentMode();
+    if (m == QStringLiteral("off")) return 0;
+    if (auto* d = findMode(m)) return d->maxStars;
+    return 5;
+}
+
+QVariantList RatingStore::modeList() const {
+    QVariantList out;
+    out.reserve(kModeCount);
+    for (int i = 0; i < kModeCount; ++i) {
+        QVariantMap m;
+        m[QStringLiteral("id")]       = QString::fromLatin1(kModeTable[i].id);
+        m[QStringLiteral("label")]    = QString::fromUtf8(kModeTable[i].label);
+        m[QStringLiteral("maxStars")] = kModeTable[i].maxStars;
+        out << m;
+    }
+    return out;
 }
 
 // ──通用 KV 持久化 ─────────────────────────────────────────────
@@ -148,8 +232,12 @@ bool RatingStore::recordRating(const QString& filePath,
                                int stars,
                                int channelIndex) {
     if (filePath.trimmed().isEmpty()) return false;
+    // off 模式不写盘（避免用户切到 "关闭" 后误触快捷键还在记录）
+    const QString modeNow = currentMode();
+    if (modeNow == QStringLiteral("off")) return false;
+    const int cap = maxStars();
     if (stars < 0) stars = 0;
-    if (stars > 5) stars = 5;
+    if (cap > 0 && stars > cap) stars = cap;  // 自动截断到当前模式上限
 
     QString rater = currentUser();
     if (rater.isEmpty()) rater = systemUserName();
@@ -196,15 +284,17 @@ bool RatingStore::recordRating(const QString& filePath,
 
 int RatingStore::ratingFor(const QString& filePath) const {
     if (filePath.trimmed().isEmpty()) return -1;
+    if (currentMode() == QStringLiteral("off")) return -1;
     QString rater = currentUser();
     if (rater.isEmpty()) rater = systemUserName();
+    const int cap = maxStars();
     const QList<QVariantMap> rows = readAll();
     for (const auto& r : rows) {
         if (r.value("file_path").toString() == filePath &&
             r.value("rater").toString() == rater) {
             int v = r.value("stars").toInt();
             if (v < 0) v = 0;
-            if (v > 5) v = 5;
+            if (cap > 0 && v > cap) v = cap;
             return v;
         }
     }
@@ -214,7 +304,7 @@ int RatingStore::ratingFor(const QString& filePath) const {
 // ════════════════════════════════════════════════════════════════════════
 // 导出到任意路径
 //
-// 注意：这里**不直接拷贝** m_dataFile，而是在内存里重新组装一份
+// 注意：这里**不直接拷贝**当前模式 CSV 文件，而是在内存里重新组装一份
 // "汇总友好的精简 CSV"。因为：
 //   1. 多人评分同一份视频时，大家会把各自的 CSV 汇总到一起做横向对比，
 //      file_path（每个人本地路径千差万别）、file_size、quick_hash
@@ -369,6 +459,12 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         emit uploadFinished(false, tr("已有上传任务进行中，请稍后重试"));
         return;
     }
+    // off 模式不产生数据，也禁止上传，避免上传最近一次“遗留在内存里”的空集。
+    const QString modeNow = currentMode();
+    if (modeNow == QStringLiteral("off")) {
+        emit uploadFinished(false, tr("当前为「不评分」模式，无可上传的评分数据"));
+        return;
+    }
     const QString url = uploadServerUrl();
     if (url.isEmpty()) {
         emit uploadFinished(false, tr("未配置上传地址，请先填写服务器 URL"));
@@ -378,6 +474,21 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     if (!u.isValid() || (u.scheme() != "http" && u.scheme() != "https")) {
         emit uploadFinished(false, tr("服务器地址不合法（需以 http:// 或 https:// 开头）"));
         return;
+    }
+    // ── URL 归一化 ────────────────────────────────────────────────────
+    // 用户经常只填基址（如 http://host:8765 或 http://host:8765/），并不带 /upload 路径。
+    // 这种情况下后端的静态文件中间件会"吞掉"请求，看起来好像 200 实则没存文件，
+    // 是历史上经常踩的坑。这里统一在客户端兜底：
+    //   - path 为空或只有 "/"  → 补成 "/upload"
+    //   - path 末尾误带 "/"     → 去掉
+    //   - 其他路径（如 "/api/upload"）保持原样，不替用户做主
+    {
+        QString path = u.path();
+        if (path.isEmpty() || path == "/") {
+            u.setPath("/upload");
+        } else if (path.size() > 1 && path.endsWith('/')) {
+            u.setPath(path.left(path.size() - 1));
+        }
     }
 
     // ── 必填校验（不再做"用系统用户名 / default tag 兜底"，避免误传）─────────
@@ -421,10 +532,12 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
 
     auto* multi = new QHttpMultiPart(QHttpMultiPart::FormDataType);
 
-    // file 字段（主要负载）
+    // file 字段（主要负载）。
+    // 文件名携带当前模式，让后端 / 运维在付启同名时一眼识别是 AIGC 还是主观评分。
     QHttpPart filePart;
-    QString fileName = QStringLiteral("playerx_%1_%2.csv")
+    QString fileName = QStringLiteral("playerx_%1_%2_%3.csv")
                            .arg(rater.isEmpty() ? "anon" : rater)
+                           .arg(modeNow)
                            .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
     filePart.setHeader(QNetworkRequest::ContentDispositionHeader,
                        QVariant(QString("form-data; name=\"file\"; filename=\"%1\"").arg(fileName)));
@@ -455,12 +568,21 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     cliPart.setBody(clientTag.toUtf8());
     multi->append(cliPart);
 
-    // tag 字段：后端靠 (user, tag) 识别是否重复上传
+    // tag 字段：后端靠 (user, tag, mode) 识别是否重复上传
     {
         QHttpPart p;
         p.setHeader(QNetworkRequest::ContentDispositionHeader,
                     QVariant("form-data; name=\"tag\""));
         p.setBody(tagVal.toUtf8());   // 已在入口处校验非空
+        multi->append(p);
+    }
+    // mode 字段：让后端可按模式分桶，不同模式的 (user, tag) 互不冲突。
+    // 后端服务考虑兼容旧客户端：不传 mode 默认当作 "aigc"。
+    {
+        QHttpPart p;
+        p.setHeader(QNetworkRequest::ContentDispositionHeader,
+                    QVariant("form-data; name=\"mode\""));
+        p.setBody(modeNow.toUtf8());
         multi->append(p);
     }
     // force 字段：仅在用户“确认覆盖”后重走时为 true
@@ -579,7 +701,9 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
 // ════════════════════════════════════════════════════════════════════════
 
 bool RatingStore::clearAll() {
-    QFile f(m_dataFile);
+    const QString fp = currentDataFile();
+    if (fp.isEmpty()) return false;   // off 模式无从谈起清空
+    QFile f(fp);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
@@ -630,7 +754,8 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths) {
 // ════════════════════════════════════════════════════════════════════════
 
 void RatingStore::revealInFolder() const {
-    QFileInfo fi(m_dataFile);
+    const QString fp = currentDataFile();
+    QFileInfo fi(fp.isEmpty() ? m_baseDir : fp);
 #ifdef Q_OS_MAC
     QStringList args;
     args << "-e" << QString("tell application \"Finder\" to reveal POSIX file \"%1\"")
@@ -652,7 +777,9 @@ void RatingStore::revealInFolder() const {
 // ════════════════════════════════════════════════════════════════════════
 
 bool RatingStore::writeAll(const QList<QVariantMap>& rows) const {
-    QFile f(m_dataFile);
+    const QString fp = currentDataFile();
+    if (fp.isEmpty()) return false;
+    QFile f(fp);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
@@ -672,7 +799,9 @@ bool RatingStore::writeAll(const QList<QVariantMap>& rows) const {
 
 QList<QVariantMap> RatingStore::readAll() const {
     QList<QVariantMap> out;
-    QFile f(m_dataFile);
+    const QString fp = currentDataFile();
+    if (fp.isEmpty()) return out;   // off 模式：表格表现为空
+    QFile f(fp);
     if (!f.exists()) return out;
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return out;
     QTextStream ts(&f);

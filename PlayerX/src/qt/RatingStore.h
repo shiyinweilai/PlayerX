@@ -7,18 +7,22 @@
  *   - 同一"文件路径"只保留**最新**一条评分（覆盖式），符合用户偏好：
  *     「不会是同一个终端，需要和评分人绑定，可以采取同一文件覆盖式存储最新评分」。
  *   - 评分人由用户在 UI 里设置一次，QSettings 持久化，重启不丢；
- *   - 数据文件落在 QStandardPaths::AppDataLocation 下：
- *       macOS:   ~/Library/Application Support/PlayerX/ratings.csv
- *       Windows: %APPDATA%/PlayerX/ratings.csv
+ *   - 数据文件按「评分模式」分文件存储，落在 QStandardPaths::AppDataLocation 下：
+ *       macOS:   ~/Library/Application Support/PlayerX/ratings_<mode>.csv
+ *       Windows: %APPDATA%/PlayerX/ratings_<mode>.csv
+ *     当前内置两种模式：
+ *       - aigc        : AIGC 评分，5 星制（用于 AI 生成视频质量打分）
+ *       - subjective  : 传统主观评分，3 星制（用于经典主观评测）
+ *     未来新增模式只要在 modeList 里追加一行即可，不影响已有数据。
  *   - 提供"导出到任意路径"接口，用于交给后端汇总；
  *   - 通过 contextProperty 暴露给 QML，命名空间 "Rating"。
  *
- * CSV 字段（首行表头固定）：
+ * CSV 字段（首行表头固定，与历史一致；mode 体现在文件名而非列里，避免每行冗余）：
  *   updated_at,rater,file_name,file_path,file_size,quick_hash,stars
  *
  *   - updated_at: ISO8601 本地时间（含时区偏移）
  *   - rater:      评分人名（用户在 UI 设置；为空则取系统用户名）
- *   - stars:      0-5；0 = 取消评分（仍记录，便于撤销审计）
+ *   - stars:      0..maxStars(mode)；0 = 取消评分（仍记录，便于撤销审计）
  */
 
 #include <QObject>
@@ -34,7 +38,18 @@ namespace rbqt {
 class RatingStore : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString currentUser READ currentUser WRITE setCurrentUser NOTIFY currentUserChanged)
-    Q_PROPERTY(QString dataFilePath READ dataFilePath CONSTANT)
+    // 当前评分模式（"aigc" / "subjective" / "off"）。
+    //   - "off"：不评分模式；UI 隐藏星条、不写盘；调用 recordRating 安静返回 false。
+    //   - 其他：按 mode 路由到独立 CSV 文件；切换 mode 后 dataFilePath / maxStars / totalCount
+    //     等都会跟着重算，QML 表格会自动刷新。
+    Q_PROPERTY(QString currentMode READ currentMode WRITE setCurrentMode NOTIFY currentModeChanged)
+    // 当前模式的星级上限（aigc=5 / subjective=3 / off=0）。QML 渲染星条的 Repeater model 直接用它。
+    Q_PROPERTY(int     maxStars    READ maxStars    NOTIFY currentModeChanged)
+    // 可用模式列表（QVariantList of QVariantMap），每项含 id/label/maxStars。
+    // QML 端用它生成模式切换菜单 / 下拉，未来加新模式不必改 QML 硬编码。
+    Q_PROPERTY(QVariantList modeList READ modeList CONSTANT)
+    // 当前模式对应的 CSV 路径（切 mode 后变化）
+    Q_PROPERTY(QString dataFilePath READ dataFilePath NOTIFY currentModeChanged)
     Q_PROPERTY(int totalCount READ totalCount NOTIFY changed)
     // 导出 CSV 时 FileDialog 默认弹出的目录（QUrl 字符串，形如 "file:///Users/.../Downloads"）。
     // 跨平台一律落到系统下载目录；若不可用则回退到家目录。
@@ -59,8 +74,16 @@ public:
     QString currentUser() const;
     void    setCurrentUser(const QString& name);
 
-    // 数据文件绝对路径（保证父目录已建立）
-    QString dataFilePath() const { return m_dataFile; }
+    // 当前评分模式（QSettings 持久化在 "rating/mode" 下，默认 "aigc"）
+    QString currentMode() const;
+    void    setCurrentMode(const QString& mode);
+    // 当前模式的星级上限（不在表里则返回 5 兜底）
+    int     maxStars() const;
+    // 内置模式表（id / label / maxStars）。CONSTANT，进程内不变。
+    QVariantList modeList() const;
+
+    // 数据文件绝对路径（保证父目录已建立，对应当前模式）
+    QString dataFilePath() const;
 
     // 导出 CSV 默认目录（QUrl 形式，供 QML FileDialog.currentFolder 绑定）
     QUrl    defaultExportDir() const;
@@ -70,37 +93,39 @@ public:
 
 public slots:
     // 记录一次评分；若同 filePath 已存在则覆盖；stars=0 也会保留为"已取消"行。
-    // filePath 为空时不写入，安静返回 false。
+    // filePath 为空 / currentMode == "off" 时不写入，安静返回 false。
     //
     // channelIndex：多路场景下的宏格索引（0-based，-1 = 不提供）。
     // 为了让导出的 CSV 能一眼分辨"哪一路"，
     // 写入时会把 file_name 统一成 "<channel+1>_<原文件名>"的样子（如 "1_xxx.mp4"）。
     // 未传（默认 -1）时保持原为写入原始文件名，保证后向兼容。
     // 该名称仅影响 CSV/评分表这一层，不影响标题栏、文件列表弹窗等其他处的文件名显示。
+    //
+    // stars 会按当前模式的 maxStars 自动截断（subjective 模式传 5 → 自动钉为 3）。
     bool recordRating(const QString& filePath,
                       const QString& fileName,
                       int stars,
                       int channelIndex = -1);
 
-    // 查询某文件路径在 *当前评分人* 下的评分。
-    //   · 命中：返回 0-5（含 0 = 已取消评分）
-    //   · 未命中：返回 -1
+    // 查询某文件路径在 *当前评分人 + 当前模式* 下的评分。
+    //   · 命中：返回 0..maxStars（含 0 = 已取消评分）
+    //   · 未命中 / off 模式：返回 -1
     // 用途：QML 翻组 / 切宫格 / 重新打开文件后，根据新文件路径回填星级显示，
     //       避免上一组的 cellRatings[idx] 残留串到下一组。
     int ratingFor(const QString& filePath) const;
 
     // 返回所有评分行（每行一个 QVariantMap，键名同 CSV 列）。
-    // 排序：updated_at 倒序（新→旧）。
+    // 排序：updated_at 倒序（新→旧）。仅返回当前模式的数据。
     QVariantList getAllRatings() const;
 
     // 导出到任意路径（CSV，UTF-8 with BOM，便于 Excel 直接打开中文不乱码）。
-    // 成功返回 true。
+    // 成功返回 true。导出的是「当前模式」的数据。
     bool exportToFile(const QString& targetPath) const;
 
-    // 清空全部评分（保留表头）
+    // 清空当前模式的全部评分（保留表头）
     bool clearAll();
 
-    // 按文件夹批量删除：删除所有 file_path 所在目录命中 folderPaths 白名单的行。
+    // 按文件夹批量删除：删除当前模式下所有 file_path 所在目录命中 folderPaths 白名单的行。
     // folderPaths 为空时不做任何修改并返回 false（避免被误用为"全删"，那种语义请直接走 clearAll）。
     // 删除成功后会发 changed() 信号；UI 据此刷新表格。
     Q_INVOKABLE bool removeByFolders(const QStringList& folderPaths);
@@ -146,6 +171,7 @@ public slots:
 
 signals:
     void currentUserChanged();
+    void currentModeChanged(); // mode 切换：dataFilePath / maxStars / totalCount 都会跟着变
     void changed();   // 任何写入/清空都会触发，QML 表格可绑定刷新
 
     // 上传相关信号
@@ -176,7 +202,13 @@ private:
     // folderPaths 非空时仅保留 file_path 所在目录命中白名单的行；空 = 不过滤。
     QByteArray buildExportCsvBytes(const QStringList& folderPaths = {}) const;
 
-    QString m_dataFile;   // 绝对路径（构造时计算并 mkpath）
+    // 按 mode 计算/确保 CSV 路径存在（建目录、写表头）。返回该模式的绝对路径；
+    // 若 mode 是 "off" 或不在 modeList 里，返回空串（调用方需自行兼容）。
+    QString ensureFileForMode(const QString& mode) const;
+    // 当前模式对应的 CSV 路径（off 模式返回空串）
+    QString currentDataFile() const { return ensureFileForMode(currentMode()); }
+
+    QString m_baseDir;    // 数据根目录（AppDataLocation/PlayerX）
 
     // QNetworkAccessManager 懒初始化：不走上传的运行不产生任何网络资源。
     mutable QNetworkAccessManager* m_nam = nullptr;
