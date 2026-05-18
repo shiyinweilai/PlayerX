@@ -41,8 +41,8 @@ constexpr const char* kSettingsUploadTagKey = "rating/uploadTag";
 // QML 会通过 modeList 自动拿到所有字段生成 UI。
 struct ModeDef { const char* id; const char* label; int maxStars; };
 static const ModeDef kModeTable[] = {
-    {"aigc",       "AIGC 评分",     5},
-    {"subjective", "传统主观评分", 3},
+    {"aigc",       "主观评分",     5},
+    {"subjective", "质量比较", 3},
 };
 static constexpr int kModeCount = sizeof(kModeTable) / sizeof(kModeTable[0]);
 

@@ -1,5 +1,5 @@
 {
-  "version": "2.0.20",
+  "version": "2.0.21",
   "minSupported": "1.0.0",
   "author": "rbyang",
   "copyright": "Copyright (c) 2026 PlayerX",
@@ -7,8 +7,8 @@
   "mandatory": false,
   "downloads": {
     "mac-arm64": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.20-arm64-mac.zip",
-      "sha256": "8759e27b25ed647d959360096852bf3c6c939a3c1ff983c3293b272fecc21499"
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-2.0.21-arm64-mac.zip",
+      "sha256": "e33507f93f2730d6546c167399159ec9ac536b577413ce29360dcdf3fb077fec"
     }
   }
 }

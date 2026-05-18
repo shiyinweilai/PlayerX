@@ -11,8 +11,8 @@
  *       macOS:   ~/Library/Application Support/PlayerX/ratings_<mode>.csv
  *       Windows: %APPDATA%/PlayerX/ratings_<mode>.csv
  *     当前内置两种模式：
- *       - aigc        : AIGC 评分，5 星制（用于 AI 生成视频质量打分）
- *       - subjective  : 传统主观评分，3 星制（用于经典主观评测）
+ *       - aigc        : 主观评分，5 星制（用于 AI 生成视频质量打分）
+ *       - subjective  : 质量比较，3 星制（用于经典主观评测）
  *     未来新增模式只要在 modeList 里追加一行即可，不影响已有数据。
  *   - 提供"导出到任意路径"接口，用于交给后端汇总；
  *   - 通过 contextProperty 暴露给 QML，命名空间 "Rating"。
