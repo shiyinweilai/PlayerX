@@ -6,10 +6,10 @@
  *   - ?all=1 时把目录里所有 csv（含历史）并入
  *   - ?names=a.csv,b.csv 或 POST body { names: [...] } 时只合并这个子集
  *     （names 与 all 同时存在时，names 优先；用于"合并下载选中"）
- *   - ?mode=aigc|subjective|...  仅合并该模式下的文件（默认全部模式）
+ *   - ?mode=subjective|quality|...  仅合并该模式下的文件（默认全部模式）
  *
  * 输出 UTF-8 with BOM 的标准 CSV，多份文件只保留首份的表头。
- * 为了让"AIGC / 主观"的数据在合并出的同一份 csv 里仍可区分，
+ * 为了让"主观评分（subjective）/ 质量比较（quality）"的数据在合并出的同一份 csv 里仍可区分，
  * 末尾追加 ",tag,mode" 两列；合并多份时只保留首份的扩展表头。
  */
 const fs   = require('fs');
@@ -81,7 +81,7 @@ function handle(req, res) {
     if (wantMode) {
         allFiles = allFiles.filter(n => {
             const meta = parseName(n) || {};
-            return (meta.mode || 'aigc') === wantMode;
+                return (meta.mode || 'subjective') === wantMode;
         });
     }
 
@@ -101,11 +101,11 @@ function handle(req, res) {
         files.sort();
     } else if (!all) {
         // 关键修复：bucket key 必须包含 mode，否则同一 (user, tag) 下
-        // AIGC 与 subjective 会互相覆盖，导致只剩一个模式被合并。
+        // 主观评分（subjective）与质量比较（quality）会互相覆盖，导致只剩一个模式被合并。
         const bucket = new Map();
         for (const n of allFiles) {
             const meta = parseName(n) || {};
-            const key = `${meta.user || ''}__${meta.tag || ''}__${meta.mode || 'aigc'}`;
+            const key = `${meta.user || ''}__${meta.tag || ''}__${meta.mode || 'subjective'}`;
             const st = fs.statSync(path.join(UPLOAD_DIR, n));
             const cur = bucket.get(key);
             if (!cur || cur.mtime < st.mtime) bucket.set(key, { name: n, mtime: st.mtime });
@@ -139,7 +139,7 @@ function handle(req, res) {
         if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
         const meta = parseName(n) || {};
         const tag  = meta.tag  || '';
-        const mode = meta.mode || 'aigc';
+        const mode = meta.mode || 'subjective';
         const out = appendTagModeToCsv(txt, tag, mode, first);
         if (out.length === 0) continue;
         if (first) {

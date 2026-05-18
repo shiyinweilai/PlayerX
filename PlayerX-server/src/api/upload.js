@@ -2,13 +2,13 @@
  * src/api/upload.js — POST /upload
  *
  * 字段：
- *   file=<csv>, user=<评分人>, tag=<可选标签>, mode=<评分模式，默认 aigc>,
+ *   file=<csv>, user=<评分人>, tag=<可选标签>, mode=<评分模式，默认 subjective>,
  *   client=<可选客户端版本>, force=<"1" 表示强制覆盖>
  *
  * 行为：
  *   - 同 (user, tag, mode) 已存在 → 默认 409 让客户端弹"覆盖确认"
  *   - force=1 → 把旧文件归档（最多保留 ARCHIVE_KEEP 份）后再写新的
- *   - 不同 mode 下同 (user, tag) 互不冲突（例如同一人可以同时上传 aigc 和 subjective）
+ *   - 不同 mode 下同 (user, tag) 互不冲突（例如同一人可以同时上传 subjective 和 quality）
  */
 const fs     = require('fs');
 const path   = require('path');
@@ -35,9 +35,9 @@ function handle(req, res) {
 
     const user  = safeSlug(req.body.user, 'anon');
     const tag   = safeSlug(req.body.tag,  'default');
-    // mode 默认 'aigc'（保障旧客户端上传仍能入库）。
+    // mode 默认 'subjective'（主观评分）。
     // 同时走 safeSlug 安全过滤，避免被人费心传个路径注入。
-    const mode  = safeSlug(req.body.mode, 'aigc');
+    const mode  = safeSlug(req.body.mode, 'subjective');
     const force = String(req.body.force || '').trim() === '1';
 
     // 冲突检测：同 (user, tag, mode) 才算冲突，不同 mode 可同时存在

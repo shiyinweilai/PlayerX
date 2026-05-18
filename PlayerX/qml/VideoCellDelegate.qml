@@ -177,7 +177,7 @@ Rectangle {
                     return (typeof v === "number" && v > 0) ? v : 0
                 }
                 Repeater {
-                    // 当前模式的星级上限：AIGC=5 / 主观=2；Rating 实例不在时兜底 5
+                // 当前模式的星级上限：主观评分=5 / 质量比较=2；Rating 实例不在时兜底 5
                     model: viewRoot.reviewMaxStars > 0 ? viewRoot.reviewMaxStars : 5
                     delegate: Item {
                         width: 14

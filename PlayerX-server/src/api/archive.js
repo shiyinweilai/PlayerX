@@ -491,7 +491,7 @@ function handleMergeArchived(req, res) {
         if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
         const meta = parseName(n) || {};
         const tag  = meta.tag  || '';
-        const mode = meta.mode || 'aigc';
+        const mode = meta.mode || 'subjective';
         const out = appendTagModeToCsv(txt, tag, mode, first);
         if (out.length === 0) continue;
         if (first) {

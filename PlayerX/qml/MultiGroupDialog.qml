@@ -38,7 +38,7 @@ ApplicationWindow {
     }
 
     // ─── 评分模式切换时按新槽位重载 lanes ─────────────────────────
-    // 时序：用户在 Main.qml / 顶部菜单切到「AIGC / 主观 / off」 →
+    // 时序：用户在 Main.qml / 顶部菜单切到「主观评分 / 质量比较 / off」 →
     //   Rating.currentMode 变化 → 这里被触发。
     // _persistKey / _persistFileName 是 readonly property，绑定到 Rating.currentMode，
     // 此时已经指向新模式槽位；旧模式的快照在切换前每次 lane 改动都已 _persistLanes
@@ -91,28 +91,28 @@ ApplicationWindow {
     //   任何一路出问题都不影响主流程。
     //
     // ── 按「评分模式」分桶 ────────────────────────────────────────
-    //   背景：同一个文件夹在 AIGC / 主观 / off 三种模式下可能播放进度不同
-    //   （比如 AIGC 评到第 4 个，主观还没开始评）。如果共用一份 lanes 快照，
+    //   背景：同一个文件夹在主观评分 / 质量比较 / off 三种模式下可能播放进度不同
+    //   （比如主观评分评到第 4 个，质量比较还没开始评）。如果共用一份 lanes 快照，
     //   切模式后会把上一种模式的 currentIndex 串过来，造成"接错"。
     //   做法：把当前模式作为命名空间拼进 key/文件名里：
     //      key      → "multiGroup/lanesJson/<mode>"
     //      filename → "multi_group_lanes_<mode>.json"
-    //   其中 <mode> ∈ { off, aigc, subjective }（未知值兜底为 off）。
+    //   其中 <mode> ∈ { off, subjective, quality }（未知值兜底为 off）。
     //   兼容旧数据：首次进入时若发现"旧的 multi_group_lanes.json / multiGroup/lanesJson"
     //   存在但当前模式槽位为空，则把它整体迁到当前模式槽位（一次性）。
     function _modeSlug() {
         try {
             if (typeof Rating === "undefined" || !Rating) return "off"
             var m = Rating.currentMode || "off"
-            if (m === "aigc" || m === "subjective" || m === "off") return m
+            if (m === "subjective" || m === "quality" || m === "off") return m
             return "off"
         } catch (e) { return "off" }
     }
     // 当前模式的人类可读标签，用于弹窗"作用域提示"
     function _modeLabel() {
         var m = _modeSlug()
-        if (m === "aigc")       return "主观评分"
-        if (m === "subjective") return "质量比较"
+        if (m === "subjective") return "主观评分"
+        if (m === "quality")    return "质量比较"
         return "未启用评分"
     }
     // 旧版本用的固定 key / 文件名：仅用于一次性迁移，迁完即删
@@ -121,12 +121,12 @@ ApplicationWindow {
     // 当前模式对应的 key / 文件名（绑定到 Rating.currentMode，模式切换时自动失效）
     readonly property string _persistKey: {
         var m = (typeof Rating !== "undefined" && Rating) ? (Rating.currentMode || "off") : "off"
-        if (m !== "aigc" && m !== "subjective") m = "off"
+        if (m !== "subjective" && m !== "quality") m = "off"
         return "multiGroup/lanesJson/" + m
     }
     readonly property string _persistFileName: {
         var m = (typeof Rating !== "undefined" && Rating) ? (Rating.currentMode || "off") : "off"
-        if (m !== "aigc" && m !== "subjective") m = "off"
+        if (m !== "subjective" && m !== "quality") m = "off"
         return "multi_group_lanes_" + m + ".json"
     }
 
@@ -1270,7 +1270,7 @@ ApplicationWindow {
 
     // ─── 进度续看：「接着评分 / 重置」交互辅助 ───────────────────
     // 设计动机：
-    //   每个评分模式（aigc / subjective / off）独立记录每路 currentIndex。
+    //   每个评分模式（subjective / quality / off）独立记录每路 currentIndex。
     //   切到某模式 + 选好文件夹后，点「启动」时如果检测到当前模式的
     //   选中路里有任何 currentIndex > 0 的进度，弹出选择：
     //     · 接着评分 → 保留当前 currentIndex 直接 start()
@@ -2450,7 +2450,8 @@ ApplicationWindow {
     Window {
         id: settingsPopup
         // 文案项数 = modeList.length + 1（"关闭" 项）；每项 32px + 上下 padding 8
-        width: 220
+        // 去掉右侧"X 星"后缀后，菜单内容更紧凑，宽度相应收窄
+        width: 150
         height: {
             var n = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList.length : 2
             return (n + 1) * 32 + 8
@@ -2540,13 +2541,6 @@ ApplicationWindow {
                                 text: modeData.label
                                 color: "#e8e8ec"
                                 font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            // 右侧辅助文案：星级上限（如 "5 星" / "3 星"），让用户一眼明白差异
-                            Text {
-                                text: modeData.maxStars + " 星"
-                                color: "#7a7a82"
-                                font.pixelSize: 11
                                 verticalAlignment: Text.AlignVCenter
                             }
                         }
@@ -2704,7 +2698,7 @@ ApplicationWindow {
                                     }
 
                                     // 星星：点击即评分；评分后驻留显示，便于回看分数。
-                    // 颗数随当前评分模式 maxStars（AIGC=5 / 主观=2）动态变化。
+                    // 颗数随当前评分模式 maxStars（主观评分=5 / 质量比较=2）动态变化。
                                     Row {
                                         spacing: 2
                                         Repeater {

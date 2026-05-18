@@ -468,10 +468,11 @@
 
     // 模式胶囊：不同模式走不同颜色，走不同 CSS 变量。
     function renderModePill(mode) {
-        const m = (mode || 'aigc').toLowerCase();
-        const labelMap = { aigc: 'AIGC', subjective: '主观', off: '关闭' };
+        const m = (mode || 'subjective').toLowerCase();
+        // 显示文案：subjective → 主观评分；quality → 质量比较
+        const labelMap = { subjective: '主观评分', quality: '质量比较', off: '关闭' };
         const label = labelMap[m] || m;
-        return `<span class="mode-pill mode-${escHtml(m)}" title="评分模式：${escHtml(m)}">${escHtml(label)}</span>`;
+        return `<span class="mode-pill mode-${escHtml(m)}" title="评分模式：${escHtml(label)}">${escHtml(label)}</span>`;
     }
 
     // 根据 modes 汇总刷新顶部 Tab 徽章。
@@ -498,7 +499,7 @@
         const arr = state.items;
         const users = new Set(arr.map(x => x.user || ''));
         // (user, tag, mode) 三元组才是一个独立的评分组，不同模式不能被合并计。
-        const tags  = new Set(arr.map(x => `${x.user}__${x.tag}__${x.mode || 'aigc'}`));
+        const tags  = new Set(arr.map(x => `${x.user}__${x.tag}__${x.mode || 'subjective'}`));
         const total = arr.reduce((s, x) => s + (+x.size || 0), 0);
         kpiCount.textContent = arr.length;
         kpiUsers.textContent = users.size;
@@ -860,13 +861,13 @@
 
     // 从预览表格中推断当前行的最大星级：
     //   - 优先看同行 mode 列（后端 ／merge 输出都会携带）
-    //   - 取不到则倆馆为 5（AIGC 默认）
+        //   - 取不到则回退为 5（主观评分默认）
     function inferMaxStars(header, row) {
         const idx = header.findIndex(h => String(h || '').toLowerCase() === 'mode');
         if (idx >= 0) {
             const m = String((row && row[idx]) || '').trim().toLowerCase();
-            if (m === 'subjective') return 2;
-            if (m === 'aigc')       return 5;
+            if (m === 'quality')    return 2;
+            if (m === 'subjective') return 5;
         }
         return 5;
     }

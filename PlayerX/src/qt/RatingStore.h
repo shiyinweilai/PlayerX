@@ -11,8 +11,8 @@
  *       macOS:   ~/Library/Application Support/PlayerX/ratings_<mode>.csv
  *       Windows: %APPDATA%/PlayerX/ratings_<mode>.csv
  *     当前内置两种模式：
- *       - aigc        : 主观评分，5 星制（用于 AI 生成视频质量打分）
- *       - subjective  : 质量比较，2 星制（用于经典主观评测）
+ *       - subjective : 主观评分，5 星制（单视频打星）
+ *       - quality    : 质量比较，2 星制（双视频优劣对比）
  *     未来新增模式只要在 modeList 里追加一行即可，不影响已有数据。
  *   - 提供"导出到任意路径"接口，用于交给后端汇总；
  *   - 通过 contextProperty 暴露给 QML，命名空间 "Rating"。
@@ -38,12 +38,12 @@ namespace rbqt {
 class RatingStore : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString currentUser READ currentUser WRITE setCurrentUser NOTIFY currentUserChanged)
-    // 当前评分模式（"aigc" / "subjective" / "off"）。
+    // 当前评分模式（"subjective" / "quality" / "off"）。
     //   - "off"：不评分模式；UI 隐藏星条、不写盘；调用 recordRating 安静返回 false。
     //   - 其他：按 mode 路由到独立 CSV 文件；切换 mode 后 dataFilePath / maxStars / totalCount
     //     等都会跟着重算，QML 表格会自动刷新。
     Q_PROPERTY(QString currentMode READ currentMode WRITE setCurrentMode NOTIFY currentModeChanged)
-// 当前模式的星级上限（aigc=5 / subjective=2 / off=0）。QML 渲染星条的 Repeater model 直接用它。
+// 当前模式的星级上限（subjective=5 / quality=2 / off=0）。QML 渲染星条的 Repeater model 直接用它。
     Q_PROPERTY(int     maxStars    READ maxStars    NOTIFY currentModeChanged)
     // 可用模式列表（QVariantList of QVariantMap），每项含 id/label/maxStars。
     // QML 端用它生成模式切换菜单 / 下拉，未来加新模式不必改 QML 硬编码。
@@ -74,7 +74,7 @@ public:
     QString currentUser() const;
     void    setCurrentUser(const QString& name);
 
-    // 当前评分模式（QSettings 持久化在 "rating/mode" 下，默认 "aigc"）
+    // 当前评分模式（QSettings 持久化在 "rating/mode" 下，默认 "subjective"）
     QString currentMode() const;
     void    setCurrentMode(const QString& mode);
     // 当前模式的星级上限（不在表里则返回 5 兜底）
@@ -101,7 +101,7 @@ public slots:
     // 未传（默认 -1）时保持原为写入原始文件名，保证后向兼容。
     // 该名称仅影响 CSV/评分表这一层，不影响标题栏、文件列表弹窗等其他处的文件名显示。
     //
-// stars 会按当前模式的 maxStars 自动截断（subjective 模式传 5 → 自动钉为 2）。
+// stars 会按当前模式的 maxStars 自动截断（quality 模式传 5 → 自动钉为 2）。
     bool recordRating(const QString& filePath,
                       const QString& fileName,
                       int stars,

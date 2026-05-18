@@ -225,12 +225,12 @@ button {
     line-height: 18px;
     white-space: nowrap;
 }
-.mode-pill.mode-aigc {
+.mode-pill.mode-subjective {
     background: rgba(10,132,255,.12);
     color: var(--accent);
     border-color: rgba(10,132,255,.30);
 }
-.mode-pill.mode-subjective {
+.mode-pill.mode-quality {
     background: rgba(255,159,10,.14);
     color: #ff9f0a;
     border-color: rgba(255,159,10,.35);

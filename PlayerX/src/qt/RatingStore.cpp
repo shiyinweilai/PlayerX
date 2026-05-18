@@ -41,8 +41,8 @@ constexpr const char* kSettingsUploadTagKey = "rating/uploadTag";
 // QML 会通过 modeList 自动拿到所有字段生成 UI。
 struct ModeDef { const char* id; const char* label; int maxStars; };
 static const ModeDef kModeTable[] = {
-    {"aigc",       "主观评分",     5},
-    {"subjective", "质量比较", 2},
+    {"subjective", "主观评分",     5},
+    {"quality",    "质量比较", 2},
 };
 static constexpr int kModeCount = sizeof(kModeTable) / sizeof(kModeTable[0]);
 
@@ -88,7 +88,7 @@ RatingStore::RatingStore(QObject* parent) : QObject(parent) {
     QDir().mkpath(base);
     m_baseDir = base;
 
-    // 预热默认模式的文件（首启动即生成 ratings_aigc.csv，
+    // 预热默认模式的文件（首启动即生成 ratings_subjective.csv，
     // 避免 UI 首次读取 dataFilePath 时拿到一个不存在的路径）。
     ensureFileForMode(currentMode());
 }
@@ -145,15 +145,15 @@ QString RatingStore::systemUserName() const {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// 评分模式：QSettings 持久化，默认 "aigc"
+// 评分模式：QSettings 持久化，默认 "subjective"
 // ════════════════════════════════════════════════════════════════════════
 
 QString RatingStore::currentMode() const {
     QSettings s;
-    QString m = s.value(kSettingsModeKey, QStringLiteral("aigc")).toString().trimmed();
-    // 兼容性兜底：值不在表里且不是 "off" 时回退到 aigc，避免脏数据卡死 UI。
+    QString m = s.value(kSettingsModeKey, QStringLiteral("subjective")).toString().trimmed();
+    // 兼容性兜底：值不在表里且不是 "off" 时回退到 subjective，避免脏数据卡死 UI。
     if (m == QStringLiteral("off")) return m;
-    if (!findMode(m)) return QStringLiteral("aigc");
+    if (!findMode(m)) return QStringLiteral("subjective");
     return m;
 }
 
@@ -555,7 +555,7 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     auto* multi = new QHttpMultiPart(QHttpMultiPart::FormDataType);
 
     // file 字段（主要负载）。
-    // 文件名携带当前模式，让后端 / 运维在付启同名时一眼识别是 AIGC 还是主观评分。
+    // 文件名携带当前模式，让后端 / 运维在付启同名时一眼识别是主观评分还是质量比较。
     QHttpPart filePart;
     QString fileName = QStringLiteral("playerx_%1_%2_%3.csv")
                            .arg(rater.isEmpty() ? "anon" : rater)
@@ -599,7 +599,7 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         multi->append(p);
     }
     // mode 字段：让后端可按模式分桶，不同模式的 (user, tag) 互不冲突。
-    // 后端服务考虑兼容旧客户端：不传 mode 默认当作 "aigc"。
+    // 后端服务考虑兼容旧客户端：不传 mode 默认当作 "subjective"。
     {
         QHttpPart p;
         p.setHeader(QNetworkRequest::ContentDispositionHeader,
@@ -776,19 +776,19 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths) {
 //
 // 物理目录结构：
 //   <AppData>/PlayerX/archive/
-//   ├── aigc/
+//   ├── subjective/
 //   │   ├── 20260518_201906/
 //   │   │   └── ratings.csv
 //   │   └── v2.1_第一轮/
 //   │       └── ratings.csv
-//   └── subjective/
+//   └── quality/
 //       └── ...
 //
 // 设计动机：
 //   - 同一文件夹下的视频可被归档多次（例如先归档"v1 评分"，再重新打分后归档"v2 评分"），
 //     按"文件夹"而非"单 CSV"组织，给同一视频多次评分留出共存空间；
 //   - 一个批次一个独立目录，未来若要附带截图/元信息（report.json、screenshot/）也好扩展；
-//   - 按 mode 隔离批次，避免 AIGC 和主观评分的批次混在同一下拉里。
+//   - 按 mode 隔离批次，避免主观评分和质量比较的批次混在同一下拉里。
 // ════════════════════════════════════════════════════════════════════════
 
 namespace {
