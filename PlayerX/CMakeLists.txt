@@ -106,6 +106,12 @@ qt_add_qml_module(PlayerX
         qml/MultiGroupRow.qml
         qml/MultiGroupDialog.qml
         qml/RatingsDialog.qml
+        # 视频宫格单元格组件：从 Main.qml 抽离，便于后续按媒体类型扩展
+        # （未来加 ImageCellDelegate.qml 等只需在此追加，宫格容器无需改动）。
+        qml/VideoCellDelegate.qml
+        # 扁平工具按钮：从 Main.qml inline component 抽出，便于跨文件复用。
+        # （inline component 仅在定义文件内可见，独立 .qml 才能被外部引用）
+        qml/FlatToolButton.qml
 )
 
 # ─── 头文件搜索路径 ───────────────────────────────────────────────────────────
