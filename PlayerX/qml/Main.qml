@@ -264,6 +264,12 @@ ApplicationWindow {
 
             MenuSeparator {}
 
+            // ── 打开日志目录 ──（与下方自绘菜单同名条目联动；调用同一个 Fs API）
+            MenuItem {
+                text: qsTr("打开日志目录")
+                onTriggered: Fs.revealInFileManager(Fs.appLogDir())
+            }
+
             // 兜底：弹出原深色自绘设置面板（与快捷键 ⌘, 一致）
             MenuItem {
                 text: qsTr("偏好设置…")
@@ -2477,6 +2483,39 @@ ApplicationWindow {
                         }
                         Text {
                             text: infoItem.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+
+                MenuSeparator {
+                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
+                }
+
+                // ── 打开日志目录 ──
+                // 用于排查问题：每次启动都会在 <CacheLocation>/logs/ 下生成
+                //   playerx_YYYYMMDD_HHmmss.log
+                // 包含 fprintf(stderr,...) 与所有 qDebug/qInfo/qWarning/... 输出。
+                // 点击此项调用 Fs.revealInFileManager 直接在系统文件管理器里
+                // 打开该目录（macOS Finder / Windows Explorer / Linux Files），
+                // 用户可手动复制/查看。
+                MenuItem {
+                    id: openLogDirItem
+                    text: "打开日志目录"
+                    onTriggered: Fs.revealInFileManager(Fs.appLogDir())
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: openLogDirItem.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
+                        Text {
+                            text: openLogDirItem.text
                             color: "#e8e8ec"
                             font.pixelSize: 13
                             verticalAlignment: Text.AlignVCenter

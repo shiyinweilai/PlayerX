@@ -63,6 +63,19 @@ public:
 
     // 文件是否存在（filePath 为空返回 false）。
     Q_INVOKABLE bool fileExists(const QString& filePath) const;
+
+    // ── 日志目录 + 文件管理器揭示 ────────────────────────────────
+    // 应用日志目录（在 appCacheDir 下的 "logs" 子目录），用于排查问题。
+    //   macOS:   ~/Library/Caches/PlayerX/logs
+    //   Windows: %LOCALAPPDATA%/PlayerX/cache/logs
+    //   Linux:   ~/.cache/PlayerX/logs
+    // 不存在会自动创建。返回绝对路径，末尾不带斜杠。
+    Q_INVOKABLE QString appLogDir() const;
+
+    // 在系统文件管理器中"打开并选中"指定路径（Finder/Explorer/Files）。
+    // 若选中失败（例如 Linux 下 xdg-open 不支持），退化为打开父目录。
+    // path 为目录则直接打开该目录。返回 true 表示已发起 reveal 请求。
+    Q_INVOKABLE bool revealInFileManager(const QString& path) const;
 };
 
 } // namespace rbqt

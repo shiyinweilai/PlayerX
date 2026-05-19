@@ -4,14 +4,17 @@
 #include "FsUtils.h"
 
 #include <QCollator>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 #include <QSet>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTextStream>
+#include <QUrl>
 
 namespace rbqt {
 
@@ -175,6 +178,62 @@ QString FsUtils::readTextFile(const QString& filePath) const {
 bool FsUtils::fileExists(const QString& filePath) const {
     if (filePath.isEmpty()) return false;
     return QFileInfo::exists(filePath);
+}
+
+// ── 日志目录 + 文件管理器揭示 ────────────────────────────────
+
+QString FsUtils::appLogDir() const {
+    // 落在 cache 目录下的 logs 子目录：用户感知一致、清理方便、跨平台规范。
+    QString dir = appCacheDir() + "/logs";
+    QDir d(dir);
+    if (!d.exists()) d.mkpath(".");
+    return dir;
+}
+
+bool FsUtils::revealInFileManager(const QString& path) const {
+    if (path.isEmpty()) return false;
+    QFileInfo fi(path);
+    // 不存在则尝试打开父目录（兜底，避免点完按钮无反应）
+    if (!fi.exists()) {
+        QFileInfo parent(fi.absolutePath());
+        if (!parent.exists()) return false;
+#if defined(Q_OS_MACOS)
+        QProcess::startDetached("open", { parent.absoluteFilePath() });
+#elif defined(Q_OS_WIN)
+        QProcess::startDetached("explorer", { QDir::toNativeSeparators(parent.absoluteFilePath()) });
+#else
+        QDesktopServices::openUrl(QUrl::fromLocalFile(parent.absoluteFilePath()));
+#endif
+        return true;
+    }
+
+#if defined(Q_OS_MACOS)
+    // Finder reveal：选中目标项
+    if (fi.isDir()) {
+        QProcess::startDetached("open", { fi.absoluteFilePath() });
+    } else {
+        QProcess::startDetached("open", { "-R", fi.absoluteFilePath() });
+    }
+    return true;
+#elif defined(Q_OS_WIN)
+    // explorer /select, "C:\path\to\file"  必须用反斜杠
+    if (fi.isDir()) {
+        QProcess::startDetached("explorer", { QDir::toNativeSeparators(fi.absoluteFilePath()) });
+    } else {
+        QStringList args;
+        args << QString("/select,") + QDir::toNativeSeparators(fi.absoluteFilePath());
+        QProcess::startDetached("explorer", args);
+    }
+    return true;
+#else
+    // Linux：尝试 xdg-open 父目录（多数 DE 不支持 select）
+    if (fi.isDir()) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absoluteFilePath()));
+    } else {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
+    }
+    return true;
+#endif
 }
 
 } // namespace rbqt

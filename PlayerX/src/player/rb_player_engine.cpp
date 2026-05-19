@@ -180,19 +180,60 @@ void RBPlayerEngine::rbPlay() {
     // 末尾点击 ▶ = 自动 replay：单路 RBVideoPlayer::rbPlay() 检测到 Ended
     // 会自动 seek 回 0，引擎层的 m_pausedPts 仍停留在 duration。这里把
     // 锚点复位到 0，避免主时钟下一次 tick 把刚 replay 到 0 的路再次拉到末尾。
+    //
+    // ── 扩展：主时钟也已到达 duration 边界视为"已结束" ──
+    // 场景：长短视频混播时，主时钟到 max(duration) 触发 rbTick 边界处理
+    // 把所有路 rbPause()（→ Paused，不会变 Ended）。此时各路 rbIsEnded()
+    // 多数为 false（尤其长路被强制 pause 在末尾，根本没走自然 EOF），
+    // 旧 allEnded 判定 → false → 走"非 allEnded"分支 →
+    //   m_anchorPts = m_pausedPts = duration → master 从 duration 起跑
+    //   → 下次 rbTick 立刻又判定 t >= dur 把所有路 pause
+    //   → 视觉上"按空格主时钟跳一下又停，画面没回到 0，无法重新播放"。
+    // 修复：把"主时钟已停在 duration 附近（容差 50ms）"也算作 allEnded，
+    // 走 replay 分支 → seek 回 0 → 从头播放，与重置按钮行为一致。
+    double maxDur = 0.0;
+    for (auto& p : m_players) if (p) maxDur = std::max(maxDur, p->rbDuration());
     bool allEnded = true;
     for (auto& p : m_players) {
         if (!p) continue;
         if (!p->rbIsEnded()) { allEnded = false; break; }
     }
-    if (allEnded) {
+    bool atEndBoundary = (maxDur > 0.0 && m_pausedPts >= maxDur - 0.05);
+    fprintf(stderr, "[RBE-PLAY] m_playing=%d m_pausedPts=%.3f maxDur=%.3f allEnded=%d atEndBoundary=%d\n",
+            m_playing.load(), m_pausedPts, maxDur, allEnded, atEndBoundary);
+    for (size_t i = 0; i < m_players.size(); ++i) {
+        auto& p = m_players[i];
+        if (!p) continue;
+        fprintf(stderr, "[RBE-PLAY]   player[%zu] isPlaying=%d isPaused=%d isEnded=%d curT=%.3f dur=%.3f\n",
+                i, p->rbIsPlaying(), p->rbIsPaused(), p->rbIsEnded(),
+                p->rbCurrentTime(), p->rbDuration());
+    }
+    if (allEnded || atEndBoundary) {
         m_pausedPts  = 0.0;
         m_anchorPts  = 0.0;
         m_anchorWall = rbWallTime();
-        // 全部 Ended 场景下让所有路重新加入主时钟，从 0 开始齐播
+        // 末尾重播：让所有路重新加入主时钟，从 0 开始齐播。
+        //
+        // 单路 RBVideoPlayer::rbPlay() 的状态分支：
+        //   · Ended  → 内部 rbSeekTo(0) 重播
+        //   · Paused → 从 m_currentTime 恢复（=duration，不会到 0！）
+        //   · Ready  → 从 m_currentTime 起播
+        //
+        // 短长视频混播时，主时钟到 max(duration) 触发 rbTick 边界处理把
+        // 所有路 rbPause()（Playing→Paused），此时长路 rbIsEnded()=false。
+        // 旧实现只对 Ended 路 replay 成功，Paused 路 rbPlay 后会卡在末尾。
+        // 这里对所有"非 Playing"路统一显式 rbSeekTo(0) 把位置归零，再 rbPlay
+        // 让其切到 Playing。已经是 Ended 的路 rbPlay 内部还会再 seek 一次，
+        // 多一次 av_seek 但功能稳定（≤50ms 用户无感）。
         for (auto& p : m_players) {
             if (!p) continue;
             p->rbEnableMasterClock(true);
+            // Paused/Ready 状态下 rbPlay 不会自动回 0，先显式 seek 归零。
+            // 已 Ended 的路无需先 seek（rbPlay 内部会做），但显式 seek 一次
+            // 也不会出错——为了路径统一这里全部 seek。
+            if (!p->rbIsEnded()) {
+                p->rbSeekTo(0.0);
+            }
             p->rbPlay();
         }
         if (!m_playing.load()) {
@@ -250,6 +291,9 @@ void RBPlayerEngine::rbPause() {
     if (m_playing.load()) {
         m_pausedPts = rbComputeMasterLocked();
         m_playing.store(false);
+        fprintf(stderr, "[RBE-PAUSE] m_pausedPts updated to %.3f\n", m_pausedPts);
+    } else {
+        fprintf(stderr, "[RBE-PAUSE] already paused, m_pausedPts=%.3f\n", m_pausedPts);
     }
     // 全局暂停语义：所有路都停（含脱离主时钟的独立播放路）。
     // 注意不修改 rbUseMasterClock 标志：保留各路"是否走主时钟"的状态，
@@ -271,15 +315,182 @@ bool RBPlayerEngine::rbIsPlaying() const {
 }
 
 void RBPlayerEngine::rbTogglePause() {
-    if (rbIsPlaying()) rbPause();
-    else               rbPlay();
+    // ── 关键修复：末尾态按空格 = 完整重置 + 播放（等价于按重置按钮再播放） ──
+    //
+    // 旧实现仅靠 rbPlay() 内部的 allEnded/atEndBoundary 判定来 replay，
+    // 在以下时序上仍可能失败：
+    //   · 视频播放过程中，rbTick 边界处理是定时器触发的（~16ms 间隔），
+    //     如果用户在 t≥dur 但 rbTick 边界处理还未执行的瞬间按空格，
+    //     rbIsPlaying() 仍返回 true → 走 rbPause() 分支：m_pausedPts
+    //     可能因 rbComputeMasterLocked() 计算偏差刚好 < dur-0.05 → 下次
+    //     rbPlay 走非 replay 分支 → 视觉上"按一下跳一下，不从头播"。
+    //
+    // 新策略：在 rbTogglePause 入口先快照状态，判定"末尾态"（任一路接近
+    // duration 或所有 player 已 Ended），不论当前 m_playing 是 true/false，
+    // 一律走完整重置 + 播放流程：rbSeek(0) → rbPlay()，与"按重置按钮再
+    // 按空格"完全等价。
+    bool isPl  = rbIsPlaying();
+    bool atEnd = false;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        double maxDur = 0.0;
+        for (auto& p : m_players) if (p) maxDur = std::max(maxDur, p->rbDuration());
+        // 三个判定任一成立都视为"已到末尾"：
+        //   1) 主时钟（或暂停锚点）已贴近 duration
+        //   2) 所有路 isEnded
+        //   3) 所有主时钟路 currentTime 都贴近 duration（边界 force-pause 后）
+        if (maxDur > 0.0) {
+            double cur = m_playing.load() ? rbComputeMasterLocked() : m_pausedPts;
+            if (cur >= maxDur - 0.05) atEnd = true;
+            if (!atEnd) {
+                bool allEnded = !m_players.empty();
+                bool allAtDur = !m_players.empty();
+                for (auto& p : m_players) {
+                    if (!p) { allEnded = false; allAtDur = false; break; }
+                    if (!p->rbIsEnded()) allEnded = false;
+                    if (p->rbCurrentTime() < p->rbDuration() - 0.05) allAtDur = false;
+                }
+                if (allEnded || allAtDur) atEnd = true;
+            }
+        }
+    }
+    fprintf(stderr, "[RBE-TOGGLE] enter: isPlaying=%d m_playing=%d m_pausedPts=%.3f atEnd=%d\n",
+            isPl, m_playing.load(), m_pausedPts, atEnd);
+
+    if (atEnd) {
+        // ─── 末尾态完整重启：等价于"重新打开视频文件"+"按播放" ───
+        //
+        // 旧方案 rbSeek(0)+rbPlay() 在 Windows 上仍会失败：rbSeek 设置
+        // m_pendingAnchorRebase=true 期望 rbTick 在所有路 seekPending=0
+        // 时把 anchorPts 重锚到"max(各路首帧 PTS)"，但 player 内部
+        // m_currentTime 是异步更新的（只有解码线程把首帧解出并被 UI
+        // 渲染层取走时才更新），rbTick 触发时取到的 curT 要么是 0（首
+        // 帧未解出）要么是 dur=5.062（脏值）。两种值都让 rebase 失败 —
+        // 取 0 时主时钟从 0 起跑导致路 0（首帧 PTS=0.533）卡半秒；取
+        // 5.062 又会被容差过滤回 0，依然是从 0 起跑卡半秒。
+        //
+        // 不再用 seek+play，改成"销毁所有 player 后用相同文件重新打开"
+        // 的硬重启策略：
+        //   ① 保存当前所有路的文件路径（按索引顺序）
+        //   ② 保存当前倍速、speedLevel
+        //   ③ rbCloseAll() 释放所有 demuxer/decoder/queue
+        //   ④ rbOpenFiles() 用相同文件按相同顺序重新打开 → 全部从 0 起、
+        //      启用主时钟、状态完全等价于"用户刚打开 N 个视频"
+        //   ⑤ 恢复倍速（rbOpenFiles 会强制复位为 1.0）
+        //   ⑥ rbPlay() 启动 → 走与"首次打开后按播放"完全相同的代码路径
+        //
+        // 代价：每路重新 av_format_open + 找流 + 创建解码器 + 解码首帧，
+        // 几十毫秒到几百毫秒（取决于硬解上下文重建）。但末尾按空格本来
+        // 就不是高频操作，且能彻底消除脏状态，比再继续打补丁可靠。
+        std::vector<std::string> paths;
+        int    savedSpeedLevel = 0;
+        double savedSpeed      = 1.0;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            paths.reserve(m_players.size());
+            for (auto& p : m_players) {
+                if (p) paths.push_back(p->rbFilePath());
+            }
+            savedSpeedLevel = m_speedLevel;
+            savedSpeed      = m_speed;
+        }
+        fprintf(stderr, "[RBE-RESTART] atEnd → full restart, paths=%zu speedLevel=%d\n",
+                paths.size(), savedSpeedLevel);
+        if (paths.empty()) return;
+
+        // rbCloseAll 内部会持锁并复位所有状态；rbOpenFiles 内部先 closeAll
+        // 再持锁重新打开。两者都是公共 API，能确保状态彻底干净。
+        rbOpenFiles(paths);
+
+        // rbOpenFiles 会强制 m_speed=1.0（"打开新文件 = 干净状态"），但
+        // 这里语义是"重启同一组视频继续播"，应保留用户调过的倍速。
+        if (savedSpeed != 1.0) {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            m_speed      = savedSpeed;
+            m_speedLevel = savedSpeedLevel;
+            for (auto& p : m_players) { if (p) p->rbSetSpeed(savedSpeed); }
+        }
+
+        rbPlay();   // 走"首次打开后按播放"的标准路径，与刚打开时按空格完全一致
+        return;
+    }
+
+    if (isPl) rbPause();
+    else      rbPlay();
 }
 
 void RBPlayerEngine::rbSeek(double seconds) {
+    seconds = std::max(0.0, seconds);
+
+    // ─── 重置到开头：走完整重启路径（与末尾按空格 atEnd 分支同源） ───
+    //
+    // 经实测（Windows）：播放中按"重置按钮"调用 rbSeek(0) 时，仍然
+    // 出现"路 0 卡 17 帧、时间正常推进、过几秒画面才追上"的现象。
+    // 根因和末尾按空格完全相同：
+    //   ① rbSeekTo 阻塞调用，串行 flush + 重 demux + 解码首帧
+    //   ② 各路首帧 PTS 不同（路 0=0.533，路 1=0）
+    //   ③ rbTick 触发 rebase 时 player 内 m_currentTime 还是异步更新中
+    //      → 拿不到正确的 0.533，rebase 退化到 0
+    //   ④ 主时钟从 0 起跑，路 0 队列里没有 PTS≤0 的帧能弹 → 画面冻住
+    //
+    // m_pendingAnchorRebase + 容差防御 在 Windows 上很难做对（curT 要么
+    // 0 要么>容差），不如直接走"销毁 + 重新打开"的硬重启：保存路径列表 +
+    // m_playing 状态 → rbCloseAll → rbOpenFiles → 恢复倍速 → 按原 m_playing
+    // 决定 rbPlay 还是保持 ready 暂停态。这样所有路都是新对象，
+    // 状态完全等价于"用户刚打开 N 个视频"，绝不会再卡帧。
+    //
+    // 仅 seconds<=0 走重启，进度条拖到非 0 位置仍走原 seek 路径（拖动
+    // 是高频操作、用户对延迟敏感、且 m_pendingAnchorRebase 在拖动场景
+    // 下可接受）。
+    //
+    // 注意：这里不能持锁——rbCloseAll/rbOpenFiles 内部要持同一把锁。
+    if (seconds <= 0.0) {
+        std::vector<std::string> paths;
+        bool wasPlaying        = false;
+        int  savedSpeedLevel   = 0;
+        double savedSpeed      = 1.0;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            if (m_players.empty()) return;
+            paths.reserve(m_players.size());
+            for (auto& p : m_players) {
+                if (p) paths.push_back(p->rbFilePath());
+            }
+            wasPlaying      = m_playing.load();
+            savedSpeedLevel = m_speedLevel;
+            savedSpeed      = m_speed;
+        }
+        fprintf(stderr, "[RBE-RESTART] rbSeek(0) → full restart, paths=%zu wasPlaying=%d speedLevel=%d\n",
+                paths.size(), wasPlaying, savedSpeedLevel);
+        if (paths.empty()) return;
+
+        rbOpenFiles(paths);
+
+        // 恢复倍速（rbOpenFiles 强制重置为 1.0）
+        if (savedSpeed != 1.0) {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            m_speed      = savedSpeed;
+            m_speedLevel = savedSpeedLevel;
+            for (auto& p : m_players) { if (p) p->rbSetSpeed(savedSpeed); }
+        }
+
+        if (wasPlaying) {
+            rbPlay();   // 重置前在播 → 重启后继续播放
+        } else {
+            // 重置前是暂停态：让所有路把首帧刷出来作为暂停帧（与原 rbSeek
+            // 的 rbRefreshPausedFrame(200) 行为一致），UI 显示首帧而非黑屏。
+            std::lock_guard<std::mutex> lk(m_mutex);
+            for (auto& p : m_players) {
+                if (p) p->rbRefreshPausedFrame(200);
+            }
+        }
+        return;
+    }
+
+    // ─── 原有逻辑：seek 到非 0 位置（进度条拖拽等） ───
     std::lock_guard<std::mutex> lk(m_mutex);
     if (m_players.empty()) return;
 
-    seconds = std::max(0.0, seconds);
     m_anchorWall = rbWallTime();
     m_anchorPts  = seconds;
     m_pausedPts  = seconds;
@@ -541,14 +752,28 @@ void RBPlayerEngine::rbTick() {
         for (auto& p : m_players) {
             if (!p) continue;
             if (!p->rbUseMasterClock()) continue;
-            if (!p->rbIsPlaying())      continue;
+            // ⚠ 不要再用 p->rbIsPlaying() 过滤：m_state 翻转是异步的，
+            // 引擎刚调完 p->rbPlay() 后 isPlaying() 可能仍返回 false，
+            // 但解码线程已启动、m_seekPending=true。若过滤掉就会让
+            // anyPending=false 提前进入 rebase 分支，此时 player 内部
+            // 还没解出新首帧，rebase 用到的 curT 全是脏值或 0 → 卡帧。
             if (p->rbIsSeekPending()) { anyPending = true; break; }
         }
         if (anyPending) {
             // 冻结主时钟在 anchorPts：把 anchorWall 跟着 now 一起走，
             // 公式 master = anchorPts + (now - anchorWall)*speed 恒等于 anchorPts
+            //
+            // ⚠ 这个冻结**独立于** m_pendingAnchorRebase 标志：只要有任一
+            // 主时钟路还在 seekPending（首帧未到），主时钟就必须停摆，
+            // 否则 UI 渲染线程的 rbGetCurrentFrame 会不停 store 推进的
+            // m_masterClock 到 m_currentTime → curT 飞快跑到 N 秒，进而
+            // 让边界 t>=dur 触发 boundary→pause→画面冻住。
+            //
+            // 即使没设置 m_pendingAnchorRebase（如完整重启路径），冻结
+            // 也是必要的：等所有路解出首帧后再让主时钟正常推进。
             m_anchorWall = rbWallTime();
-        } else if (m_pendingAnchorRebase) {
+        }
+        if (!anyPending && m_pendingAnchorRebase) {
             // ─── 闸门解除瞬间：重锚 anchorPts 到"各路实际首帧 PTS 的最大值" ──
             // 走到这里说明所有主时钟+在播的路都已 seekPending=false，意味着
             // 各路 RBVideoPlayer::rbGetCurrentFrame 已对齐时钟、把 currentTime
@@ -570,17 +795,47 @@ void RBPlayerEngine::rbTick() {
             //   · 路 1 队列里 PTS=0~0.533 的帧在一个 tick 内被批量丢弃，最终
             //     停在 PTS≤0.533 的最后一帧上（视觉上从 #17 开始同步播放）
             // 两路从此真正对齐，不会再出现"某路单独卡帧"。
+            //
+            // ⚠ 关键防脏值：rbSeekTo 是阻塞的但 player 内部的 m_currentTime
+            // 不一定立即更新到目标值（尤其末尾态 replay 场景：上一帧的
+            // currentTime 还停留在 dur=5.062，新解码线程尚未推出 PTS=0 的
+            // 首帧）。如果不加限制直接取 max，会把 seek 前的"末尾时间"当
+            // 成新首帧 PTS，导致：
+            //   ① m_anchorPts 被瞬间拉到 5.062
+            //   ② 紧接的 boundary 检测立刻触发 → 全局 pause、画面停死
+            // 这正是 Windows 上"播放结束按空格画面不动"的直接原因。
+            //
+            // 防御：只接受"和当前 anchorPts 偏差 ≤ kRebaseTolerance"的
+            // currentTime 作为有效首帧 PTS。一个 GOP 通常 ≤ 0.6s，给到 1.0s
+            // 已涵盖绝大多数实拍/AIGC 视频；超过这个范围的肯定是脏值。
+            constexpr double kRebaseTolerance = 1.0;  // 单位：秒
             double maxPts = m_anchorPts;
             for (auto& p : m_players) {
                 if (!p) continue;
                 if (!p->rbUseMasterClock()) continue;
-                if (!p->rbIsPlaying())      continue;
-                maxPts = std::max(maxPts, p->rbCurrentTime());
+                // ⚠ 同样不用 isPlaying 过滤：异步状态翻转期间路 0 可能
+                // 已解出首帧（curT=0.533）但 isPlaying 仍是 false，过滤
+                // 掉就会丢失关键的首帧 PTS 信息，rebase 退化为不动。
+                double cur = p->rbCurrentTime();
+                // 只取"在容差范围内"的较大值作为首帧 PTS；超出的忽略
+                // （多半是 seek 前的旧值，新解码尚未刷新）。
+                if (cur > m_anchorPts + kRebaseTolerance) continue;
+                if (cur < m_anchorPts) continue;  // 不可能比锚点还早
+                maxPts = std::max(maxPts, cur);
             }
             m_anchorPts  = maxPts;
             m_anchorWall = rbWallTime();
             m_pausedPts  = maxPts;
             m_pendingAnchorRebase = false;
+            // 详细日志：列出每路 curT，便于诊断 rebase 是否取到了正确值
+            fprintf(stderr, "[RBE-REBASE] anchorPts -> %.3f", maxPts);
+            for (size_t i = 0; i < m_players.size(); ++i) {
+                auto& p = m_players[i];
+                if (!p) continue;
+                fprintf(stderr, "  p[%zu]:curT=%.3f,isPlaying=%d,seekPending=%d",
+                        i, p->rbCurrentTime(), p->rbIsPlaying(), p->rbIsSeekPending());
+            }
+            fprintf(stderr, "\n");
         }
     } else {
         // 全局非播放态（rbRefreshPausedFrame 已在调用方处理首帧），
@@ -596,6 +851,8 @@ void RBPlayerEngine::rbTick() {
     if (dur > 0.0 && t >= dur) {
         t = dur;
         if (m_playing.load()) {
+            fprintf(stderr, "[RBE-TICK] boundary hit: t=%.3f dur=%.3f → pause all, m_pausedPts=%.3f\n",
+                    t, dur, t);
             m_pausedPts = t;
             m_playing.store(false);
             for (auto& p : m_players) if (p) p->rbPause();

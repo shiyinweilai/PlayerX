@@ -46,6 +46,7 @@ import shutil
 import subprocess
 import argparse
 import platform
+import time
 
 IS_MACOS_HOST = platform.system() == "Darwin"
 
@@ -1146,4 +1147,8 @@ def main():
         package(target)
 
 if __name__ == "__main__":
+    start_time = time.time()
     main()
+    end_time = time.time()
+    print(f"构建完成，耗时 {end_time - start_time:.2f} 秒")
+    print("完成时间:", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)))
