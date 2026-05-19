@@ -668,8 +668,8 @@ ApplicationWindow {
                 title: qsTr("多组对比（仅当多组对比窗口激活时）")
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignTop
-                ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组") }
-                ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组") }
+                ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组 windows是command+↑") }
+                ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组 windows是command+↓") }
             }
             // 右列 3 占位：让最后一组左对齐时另一列也保持网格结构稳定
             // （GridLayout 会自动对齐，这里留空 Item 让视觉更平衡）
