@@ -2467,8 +2467,9 @@ ApplicationWindow {
     Window {
         id: settingsPopup
         // 文案项数 = modeList.length + 1（"关闭" 项）；每项 32px + 上下 padding 8
-        // 去掉右侧"X 星"后缀后，菜单内容更紧凑，宽度相应收窄
-        width: 150
+        // 加入"（差/相当/好）"等括号说明后文案变长，宽度从 150 扩到 210，
+        // 保证最长项"质量比较（差/相当/好）"能完整显示而不被截断。
+        width: 210
         height: {
             var n = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList.length : 2
             return (n + 1) * 32 + 8
