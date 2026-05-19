@@ -183,8 +183,13 @@ void SliderCompareItem::rbConvertSide(Side& s, rb::RBVideoPlayer* p, int areaW, 
 void SliderCompareItem::paint(QPainter* painter) {
     if (!painter || !m_engine) return;
 
-    auto* pl = m_engine->playerAt(m_leftIndex);
-    auto* pr = m_engine->playerAt(m_rightIndex);
+    // ⚠️ 关键修复：拿 shared_ptr 副本保活到本函数返回，避免中途 rbCloseAll 造成
+    // use-after-free。"评分后立即下一组"会触发 closeAll+openFiles，渲染线程
+    // 同时 paint 时旧裸指针即悬空。
+    auto spL = m_engine->playerAtShared(m_leftIndex);
+    auto spR = m_engine->playerAtShared(m_rightIndex);
+    rb::RBVideoPlayer* pl = spL.get();
+    rb::RBVideoPlayer* pr = spR.get();
     // 任一路没有就只画黑底（基类 fillColor 已处理）
     if (!pl && !pr) return;
 

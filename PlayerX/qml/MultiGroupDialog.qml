@@ -1862,6 +1862,7 @@ ApplicationWindow {
     function navigate(dir) {
         if (!active) return false
         if (dir !== -1 && dir !== 1) return false
+        console.log("[MGD-NAV] navigate dir=" + dir + " reviewMode=" + reviewMode + " singleLaneMode=" + singleLaneMode)
 
         // ── 评分模式拦截：当前组若有未评分通道，先弹提醒 ─────────
         // 仅由 reviewMode 主动触发；未注入 unratedChecker 时直接跳过，安全降级。

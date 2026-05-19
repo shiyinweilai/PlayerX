@@ -39,7 +39,7 @@ bool RBPlayerEngine::rbOpenFiles(const std::vector<std::string>& files) {
     bool anyOk = false;
     int  count = std::min<int>(static_cast<int>(files.size()), kMaxPlayers);
     for (int i = 0; i < count; ++i) {
-        auto p = std::make_unique<RBVideoPlayer>();
+        auto p = std::make_shared<RBVideoPlayer>();
         if (p->rbOpen(files[i])) {
             // 多路同步：所有路启用主时钟模式
             p->rbEnableMasterClock(true);
@@ -77,7 +77,7 @@ int RBPlayerEngine::rbAddFile(const std::string& file) {
     std::lock_guard<std::mutex> lk(m_mutex);
     if (static_cast<int>(m_players.size()) >= kMaxPlayers) return -1;
 
-    auto p = std::make_unique<RBVideoPlayer>();
+    auto p = std::make_shared<RBVideoPlayer>();
     if (!p->rbOpen(file)) return -1;
 
     // ────────────────────────────────────────────────────────────────
@@ -112,11 +112,9 @@ int RBPlayerEngine::rbAddFile(const std::string& file) {
 }
 
 bool RBPlayerEngine::rbReplaceAt(int idx, const std::string& file) {
-    std::lock_guard<std::mutex> lk(m_mutex);
-    if (idx < 0 || idx >= static_cast<int>(m_players.size())) return false;
     if (file.empty()) return false;
 
-    auto np = std::make_unique<RBVideoPlayer>();
+    auto np = std::make_shared<RBVideoPlayer>();
     if (!np->rbOpen(file)) {
         // 打开失败：保持原 player 不变，由调用方决定是否提示用户。
         return false;
@@ -128,36 +126,83 @@ bool RBPlayerEngine::rbReplaceAt(int idx, const std::string& file) {
         np->rbPlay();
     }
 
-    // 关闭旧 player 后再原地替换槽位：索引保持不变，layout/UI 无需重排。
-    if (m_players[idx]) m_players[idx]->rbClose();
-    m_players[idx] = std::move(np);
+    // ⚠️ "晚关"：dying 提到锁外作用域，确保锁释放后才真正析构旧 player，
+    // 避免与渲染线程 paint() 持有的 shared_ptr 副本竞争。
+    std::shared_ptr<RBVideoPlayer> dying;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        if (idx < 0 || idx >= static_cast<int>(m_players.size())) return false;
+        // 关闭旧 player 后再原地替换槽位：索引保持不变，layout/UI 无需重排。
+        if (m_players[idx]) dying = std::move(m_players[idx]);
+        m_players[idx] = std::move(np);
+    }
+    // 锁已释放，此处 dying 走出作用域时调用 ~RBVideoPlayer 完成实际清理。
+    dying.reset();
     return true;
 }
 
 void RBPlayerEngine::rbCloseAt(int idx) {
-    std::lock_guard<std::mutex> lk(m_mutex);
-    if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;
-    if (m_players[idx]) m_players[idx]->rbClose();
-    m_players.erase(m_players.begin() + idx);
+    // 与 rbCloseAll 同样的"晚关"模式：持锁仅做容器摘除与状态复位，
+    // 实际析构（含 join 工作线程、释放 frame 缓冲）放到锁外完成，
+    // 与渲染线程 paint() 的 shared_ptr 副本完全解耦。
+    std::shared_ptr<RBVideoPlayer> dying;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;
+        dying = std::move(m_players[idx]);
+        m_players.erase(m_players.begin() + idx);
+    }
+    // 锁外析构：dying 走出作用域时调用 ~RBVideoPlayer。
+    dying.reset();
 }
 
 void RBPlayerEngine::rbCloseAll() {
-    std::lock_guard<std::mutex> lk(m_mutex);
-    for (auto& p : m_players) {
-        if (p) p->rbClose();
+    // ⚠️ 关键修复（2026-05-19）：解决"播放中切下一组崩溃"——
+    //
+    // 此前实现：在持 m_mutex 期间直接调 p->rbClose()，rbClose 内部 join
+    // demuxer/decoder 工作线程并 release frame 缓冲。与此同时 Qt Quick
+    // 渲染线程的 paint() 持有 shared_ptr 副本仍在读 frame 缓冲 → 数据
+    // 竞争与悬空 buffer 访问 → 崩溃。日志现象就是 destroy player[0]
+    // 这一行打印后立刻挂起、第二条 destroy 都没出来。
+    //
+    // 修复策略：先在持锁状态下"快速摘除"——把 m_players swap 到本地
+    // 临时容器并清空（这样新的 rbAtShared 拿不到旧 player），并立即
+    // 复位引擎状态；然后**在锁外**让 dying 容器析构（shared_ptr 引用
+    // 计数归零时调用 ~RBVideoPlayer → rbClose → join 工作线程）。
+    // 渲染线程已持有的 shared_ptr 副本会延后析构时机直到该 paint
+    // 调用栈结束，避免 frame 缓冲被并发释放。
+    std::vector<std::shared_ptr<RBVideoPlayer>> dying;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        fprintf(stderr, "[RBE-CLOSEALL] entry: m_players.size=%zu\n",
+                m_players.size());
+        for (size_t i = 0; i < m_players.size(); ++i) {
+            fprintf(stderr, "[RBE-CLOSEALL]   detach player[%zu]=%p (refcnt=%ld)\n",
+                    i, (void*)m_players[i].get(),
+                    m_players[i] ? (long)m_players[i].use_count() : 0L);
+        }
+        dying.swap(m_players); // 容器交换，O(1)，仍持锁
+        m_playing.store(false);
+        m_anchorWall = rbWallTime();
+        m_anchorPts  = 0.0;
+        m_pausedPts  = 0.0;
+        m_speed      = 1.0;
+        m_speedLevel = 0;
+        m_pendingAnchorRebase = false;
+        fprintf(stderr,
+                "[RBE-CLOSEALL] detached: m_playing=0 m_anchorPts=0 "
+                "m_anchorWall=%.3f m_pausedPts=0 m_speed=1 pendingRebase=0\n",
+                m_anchorWall);
     }
-    m_players.clear();
-    m_playing.store(false);
-    m_anchorWall = rbWallTime();
-    m_anchorPts  = 0.0;
-    m_pausedPts  = 0.0;
-    m_speed      = 1.0;
-    m_speedLevel = 0;
-    m_pendingAnchorRebase = false;
-    fprintf(stderr,
-            "[RBE-CLOSEALL] reset: m_playing=0 m_anchorPts=0 m_anchorWall=%.3f "
-            "m_pausedPts=0 m_speed=1 pendingRebase=0\n",
-            m_anchorWall);
+    // 锁已释放。dying 在此作用域结束时逐个析构：
+    //   - 若渲染线程没有副本：shared_ptr refcnt → 0 → ~RBVideoPlayer → rbClose
+    //     → join 工作线程 → 释放 frame 缓冲。
+    //   - 若渲染线程持有副本：等其 paint 返回后副本销毁，再实际析构。
+    // 整个过程不再持引擎锁，与 paint() 完全解耦。
+    fprintf(stderr, "[RBE-CLOSEALL] outer-scope dying.size=%zu (will free now)\n",
+            dying.size());
+    dying.clear(); // 显式清空，方便日志清晰；离开作用域亦会自动析构
+    fprintf(stderr, "[RBE-CLOSEALL] done\n");
 }
 
 int RBPlayerEngine::rbCount() const {
@@ -168,7 +213,20 @@ int RBPlayerEngine::rbCount() const {
 RBVideoPlayer* RBPlayerEngine::rbAt(int idx) const {
     std::lock_guard<std::mutex> lk(m_mutex);
     if (idx < 0 || idx >= static_cast<int>(m_players.size())) return nullptr;
+    // ⚠️ 返回裸指针后锁释放：调用者使用期间若其他线程 rbCloseAll 则产生 use-after-free。
+    // 本函数仅作快照返回，未拦截异常。现场崩溃依靠 paint 中的日志交叉定位。
     return m_players[idx].get();
+}
+
+// ─── 以 shared_ptr 返回某路 player——渲染热路径专用 ───────────
+//
+// 调用者拿到副本后引用计数 +1。即使本函数返回后锁释放、其他线程
+// 调 rbCloseAll 把 m_players 清空，shared_ptr 仍使对象存活到调用者
+// 释放副本为止。paint() / QML binding 多线程读取场景应使用本接口。
+std::shared_ptr<RBVideoPlayer> RBPlayerEngine::rbAtShared(int idx) const {
+    std::lock_guard<std::mutex> lk(m_mutex);
+    if (idx < 0 || idx >= static_cast<int>(m_players.size())) return nullptr;
+    return m_players[idx];
 }
 
 const std::string& RBPlayerEngine::rbPathAt(int idx) const {
@@ -304,9 +362,17 @@ void RBPlayerEngine::rbPlay() {
 
     // 把"独立暂停"的路单独恢复播放（仍走独立时钟，不强行加入主时钟）。
     // 避免被主时钟的 anchorPts 拉到其他位置 = 不会"加速追赶"。
+    //
+    // 🐞 疑似崩溃路径（待诊断）：单路 ⏸ 后用户立刻点全局 ▶，rbPause()
+    // 的解码线程尚未真正退出，这里再调 rbPlay 会叠加启动 demuxer/decoder，
+    // Windows 上可能发生 double-start race。已加日志 [RBE-PLAY-INDIE] 确认。
     for (auto& p : m_players) {
         if (!p) continue;
         if (!p->rbUseMasterClock() && !p->rbIsPlaying()) {
+            fprintf(stderr,
+                    "[RBE-PLAY-INDIE] revive independent lane: player=%p "
+                    "isPaused=%d isEnded=%d curT=%.3f\n",
+                    (void*)p.get(), p->rbIsPaused(), p->rbIsEnded(), p->rbCurrentTime());
             p->rbPlay();   // 独立时钟下从各自停下的位置继续
         }
     }
@@ -680,8 +746,15 @@ void RBPlayerEngine::rbTogglePauseAt(int idx) {
     auto& p = m_players[idx];
     if (!p) return;
 
+    const bool wasPlaying  = p->rbIsPlaying();
+    const bool wasMaster   = p->rbUseMasterClock();
+    fprintf(stderr,
+            "[RBE-TOGGLE-AT] entry: idx=%d player=%p wasPlaying=%d wasMaster=%d "
+            "m_playing=%d\n",
+            idx, (void*)p.get(), wasPlaying, wasMaster, m_playing.load());
+
     // 单路暂停时关闭主时钟模式，避免被全局时钟覆盖；恢复时再打开
-    if (p->rbIsPlaying()) {
+    if (wasPlaying) {
         p->rbEnableMasterClock(false);
         p->rbPause();
     } else {
@@ -689,6 +762,9 @@ void RBPlayerEngine::rbTogglePauseAt(int idx) {
         p->rbEnableMasterClock(false);
         p->rbPlay();
     }
+    fprintf(stderr,
+            "[RBE-TOGGLE-AT] exit:  idx=%d nowPlaying=%d nowMaster=%d curT=%.3f\n",
+            idx, p->rbIsPlaying(), p->rbUseMasterClock(), p->rbCurrentTime());
 }
 
 void RBPlayerEngine::rbSeekAt(int idx, double seconds) {

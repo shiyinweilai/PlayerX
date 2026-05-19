@@ -17,6 +17,7 @@
 #include <QFileInfo>
 #include <QQuickWindow>
 #include <QPaintDevice>
+#include <QDateTime>
 #include <algorithm>
 #include <cmath>
 
@@ -83,6 +84,15 @@ VideoFrameProvider::~VideoFrameProvider() {
 rb::RBVideoPlayer* VideoFrameProvider::rbActivePlayer() const {
     if (m_engine) return m_engine->playerAt(m_playerIndex);
     return m_player.get();
+}
+
+// shared_ptr 版本：仅引擎模式下能保活（自持有模式仍是 unique_ptr，
+// 但自持有模式下只有本 Item 能销毁 m_player，paint 同一线程不会重入）。
+std::shared_ptr<rb::RBVideoPlayer> VideoFrameProvider::rbActivePlayerShared() const {
+    if (m_engine) return m_engine->playerAtShared(m_playerIndex);
+    // 自持有模式：包一个 aliasing shared_ptr（不拥有所有权，但仍走同一接口）。
+    if (m_player) return std::shared_ptr<rb::RBVideoPlayer>(std::shared_ptr<void>{}, m_player.get());
+    return nullptr;
 }
 
 // ─── 属性访问 ────────────────────────────────────────────────────────────
@@ -355,9 +365,22 @@ void VideoFrameProvider::rbReleaseSwsContext() {
 void VideoFrameProvider::paint(QPainter* painter) {
     if (!painter) return;
 
-    // 当前帧尺寸（决定纵横比；用 player 的 frame 尺寸而非 m_currentImage，
-    // 因为首帧到达前 m_currentImage 仍是空的）
-    auto* p = rbActivePlayer();
+    // ⚠️ 关键修复：拿 shared_ptr 副本保活到本函数返回，避免中途 rbCloseAll 造成
+    // use-after-free。之前用裸指针，评分后立即“下一组”会销毁 player，崩溃。
+    auto sp = rbActivePlayerShared();
+    rb::RBVideoPlayer* p = sp.get();
+    // 诊断日志：paint 是主要可疑崩溃点（use-after-free）。节流 1Hz
+    // 打一次，捕捉崩溃前最后一刻的 player 指针 / idx 关联，便于与
+    // [RBE-CLOSEALL] destroy player[%zu]=%p 日志交叉定位。
+    {
+        static thread_local double _lastPaintLog = 0.0;
+        const double nowSec = double(QDateTime::currentMSecsSinceEpoch()) / 1000.0;
+        if (nowSec - _lastPaintLog >= 1.0) {
+            _lastPaintLog = nowSec;
+            fprintf(stderr, "[VFP-PAINT] idx=%d player=%p engine=%p\n",
+                    m_playerIndex, (void*)p, (void*)m_engine.data());
+        }
+    }
     if (!p) return;
     AVFrame* f = p->rbGetCurrentFrame();
     if (!f || f->width <= 0 || f->height <= 0) return;

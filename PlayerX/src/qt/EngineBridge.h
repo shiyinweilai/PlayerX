@@ -60,6 +60,9 @@ public:
 
     // 给 VideoFrameProvider 直接拿 player 指针（同线程，无需锁外部 wrap）
     rb::RBVideoPlayer* playerAt(int idx) const;
+    // shared_ptr 版本：渲染热路径（paint 线程）专用，避免
+    // rbCloseAll 期间使用裸指针导致 use-after-free。
+    std::shared_ptr<rb::RBVideoPlayer> playerAtShared(int idx) const;
 
     // 属性 getter
     int         fileCount()   const;

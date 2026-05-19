@@ -48,7 +48,12 @@ public:
     void rbCloseAll();
 
     int                rbCount() const;
-    RBVideoPlayer*     rbAt(int idx) const;
+    // ─── 取某一路 player ─────────────────────────────────────────────
+    // ⚠️ rbAt 返回裸指针：调用者拿到后引擎其他线程若 rbCloseAll/rbOpenFiles
+    //    则发生 use-after-free（已观察到崩溃）。仅限同线程短临时使用，
+    //    渲染热路径（paint / QML binding 多线程读取）请改用 rbAtShared。
+    RBVideoPlayer*                  rbAt(int idx) const;
+    std::shared_ptr<RBVideoPlayer>  rbAtShared(int idx) const;
     const std::string& rbPathAt(int idx) const; // 不存在返回空串
 
     // ─── 全局控制（作用于所有路，主时钟驱动）────────────────────────
@@ -99,7 +104,9 @@ private:
     double rbComputeMasterLocked() const;
 
     mutable std::mutex                          m_mutex;
-    std::vector<std::unique_ptr<RBVideoPlayer>> m_players;
+    // 改用 shared_ptr：rbAtShared 返回副本以避免 paint 线程在 rbCloseAll
+    // 期间访问已析构对象（use-after-free）。引擎内部仍按值/引用使用。
+    std::vector<std::shared_ptr<RBVideoPlayer>> m_players;
 
     // ── 全局时钟 ──
     std::atomic<bool> m_playing{false};

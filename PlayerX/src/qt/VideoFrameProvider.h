@@ -103,6 +103,8 @@ private:
     void rbConvertFrameToImage(int dstW, int dstH);
     void rbReleaseSwsContext();
     rb::RBVideoPlayer* rbActivePlayer() const; // 当前真正的 player（引擎模式或自持有）
+    // shared_ptr 版本：用于渲染热路径 paint()，避免 rbCloseAll 期间发生 use-after-free。
+    std::shared_ptr<rb::RBVideoPlayer> rbActivePlayerShared() const;
 
     QUrl                              m_source;
     std::unique_ptr<rb::RBVideoPlayer> m_player; // 仅自持有模式使用

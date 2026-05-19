@@ -32,6 +32,11 @@ rb::RBVideoPlayer* EngineBridge::playerAt(int idx) const {
     return m_engine->rbAt(idx);
 }
 
+std::shared_ptr<rb::RBVideoPlayer> EngineBridge::playerAtShared(int idx) const {
+    if (!m_engine) return nullptr;
+    return m_engine->rbAtShared(idx);
+}
+
 int EngineBridge::fileCount() const {
     return m_engine ? m_engine->rbCount() : 0;
 }
@@ -67,6 +72,7 @@ void EngineBridge::setLayoutMode(int v) {
 // ════════════════════════════════════════════════════════════════════════
 
 bool EngineBridge::openFiles(const QList<QUrl>& urls) {
+    fprintf(stderr, "[EB-OPEN] entry: urls.size=%d\n", (int)urls.size());
     std::vector<std::string> files;
     files.reserve(urls.size());
     for (const auto& u : urls) {
@@ -106,6 +112,7 @@ bool EngineBridge::addFile(const QUrl& url) {
 }
 
 bool EngineBridge::replaceAt(int idx, const QUrl& url) {
+    fprintf(stderr, "[EB-REPLACEAT] entry: idx=%d\n", idx);
     QString p = url.isLocalFile() ? url.toLocalFile() : url.toString();
     if (p.isEmpty()) return false;
     if (!m_engine->rbReplaceAt(idx, p.toStdString())) return false;
@@ -137,6 +144,7 @@ void EngineBridge::closeAt(int idx) {
 }
 
 void EngineBridge::closeAll() {
+    fprintf(stderr, "[EB-CLOSEALL] entry\n");
     m_engine->rbCloseAll();
     setActiveIndex(0);
     emit fileCountChanged();
