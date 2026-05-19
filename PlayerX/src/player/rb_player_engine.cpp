@@ -18,6 +18,12 @@ static double rbWallTime() {
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
+// ── 诊断日志节流：rbTick 一秒最多打一次 TICK 快照，避免刷屏 ──
+// 仅用于调试：上一次打 TICK 快照的 wall 时间；以及 anyPending 上一次取值
+// 用来检测 true→false 翻转（rebase 触发瞬间）。
+static double  g_lastTickLogWall = 0.0;
+static int     g_lastAnyPending  = -1;   // -1 = 未初始化
+
 RBPlayerEngine::RBPlayerEngine() = default;
 RBPlayerEngine::~RBPlayerEngine() { rbCloseAll(); }
 
@@ -52,6 +58,18 @@ bool RBPlayerEngine::rbOpenFiles(const std::vector<std::string>& files) {
     m_speed       = 1.0;
     m_speedLevel  = 0;
     for (auto& q : m_players) { if (q) q->rbSetSpeed(1.0); }
+    fprintf(stderr,
+            "[RBE-OPEN] done: count=%zu anyOk=%d m_anchorPts=0 m_anchorWall=%.3f "
+            "m_pausedPts=0 m_speed=1\n",
+            m_players.size(), (int)anyOk, m_anchorWall);
+    for (size_t i = 0; i < m_players.size(); ++i) {
+        auto& p = m_players[i];
+        if (!p) continue;
+        fprintf(stderr,
+                "[RBE-OPEN]   player[%zu] dur=%.3f curT=%.3f isPlaying=%d isPaused=%d isEnded=%d\n",
+                i, p->rbDuration(), p->rbCurrentTime(),
+                p->rbIsPlaying(), p->rbIsPaused(), p->rbIsEnded());
+    }
     return anyOk;
 }
 
@@ -136,6 +154,10 @@ void RBPlayerEngine::rbCloseAll() {
     m_speed      = 1.0;
     m_speedLevel = 0;
     m_pendingAnchorRebase = false;
+    fprintf(stderr,
+            "[RBE-CLOSEALL] reset: m_playing=0 m_anchorPts=0 m_anchorWall=%.3f "
+            "m_pausedPts=0 m_speed=1 pendingRebase=0\n",
+            m_anchorWall);
 }
 
 int RBPlayerEngine::rbCount() const {
@@ -249,6 +271,12 @@ void RBPlayerEngine::rbPlay() {
         // 等所有路首帧到达后，把 anchorPts 重锚为 max(各路实际首帧 PTS)，
         // 解决"路 0 视频首帧 PTS=0.533 而路 1=0"导致的左路单独卡帧问题。
         m_pendingAnchorRebase = true;
+        fprintf(stderr, "[RBE-REBASE] schedule from rbPlay(atEnd): pendingRebase=true\n");
+        fprintf(stderr,
+                "[RBE-PLAY] EXIT(atEnd): m_playing=%d m_anchorPts=%.3f m_anchorWall=%.3f "
+                "m_pausedPts=%.3f m_speed=%.3f pendingRebase=%d\n",
+                m_playing.load(), m_anchorPts, m_anchorWall, m_pausedPts, m_speed,
+                (int)m_pendingAnchorRebase);
         return;
     }
 
@@ -282,6 +310,10 @@ void RBPlayerEngine::rbPlay() {
             p->rbPlay();   // 独立时钟下从各自停下的位置继续
         }
     }
+    fprintf(stderr,
+            "[RBE-PLAY] EXIT: m_playing=%d m_anchorPts=%.3f m_anchorWall=%.3f "
+            "m_pausedPts=%.3f m_speed=%.3f\n",
+            m_playing.load(), m_anchorPts, m_anchorWall, m_pausedPts, m_speed);
 }
 
 void RBPlayerEngine::rbPause() {
@@ -532,6 +564,10 @@ void RBPlayerEngine::rbSeek(double seconds) {
     // 主时钟若仍从 target=0 起跑，路 0 队列里没有 PTS≤0 的帧能取，
     // 画面只能停在 seek 之前的最后一帧直到主时钟追上 0.533s。
     m_pendingAnchorRebase = true;
+    fprintf(stderr,
+            "[RBE-SEEK] EXIT(non-zero): seconds=%.3f m_anchorPts=%.3f m_anchorWall=%.3f "
+            "m_pausedPts=%.3f pendingRebase=1\n",
+            seconds, m_anchorPts, m_anchorWall, m_pausedPts);
 }
 
 void RBPlayerEngine::rbSeekRelative(double deltaSeconds) {    // ────────────────────────────────────────────────────────────────
@@ -584,6 +620,10 @@ void RBPlayerEngine::rbSeekRelative(double deltaSeconds) {    // ─────
     // 同 rbSeek：等所有主时钟路 seekPending 清掉那一刻，把 anchorPts 重
     // 锚为 max(各路实际首帧 PTS)，避免某路因首帧 PTS 较大而单独卡帧。
     m_pendingAnchorRebase = true;
+    fprintf(stderr,
+            "[RBE-SEEKREL] EXIT: delta=%.3f masterTarget=%.3f m_anchorPts=%.3f "
+            "m_anchorWall=%.3f m_pausedPts=%.3f pendingRebase=1\n",
+            deltaSeconds, masterTarget, m_anchorPts, m_anchorWall, m_pausedPts);
 }
 
 
@@ -724,6 +764,25 @@ void RBPlayerEngine::rbTick() {
     std::lock_guard<std::mutex> lk(m_mutex);
     if (m_players.empty()) return;
 
+    // 诊断日志：节流 1 秒/次打印引擎内部快照，避免刷屏
+    {
+        const double wallNow = rbWallTime();
+        if (wallNow - g_lastTickLogWall >= 1.0) {
+            g_lastTickLogWall = wallNow;
+            const double t = rbComputeMasterLocked();
+            double maxDur = 0.0;
+            for (auto& p : m_players) if (p) maxDur = std::max(maxDur, p->rbDuration());
+            fprintf(stderr,
+                    "[RBE-TICK] snapshot: m_playing=%d t=%.3f maxDur=%.3f "
+                    "m_anchorPts=%.3f m_anchorWall=%.3f dt=%.3f "
+                    "m_pausedPts=%.3f m_speed=%.3f pendingRebase=%d players=%zu\n",
+                    m_playing.load(), t, maxDur,
+                    m_anchorPts, m_anchorWall, wallNow - m_anchorWall,
+                    m_pausedPts, m_speed, (int)m_pendingAnchorRebase,
+                    m_players.size());
+        }
+    }
+
     // ───────────────────────────────────────────────────────────────────
     // 主时钟"等所有主时钟路就绪"闸门：
     //
@@ -758,6 +817,16 @@ void RBPlayerEngine::rbTick() {
             // anyPending=false 提前进入 rebase 分支，此时 player 内部
             // 还没解出新首帧，rebase 用到的 curT 全是脏值或 0 → 卡帧。
             if (p->rbIsSeekPending()) { anyPending = true; break; }
+        }
+        // 诊断日志：anyPending 翻转时打一次（每事件 1 行，不刷屏）
+        const int curAnyPending = anyPending ? 1 : 0;
+        if (curAnyPending != g_lastAnyPending) {
+            fprintf(stderr,
+                    "[RBE-PENDING] anyPending: %d -> %d  m_playing=%d "
+                    "m_anchorPts=%.3f m_anchorWall=%.3f pendingRebase=%d\n",
+                    g_lastAnyPending, curAnyPending, m_playing.load(),
+                    m_anchorPts, m_anchorWall, (int)m_pendingAnchorRebase);
+            g_lastAnyPending = curAnyPending;
         }
         if (anyPending) {
             // 冻结主时钟在 anchorPts：把 anchorWall 跟着 now 一起走，
@@ -851,8 +920,16 @@ void RBPlayerEngine::rbTick() {
     if (dur > 0.0 && t >= dur) {
         t = dur;
         if (m_playing.load()) {
-            fprintf(stderr, "[RBE-TICK] boundary hit: t=%.3f dur=%.3f → pause all, m_pausedPts=%.3f\n",
-                    t, dur, t);
+            // 详细日志：揭示 t 的来源（anchorPts + (now-anchorWall)*speed）
+            // 用于诊断"刚 rbPlay 完 t 就 ≥ dur"的异常 boundary 触发
+            const double wallNow = rbWallTime();
+            fprintf(stderr,
+                    "[RBE-TICK] boundary hit: t=%.3f dur=%.3f → pause all"
+                    "  anchorPts=%.3f anchorWall=%.3f now=%.3f dt=%.3f speed=%.3f"
+                    "  m_pausedPts(before)=%.3f\n",
+                    t, dur,
+                    m_anchorPts, m_anchorWall, wallNow, wallNow - m_anchorWall, m_speed,
+                    m_pausedPts);
             m_pausedPts = t;
             m_playing.store(false);
             for (auto& p : m_players) if (p) p->rbPause();
