@@ -624,6 +624,23 @@ ApplicationWindow {
     // 多组模式是否处于"已启动"状态：用户至少成功 start() 过一次，
     // 且 lanes 仍是当前打开的那一批（lanes 内容若被用户改动会自动失效）。
     property bool active: false
+    onActiveChanged: console.log("[MGD][debug] active ->", active, "fileCount=", Engine.fileCount)
+
+    // 当 Engine 中的视频被全部关闭（用户点"✕ 全部" / ⌘W / 菜单"关闭所有视频"等回到欢迎页）时，
+    // 多组对比的"已启动"状态自然就失效了——继续保留 active=true 会让主界面残留
+    // ⏮ / ⏭ / "1 / N" 等只在对比态下才有意义的控件。
+    // 这里统一在 fileCount 归零时把 active 复位，保证 UI 与 Engine 的实际状态对齐。
+    Connections {
+        target: Engine
+        function onFileCountChanged() {
+            console.log("[MGD][debug] fileCountChanged -> fileCount=", Engine.fileCount, "active=", dlg.active)
+            if (Engine.fileCount <= 0 && dlg.active) {
+                console.log("[MGD][debug] reset active to false because fileCount=0")
+                dlg.active = false
+            }
+        }
+    }
+
 
     // 当前每路在自己 visibleFiles 中的索引（仅用于"上一组/下一组"导航；start() 时刷新）
     property var laneSnapshotPaths: []   // 上次启动时各路的 currentPath，用于检测是否需要重新 start

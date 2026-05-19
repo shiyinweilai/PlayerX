@@ -1916,25 +1916,29 @@ ApplicationWindow {
             }
 
             // ── 多组对比模式专用：上一组 / 下一组 + 组号指示 ──
-            // 仅在 multiGroupDialog.active = true 时可见，默认 false → 单组模式下完全不占位。
+            // 仅在 multiGroupDialog.active = true 且当前确实有视频时可见；
+            // 否则默认完全不占位（包括用户关闭多组对比窗口、清空所有视频回到欢迎页等场景）。
             FlatButton {
                 text: "⏮"
-                visible: multiGroupDialog.active
+                visible: multiGroupDialog.active && Engine.fileCount > 0
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 font.pixelSize: 14
-                enabled: multiGroupDialog.active
+                enabled: multiGroupDialog.active && Engine.fileCount > 0
                 onClicked: multiGroupDialog.prevGroup()
+                onVisibleChanged: console.log("[MGD][debug] ⏮ btn visible=", visible, "active=", multiGroupDialog.active, "fileCount=", Engine.fileCount)
+                Component.onCompleted: console.log("[MGD][debug] ⏮ btn init visible=", visible, "active=", multiGroupDialog.active, "fileCount=", Engine.fileCount)
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("上一组（Ctrl+↑）")
             }
             FlatButton {
                 text: "⏭"
-                visible: multiGroupDialog.active
+                visible: multiGroupDialog.active && Engine.fileCount > 0
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 font.pixelSize: 14
-                enabled: multiGroupDialog.active
+                enabled: multiGroupDialog.active && Engine.fileCount > 0
                 onClicked: multiGroupDialog.nextGroup()
+                onVisibleChanged: console.log("[MGD][debug] ⏭ btn visible=", visible, "active=", multiGroupDialog.active, "fileCount=", Engine.fileCount)
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("下一组（Ctrl+↓）")
@@ -1975,7 +1979,7 @@ ApplicationWindow {
                 }
             }
             Label {
-                visible: multiGroupDialog.active
+                visible: multiGroupDialog.active && Engine.fileCount > 0
                 color: "#9a9aa8"
                 font.pixelSize: 11
                 text: {
@@ -1984,6 +1988,7 @@ ApplicationWindow {
                     // "行内 1/2 共 2，底部却 2/20" 这类历史残留导致的不一致。
                     var _bump = multiGroupDialog.stateBumper
                     if (!multiGroupDialog.active) return ""
+                    if (Engine.fileCount <= 0) return ""
                     var n = multiGroupDialog.groupCount()
                     var i = multiGroupDialog.groupIndex()
                     if (n <= 0 || i < 0) return "— / —"
@@ -2709,16 +2714,16 @@ ApplicationWindow {
     Shortcut { sequence: "]";       context: Qt.ApplicationShortcut; enabled: Engine.fileCount >= 1
                onActivated: root._shiftActive(+1) }
 
-    // ── 多组对比专用快捷键：上组 / 下组。仅在 multiGroupDialog.active 时生效。
+    // ── 多组对比专用快捷键：上组 / 下组。仅在 multiGroupDialog.active 且当前确实有视频时生效。
     // 选用 Ctrl+↑/↓，避免与现有 ←→（快进快退） / "."","（帧步进）冲突。
     Shortcut {
         sequence: "Ctrl+Up";   context: Qt.ApplicationShortcut
-        enabled: multiGroupDialog.active
+        enabled: multiGroupDialog.active && Engine.fileCount > 0
         onActivated: multiGroupDialog.prevGroup()
     }
     Shortcut {
         sequence: "Ctrl+Down"; context: Qt.ApplicationShortcut
-        enabled: multiGroupDialog.active
+        enabled: multiGroupDialog.active && Engine.fileCount > 0
         onActivated: multiGroupDialog.nextGroup()
     }
 
