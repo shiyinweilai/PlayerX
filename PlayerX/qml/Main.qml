@@ -262,6 +262,14 @@ ApplicationWindow {
                 }
             }
 
+            // ── 单路悬停控制条（与下方自绘菜单同步，无快捷键）──
+            MenuItem {
+                text: qsTr("单路悬停控制条")
+                checkable: true
+                checked: root.singleControlsHoverEnabled
+                onTriggered: root.singleControlsHoverEnabled = !root.singleControlsHoverEnabled
+            }
+
             MenuSeparator {}
 
             // ── 打开日志目录 ──（与下方自绘菜单同名条目联动；调用同一个 Fs API）
@@ -1386,6 +1394,13 @@ ApplicationWindow {
     // 控制每个窗口左上角的序号徽标 + 右上角的文件名。默认 true。
     property bool globalChannelVisible: true
 
+    // 全局"单路悬停控制条"开关（设置菜单控制，无快捷键）。
+    // 默认 false：鼠标悬停在某路视频上时，**不**显示该路自己的悬浮播放
+    // 控制条（避免在多路对比时遮挡画面）。仅在用户主动开启此开关后，
+    // VideoCellDelegate 内的 cellBar（单路 ◀▶/进度条/帧步/重置）才会
+    // 在 hover 时浮现。底部的全局控制条不受此开关影响。
+    property bool singleControlsHoverEnabled: false
+
     // 全屏抑制：按 F 进入全屏后，V/C 对应的叠加元素默认隐藏，但仍可
     // 再按 V/C 售起。本质是一个"临时抑制"标志，被Pick V/C 按下时会被清除。
     // 退出全屏时也会被清除。
@@ -2483,6 +2498,42 @@ ApplicationWindow {
                         }
                         Text {
                             text: infoItem.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+
+                // ── 单路悬停控制条（全局开关，无快捷键，默认关闭）──
+                // 关闭：鼠标悬停在某路视频上时不显示该路的播放控制条，
+                //       视野更纯净，专注画面对比。底部全局控制条不受影响。
+                // 开启：鼠标悬停时该路浮现进度条 + 帧步 / 重置按钮，
+                //       便于对单路做精细控制。
+                MenuItem {
+                    id: singleControlsHoverItem
+                    text: "单路悬停控制条"
+                    checkable: true
+                    checked: root.singleControlsHoverEnabled
+                    onTriggered: root.singleControlsHoverEnabled = !root.singleControlsHoverEnabled
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: singleControlsHoverItem.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text {
+                            leftPadding: 10
+                            text: singleControlsHoverItem.checked ? "✓" : ""
+                            color: "#6a9fd8"
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.minimumWidth: 22
+                        }
+                        Text {
+                            text: singleControlsHoverItem.text
                             color: "#e8e8ec"
                             font.pixelSize: 13
                             verticalAlignment: Text.AlignVCenter

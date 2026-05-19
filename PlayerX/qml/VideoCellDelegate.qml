@@ -383,8 +383,13 @@ Rectangle {
             }
         }
         onDoubleClicked: (mouse) => {
-            if (mouse.button === Qt.LeftButton)
+            // 仅在「单路悬停控制条」开关开启时，双击才切换该路暂停。
+            // 关闭时（默认）双击不再触发单路暂停，避免与多路对比场景下
+            // 的误操作冲突；用户仍可通过空格切换全局暂停。
+            if (mouse.button === Qt.LeftButton
+                    && viewRoot && viewRoot.singleControlsHoverEnabled) {
                 Engine.togglePauseAt(cell.playerIdx)
+            }
         }
     }
 
@@ -550,7 +555,12 @@ Rectangle {
 
         // hover 联动：使用 HoverHandler.hovered，
         // 鼠标在 cell 任意位置（包含工具条/按钮上）都稳定为 true。
+        //
+        // 全局开关：viewRoot.singleControlsHoverEnabled = false（默认）时，
+        // 即便鼠标悬停也保持隐藏——避免在多路对比时遮挡画面。用户可在
+        // 顶部「设置 → 单路悬停控制条」开启。
         property bool hovered: cellHover.hovered
+                               && (viewRoot ? viewRoot.singleControlsHoverEnabled : false)
         opacity: hovered ? 1.0 : 0.0
         visible: opacity > 0.01
         Behavior on opacity { NumberAnimation { duration: 150 } }
