@@ -113,6 +113,16 @@ private:
     // 主时钟推进量 m· m_speed，同时下发给所有 player 的 rbSetSpeed。
     int    m_speedLevel{0};
     double m_speed{1.0};
+
+    // 主时钟"重锚到实际首帧 PTS"标志：
+    //   全局 seek / 全部 Ended 重播 / 全局相对 seek 后，各路 demuxer av_seek 落到
+    //   ≤target 的关键帧，但解码出的"首帧 PTS"可能远大于 target（不同视频 GOP /
+    //   起始关键帧布局差异），且各路差异显著（路 0=0.533s、路 1=0s）。
+    //   主时钟若仍从 target=0 起跑，路 0 会卡 0.5s 直到主时钟追上其首帧 PTS。
+    //   通过此标志，让 rbTick 在"所有主时钟路 seekPending 都清掉"那一刻，
+    //   把 anchorPts 重锚到 max(各路实际首帧 PTS)，使所有路同时显示各自首帧
+    //   后再对齐推进，消除"某路单独卡几帧"现象。
+    bool   m_pendingAnchorRebase{false};
 };
 
 } // namespace rb

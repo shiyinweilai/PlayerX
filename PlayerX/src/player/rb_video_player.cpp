@@ -194,9 +194,28 @@ void RBVideoPlayer::rbSeekTo(double seconds) {
     m_playStartWallTime = rbWallTime();
     m_playStartPts      = seconds;
 
-    // 若视频已播完，用户主动 seek 说明想继续播放，自动恢复 Playing
+    // ── 状态语义：rbSeekTo 不擅自升级为 Playing；Ended 必须降为 Paused ──
+    // 历史上这里有一段「Ended → Playing」自动恢复，目的是让 Ended 态空格键
+    // 重播时能直接进入播放。但它造成了一个隐蔽 bug：
+    //   多路对比下，路 0（左路）经常先于其他路播到末尾进入 Ended 状态。
+    //   此时用户点全局重置（Engine::seek(0)）：
+    //     1) 路 0 进 rbSeekTo(0)，末尾被偷偷升级为 Playing
+    //     2) 引擎随后调 rbRefreshPausedFrame(200) 想把首帧刷到画面上
+    //     3) rbRefreshPausedFrame 第一行检查 state==Playing 直接 return false
+    //     4) 路 0 画面停在 Ended 时的旧帧（如 #17）不更新；其它路正常显示 #0
+    // 现象：「按重置后 1 号通道偶尔卡住」（与帧率/视频本身无关）。
+    //
+    // 正确做法：
+    //   · rbPlay() 在 Ended 态会自己 rbSeekTo(0) + 显式 set Playing，不依赖此副作用
+    //   · 重置 / 进度条拖拽 / 单路 seek 希望保持「不主动播放」语义，绝不能偷偷升级
+    //   · 但 Ended 也不该保留——已经离开末尾位置，应回到 Paused，使得：
+    //       a) rbRefreshPausedFrame 能成功刷新首帧（它的白名单是 Ready/Paused/Ended，
+    //          这里降为 Paused 仍然在白名单内，画面正确刷新）
+    //       b) 用户随后点播放走 rbPlay 的 Paused 分支，从当前位置（已 seek 到的位置）
+    //          直接续播，不会再次走 Ended→rbSeekTo(0) 的重播分支
+    //   · rbStepFrame 慢路径上层已自行把 Ended 降为 Paused，行为不变
     if (m_state.load() == RBPlayerState::Ended) {
-        m_state.store(RBPlayerState::Playing);
+        m_state.store(RBPlayerState::Paused);
     }
 }
 

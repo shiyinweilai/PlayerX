@@ -118,6 +118,12 @@ public:
     bool rbUseMasterClock() const { return m_useMasterClock; }
     void rbEnableMasterClock(bool enable) { m_useMasterClock = enable; }
 
+    // seek 后是否仍在等待第一帧对齐时钟。
+    // 引擎层据此实现"主时钟等所有路就绪后再起跑"，避免先就绪那路被
+    // 主时钟立刻推到 N 毫秒位置后出现"卡一下追上"现象（Windows 上
+    // 解码启动慢，更易触发）。
+    bool rbIsSeekPending() const { return m_seekPending; }
+
     // ─── 倍速控制 ─────────────────────────────────────────────────────
     // 设置本地时钟倍速因子（用于不走主时钟的独立路及主时钟为补偿同一因子同步设置）。
     // 语义： m_speed=1.0 为原速。本地时钟公式：

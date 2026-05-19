@@ -135,6 +135,7 @@ void RBPlayerEngine::rbCloseAll() {
     m_pausedPts  = 0.0;
     m_speed      = 1.0;
     m_speedLevel = 0;
+    m_pendingAnchorRebase = false;
 }
 
 int RBPlayerEngine::rbCount() const {
@@ -199,6 +200,14 @@ void RBPlayerEngine::rbPlay() {
             m_anchorPts  = 0.0;
             m_playing.store(true);
         }
+        // 修复：p->rbPlay() 在 Ended 自动 replay 时要内部 seek 到 0、
+        // 解码首帧，每路耗时不一致。串行调用完后把 anchorWall 复位到
+        // "全部就绪"这一刻，避免先 ready 的路被主时钟 broadcast 推到
+        // 几十 ms 之后，画面出现"卡一下再追上"。
+        m_anchorWall = rbWallTime();
+        // 等所有路首帧到达后，把 anchorPts 重锚为 max(各路实际首帧 PTS)，
+        // 解决"路 0 视频首帧 PTS=0.533 而路 1=0"导致的左路单独卡帧问题。
+        m_pendingAnchorRebase = true;
         return;
     }
 
@@ -218,6 +227,10 @@ void RBPlayerEngine::rbPlay() {
                 p->rbPlay();
             }
         }
+        // 修复：每路 rbPlay() 要从暂停的 lastFrame 状态重新启动解码、
+        // 重填队列，耗时不一致。串行完成后把 anchorWall 重置到"全部
+        // 就绪"这一刻，避免先 ready 的路被立刻推几十 ms 出现卡顿。
+        m_anchorWall = rbWallTime();
     }
 
     // 把"独立暂停"的路单独恢复播放（仍走独立时钟，不强行加入主时钟）。
@@ -284,10 +297,33 @@ void RBPlayerEngine::rbSeek(double seconds) {
             p->rbRefreshPausedFrame(200);
         }
     }
+
+    // ───────────────────────────────────────────────────────────────────
+    // 修复：rbSeekTo 是阻塞调用（要 flush 解码器、重新 demux、解码
+    // 首帧），每路耗时可达几十毫秒——尤其 Windows 上硬解上下文重建慢。
+    //
+    // 旧实现把 m_anchorWall 设在循环开始前，等所有路 seek 完后已经过
+    // 去 N 毫秒；如果此时 m_playing=true，下一次 rbTick 就会按
+    //   master = seconds + (wallNow - wallBeforeSeek) * speed   // ≈ 0.05s
+    // 给所有路下发新时钟。先 seek 完的那路（通常是左/路 0）画面已就位
+    // 在 pts=0，下一帧立刻被推到 ~0.05s → 视觉上"卡一下、再快速追赶"。
+    // 后 seek 完的那路（路 1）解码本身就晚到，反而和这个偏移对齐。
+    //
+    // 修复：所有路 seek 全部完成后，把 anchorWall 复位为"现在"，让主
+    // 时钟从"全部就绪那一刻"开始累加，避免任一路出现起跑偏移。
+    // ───────────────────────────────────────────────────────────────────
+    m_anchorWall = rbWallTime();
+
+    // 标记：等 rbTick 看到所有主时钟路 seekPending 都清掉那一刻，把
+    // anchorPts 重锚到 max(各路实际首帧 PTS)。修复 Windows 上播放中
+    // 重置时"路 0 卡 17 帧、路 1 追上后才一起播"的问题——根因是不同
+    // 路视频 av_seek 后第一个解码帧 PTS 不一致（路 0=0.533，路 1=0），
+    // 主时钟若仍从 target=0 起跑，路 0 队列里没有 PTS≤0 的帧能取，
+    // 画面只能停在 seek 之前的最后一帧直到主时钟追上 0.533s。
+    m_pendingAnchorRebase = true;
 }
 
-void RBPlayerEngine::rbSeekRelative(double deltaSeconds) {
-    // ────────────────────────────────────────────────────────────────
+void RBPlayerEngine::rbSeekRelative(double deltaSeconds) {    // ────────────────────────────────────────────────────────────────
     // 全局相对 seek（前进/后退按钮）：
     //   - 主时钟下的路：以主时钟当前位置 + delta 作为统一目标（仍齐播）
     //   - 独立时钟下的路（已脱离主时钟）：以该路自身 currentTime + delta，
@@ -328,6 +364,15 @@ void RBPlayerEngine::rbSeekRelative(double deltaSeconds) {
             }
         }
     }
+
+    // 同 rbSeek 的修复：rbSeekTo 串行耗时，所有路完成后重置 anchorWall，
+    // 避免主时钟下一次 broadcast 把先就绪那路推到偏移位置造成"卡一下
+    // 再追赶"。这里只影响主时钟路；独立时钟路本来就不读主时钟。
+    m_anchorWall = rbWallTime();
+
+    // 同 rbSeek：等所有主时钟路 seekPending 清掉那一刻，把 anchorPts 重
+    // 锚为 max(各路实际首帧 PTS)，避免某路因首帧 PTS 较大而单独卡帧。
+    m_pendingAnchorRebase = true;
 }
 
 
@@ -467,6 +512,81 @@ double RBPlayerEngine::rbFrameDuration() const {
 void RBPlayerEngine::rbTick() {
     std::lock_guard<std::mutex> lk(m_mutex);
     if (m_players.empty()) return;
+
+    // ───────────────────────────────────────────────────────────────────
+    // 主时钟"等所有主时钟路就绪"闸门：
+    //
+    // 现象（Windows 高频复现）：全局重置/全局播放/全局 seek 后，左路
+    // 视频卡顿一下再快速追上右路。
+    //
+    // 根因：rbSeek/rbPlay 末尾虽然把 m_anchorWall 重锚为"返回那一刻"，
+    // 但此时各路 demuxer/decoder 刚 restart，第一帧仍在异步解码中。
+    // 等几十毫秒后 rbTick 触发，master 已从 anchorPts 跑出 N ms。
+    // 先就绪的那路（通常解码上下文重建快的）一收到第一帧立刻被主时钟
+    // 推到 N ms 位置 —— 队列里 PTS 早于 master 的若干帧立刻被消费掉，
+    // 视觉上就是"卡一下连刷数帧追赶"。两路视频帧率不同（如 16fps vs
+    // 24fps）/ GOP 不同时差异更明显。
+    //
+    // 修复：rbTick 推进主时钟前，先检查"所有主时钟模式且在播的路"是否
+    // 都已清掉 m_seekPending（首帧已到、时钟已对齐）。只要有任何一路
+    // 还 pending，就把 m_anchorWall 重锚为 now，等价于让主时钟原地
+    // "停摆"在 m_anchorPts 不前进。所有路都就绪后自然恢复推进。
+    //
+    // 仅检查"主时钟模式且当前在播"的路：独立时钟路的 seekPending 不
+    // 影响主时钟；停在 Ready/Paused/Ended 的路也不该卡主时钟（后者
+    // 不会有人等它出帧）。
+    // ───────────────────────────────────────────────────────────────────
+    if (m_playing.load()) {
+        bool anyPending = false;
+        for (auto& p : m_players) {
+            if (!p) continue;
+            if (!p->rbUseMasterClock()) continue;
+            if (!p->rbIsPlaying())      continue;
+            if (p->rbIsSeekPending()) { anyPending = true; break; }
+        }
+        if (anyPending) {
+            // 冻结主时钟在 anchorPts：把 anchorWall 跟着 now 一起走，
+            // 公式 master = anchorPts + (now - anchorWall)*speed 恒等于 anchorPts
+            m_anchorWall = rbWallTime();
+        } else if (m_pendingAnchorRebase) {
+            // ─── 闸门解除瞬间：重锚 anchorPts 到"各路实际首帧 PTS 的最大值" ──
+            // 走到这里说明所有主时钟+在播的路都已 seekPending=false，意味着
+            // 各路 RBVideoPlayer::rbGetCurrentFrame 已对齐时钟、把 currentTime
+            // 设为各自第一帧的真实 PTS。
+            //
+            // 不同视频 GOP / 起始关键帧布局差异会导致首帧 PTS 不同：
+            //   路 0：videoA av_seek(0) 后首个解码帧 PTS = 0.533s（≈ 16 帧 @30fps）
+            //   路 1：videoB av_seek(0) 后首个解码帧 PTS = 0.000s
+            // 若主时钟仍从 anchorPts=0 起跑：
+            //   · 路 0 队列里只有 PTS≥0.533 的帧，没有任何帧满足 framePts≤0
+            //     → rbGetCurrentFrame 不弹帧 → 画面停在 seek 前的旧帧
+            //     → 直到主时钟跑到 0.533s 才取走首帧（视觉上卡 0.5s）
+            //   · 路 1 队列正常按主时钟节奏播 #0、#1、...
+            //   → 用户看到"路 0 停帧、路 1 单独跑了一会儿、追到 #17 才同步"
+            //
+            // 修复：把 anchorPts 提升到所有路 currentTime 的最大值，相当于
+            // 主时钟从"最晚的那个首帧 PTS"开始计时：
+            //   · 路 0 立即显示首帧（PTS 0.533 ≤ 0.533）
+            //   · 路 1 队列里 PTS=0~0.533 的帧在一个 tick 内被批量丢弃，最终
+            //     停在 PTS≤0.533 的最后一帧上（视觉上从 #17 开始同步播放）
+            // 两路从此真正对齐，不会再出现"某路单独卡帧"。
+            double maxPts = m_anchorPts;
+            for (auto& p : m_players) {
+                if (!p) continue;
+                if (!p->rbUseMasterClock()) continue;
+                if (!p->rbIsPlaying())      continue;
+                maxPts = std::max(maxPts, p->rbCurrentTime());
+            }
+            m_anchorPts  = maxPts;
+            m_anchorWall = rbWallTime();
+            m_pausedPts  = maxPts;
+            m_pendingAnchorRebase = false;
+        }
+    } else {
+        // 全局非播放态（rbRefreshPausedFrame 已在调用方处理首帧），
+        // 标志失效，直接清掉避免下次播放误触发。
+        m_pendingAnchorRebase = false;
+    }
 
     double t = rbComputeMasterLocked();
 
