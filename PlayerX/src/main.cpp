@@ -41,22 +41,45 @@ static QString g_logFilePath;
 
 // 计算并准备好日志目录与本次运行的日志文件路径。
 // 路径与 FsUtils::appLogDir 保持一致：<CacheLocation>/logs。
-// 同时清理过旧日志（保留最近 N 个），避免无限增长。
+//
+// 同时清理过旧日志，避免无限增长：
+//   ① 数量上限：仅保留最近 kKeepCount 个 playerx_*.log（按修改时间倒序）
+//   ② 总大小上限：超过 kMaxTotalBytes 时，从最旧的开始删，直到总和 ≤ 上限
+// 两条规则并行生效，谁先命中谁先删。这样既能避免文件数过多（用户终端
+// 被无限文件污染），也能防止单次长跑写出超大日志撑爆磁盘。
 static QString prepareLogFilePath() {
     QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
     if (cache.isEmpty()) cache = QDir::homePath() + "/.playerx_cache";
     QString logDir = cache + "/logs";
     QDir().mkpath(logDir);
 
-    // 清理旧日志：仅保留最近 20 个 .log 文件（按修改时间倒序）。
+    // 旧日志清理
     {
+        constexpr int      kKeepCount     = 100;                  // 保留最近 100 个文件
+        constexpr qint64   kMaxTotalBytes = 100LL * 1024 * 1024;  // 总大小不超过 100 MB
+
         QDir d(logDir);
         QFileInfoList olds = d.entryInfoList({"playerx_*.log"},
                                               QDir::Files | QDir::NoSymLinks,
-                                              QDir::Time);
-        const int keep = 20;
-        for (int i = keep; i < olds.size(); ++i) {
+                                              QDir::Time);  // 最新在前
+
+        // ① 数量裁剪
+        for (int i = kKeepCount; i < olds.size(); ++i) {
             QFile::remove(olds.at(i).absoluteFilePath());
+        }
+        if (olds.size() > kKeepCount) olds = olds.mid(0, kKeepCount);
+
+        // ② 总大小裁剪：从最新往最旧累计；累计值首次超过上限的那一刻起，
+        //    后续（更旧的）全部删掉。这样保证留下来的都是"最新一批"。
+        qint64 acc = 0;
+        for (int i = 0; i < olds.size(); ++i) {
+            acc += olds.at(i).size();
+            if (acc > kMaxTotalBytes && i + 1 < olds.size()) {
+                for (int j = i + 1; j < olds.size(); ++j) {
+                    QFile::remove(olds.at(j).absoluteFilePath());
+                }
+                break;
+            }
         }
     }
 
