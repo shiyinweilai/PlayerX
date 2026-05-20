@@ -228,6 +228,28 @@ public slots:
     Q_INVOKABLE void uploadToCloud(bool force = false,
                                    const QStringList& folderPaths = {});
 
+    // 把某个归档批次上传到云端：与 uploadToCloud 完全等价的网络/状态/信号链路，
+    // 区别仅在于 CSV 数据源——读自 archive/<mode>/<batchName>/ratings.csv，
+    // 而不是当前模式的主 CSV。
+    //
+    // 设计动机：归档批次承载“打分快照”，业务上同样需要交给后端汇总；之前因为
+    //   后端目录结构未对齐而暂未开放，本轮按"与 uploadToCloud 同样的精简列+多部分表单"
+    //   提交，后端无需改动即可识别。文件名携带 batch 信息便于运维区分。
+    //
+    // 参数：
+    //   · mode       : 归档批次所在的评分模式（"subjective"/"quality"）。空 → 用当前模式。
+    //   · batchName  : 批次目录名（与 listArchiveBatches 返回 .name 字段一致）。空 → 拒绝。
+    //   · force      : 与 uploadToCloud 一样，true 时携带 force=1 强制覆盖。
+    //   · folderPaths: 可选的“文件夹白名单”，与 uploadToCloud 同义；
+    //                  归档默认是“完整快照”，UI 可不勾选 = 全量上传，也可按 folder 过滤。
+    //
+    // 上传中重复调用会被忽略；结果通过 uploadFinished/uploadConflict 信号回调，
+    // 与当前 Tab 上传共用同一套 QML 处理链路。
+    Q_INVOKABLE void uploadArchiveBatchToCloud(const QString& mode,
+                                               const QString& batchName,
+                                               bool force = false,
+                                               const QStringList& folderPaths = {});
+
 signals:
     void currentUserChanged();
     void currentModeChanged(); // mode 切换：dataFilePath / maxStars / totalCount 都会跟着变
@@ -263,6 +285,43 @@ private:
     // 在内存里拼出“精简 CSV”（与 exportToFile 完全一致）。上传时复用。
     // folderPaths 非空时仅保留 file_path 所在目录命中白名单的行；空 = 不过滤。
     QByteArray buildExportCsvBytes(const QStringList& folderPaths = {}) const;
+
+    // 在内存里拼出某归档批次的“精简 CSV”，列与 buildExportCsvBytes 完全一致：
+    //   updated_at,rater,folder,file_name,stars
+    // 数据源换成 archive/<mode>/<batchName>/ratings.csv，因此与归档落盘格式解耦：
+    // 即便用户重命名了主 mode 或换了评分人，归档批次也能保留写入瞬间的 rater 身份语义。
+    // folderPaths 非空时仅保留 file_path 所在目录命中白名单的行。
+    QByteArray buildArchiveExportCsvBytes(const QString& mode,
+                                          const QString& batchName,
+                                          const QStringList& folderPaths = {}) const;
+
+    // 共享上传发送：拼 multipart、设置头、发起 POST、绑定 finished 回调。
+    // 当前 Tab 与归档 Tab 上传都走这里，差异仅在 csvBytes 与 fileNameTag。
+    //   · modeNow      : 表单中要带的 mode 字段（与服务端 (user, tag, mode) 唯一性键一致）；
+    //                    归档上传也复用所属模式，避免和当前 CSV 混淆。
+    //   · csvBytes     : 已经拼好的精简 CSV 字节（含 BOM + 表头 + 数据行）。
+    //   · fileNameTag  : 拼到下载文件名里的标签（mode 或 "<mode>__<batch>"），
+    //                    后端只是落盘时透传，方便人工区分批次来源。
+    //   · force        : 与 uploadToCloud 同义，true 时携带 force=1。
+    void postCsvBytesToServer(const QString& modeNow,
+                              const QByteArray& csvBytes,
+                              const QString& fileNameTag,
+                              bool force);
+
+    // 上传前的"服务器探活"：发一次 HEAD（5 秒短超时），用来判断 URL 指向的端口
+    // 是否真有进程在监听。设计动机：
+    //   · 后端服务没启动时，正式 multipart POST 会等到 30s 超时才反馈，
+    //     用户体感"点了上传没任何反应"，而且可能已经放弃等待；
+    //   · HEAD 失败 / 5s 超时 → 直接 emit uploadFinished(false, "[NET] ...")，
+    //     QML 端识别 [NET] 前缀走模态错误对话框，给出可操作的诊断指引；
+    //   · HEAD 成功（即便 404/405 也算"端口通"）→ 走原 postCsvBytesToServer，
+    //     上传链路完全不变。
+    // 注意：本函数会接管 m_uploading 状态机；探活期间也算"上传中"，
+    // 防止用户连点。
+    void probeServerThenPost(const QString& modeNow,
+                             const QByteArray& csvBytes,
+                             const QString& fileNameTag,
+                             bool force);
 
     // 按 mode 计算/确保 CSV 路径存在（建目录、写表头）。返回该模式的绝对路径；
     // 若 mode 是 "off" 或不在 modeList 里，返回空串（调用方需自行兼容）。

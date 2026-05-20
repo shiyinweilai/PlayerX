@@ -96,6 +96,12 @@ Window {
     // 设置框"保存并上传"、覆盖确认"覆盖上传"都会复用它，
     // 避免“点上传 → 弹设置 → 保存”过程中把白名单丢了变成全量上传。
     property var _lastUploadFolders: []
+    // 上次上传的“来源标记”："current"（当前 Tab 主 CSV）/ "archive"（归档批次）。
+    // 服务端返回 409 后用户选择“覆盖上传”时，需要按同一来源 + 同一批次重发，
+    // 否则点了归档批次的上传，覆盖时却走当前 Tab 数据，会和用户预期完全错位。
+    property string _lastUploadKind: "current"
+    // 归档来源专属：上次上传所选的批次名；current 来源时无意义。
+    property string _lastUploadArchiveBatch: ""
 
     // 从 file_path 中提取所属目录（兼容 / 与 \）
     function _dirOf(fp) {
@@ -1448,9 +1454,11 @@ Window {
                 }
             }
             PillBtn {
-                // 归档 Tab 不接云端上传（本轮先不做，避免后端目录结构跟着改），
-                // 只在当前 Tab 显示
-                visible: !root._isArchiveView
+                // 当前 Tab 与归档 Tab 都支持云端上传：
+                //   ・ 当前 Tab：上传当前主 CSV（与历史行为一致）
+                //   ・ 归档 Tab：上传当前选中的批次（archive/<mode>/<batch>/ratings.csv）
+                // 网络栈、覆盖确认、信号链路完全共用，差异仅在 onClicked 里的 API 选择。
+                visible: true
                 // 上传到后端服务器：
                 //   ・ 未配置地址时 → 先弹设置对话框让用户填 URL/Token
                 //   ・ 配置后点击 → 直接走上传。上传中 disable，避免连点重复提交
@@ -1462,7 +1470,9 @@ Window {
                 // ── 启用条件分两层：
                 // 1) 真·硬约束（绑定层就置灰，本地直接卡住）：
                 //    - 至少勾选 1 个文件夹（picked > 0）
-                //    - 勾选的文件夹全部已评完（incomplete == 0）
+                //    - 勾选的文件夹全部已评完（incomplete == 0；归档批次跳过该约束，
+                //      因为归档本身就是“某次评分快照”，业务上视作完整结果）
+                //    - 归档 Tab 还要求当前选中了一个有效批次（_archiveBatch 非空）
                 // 2) 软约束（点击层兜底拦截）：评分人/备注 tag 必填、网络上传中等
                 //    保留 onClicked 中的 _collectCheckedIncomplete() 兜底，避免 binding
                 //    没及时刷新时漏拦。
@@ -1470,10 +1480,17 @@ Window {
                 enabled: {
                     var _dep1 = root._checkedFolders
                     var _dep2 = root._folders
+                    var _dep3 = root._archiveBatch
                     if (typeof Rating === "undefined") return false
                     if (Rating.uploading) return false
                     if (root._rows.length === 0) return false
                     if (root._checkedFolderCount() === 0) return false
+                    // 归档 Tab 额外要求：必须选中一个有效批次
+                    if (root._isArchiveView
+                            && (!root._archiveBatch || root._archiveBatch.length === 0))
+                        return false
+                    // 未评完拦截：归档 Tab 与当前 Tab 一视同仁——
+                    // 归档批次也是基于“文件夹完整评分”做云端汇总，半成品上传同样不可信。
                     if (root._collectCheckedIncomplete().length > 0) return false
                     return true
                 }
@@ -1494,8 +1511,12 @@ Window {
                 ToolTip.text: {
                     var _dep1 = root._checkedFolders
                     var _dep2 = root._folders
+                    var _dep3 = root._archiveBatch
                     if (typeof Rating === "undefined") return ""
                     if (Rating.uploading) return ""
+                    if (root._isArchiveView
+                            && (!root._archiveBatch || root._archiveBatch.length === 0))
+                        return qsTr("当前没有可用的归档批次")
                     if (root._rows.length === 0)
                         return qsTr("当前还没有任何评分记录")
                     if (root._checkedFolderCount() === 0)
@@ -1509,7 +1530,10 @@ Window {
                                        + " （" + inc[i].ratedCount + "/" + inc[i].totalVideos + "）")
                         }
                         if (inc.length > 3) lines.push("…还有 " + (inc.length - 3) + " 个")
-                        return qsTr("以下勾选的文件夹尚未评完，无法上传：\n") + lines.join("\n")
+                        var leadHint = root._isArchiveView
+                                ? qsTr("以下勾选的文件夹在该归档批次中尚未评完，无法上传：\n")
+                                : qsTr("以下勾选的文件夹尚未评完，无法上传：\n")
+                        return leadHint + lines.join("\n")
                     }
                     return ""
                 }
@@ -1554,19 +1578,34 @@ Window {
                         return
                     }
 
-                    // ── 未评完拦截：勾选的文件夹必须每个都"已评分视频数 == 视频总数"
+                    // ── 未评完拦截：归档 Tab 与当前 Tab 一致都走
                     // 设计动机：云端汇总通常按"文件夹完整评分"维度做统计，
-                    // 半成品上传会让别人无法判断该批数据是否可用。
+                    // 半成品上传（不论来自当前还是归档）都会让别人无法判断该批数据是否可用。
                     var incomplete = root._collectCheckedIncomplete()
                     if (incomplete.length > 0) {
                         incompleteUploadDialog.openWith(incomplete)
                         return
                     }
-                    // 缓存本次勾选，供"保存并上传"/"覆盖上传"等后续入口复用
+                    // 归档 Tab 还要确认有选中批次（双保险，避免 enabled 没及时刷新）
+                    if (root._isArchiveView
+                            && (!root._archiveBatch || root._archiveBatch.length === 0)) {
+                        rejectDialog.openWith(
+                            qsTr("无法上传到云端"),
+                            qsTr("当前没有选中归档批次，无法确定要上传哪一份归档数据。"))
+                        return
+                    }
+                    // 缓存本次勾选 + 上传来源，供"保存并上传"/"覆盖上传"等后续入口复用
                     root._lastUploadFolders = picked
+                    root._lastUploadKind = root._isArchiveView ? "archive" : "current"
+                    root._lastUploadArchiveBatch = root._isArchiveView ? root._archiveBatch : ""
 
                     if (!Rating.uploadServerUrl || Rating.uploadServerUrl.length === 0) {
                         uploadConfigDialog.open()
+                    } else if (root._isArchiveView) {
+                        Rating.uploadArchiveBatchToCloud(
+                            Rating.currentMode,
+                            root._archiveBatch,
+                            false, picked)
                     } else {
                         Rating.uploadToCloud(false, picked)
                     }
@@ -1586,7 +1625,8 @@ Window {
             }
             PillBtn {
                 // “⚙ 设置”：独立入口，避免“双击上传按钮”这种隐藏交互被错过
-                visible: !root._isArchiveView
+                // 归档 Tab 同样可见——归档与当前 Tab 共用同一份服务器配置
+                visible: true
                 text: qsTr("⚙ 上传设置")
                 onClicked: uploadConfigDialog.open()
             }
@@ -2532,6 +2572,14 @@ Window {
                 uploadAuthErrorDialog.open()
                 return
             }
+            // 网络不可达 / 后端未启动（C++ 端HEAD探活失败时加 "[NET]" 前缀）走独立模态提醒，
+            // 原因同上：URL 填错 / 后端没起是高频用户错误，必须让他们一眼看见。
+            if (!ok && message && message.indexOf("[NET]") >= 0) {
+                var cleanNet = message.replace("[NET]", "").trim()
+                uploadNetErrorDialog._msg = cleanNet
+                uploadNetErrorDialog.open()
+                return
+            }
             if (ok) {
                 // 成功：右下角小 toast 容易被用户漏看（"我点了上传按钮怎么没反应？"），
                 // 改用居中模态成功对话框 + 4s 自动关闭：既醒目，又不打断后续操作太久。
@@ -2931,6 +2979,114 @@ Window {
         }
     }
 
+    // 网络不可达对话框：HEAD 探活失败（连接拒绝 / 超时 / DNS 错误 等）时弹。
+    // 为什么独立于 [AUTH]：[AUTH] 是“服务起了但拒你”，[NET] 是“服务根本没起”，
+    // 诊断路径和能给用户的建议完全不同，合并一起会混淆。
+    Dialog {
+        id: uploadNetErrorDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 520
+        padding: 0
+
+        property string _msg: ""
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#5a3a2a"   // 橙色警示：不同于鉴权类的红色边框
+            border.width: 1
+            radius: 8
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("⚠️ 无法连接到上传服务器")
+                color: "#f0f0f3"
+                font.pixelSize: 14
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a30"
+            }
+        }
+
+        contentItem: Item {
+            implicitHeight: _netCol.implicitHeight + 32
+            ColumnLayout {
+                id: _netCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                spacing: 10
+                Text {
+                    Layout.fillWidth: true
+                    text: uploadNetErrorDialog._msg
+                    color: "#e6e6ea"
+                    font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                    // C++ 端已拼好多行提示（包含原因 + 地址 + 检查清单），这里保留原始换行。
+                    lineHeight: 1.35
+                    textFormat: Text.PlainText
+                }
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a30"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("知道了")
+                    onClicked: uploadNetErrorDialog.close()
+                }
+                PillBtn {
+                    text: qsTr("修改服务器地址")
+                    danger: true
+                    onClicked: {
+                        uploadNetErrorDialog.close()
+                        uploadConfigDialog.open()
+                    }
+                }
+            }
+        }
+    }
+
     // 覆盖确认对话框：同 (评分人, tag) 已存在时询问是否覆盖。
     // 确认后调 Rating.uploadToCloud(true) 带 force=1 重走。
     Dialog {
@@ -3036,8 +3192,21 @@ Window {
                     danger: true
                     onClicked: {
                         uploadConflictDialog.close()
-                        if (typeof Rating !== "undefined")
+                        if (typeof Rating === "undefined") return
+                        // 按上次的“上传来源”走：归档来源就重发归档批次，
+                        // current 来源就重发主 CSV——避免用户在归档 Tab 触发的 409
+                        // 被覆盖时却写到了当前 Tab 的数据上去。
+                        if (root._lastUploadKind === "archive"
+                                && root._lastUploadArchiveBatch
+                                && root._lastUploadArchiveBatch.length > 0) {
+                            Rating.uploadArchiveBatchToCloud(
+                                Rating.currentMode,
+                                root._lastUploadArchiveBatch,
+                                true,
+                                root._lastUploadFolders || [])
+                        } else {
                             Rating.uploadToCloud(true, root._lastUploadFolders || [])
+                        }
                     }
                 }
             }

@@ -430,6 +430,118 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
     return buf;
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// 把某归档批次的 CSV 转成与 buildExportCsvBytes 完全一致的“精简 CSV”，
+// 用于上传归档批次时复用 postCsvBytesToServer 的 multipart / 表单链路。
+//
+// 与 buildExportCsvBytes 的差异仅在于：
+//   · 数据源：archive/<mode>/<batchName>/ratings.csv（而非主 CSV readAll）。
+//   · rater 列：归档落盘时的 rater 是“写入瞬间”的值——这里仍按照
+//     “导出/上传时统一身份”的语义改用 currentUser（与当前 Tab 一致），
+//     避免用户改名后云端列出错乱身份。
+// 列顺序、BOM、表头、folder/file_name 处理规则都与 buildExportCsvBytes 完全相同，
+// 后端无需任何改动即可识别。
+// ════════════════════════════════════════════════════════════════════════
+
+QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
+                                                   const QString& batchName,
+                                                   const QStringList& folderPaths) const {
+    QByteArray buf;
+    if (mode.isEmpty() || mode == QStringLiteral("off")) return buf;
+    if (!findMode(mode)) return buf;
+    if (batchName.isEmpty()) return buf;
+
+    // 归档批次的物理 CSV 路径（与 archiveBatchCsvIn 完全等价，但避免依赖
+    // 后文匿名命名空间里的 helper —— 那些 helper 定义在本函数下方，
+    // 这里就近内联拼路径，让前后函数体内的小工具相互独立、维护更简单）。
+    const QString csvPath = QDir(QDir(QDir(m_baseDir).filePath(QStringLiteral("archive")))
+                                     .filePath(mode))
+                                .filePath(batchName)
+                            + QStringLiteral("/ratings.csv");
+
+    // 读批次 CSV：表头格式与主 CSV 一致（updated_at,rater,file_name,
+    // file_path,file_size,quick_hash,stars），逐行解析。
+    QList<QVariantMap> rows;
+    {
+        QFile f(csvPath);
+        if (!f.exists()) return buf;
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return buf;
+        QTextStream ts(&f);
+        ts.setEncoding(QStringConverter::Utf8);
+        bool firstLine = true;
+        while (!ts.atEnd()) {
+            QString line = ts.readLine();
+            if (firstLine) { firstLine = false; continue; }
+            if (line.trimmed().isEmpty()) continue;
+            const QStringList cols = parseCsvLine(line);
+            if (cols.size() < 7) continue;
+            QVariantMap row;
+            row["updated_at"] = cols.value(0);
+            row["rater"]      = cols.value(1);
+            row["file_name"]  = cols.value(2);
+            row["file_path"]  = cols.value(3);
+            row["stars"]      = cols.value(6).toInt();
+            rows.push_back(row);
+        }
+    }
+
+    QString rater = currentUser();
+    if (rater.isEmpty()) rater = systemUserName();
+
+    QSet<QString> allow;
+    const bool filter = !folderPaths.isEmpty();
+    if (filter) {
+        for (const QString& p : folderPaths) {
+            const QString k = normalizeFolderForMatch(p);
+            if (k.isEmpty()) continue;
+            allow.insert(k);
+        }
+    }
+
+    QTextStream ts(&buf, QIODevice::WriteOnly);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts.setGenerateByteOrderMark(true);
+    ts << "updated_at,rater,folder,file_name,stars\n";
+
+    auto stripChannelPrefix = [](const QString& name) -> QString {
+        int i = 0;
+        while (i < name.size() && i < 3 && name.at(i).isDigit()) ++i;
+        if (i > 0 && i < name.size() && name.at(i) == QLatin1Char('_')) {
+            return name.mid(i + 1);
+        }
+        return name;
+    };
+
+    for (const auto& r : rows) {
+        const QString fp = r.value("file_path").toString();
+        if (filter) {
+            if (fp.isEmpty()) continue;
+            const QString dir = QDir::cleanPath(QFileInfo(fp).absolutePath());
+            if (!allow.contains(dir)) continue;
+        }
+        const QString rawTs = r.value("updated_at").toString();
+        QDateTime dt = QDateTime::fromString(rawTs, Qt::ISODateWithMs);
+        if (!dt.isValid()) dt = QDateTime::fromString(rawTs, Qt::ISODate);
+        const QString prettyTs = dt.isValid()
+                                     ? dt.toString("yyyy-MM-dd HH:mm:ss")
+                                     : rawTs;
+
+        QString folder;
+        if (!fp.isEmpty()) folder = QFileInfo(fp).dir().dirName();
+
+        const QString fileName =
+            stripChannelPrefix(r.value("file_name").toString());
+
+        ts << csvEscape(prettyTs)  << ","
+           << csvEscape(rater)     << ","
+           << csvEscape(folder)    << ","
+           << csvEscape(fileName)  << ","
+           << r.value("stars").toInt() << "\n";
+    }
+    ts.flush();
+    return buf;
+}
+
 // ═════════════════════════════════════════════════════════════════════
 // 上传：读取配置 → 拼 multipart → POST → 信号带出结果
 // ═════════════════════════════════════════════════════════════════════
@@ -550,16 +662,234 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         return;
     }
 
+    // 把 multipart 装配 + 网络发送 + reply 解析全部走共享路径，
+    // 当前 Tab 上传与归档批次上传仅在 csvBytes / fileNameTag 上有区别。
+    // 但在真正发 multipart 之前，先用一次 HEAD 探活判断后端是否存活——
+    // 这样用户不需要等到 30s 上传超时才知道"服务根本没启"。
+    probeServerThenPost(modeNow, csvBytes, /*fileNameTag*/ modeNow, force);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 上传归档批次（与 uploadToCloud 共用网络栈与状态机；CSV 数据源换成归档）
+// ════════════════════════════════════════════════════════════════════════
+
+void RatingStore::uploadArchiveBatchToCloud(const QString& mode,
+                                            const QString& batchName,
+                                            bool force,
+                                            const QStringList& folderPaths) {
+    if (m_uploading) {
+        emit uploadFinished(false, tr("已有上传任务进行中，请稍后重试"));
+        return;
+    }
+    const QString modeNow = mode.isEmpty() ? currentMode() : mode;
+    if (modeNow.isEmpty() || modeNow == QStringLiteral("off")) {
+        emit uploadFinished(false, tr("当前为「不评分」模式，无可上传的评分数据"));
+        return;
+    }
+    if (!findMode(modeNow)) {
+        emit uploadFinished(false, tr("未知的评分模式：%1").arg(modeNow));
+        return;
+    }
+    if (batchName.trimmed().isEmpty()) {
+        emit uploadFinished(false, tr("未指定归档批次，无法上传"));
+        return;
+    }
+    // 必填校验：评分人 / tag —— 与当前 Tab 上传保持一致语义，
+    // 避免“归档上传绕过身份校验”导致云端数据无法溯源。
+    QString rater = currentUser().trimmed();
+    if (rater.isEmpty()) {
+        emit uploadFinished(false,
+            tr("「评分人」为必填项，未填写无法上传。\n请在顶部「评分人 *」输入框填写后再试。"));
+        return;
+    }
+    QString tagVal = uploadTag().trimmed();
+    if (tagVal.isEmpty()) {
+        emit uploadFinished(false,
+            tr("「备注 tag」为必填项，未填写无法上传。\n请在顶部「备注 tag *」输入框填写后再试。"));
+        return;
+    }
+    // URL 校验：尽早拦截配置缺失，避免拼好 multipart 后才发现没地方发。
+    const QString url = uploadServerUrl();
+    if (url.isEmpty()) {
+        emit uploadFinished(false, tr("未配置上传地址，请先填写服务器 URL"));
+        return;
+    }
+    {
+        QUrl u(url);
+        if (!u.isValid() || (u.scheme() != "http" && u.scheme() != "https")) {
+            emit uploadFinished(false, tr("服务器地址不合法（需以 http:// 或 https:// 开头）"));
+            return;
+        }
+    }
+
+    const QByteArray csvBytes = buildArchiveExportCsvBytes(modeNow, batchName, folderPaths);
+    bool csvEmpty = csvBytes.isEmpty();
+    if (!csvEmpty) {
+        int dataLines = csvBytes.count('\n') - 1;
+        if (dataLines <= 0) csvEmpty = true;
+    }
+    if (csvEmpty) {
+        if (!folderPaths.isEmpty()) {
+            emit uploadFinished(false, tr("勾选的文件夹下没有可上传的归档记录"));
+        } else {
+            emit uploadFinished(false, tr("该归档批次为空，无需上传"));
+        }
+        return;
+    }
+
+    // 文件名加批次后缀，方便后端落盘后人工区分是哪个归档；
+    // mode 表单字段仍只填 modeNow，与 (user, tag, mode) 唯一性键一致——也就是说：
+    // “同一评分人 + 同一 tag + 同一模式” 上传当前 / 归档都会触发覆盖确认，
+    // 让用户主动选择是覆盖云端旧数据还是先改 tag 再传，行为可预测。
+    const QString fileNameTag = QStringLiteral("%1__%2").arg(modeNow, batchName);
+    // 与当前 Tab 上传一致：先做 HEAD 探活，避免后端没启时用户等 30s 才知道。
+    probeServerThenPost(modeNow, csvBytes, fileNameTag, force);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 上传前探活：HEAD <url>，5s 超时；通过则继续 postCsvBytesToServer
+// ════════════════════════════════════════════════════════════════════════
+//
+// 设计要点：
+//   1) 把 m_uploading 在探活阶段就置 true，让 QML 的"上传按钮置灰 + 文案变上传中"
+//      立刻生效，给用户即时反馈；探活失败时再复位。
+//   2) 任何"端口可达"的响应（含 404/405/任何 HTTP 状态码）都视作探活通过——
+//      因为我们只想确认"服务进程在监听"，HEAD 是不是路由匹配并不重要。
+//   3) 真·失败（连接拒绝 / DNS 失败 / 超时 / TLS 失败）才走 [NET] 失败信号；
+//      QML 端识别 [NET] 前缀弹模态错误对话框。
+//   4) 5 秒超时是体感临界值：太短可能误判内网慢链路，太长违背"探活"目的。
+void RatingStore::probeServerThenPost(const QString& modeNow,
+                                      const QByteArray& csvBytes,
+                                      const QString& fileNameTag,
+                                      bool force) {
+    // URL 归一化：与 postCsvBytesToServer 中保持一致，避免探活地址与上传地址不一致。
+    QUrl u(uploadServerUrl());
+    {
+        QString path = u.path();
+        if (path.isEmpty() || path == "/") {
+            u.setPath("/upload");
+        } else if (path.size() > 1 && path.endsWith('/')) {
+            u.setPath(path.left(path.size() - 1));
+        }
+    }
+
+    if (!m_nam) m_nam = new QNetworkAccessManager(this);
+
+    QNetworkRequest req(u);
+    req.setRawHeader("User-Agent", "PlayerX-Uploader/1.0 (probe)");
+    const QString tok = uploadToken();
+    if (!tok.isEmpty()) req.setRawHeader("X-Token", tok.toUtf8());
+    // 5s 短超时：保证用户在"后端没启"时最多等 5 秒就能拿到反馈。
+    req.setTransferTimeout(5 * 1000);
+
+    // 进入"上传中"状态：UI 立刻置灰防连点；探活失败再复位。
+    m_uploading = true;
+    emit uploadingChanged();
+    emit uploadStarted();
+
+    // 用 sendCustomRequest("HEAD", ...) 而非 head()——某些后端对 head() 默认实现不友好；
+    // 但 head() 与 sendCustomRequest 行为本质相同，这里使用 head() 简单稳定。
+    QNetworkReply* probe = m_nam->head(req);
+
+    // 把上下文捕获进 lambda：成功时再发起实际 multipart 上传。
+    QObject::connect(probe, &QNetworkReply::finished, this,
+                     [this, probe, modeNow, csvBytes, fileNameTag, force, urlStr = u.toString()]() {
+        const int httpCode = probe->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QNetworkReply::NetworkError err = probe->error();
+        probe->deleteLater();
+
+        // 端口通：拿到任何 HTTP 状态码就算通过（哪怕 404/405），继续走真实上传。
+        // 但需要避开"端口通但 TLS 握手失败 / 协议不对"这类硬错——
+        //   · 这种情况下 httpCode 不会有值，err 会是 SslHandshakeFailedError 等；
+        //   · 用 httpCode > 0 作为"拿到 HTTP 响应"的判定标准最稳。
+        if (httpCode > 0) {
+            // 探活只是前哨，把 m_uploading 交还给真正的上传链路接管——
+            // 先复位再调 postCsvBytesToServer，由后者重新置 true，避免状态被双重 emit。
+            m_uploading = false;
+            emit uploadingChanged();
+            postCsvBytesToServer(modeNow, csvBytes, fileNameTag, force);
+            return;
+        }
+
+        // 失败：把 Qt 的网络错误码翻译成给人看的文案，覆盖最常见的几种场景。
+        QString reason;
+        switch (err) {
+            case QNetworkReply::ConnectionRefusedError:
+                reason = tr("连接被拒绝（后端服务可能未启动，或端口不对）");
+                break;
+            case QNetworkReply::HostNotFoundError:
+                reason = tr("找不到主机（请检查 URL 中的域名 / IP）");
+                break;
+            case QNetworkReply::RemoteHostClosedError:
+                reason = tr("远端主动断开连接");
+                break;
+            case QNetworkReply::TimeoutError:
+            case QNetworkReply::OperationCanceledError:
+                reason = tr("连接超时（5s 内未收到响应，请检查服务器是否启动 / 网络是否通畅）");
+                break;
+            case QNetworkReply::SslHandshakeFailedError:
+                reason = tr("TLS/SSL 握手失败（证书是否正确？或 URL 是否应改为 http://）");
+                break;
+            case QNetworkReply::UnknownNetworkError:
+            case QNetworkReply::UnknownServerError:
+                reason = tr("未知网络错误");
+                break;
+            default:
+                reason = probe->errorString();
+                if (reason.isEmpty()) reason = tr("网络不可达");
+                break;
+        }
+
+        // [NET] 前缀给 QML 端用来识别"是否走模态错误对话框"。
+        const QString message = QStringLiteral("[NET] ")
+                + tr("无法连接到上传服务器：%1\n地址：%2\n\n"
+                     "请检查：\n"
+                     "  1) 后端服务是否已启动？\n"
+                     "  2) 服务器 URL 是否正确？\n"
+                     "  3) 本机网络 / 防火墙是否允许该端口？")
+                  .arg(reason).arg(urlStr);
+
+        m_uploading = false;
+        emit uploadingChanged();
+        emit uploadFinished(false, message);
+    });
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 共享上传发送：拼 multipart、设置头、发起 POST、绑定 finished 回调
+// ════════════════════════════════════════════════════════════════════════
+
+void RatingStore::postCsvBytesToServer(const QString& modeNow,
+                                       const QByteArray& csvBytes,
+                                       const QString& fileNameTag,
+                                       bool force) {
+    // URL 归一化（与历史行为完全一致）：
+    //   - path 为空 / "/"  → 补 "/upload"
+    //   - path 末尾误带 "/" → 去掉
+    QUrl u(uploadServerUrl());
+    {
+        QString path = u.path();
+        if (path.isEmpty() || path == "/") {
+            u.setPath("/upload");
+        } else if (path.size() > 1 && path.endsWith('/')) {
+            u.setPath(path.left(path.size() - 1));
+        }
+    }
+
+    // rater / tag 已经在调用方校验通过，这里直接读用即可。
+    const QString rater  = currentUser().trimmed();
+    const QString tagVal = uploadTag().trimmed();
+
     if (!m_nam) m_nam = new QNetworkAccessManager(this);
 
     auto* multi = new QHttpMultiPart(QHttpMultiPart::FormDataType);
 
-    // file 字段（主要负载）。
-    // 文件名携带当前模式，让后端 / 运维在付启同名时一眼识别是主观评分还是质量比较。
+    // file 字段：文件名携带 fileNameTag（mode 或 "<mode>__<batch>"），
+    // 让后端 / 运维一眼识别是主观评分 / 质量比较 / 哪一个归档批次。
     QHttpPart filePart;
     QString fileName = QStringLiteral("playerx_%1_%2_%3.csv")
-                           .arg(rater.isEmpty() ? "anon" : rater)
-                           .arg(modeNow)
+                           .arg(rater.isEmpty() ? QStringLiteral("anon") : rater)
+                           .arg(fileNameTag)
                            .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
     filePart.setHeader(QNetworkRequest::ContentDispositionHeader,
                        QVariant(QString("form-data; name=\"file\"; filename=\"%1\"").arg(fileName)));
@@ -574,7 +904,7 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     userPart.setBody(rater.toUtf8());
     multi->append(userPart);
 
-    // client 字段（带上应用名+版本，服务端可记录以供审计）
+    // client 字段：应用名+版本，服务端可记录以供审计
     QHttpPart cliPart;
     cliPart.setHeader(QNetworkRequest::ContentDispositionHeader,
                       QVariant("form-data; name=\"client\""));
@@ -590,16 +920,15 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     cliPart.setBody(clientTag.toUtf8());
     multi->append(cliPart);
 
-    // tag 字段：后端靠 (user, tag, mode) 识别是否重复上传
+    // tag 字段
     {
         QHttpPart p;
         p.setHeader(QNetworkRequest::ContentDispositionHeader,
                     QVariant("form-data; name=\"tag\""));
-        p.setBody(tagVal.toUtf8());   // 已在入口处校验非空
+        p.setBody(tagVal.toUtf8());
         multi->append(p);
     }
-    // mode 字段：让后端可按模式分桶，不同模式的 (user, tag) 互不冲突。
-    // 后端服务考虑兼容旧客户端：不传 mode 默认当作 "subjective"。
+    // mode 字段：让后端可按模式分桶
     {
         QHttpPart p;
         p.setHeader(QNetworkRequest::ContentDispositionHeader,
@@ -620,7 +949,6 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     req.setRawHeader("User-Agent", "PlayerX-Uploader/1.0");
     const QString tok = uploadToken();
     if (!tok.isEmpty()) req.setRawHeader("X-Token", tok.toUtf8());
-    // 超时 30s：局域网下 CSV 体积极小，不该超过 1s，这个是兑底。
     req.setTransferTimeout(30 * 1000);
 
     QNetworkReply* reply = m_nam->post(req, multi);
@@ -634,10 +962,7 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         const int httpCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QByteArray body = reply->readAll();
 
-        // 服务端返回 409 = (rater, tag) 已存在，需要二次确认。
-        // 这里不作为错误报出，走专门的 uploadConflict 信号，QML 负责弹“是否覆盖”。
-        // 后端 body 是个完整 JSON（带 existing 数组 + mtime 等），直接丢给 QML 显示太吵，
-        // 这里只抽关键字段拼个人话。
+        // 409 = (rater, tag, mode) 已存在 → 走 uploadConflict 信号，QML 弹覆盖确认
         if (httpCode == 409) {
             QString msg;
             QJsonParseError perr{};
@@ -667,7 +992,6 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
                     msg += tr("，最近一次：%1").arg(lastTime);
                 }
             } else {
-                // 后端没返 JSON（不太可能）才走这个兑底分支
                 msg = tr("服务端提示该评分人/标签已有记录");
             }
             m_uploading = false;
@@ -680,13 +1004,10 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         const bool ok = (reply->error() == QNetworkReply::NoError);
         QString message;
         if (ok) {
-            // 服务端返回是个简单 JSON，里面有 saved 字段；这里不动用 QJsonDocument，
-            // 反正只是展示用，拿原始字节足够这个场景。只护一下快照：
             QString trimmed = QString::fromUtf8(body).trimmed();
             if (trimmed.size() > 200) trimmed = trimmed.left(200) + QStringLiteral("…");
             message = tr("上传成功：%1").arg(trimmed.isEmpty() ? tr("已收到") : trimmed);
         } else {
-            // 优先从 JSON body 里抠 error 字段（避免把一长串 JSON 原文吐给用户）
             QString errText;
             {
                 QJsonParseError perr{};
@@ -698,8 +1019,6 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
             if (errText.isEmpty()) errText = QString::fromUtf8(body).trimmed();
             if (errText.isEmpty()) errText = reply->errorString();
 
-            // 401/403 视作鉴权类硬错：在文案前加 [AUTH] 标记，QML 端据此弹强提醒。
-            // 兼容服务端自身已经带 [AUTH] 前缀的情况，避免重复加。
             const bool authErr = (httpCode == 401 || httpCode == 403);
             if (authErr && !errText.startsWith(QStringLiteral("[AUTH]"))) {
                 errText = QStringLiteral("[AUTH] ") + errText;
