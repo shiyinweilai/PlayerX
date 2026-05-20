@@ -2944,11 +2944,34 @@ ApplicationWindow {
                 smooth: true
                 mipmap: true
                 cache: true
-                // sourceSize 让 Image 按目标尺寸解码，节省内存（大图也不卡）
-                sourceSize.width:  width  > 0 ? width  * 2 : 512
-                sourceSize.height: height > 0 ? height * 2 : 512
+                // sourceSize 锁成稳定值（不再随容器尺寸变化）
+                //   · 历史问题：之前写 width*2 / height*2，会随窗口尺寸变动
+                //     按 F / 双击切全屏时，refImageBox 的 width/height 会经历瞬时中间值，
+                //     导致 sourceSize 跳变 → Qt 重新解码 → status 回到 Loading → "加载中…"闪现
+                //   · 解决：固定 1024×1024，对侧栏参考图（最大也就几百 px 宽）足够清晰；
+                //     PreserveAspectFit 保留比例显示，sourceSize 只是解码上限不强制比例
+                //   · 副作用：内存略升（从动态变为常驻 1024 上限），但侧栏只 1 张图，可忽略
+                sourceSize.width:  1024
+                sourceSize.height: 1024
                 visible: root.refHasCurrent && status === Image.Ready
                 asynchronous: true
+
+                // 双击图片本体也能放大查看（与右上角 ⤢ 按钮等价）
+                //   · 设计：常见图片查看器的"双击查看原图"惯用手势，无视觉打扰
+                //   · 单击不做任何事（避免误触），仅 onDoubleClicked 触发 Lightbox
+                //   · z 默认 0，低于 refImageZoomBtn(z:2)，按钮区域不会被这层吃掉
+                //   · cursorShape 给个手型，暗示可点击；ToolTip 第一次 hover 时提示双击
+                MouseArea {
+                    id: refImageDblMA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton
+                    cursorShape: Qt.PointingHandCursor
+                    onDoubleClicked: refLightbox.open()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 800
+                    ToolTip.text: "双击放大查看"
+                }
             }
 
             // 右上角显性"放大查看"按钮 → 弹出 Lightbox 覆盖层
