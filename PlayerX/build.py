@@ -52,11 +52,16 @@ IS_MACOS_HOST = platform.system() == "Darwin"
 
 # ─── 路径配置 ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SOURCE_DIR = SCRIPT_DIR                                # PlayerX/PlayerX/
-BUILD_ROOT = os.path.join(SOURCE_DIR, "build")         # PlayerX/PlayerX/build/
+SOURCE_DIR = SCRIPT_DIR                                # PlayerX/
+BUILD_ROOT = os.path.join(SOURCE_DIR, "build")         # PlayerX/build/
 
-REPO_ROOT      = os.path.dirname(SOURCE_DIR)            # PlayerX/
-PARENT_BUILD   = os.path.join(REPO_ROOT, "build")       # PlayerX/build/
+# PlayerX 自包含依赖目录（独立后默认位置）
+THIRD_PARTY_DIR = os.path.join(SOURCE_DIR, "third_party")
+SCRIPTS_DIR     = os.path.join(SOURCE_DIR, "scripts")
+
+# 旧仓库结构兼容（独立前 PlayerX 是子目录，FFmpeg 在 PlayerX/../build/ffmpeg）
+REPO_ROOT_LEGACY    = os.path.dirname(SOURCE_DIR)
+PARENT_BUILD_LEGACY = os.path.join(REPO_ROOT_LEGACY, "build")
 
 def build_dir_for(target: str) -> str:
     suffix = "_win" if target == "windows" else ""
@@ -84,24 +89,43 @@ def cpu_count() -> int:
 
 # ─── 依赖探测 ──────────────────────────────────────────────────────────────────
 def find_ffmpeg(target: str) -> str:
-    """复用上层（旧 build 系统）已经构建好的 FFmpeg 静态库。"""
+    """探测 FFmpeg 静态库安装目录。
+
+    搜索优先级：
+      1) 环境变量 FFMPEG_INSTALL_DIR（最高优先级，CI/外部最干净）
+      2) PlayerX/third_party/ffmpeg/build/install[_win]（独立后默认位置）
+      3) PlayerX/../build/ffmpeg/install[_win]（旧仓库结构向后兼容）
+    """
     sub = "install_win" if target == "windows" else "install"
 
-    # PlayerX/build/ffmpeg/install[_win]
-    candidates = [
-        os.path.join(PARENT_BUILD, "ffmpeg", sub),
-    ]
+    # 1) 环境变量
+    env_p = os.environ.get("FFMPEG_INSTALL_DIR")
+    if env_p:
+        if os.path.isdir(env_p) and os.path.isdir(os.path.join(env_p, "lib")):
+            return env_p
+        warn(f"FFMPEG_INSTALL_DIR={env_p} 无效，将继续在默认位置搜索")
+
+    # 2) 内置 third_party（产物在 PlayerX/build/third_party/ffmpeg/install[_win]）
+    builtin = os.path.join(BUILD_ROOT, "third_party", "ffmpeg", sub)
+    # 3) 旧路径（兼容迁移过渡期）
+    legacy  = os.path.join(PARENT_BUILD_LEGACY, "ffmpeg", sub)
+
+    candidates = [builtin, legacy]
     for p in candidates:
-        if os.path.isdir(p):
+        if os.path.isdir(p) and os.path.isdir(os.path.join(p, "lib")):
             return p
+
     error("未找到 FFmpeg 安装目录，已尝试以下路径：")
+    error(f"  环境变量 FFMPEG_INSTALL_DIR = {os.environ.get('FFMPEG_INSTALL_DIR', '<未设置>')}")
     for p in candidates:
         error(f"  {p}")
-    error("请先在仓库根 PlayerX/build/ 下运行 main.py 构建 FFmpeg：")
-    if target == "windows":
-        error("  python3 main.py -p windows")
-    else:
-        error("  python3 main.py -p macos")
+    error("请先在 PlayerX 内置的依赖脚本里构建 FFmpeg：")
+    plat = "windows" if target == "windows" else "macos"
+    error(f"  python3 scripts/build_deps.py -p {plat}")
+    error("或单独构建 FFmpeg：")
+    error(f"  python3 scripts/build_ffmpeg.py -p {plat}")
+    error("如果尚未拉取 FFmpeg 源码（third_party/ffmpeg 为空），先执行：")
+    error("  git submodule update --init --recursive")
     sys.exit(1)
 
 

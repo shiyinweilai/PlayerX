@@ -1,22 +1,22 @@
 {
-  "version": "3.0.2",
+  "version": "3.0.3",
   "minSupported": "1.0.0",
   "author": "rbyang",
   "copyright": "Copyright (c) 2026 PlayerX",
   "notes": "PlayerX 2.0.5 is a major update that includes performance improvements, bug fixes, and new features such as support for additional video formats and enhanced user interface.",
   "mandatory": false,
   "downloads": {
+    "mac-arm64": {
+      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-3.0.3-arm64-mac.zip",
+      "sha256": "289a29c0b207493c4bb2b60a0454a9a4238fbb21163f28ad438bd64d62fa8a79"
+    },
     "win-install": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-Setup-3.0.2.exe",
-      "sha256": "dc4507d3557299638fc0a3731adfaaa74e0dd1b76eae413c480c2f985b2d473f"
+      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-Setup-3.0.3.exe",
+      "sha256": "8b4fbc5bc12a0082e94c6bd633c0bf464cba9f4b5cf0dad114920e373f473f2c"
     },
     "win-portable": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-3.0.2-win64-portable.zip",
-      "sha256": "d4d6c7347787790edd98c9edf9a2bae207b3231dbbfe16c4df75178426590082"
-    },
-    "mac-arm64": {
-      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-3.0.2-arm64-mac.zip",
-      "sha256": "789749d41f35c5635712d17e0c321fcba150ef1447d07455ba1363b21d3fd354"
+      "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-3.0.3-win64-portable.zip",
+      "sha256": "7c4d46e3b81ca26d15e36220f98d3dfef4b23a15a90f6a9b5a0b84c276d92dbd"
     }
   }
 }
