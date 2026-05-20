@@ -115,14 +115,14 @@ public:
     // ─── 时钟同步（多路同步时由 RBPlayerUI 调用）──────────────
     // 设置外部主时钟（秒），播放器将以此为基准对齐
     void rbSetMasterClock(double masterTime);
-    bool rbUseMasterClock() const { return m_useMasterClock; }
-    void rbEnableMasterClock(bool enable) { m_useMasterClock = enable; }
+    bool rbUseMasterClock() const { return m_useMasterClock.load(); }
+    void rbEnableMasterClock(bool enable) { m_useMasterClock.store(enable); }
 
     // seek 后是否仍在等待第一帧对齐时钟。
     // 引擎层据此实现"主时钟等所有路就绪后再起跑"，避免先就绪那路被
     // 主时钟立刻推到 N 毫秒位置后出现"卡一下追上"现象（Windows 上
     // 解码启动慢，更易触发）。
-    bool rbIsSeekPending() const { return m_seekPending; }
+    bool rbIsSeekPending() const { return m_seekPending.load(); }
 
     // ─── 倍速控制 ─────────────────────────────────────────────────────
     // 设置本地时钟倍速因子（用于不走主时钟的独立路及主时钟为补偿同一因子同步设置）。
@@ -132,7 +132,7 @@ public:
     // 但仍会被推送以保证 “独立路” 切换为主时钟后立即一致。
     // 重错锁 m_playStartPts/WallTime 避免倍速变更璬间 PTS 跳变。
     void rbSetSpeed(double speed);
-    double rbSpeed() const { return m_speed; }
+    double rbSpeed() const { return m_speed.load(); }
 private:
     void rbReleaseCurrentFrame();
 
@@ -168,18 +168,24 @@ private:
     int64_t                       m_displayFrameIndex{0};
 
     // 播放时钟
-    double                        m_playStartWallTime{0.0}; // 开始播放时的系统时间
-    double                        m_playStartPts{0.0};      // 开始播放时的 PTS
-    bool                          m_seekPending{false};     // seek 后等待第一帧对齐时钟
+    // 注意：所有这些字段会被「主线程（rbPlay/rbPause/rbSeekTo/rbSetSpeed）」
+    // 与「Qt 渲染线程（rbGetCurrentFrame）」同时访问。改 atomic 是为了消除
+    // 数据竞争 UB——即便 x86_64 下 double 单条 mov 能原子读写，跨平台、
+    // 跨编译器优化下普通 double 仍是 UB（编译器可能将其拆分指令、缓存到寄存
+    // 器、重排顺序）。Windows release 下表现为「按下空格立刻切下一组」偶发
+    // 段错误。
+    std::atomic<double>           m_playStartWallTime{0.0}; // 开始播放时的系统时间
+    std::atomic<double>           m_playStartPts{0.0};      // 开始播放时的 PTS
+    std::atomic<bool>             m_seekPending{false};     // seek 后等待第一帧对齐时钟
 
     // 主时钟同步
-    bool                          m_useMasterClock{false};
-    double                        m_masterClock{0.0};
+    std::atomic<bool>             m_useMasterClock{false};
+    std::atomic<double>           m_masterClock{0.0};
 
     // 倍速因子（1.0 = 原速）；playTime 推进中 wall 增量会乘以此倍速。
     // 不动 PTS 本身，只动 “wall 隔 → PTS 增量” 的换算。不影响帧步进、seek、
     // 解码任何路径、渲染任何路径。
-    double                        m_speed{1.0};
+    std::atomic<double>           m_speed{1.0};
 };
 
 } // namespace rb

@@ -740,18 +740,39 @@ void RBPlayerEngine::rbStepFrame(int n) {
 // 单路控制（不影响其他路）
 // ════════════════════════════════════════════════════════════════════════
 
-void RBPlayerEngine::rbTogglePauseAt(int idx) {
-    std::lock_guard<std::mutex> lk(m_mutex);
-    if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;
-    auto& p = m_players[idx];
-    if (!p) return;
+// ─── 单路控制：持锁仅取 shared_ptr，释放锁后再调 player 方法 ─────────
+//
+// 关键改造（A 级修复）：rbSeekAt / rbStepFrameAt 内部 rbSeekTo 走慢路径，
+// 含数百毫秒级别的 sleep 5ms 轮询 + 解码线程同步；rbRefreshPausedFrame 也
+// 要等解码线程产帧。如果在 m_mutex 持锁期间执行这些重活，会让以下接口
+// 全部排队阻塞：
+//   · onTick（每 16ms 主线程）→ UI 整体卡死
+//   · positionAt/durationAt/playingAt/videoInfoAt（QML 高频绑定）
+//   · rbCloseAll（用户切下一组）
+// 用户连按"快速操作单路"时，主线程被串行 lock 数秒，接收输入时序错乱、
+// QML 绑定值滞后，是各种"乱按崩溃"的根因之一。
+//
+// 修法：rbAtShared 已能保证返回的 shared_ptr 在调用期间 player 不会被
+// 并发析构（即使另一线程 rbCloseAll 把 m_players 清空，shared_ptr 副本
+// 也保活到本函数返回）。所以"取一次 shared_ptr 就足以独立操作 player"。
 
-    const bool wasPlaying  = p->rbIsPlaying();
-    const bool wasMaster   = p->rbUseMasterClock();
+void RBPlayerEngine::rbTogglePauseAt(int idx) {
+    std::shared_ptr<RBVideoPlayer> p;
+    bool inGlobalPlay;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;
+        p = m_players[idx];
+        if (!p) return;
+        inGlobalPlay = m_playing.load();
+    }
+
+    const bool wasPlaying = p->rbIsPlaying();
+    const bool wasMaster  = p->rbUseMasterClock();
     fprintf(stderr,
             "[RBE-TOGGLE-AT] entry: idx=%d player=%p wasPlaying=%d wasMaster=%d "
             "m_playing=%d\n",
-            idx, (void*)p.get(), wasPlaying, wasMaster, m_playing.load());
+            idx, (void*)p.get(), wasPlaying, wasMaster, (int)inGlobalPlay);
 
     // 单路暂停时关闭主时钟模式，避免被全局时钟覆盖；恢复时再打开
     if (wasPlaying) {
@@ -768,25 +789,33 @@ void RBPlayerEngine::rbTogglePauseAt(int idx) {
 }
 
 void RBPlayerEngine::rbSeekAt(int idx, double seconds) {
-    std::lock_guard<std::mutex> lk(m_mutex);
-    if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;
-    auto& p = m_players[idx];
-    if (!p) return;
+    std::shared_ptr<RBVideoPlayer> p;
+    bool inGlobalPlay;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;
+        p = m_players[idx];
+        if (!p) return;
+        inGlobalPlay = m_playing.load();
+    }
 
     // 单路 seek：必须脱离主时钟，否则下一次 rbTick 会把该路拉回主时钟位置，
     // 视觉上 seek 像没生效。与 rbStepFrameAt / rbTogglePauseAt 保持一致策略。
     p->rbEnableMasterClock(false);
     p->rbSeekTo(seconds);
-    if (!m_playing.load() || !p->rbIsPlaying()) {
+    if (!inGlobalPlay || !p->rbIsPlaying()) {
         p->rbRefreshPausedFrame(200);
     }
 }
 
 void RBPlayerEngine::rbStepFrameAt(int idx, int n) {
-    std::lock_guard<std::mutex> lk(m_mutex);
-    if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;
-    auto& p = m_players[idx];
-    if (!p) return;
+    std::shared_ptr<RBVideoPlayer> p;
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        if (idx < 0 || idx >= static_cast<int>(m_players.size())) return;
+        p = m_players[idx];
+        if (!p) return;
+    }
     // 单路帧步进时，要脱离主时钟，否则下一次 broadcast 会把它拉回主时钟位置
     p->rbEnableMasterClock(false);
     p->rbStepFrame(n);

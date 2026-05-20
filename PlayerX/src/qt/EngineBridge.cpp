@@ -93,7 +93,9 @@ bool EngineBridge::openFiles(const QList<QUrl>& urls) {
     // 暂停态下让首帧立刻可见
     int n = m_engine->rbCount();
     for (int i = 0; i < n; ++i) {
-        if (auto* p = m_engine->rbAt(i)) p->rbRefreshPausedFrame(200);
+        // ₠️ 用 shared_ptr 保活：汤中 openFiles 本身不会被其它线程调用 closeAll，
+        // 但为了统一防御风格，这里同样走 shared_ptr 路径。
+        if (auto sp = m_engine->rbAtShared(i)) sp->rbRefreshPausedFrame(200);
     }
     return ok;
 }
@@ -107,7 +109,7 @@ bool EngineBridge::addFile(const QUrl& url) {
     emit fileCountChanged();
     emit filesChanged();
     emit requestRepaint();
-    if (auto* pl = m_engine->rbAt(idx)) pl->rbRefreshPausedFrame(200);
+    if (auto sp = m_engine->rbAtShared(idx)) sp->rbRefreshPausedFrame(200);
     return true;
 }
 
@@ -124,7 +126,7 @@ bool EngineBridge::replaceAt(int idx, const QUrl& url) {
     emit playingChanged();
     emit requestRepaint();
     // 暂停态下让首帧立刻可见，避免画面残留为旧帧
-    if (auto* pl = m_engine->rbAt(idx)) pl->rbRefreshPausedFrame(200);
+    if (auto sp = m_engine->rbAtShared(idx)) sp->rbRefreshPausedFrame(200);
     return true;
 }
 
@@ -319,21 +321,22 @@ QString EngineBridge::filePathAt(int idx) const {
     return QString::fromStdString(m_engine->rbPathAt(idx));
 }
 double EngineBridge::positionAt(int idx) const {
-    if (auto* p = playerAt(idx)) return p->rbCurrentTime();
+    if (auto sp = playerAtShared(idx)) return sp->rbCurrentTime();
     return 0.0;
 }
 double EngineBridge::durationAt(int idx) const {
-    if (auto* p = playerAt(idx)) return p->rbDuration();
+    if (auto sp = playerAtShared(idx)) return sp->rbDuration();
     return 0.0;
 }
 bool EngineBridge::playingAt(int idx) const {
-    if (auto* p = playerAt(idx)) return p->rbIsPlaying();
+    if (auto sp = playerAtShared(idx)) return sp->rbIsPlaying();
     return false;
 }
 
 QVariantMap EngineBridge::videoInfoAt(int idx) const {
     QVariantMap info;
-    auto* p = playerAt(idx);
+    auto sp = playerAtShared(idx);
+    rb::RBVideoPlayer* p = sp.get();
     if (!p) return info;
     info["codec"]      = QString::fromStdString(p->rbCodecName());
     info["decoder"]    = QString::fromStdString(p->rbDecoderName());
@@ -384,8 +387,10 @@ void EngineBridge::onTick() {
     bool anyPlaying = pl;
     if (!anyPlaying) {
         for (int i = 0; i < cnt; ++i) {
-            if (auto* p = m_engine->rbAt(i)) {
-                if (p->rbIsPlaying()) { anyPlaying = true; break; }
+            // ₠️ use-after-free 防御：onTick 与 closeAll 主线程同源，本不会并发，
+            // 但为了统一风格且跳过任何未来可能引入的异步销毁，走 shared_ptr。
+            if (auto sp = m_engine->rbAtShared(i)) {
+                if (sp->rbIsPlaying()) { anyPlaying = true; break; }
             }
         }
     }

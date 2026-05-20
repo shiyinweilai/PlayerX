@@ -56,7 +56,7 @@ bool RBVideoPlayer::rbOpen(const std::string& filePath) {
     m_duration      = m_demuxer->rbDuration();
     m_videoTimeBase = m_demuxer->rbVideoTimeBase();
     m_currentTime.store(0.0);
-    m_seekPending   = false;
+    m_seekPending.store(false);
     m_state.store(RBPlayerState::Ready);
 
     // restart 队列（rbClose 会 stop 队列，必须先 restart 才能正常 push/pop）
@@ -103,9 +103,9 @@ void RBVideoPlayer::rbClose() {
     m_duration          = 0.0;
     m_currentTime.store(0.0);
     m_currentFramePts   = 0.0;
-    m_playStartWallTime = 0.0;
-    m_playStartPts      = 0.0;
-    m_seekPending       = false;
+    m_playStartWallTime.store(0.0);
+    m_playStartPts.store(0.0);
+    m_seekPending.store(false);
     m_displayFrameIndex = 0;
 }
 
@@ -121,13 +121,13 @@ void RBVideoPlayer::rbPlay() {
         return;
     }
 
-    m_playStartWallTime = rbWallTime();
-    m_playStartPts      = m_currentTime.load();
+    m_playStartWallTime.store(rbWallTime());
+    m_playStartPts.store(m_currentTime.load());
 
     if (s == RBPlayerState::Ready) {
         // 首次播放：解码线程刚启动，帧队列可能为空
         // 设 seekPending，等第一帧到达后再对齐时钟，避免时钟跑飞跳帧
-        m_seekPending = true;
+        m_seekPending.store(true);
     }
     // Paused → Playing：直接从当前时间继续，不需要 seekPending
 
@@ -189,10 +189,10 @@ void RBVideoPlayer::rbSeekTo(double seconds) {
     m_decoder->rbSetSeeking(false);
 
     // 对齐时钟
-    m_seekPending       = true;
+    m_seekPending.store(true);
     m_currentTime.store(seconds);
-    m_playStartWallTime = rbWallTime();
-    m_playStartPts      = seconds;
+    m_playStartWallTime.store(rbWallTime());
+    m_playStartPts.store(seconds);
 
     // ── 状态语义：rbSeekTo 不擅自升级为 Playing；Ended 必须降为 Paused ──
     // 历史上这里有一段「Ended → Playing」自动恢复，目的是让 Ended 态空格键
@@ -220,7 +220,7 @@ void RBVideoPlayer::rbSeekTo(double seconds) {
 }
 
 void RBVideoPlayer::rbSetMasterClock(double masterTime) {
-    m_masterClock = masterTime;
+    m_masterClock.store(masterTime);
 }
 
 void RBVideoPlayer::rbSetSpeed(double speed) {
@@ -229,20 +229,19 @@ void RBVideoPlayer::rbSetSpeed(double speed) {
     if (!(speed > 0.0)) speed = 1.0;
     if (speed < 1.0/128.0) speed = 1.0/128.0;
     if (speed > 128.0)     speed = 128.0;
-    if (speed == m_speed) return;
+    if (speed == m_speed.load()) return;
 
-    // 重锚本地时钟，避免倍速变更瞬间 playTime 跳变。
+    // 重锰本地时钟，避免倍速变更瞬间 playTime 跳变。
     //   原公式 playTime = m_playStartPts + (now - m_playStartWallTime) * m_speed
     //   切换为 m_speed' 后：先取 now 冻结当前 playTime，再以它为新起点续走。
-    if (m_state.load() == RBPlayerState::Playing && !m_useMasterClock) {
+    if (m_state.load() == RBPlayerState::Playing && !m_useMasterClock.load()) {
         const double wallNow  = rbWallTime();
-        const double playNow  = m_playStartPts + (wallNow - m_playStartWallTime) * m_speed;
-        m_playStartPts        = playNow;
-        m_playStartWallTime   = wallNow;
+        const double playNow  = m_playStartPts.load() + (wallNow - m_playStartWallTime.load()) * m_speed.load();
+        m_playStartPts.store(playNow);
+        m_playStartWallTime.store(wallNow);
     }
-    m_speed = speed;
+    m_speed.store(speed);
 }
-
 AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
     if (m_state.load() != RBPlayerState::Playing) {
         return m_currentFrame; // 暂停时返回最后一帧
@@ -251,11 +250,11 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
     // 计算当前播放时间
     double wallNow = rbWallTime();
     double playTime;
-    if (m_useMasterClock) {
-        playTime = m_masterClock;
+    if (m_useMasterClock.load()) {
+        playTime = m_masterClock.load();
     } else {
         // 本地时钟需作倍速缩放；m_speed=1.0 时与原逻辑一致。
-        playTime = m_playStartPts + (wallNow - m_playStartWallTime) * m_speed;
+        playTime = m_playStartPts.load() + (wallNow - m_playStartWallTime.load()) * m_speed.load();
     }
     playTime = std::min(playTime, m_duration > 0 ? m_duration : playTime);
     // 从队列中取出 PTS <= playTime 的帧
@@ -266,9 +265,9 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
             // 队列空
             if (m_frameQueue->rbIsEof()) {
                 m_state.store(RBPlayerState::Ended);
-            } else if (m_seekPending) {
+            } else if (m_seekPending.load()) {
                 // seek/replay 后第一帧还没到：暂停时钟推进，等帧到了再对齐
-                m_playStartWallTime = wallNow;
+                m_playStartWallTime.store(wallNow);
             }
             break;
         }
@@ -281,7 +280,7 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
             ? rawPts * av_q2d(m_videoTimeBase)
             : m_currentFramePts + av_q2d(m_videoTimeBase);
 
-        if (m_seekPending && !gotFrame) {
+        if (m_seekPending.load() && !gotFrame) {
             // seek 后第一帧到达：
             //   av_seek_frame(AVSEEK_FLAG_BACKWARD) 会落到 ≤ 目标时间的
             //   最近关键帧，因此队列前面会有一段 PTS < 目标时间 的"前置
@@ -290,7 +289,7 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
             //   策略：丢弃 PTS 明显早于目标时间（>0.5s）的帧，直到遇到
             //   PTS ≥ 目标时间附近的帧再对齐时钟。这样进度条不会从用户
             //   点击的位置"弹回"到关键帧位置。
-            double target = m_playStartPts; // rbSeekTo 中设置为目标时间
+            double target = m_playStartPts.load(); // rbSeekTo 中设置为目标时间
             if (framePts + 0.5 < target) {
                 // 前置帧：直接丢弃
                 AVFrame* drop = m_frameQueue->rbPop();
@@ -298,11 +297,11 @@ AVFrame* RBVideoPlayer::rbGetCurrentFrame() {
                 continue;
             }
             // 找到目标位置的帧，对齐时钟
-            m_playStartPts      = framePts;
-            m_playStartWallTime = wallNow;
+            m_playStartPts.store(framePts);
+            m_playStartWallTime.store(wallNow);
             playTime            = framePts;
             m_currentTime.store(framePts);
-            m_seekPending       = false;
+            m_seekPending.store(false);
         }
 
         if (framePts <= playTime + 0.005) { // 5ms 容差
@@ -418,10 +417,10 @@ void RBVideoPlayer::rbStepFrame(int n) {
                     rbReleaseCurrentFrame();
                     m_currentFrame      = f;
                     m_currentFramePts   = framePts;
-                    m_playStartPts      = framePts;
-                    m_playStartWallTime = rbWallTime();
+                    m_playStartPts.store(framePts);
+                    m_playStartWallTime.store(rbWallTime());
                     m_currentTime.store(framePts);
-                    m_seekPending       = false;
+                    m_seekPending.store(false);
                     ok = true;
                 }
                 break;
@@ -492,10 +491,10 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
         rbReleaseCurrentFrame();
         m_currentFrame      = fallback;
         m_currentFramePts   = fallbackPts;
-        m_playStartPts      = fallbackPts;
-        m_playStartWallTime = rbWallTime();
+        m_playStartPts.store(fallbackPts);
+        m_playStartWallTime.store(rbWallTime());
         m_currentTime.store(fallbackPts);
-        m_seekPending       = false;
+        m_seekPending.store(false);
         fallback            = nullptr;
         return true;
     };
@@ -515,7 +514,7 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
             double framePts = noPts ? (m_currentFramePts + frameDur)
                                     : rawPts * av_q2d(m_videoTimeBase);
 
-            if (m_seekPending && !noPts && framePts < dropThresh) {
+            if (m_seekPending.load() && !noPts && framePts < dropThresh) {
                 // 前置帧：保留为 fallback（取最接近 target 的那一帧）
                 AVFrame* drop = m_frameQueue->rbPop();
                 if (drop) {
@@ -537,10 +536,10 @@ bool RBVideoPlayer::rbRefreshPausedFrameExact(double target, double frameDur, in
                 rbReleaseCurrentFrame();
                 m_currentFrame    = f;
                 m_currentFramePts = framePts;
-                m_playStartPts      = framePts;
-                m_playStartWallTime = rbWallTime();
+                m_playStartPts.store(framePts);
+                m_playStartWallTime.store(rbWallTime());
                 m_currentTime.store(framePts);
-                m_seekPending       = false;
+                m_seekPending.store(false);
                 return true;
             }
         }
@@ -577,10 +576,10 @@ bool RBVideoPlayer::rbStepBackwardOne(double curPts, int timeoutMs) {
         rbReleaseCurrentFrame();
         m_currentFrame      = best;
         m_currentFramePts   = bestPts;
-        m_playStartPts      = bestPts;
-        m_playStartWallTime = rbWallTime();
+        m_playStartPts.store(bestPts);
+        m_playStartWallTime.store(rbWallTime());
         m_currentTime.store(bestPts);
-        m_seekPending       = false;
+        m_seekPending.store(false);
         best                = nullptr;
         return true;
     };
@@ -643,7 +642,7 @@ bool RBVideoPlayer::rbRefreshPausedFrame(int timeoutMs) {
     auto deadline = clock::now() + std::chrono::milliseconds(timeoutMs);
 
     // 目标时间（rbSeekTo 已把 m_playStartPts 设为目标 seek 秒数）
-    const double target = m_playStartPts;
+    const double target = m_playStartPts.load();
 
     while (clock::now() < deadline) {
         AVFrame* peek = m_frameQueue->rbPeek();
@@ -656,7 +655,7 @@ bool RBVideoPlayer::rbRefreshPausedFrame(int timeoutMs) {
                 : 0.0;
 
             // 与 rbGetCurrentFrame 保持一致：丢弃 seek 关键帧前的"前置帧"
-            if (m_seekPending && framePts + 0.5 < target) {
+            if (m_seekPending.load() && framePts + 0.5 < target) {
                 AVFrame* drop = m_frameQueue->rbPop();
                 if (drop) av_frame_free(&drop);
                 continue;
@@ -671,10 +670,10 @@ bool RBVideoPlayer::rbRefreshPausedFrame(int timeoutMs) {
                 m_currentFramePts = framePts;
                 // 对齐时钟，但保持暂停状态：清除 seekPending，使 rbGetCurrentFrame
                 // 后续即便切到 Playing 也不会再丢这一帧
-                m_playStartPts      = framePts;
-                m_playStartWallTime = rbWallTime();
+                m_playStartPts.store(framePts);
+                m_playStartWallTime.store(rbWallTime());
                 m_currentTime.store(framePts);
-                m_seekPending       = false;
+                m_seekPending.store(false);
                 return true;
             }
         }

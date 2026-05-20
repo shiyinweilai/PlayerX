@@ -96,20 +96,25 @@ std::shared_ptr<rb::RBVideoPlayer> VideoFrameProvider::rbActivePlayerShared() co
 }
 
 // ─── 属性访问 ────────────────────────────────────────────────────────────
+//
+// ⚠️ 关键：这些 getter 会被 QML binding 频繁求值（绑定可能跨线程，且与
+// EngineBridge::closeAll 在主线程内的执行时序复杂）。统一改用 shared_ptr
+// 副本，确保即使其他路径正在销毁 player，这里也能安全读到最后状态而非
+// use-after-free。
 
 bool VideoFrameProvider::isPlaying() const {
-    auto* p = rbActivePlayer();
-    return p ? p->rbIsPlaying() : false;
+    auto sp = rbActivePlayerShared();
+    return sp ? sp->rbIsPlaying() : false;
 }
 
 double VideoFrameProvider::position() const {
-    auto* p = rbActivePlayer();
-    return p ? p->rbCurrentTime() : 0.0;
+    auto sp = rbActivePlayerShared();
+    return sp ? sp->rbCurrentTime() : 0.0;
 }
 
 double VideoFrameProvider::duration() const {
-    auto* p = rbActivePlayer();
-    return p ? p->rbDuration() : 0.0;
+    auto sp = rbActivePlayerShared();
+    return sp ? sp->rbDuration() : 0.0;
 }
 
 // ─── 自持有模式：source 设置 ────────────────────────────────────────────
@@ -273,8 +278,8 @@ void VideoFrameProvider::onPositionPoll() {
 
 void VideoFrameProvider::onEngineRepaint() {
     // 引擎模式：仅触发重绘，sws 转换延迟到 paint()（需要目标 dst 尺寸）。
-    auto* p = rbActivePlayer();
-    if (!p) return;
+    auto sp = rbActivePlayerShared();
+    if (!sp) return;
     update();
 }
 
@@ -298,7 +303,10 @@ void VideoFrameProvider::onEngineRepaint() {
 // 时才重建 SwsContext。
 void VideoFrameProvider::rbConvertFrameToImage(int dstW, int dstH) {
     if (dstW <= 0 || dstH <= 0) return;
-    auto* p = rbActivePlayer();
+    // 仅 paint() 调用本函数，调用者已拿住 shared_ptr 保活 player；
+    // 这里为了不依赖不可见的调用约定，再取一次 shared_ptr 本地保持。
+    auto sp = rbActivePlayerShared();
+    rb::RBVideoPlayer* p = sp.get();
     if (!p) return;
     AVFrame* f = p->rbGetCurrentFrame();
     if (!f || f->width <= 0 || f->height <= 0) return;
