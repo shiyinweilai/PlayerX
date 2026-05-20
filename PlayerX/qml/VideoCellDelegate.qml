@@ -68,6 +68,7 @@ Rectangle {
 
     // 序号徽标（受全局"通道信息"开关控制，默认显示）
     Rectangle {
+        id: idxBadge
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.margins: 6
@@ -83,6 +84,117 @@ Rectangle {
         }
     }
 
+    // 顶部左上角"路径胶囊"：紧贴序号徽标右侧，显性显示 父目录/文件名。
+    //
+    // 设计动机（方案 B）
+    // -----------------
+    //   原本路径塞在右上 channelBar 里，与 帧号/时间/星条/⋯/⤢/✕ 共抢一行；
+    //   三宫格小窗下右侧固定占用 ≈270px，留给路径只剩 <100px，文件名经常被
+    //   省略到只剩 "1…"，无法区分多路同名 1.mp4。
+    //
+    //   方案 B 把路径独立成左上角自有胶囊，与 channelBar 同 y、不增加遮挡高度，
+    //   宽度上限独立计算（cell 宽 ≈55%），且不与右侧按钮区争夺空间。
+    //
+    //   左 = "是谁"（路径） | 右 = "是什么状态/能做什么"（数据 + 操作按钮）。
+    //
+    // 显隐与样式
+    // -----------
+    //   · 与 channelBar 共用 effectiveChannelVisible：按 C 一并隐藏；
+    //   · 整体 hover 弹 ToolTip 显示完整路径，便于深层目录辨识；
+    //   · 文件名末尾省略（ElideRight），目录段始终完整显示。
+    Rectangle {
+        id: pathBar
+        anchors.left: idxBadge.right
+        anchors.top: idxBadge.top
+        anchors.leftMargin: 6
+        radius: 3
+        // 调稀透明度（0xaa≈67% → 0x33≈20%），在不遮挡画面的前提下
+        // 保留一点点软遮罩，避免路径/文件名文字与同色底画面贴一起不可读。
+        color: "#33000000"
+        z: 5
+        visible: viewRoot.effectiveChannelVisible && fileNameLabel.text !== "—"
+        // 宽度上限：不再写死"扣 280"，而是动态跟随右上 channelBar 的实际宽度。
+        // 公式： cell宽 − idxBadge右边 − leftMargin(6) − channelBar实宽 − channelBar右锁margin(6) − 安全间距(8)
+        // 这样 HUD 变窄后 pathBar 可以跨越原本被 280 硕占的区域，三宫格中也能尽量完整显示。
+        // channelBar 不可见时 (effectiveChannelVisible=false) 以 0 计，路径可独享整个顶部。
+        readonly property int _channelOccupiedW: channelBar.visible ? (channelBar.width + 6 + 8) : 8
+        readonly property int _maxAvailWidth:
+            Math.max(80, cell.width - (idxBadge.x + idxBadge.width) - 6 - _channelOccupiedW)
+        implicitWidth:  pathRow.implicitWidth + 12
+        implicitHeight: pathRow.implicitHeight + 4
+        width:  Math.min(implicitWidth, _maxAvailWidth)
+        height: implicitHeight
+
+        // 路径解析：拆出 dir / file 两段；显式引用 Engine.titles 让本绑定能在
+        // 视频切换 / 替换时自动重算（titles 带 NOTIFY filesChanged）。
+        readonly property var pathInfo: {
+            var _dep = Engine.titles
+            var p = Engine.filePathAt(cell.playerIdx)
+            if (!p || p.length === 0) return { dir: "", file: "—" }
+            var norm = p.replace(/\\/g, "/")
+            var parts = norm.split("/")
+            var fname = parts.length > 0 ? parts[parts.length - 1] : norm
+            var parent = parts.length > 1 ? parts[parts.length - 2] : ""
+            return { dir: parent, file: fname }
+        }
+
+        RowLayout {
+            id: pathRow
+            anchors.fill: parent
+            anchors.leftMargin: 6
+            anchors.rightMargin: 6
+            anchors.topMargin: 2
+            anchors.bottomMargin: 2
+            spacing: 0
+
+            Item {
+                id: pathInner
+                Layout.fillWidth: true
+                Layout.preferredHeight: 14
+                Layout.preferredWidth: dirPrefixLabel.implicitWidth + fileNameLabel.implicitWidth
+                Layout.minimumWidth: Math.min(dirPrefixLabel.implicitWidth + 16, 160)
+
+                // 目录段：永远完整显示（不省略），靠左
+                Text {
+                    id: dirPrefixLabel
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: "#9fd3ff"          // 略偏冷色，让目录与文件名一眼可辨
+                    font.pixelSize: 11
+                    text: pathBar.pathInfo.dir.length > 0
+                          ? (pathBar.pathInfo.dir + "/")
+                          : ""
+                }
+                // 文件名段：占用剩余宽度，超出从尾部省略
+                Text {
+                    id: fileNameLabel
+                    anchors.left: dirPrefixLabel.right
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: "#e8e8ec"
+                    font.pixelSize: 11
+                    elide: Text.ElideRight    // 文件名尾部省略
+                    text: pathBar.pathInfo.file
+                }
+            }
+        }
+
+        ToolTip.visible: pathHover.containsMouse && fileNameLabel.text !== "—"
+        ToolTip.delay: 400
+        ToolTip.timeout: 8000
+        ToolTip.text: {
+            var _dep = Engine.titles
+            var p = Engine.filePathAt(cell.playerIdx)
+            return (p && p.length > 0) ? p : ""
+        }
+        MouseArea {
+            id: pathHover
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.NoButton  // 仅悬停显示 ToolTip，不拦截点击
+        }
+    }
+
     // 顶部右侧"通道信息"胶囊条：帧号 · 时间戳 · 文件名。
     // 受全局"通道信息"开关控制，默认显示；帧号/时间戳随 Engine.position 自动刷新。
     Rectangle {
@@ -91,13 +203,20 @@ Rectangle {
         anchors.top: parent.top
         anchors.margins: 6
         radius: 3
-        color: "#aa000000"
+        // 调稀透明度（0xaa≈67% → 0x33≈20%），与 pathBar 保持一致：
+        // 足以让星字/帧号/时间/按钮从亮底视频中跨出来，又不会遮挡画面。
+        color: "#22000000"
         z: 5
         visible: viewRoot.effectiveChannelVisible
-        // 宽/高按内容自适应
-        implicitWidth:  channelRow.implicitWidth + 12
-        implicitHeight: channelRow.implicitHeight + 4
-        width:  implicitWidth
+        // 宽/高按内容自适应；同时设"可用上限"避免文件名过长把胶囊条
+        // 撑出本路 cell 边界（参考图：右路 ours_hysj.../1.mp4 越界到下一路）。
+        // 上限 = cell 宽 − 右锚 margin (6) − 左上角序号徽标占位 (22+6 margin+6 安全间距 = 34) ≈ cell.width − 40。
+        // 当 implicitWidth 超过上限时，width 收敛到上限，channelRow 在 anchors.fill
+        // 下被同步压缩，唯一可压缩项 pathLabelWrap 触发 ElideLeft 省略。
+        readonly property int _maxAvailWidth: Math.max(120, cell.width - 40)
+        implicitWidth:  channelCol.implicitWidth + 12
+        implicitHeight: channelCol.implicitHeight + 6
+        width:  Math.min(implicitWidth, _maxAvailWidth)
         height: implicitHeight
 
         // 动态信息（帧号/时间戳）随引擎位置变化刷新
@@ -112,45 +231,30 @@ Rectangle {
         onVisibleChanged: refreshInfo()
         Component.onCompleted: refreshInfo()
 
-        RowLayout {
-            id: channelRow
-            anchors.centerIn: parent
-            spacing: 8
+        // 两行布局（ColumnLayout）：
+        //   第 1 行：评分星条 + 操作按钮（⋯ ⤢ ✕）—— 用户高频交互的入口
+        //   第 2 行：帧号 + 时间戳            —— 仅展示用的实时数据
+        // 两行整体右对齐（每行内部 anchors.right→parent.right），
+        // channelBar 宽度由两行 implicitWidth 的较大者决定。
+        ColumnLayout {
+            id: channelCol
+            anchors.fill: parent
+            anchors.leftMargin: 6
+            anchors.rightMargin: 6
+            anchors.topMargin: 2
+            anchors.bottomMargin: 2
+            spacing: 2
 
-            // 帧号（固定最小宽度，避免 1/2/3/4 位数字之间抖动）
-            Text {
-                color: "#e8e8ec"
-                font.pixelSize: 11
-                font.family: "Menlo, Monaco, Courier New, monospace"
-                horizontalAlignment: Text.AlignRight
-                Layout.minimumWidth: 56
-                Layout.preferredWidth: 56
-                text: channelBar.info.frameNum !== undefined
-                      ? "#" + channelBar.info.frameNum
-                      : "#—"
-            }
-            Rectangle {
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: 12
-                color: "#55ffffff"
-            }
-            // 时间戳（固定最小宽度，避免抖动）
-            Text {
-                color: "#e8e8ec"
-                font.pixelSize: 11
-                font.family: "Menlo, Monaco, Courier New, monospace"
-                horizontalAlignment: Text.AlignRight
-                Layout.minimumWidth: 70
-                Layout.preferredWidth: 70
-                text: channelBar.info.pts !== undefined
-                      ? channelBar.info.pts.toFixed(3) + "s"
-                      : "—"
-            }
+            // ────── 第 1 行：评分 + 操作按钮 ──────
+            RowLayout {
+                id: channelRowTop
+                Layout.alignment: Qt.AlignRight
+                spacing: 6
 
-            // 内联评分星条（仅在 viewRoot.reviewMode 开启时显示，否则整段 0 宽不占位）：
-            //  · 单击第 N 颗星 → 写入 N 分（与原 cellMenu 内星条一致逻辑）
-            //  · 右键任意位置  → 清空（0 分），方便误评后修正
-            //  · 鼠标悬停时整条变成"预览态"，移开还原当前真实分值
+                // 内联评分星条（仅在 viewRoot.reviewMode 开启时显示，否则整段 0 宽不占位）：
+                //  · 单击第 N 颗星 → 写入 N 分（与原 cellMenu 内星条一致逻辑）
+                //  · 右键任意位置  → 清空（0 分），方便误评后修正
+                //  · 鼠标悬停时整条变成"预览态"，移开还原当前真实分值
             // 设计意图：开启评分模式后，5 颗星和"是否已评分"应该在 cell
             // 上一眼可见，而不是要点 ⋯ 菜单才看见——这条要求来自图 1 / 图 2。
             Rectangle {
@@ -218,8 +322,6 @@ Rectangle {
                 ToolTip.text: "左键打分 · 右键清空"
             }
             // 文件名已从胶囊条移除：
-            //   ▸ ⋯ 按钮 hover 时的 ToolTip 直接显示完整路径，区分同名不同目录；
-            //   ▸ 评分入口已迁到顶部内联星条（reviewMode 开启时常驻）。
             // 【cell hover 工具按钮】两个同风格的圆点：⋯ 替换本路、✕ 关闭本路。
             // 二者均常驻显示（不随鼠标移出 cell 消失），仅在用户按 C
             // 关闭通道信息条 / 全屏抑制角标时才隐藏，避免按钮闪烁或定位丢失。
@@ -354,7 +456,48 @@ Rectangle {
                 ToolTip.timeout: 3000
                 ToolTip.text: "关闭本路视频"
             }
-        }
+            }   // ← end of channelRowTop（第 1 行：星条 + ⋯ + ⤢ + ✕）
+
+            // ──────── 第 2 行：帧号 + 时间戳（实时数据） ────────
+            // 仅展示用，不交互；右对齐贴齐 channelBar 右边界。
+            // 单独成行后，避免与第 1 行的星条/按钮抢同一行的可用宽度，
+            // 三宫格小窗下也能完整显示「#frame · 0.000s」。
+            RowLayout {
+                id: channelRowBottom
+                Layout.alignment: Qt.AlignRight
+                spacing: 8
+
+                // 帧号（固定最小宽度，避免 1/2/3/4 位数字之间抖动）
+                Text {
+                    color: "#e8e8ec"
+                    font.pixelSize: 11
+                    font.family: "Menlo, Monaco, Courier New, monospace"
+                    horizontalAlignment: Text.AlignRight
+                    Layout.minimumWidth: 56
+                    Layout.preferredWidth: 56
+                    text: channelBar.info.frameNum !== undefined
+                          ? "#" + channelBar.info.frameNum
+                          : "#—"
+                }
+                Rectangle {
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 12
+                    color: "#55ffffff"
+                }
+                // 时间戳（固定最小宽度，避免抖动）
+                Text {
+                    color: "#e8e8ec"
+                    font.pixelSize: 11
+                    font.family: "Menlo, Monaco, Courier New, monospace"
+                    horizontalAlignment: Text.AlignRight
+                    Layout.minimumWidth: 70
+                    Layout.preferredWidth: 70
+                    text: channelBar.info.pts !== undefined
+                          ? channelBar.info.pts.toFixed(3) + "s"
+                          : "—"
+                }
+            }
+        }   // ← end of channelCol（ColumnLayout 两行布局）
     }
 
     // 评分入口已迁至顶部胶囊条 channelBar 的内联星条（reviewMode 开启时常驻显示），
