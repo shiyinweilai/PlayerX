@@ -325,60 +325,8 @@ ApplicationWindow {
         }
     }
 
-    // ─── 右上角"更新可用"胶囊按钮（VS Code 风格） ───────────────────────
-    //  · 仅在 Updater.updateAvailable=true 时显示
-    //  · 点击 → 弹 updateDialog（深色面板 + 进度条）
-    //  · 视觉上落在菜单栏下方右侧 8px 处，保证不遮挡内容；macOS 全局菜单
-    //    在屏幕顶端、本按钮位于窗口顶端，互不冲突且双入口冗余更可靠。
-    Rectangle {
-        id: updateBadge
-        z: 100
-        visible: Updater.updateAvailable
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.rightMargin: 10
-        anchors.topMargin: Qt.platform.os === "osx" ? 6 : 32   // mac 全局菜单栏不在窗口内
-        implicitHeight: 22
-        implicitWidth: badgeRow.implicitWidth + 18
-        radius: 11
-        // VS Code 蓝色调 #0e639c，与深色主题统一
-        color: badgeMA.pressed ? "#0a4f7d"
-                               : badgeMA.containsMouse ? "#1177bb" : "#0e639c"
-        border.color: "#1f8ad9"
-        border.width: 1
-        Behavior on color { ColorAnimation { duration: 120 } }
-
-        Row {
-            id: badgeRow
-            anchors.centerIn: parent
-            spacing: 6
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "⬆"
-                color: "#ffffff"
-                font.pixelSize: 12
-                font.bold: true
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: qsTr("更新 %1").arg(Updater.latestVersion || "")
-                color: "#ffffff"
-                font.pixelSize: 11
-            }
-        }
-
-        MouseArea {
-            id: badgeMA
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: { updateDialog.userInitiated = false; updateDialog.open() }
-        }
-
-        ToolTip.visible: badgeMA.containsMouse
-        ToolTip.delay: 400
-        ToolTip.text: qsTr("有新版本 %1 可用，点击查看").arg(Updater.latestVersion || "")
-    }
+    // ─── "更新可用"胶囊按钮已迁移到底部工具栏（参考图按钮右侧），
+    //      避免浮在右上角遮挡视频画面/控制条。具体实现见 RowLayout 内 refUpdateBtn。
 
     // ─── 启动 5 秒后静默自检；同时连接 Updater 信号驱动 UI ───────────────
     Timer {
@@ -1901,6 +1849,53 @@ ApplicationWindow {
                     font.pixelSize: 14
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            // ── "更新可用"胶囊按钮（紧邻参考图按钮右侧）──
+            // 设计：原本浮在窗口右上角，会遮挡视频画面/控制条；改为常驻在底部
+            //       工具栏左侧，与"参考图"切换按钮同行。仅在 Updater.updateAvailable
+            //       时占位（visible=false 时 preferredWidth=0，不留空白）。
+            //       点击 → 弹 updateDialog，与原右上角胶囊行为一致。
+            Button {
+                id: refUpdateBtn
+                visible: Updater.updateAvailable
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                Layout.preferredHeight: 22
+                Layout.alignment: Qt.AlignVCenter
+                hoverEnabled: true
+                padding: 0
+                leftPadding: 9
+                rightPadding: 9
+                onClicked: { updateDialog.userInitiated = false; updateDialog.open() }
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("有新版本 %1 可用，点击查看").arg(Updater.latestVersion || "")
+                background: Rectangle {
+                    radius: 11
+                    // VS Code 蓝色调，与原右上角胶囊一致
+                    color: refUpdateBtn.down       ? "#0a4f7d"
+                         : refUpdateBtn.hovered    ? "#1177bb"
+                                                   : "#0e639c"
+                    border.color: "#1f8ad9"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                }
+                contentItem: Row {
+                    spacing: 6
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "⬆"
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("更新 %1").arg(Updater.latestVersion || "")
+                        color: "#ffffff"
+                        font.pixelSize: 11
+                    }
                 }
             }
 
