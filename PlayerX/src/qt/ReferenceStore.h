@@ -5,8 +5,17 @@
  *   - 与 EngineBridge / 播放内核完全解耦：只做「视频所在文件夹 → 参考资料来源」的映射；
  *   - 「参考资料」分为两个独立维度，互不干扰：
  *       (A) 参考图：
- *           · "image"  ：一张固定图片
- *           · "folder" ：一个图片文件夹，按"当前视频在其所在文件夹中的索引"取同序号图片
+ *           · "image"   ：一张固定图片
+ *           · "folder"  ：一个图片文件夹，按"当前视频在其所在文件夹中的索引"取同序号图片
+ *           · "grouped" ：「分组多图」模式 —— 根目录下两级结构
+ *                          根/组A/{图1,图2,...}
+ *                          根/组B/{图1,图2,...}
+ *                         所有图被拉直成一条「长队列」（按子组自然序、组内自然序拼接）。
+ *                         · 跟随对比组切换时：跳到该视频组对应子组的「组首张」
+ *                           （先按子组名 == 视频文件夹名匹配，匹配不到按索引顺序回退）；
+ *                         · ◀ ▶ 在长队列上 ±1，可跨组无缝翻图，到队首/队尾停住；
+ *                         · 与 "folder" 共享同一组对外接口（offset / count），
+ *                           上层 QML 几乎不用区分。
  *       (B) 参考文本（新增）：
  *           · "csv"    ：一个 CSV 文件，按"当前视频索引"取同序号行；
  *                        优先识别列名 prompt / en_prompt / Image，
@@ -59,6 +68,11 @@ public:
     Q_INVOKABLE bool setReferenceUrl(const QString& folderPath, const QUrl& imageUrl);
     Q_INVOKABLE bool setReferenceFolder(const QString& folderPath, const QString& imageDir);
     Q_INVOKABLE bool setReferenceFolderUrl(const QString& folderPath, const QUrl& imageDirUrl);
+    // 「分组多图」模式：rootDir 下两级结构（rootDir/组X/图Y）
+    Q_INVOKABLE bool setGroupedFolder(const QString& folderPath, const QString& rootDir);
+    Q_INVOKABLE bool setGroupedFolderUrl(const QString& folderPath, const QUrl& rootDirUrl);
+    Q_INVOKABLE bool isGrouped(const QString& folderPath) const;
+    Q_INVOKABLE QString groupedRootOf(const QString& folderPath) const;
     Q_INVOKABLE void clearReference(const QString& folderPath);
 
     // ════════════════════════════════════════════════════════════════
@@ -82,6 +96,11 @@ public:
     Q_INVOKABLE bool setReferenceUrl2(const QString& folderPath, const QUrl& imageUrl);
     Q_INVOKABLE bool setReferenceFolder2(const QString& folderPath, const QString& imageDir);
     Q_INVOKABLE bool setReferenceFolderUrl2(const QString& folderPath, const QUrl& imageDirUrl);
+    // 「分组多图」模式（槽位 2）
+    Q_INVOKABLE bool setGroupedFolder2(const QString& folderPath, const QString& rootDir);
+    Q_INVOKABLE bool setGroupedFolderUrl2(const QString& folderPath, const QUrl& rootDirUrl);
+    Q_INVOKABLE bool isGrouped2(const QString& folderPath) const;
+    Q_INVOKABLE QString groupedRootOf2(const QString& folderPath) const;
     Q_INVOKABLE void clearReference2(const QString& folderPath);
 
     // ════════════════════════════════════════════════════════════════
@@ -139,11 +158,11 @@ private:
     // 一个文件夹同时拥有图片绑定 + 文本绑定，二者独立。
     struct Entry {
         // 图片维度（槽位 1）
-        QString kind;       // "image" / "folder" / ""（未绑定）
-        QString path;       // 图片或图片文件夹绝对路径
+        QString kind;       // "image" / "folder" / "grouped" / ""（未绑定）
+        QString path;       // image: 图片绝对路径；folder: 图片文件夹；grouped: 分组根目录
         // 图片维度（槽位 2，与槽位 1 完全独立）
-        QString kind2;      // "image" / "folder" / ""（未绑定）
-        QString path2;      // 图片或图片文件夹绝对路径
+        QString kind2;      // "image" / "folder" / "grouped" / ""（未绑定）
+        QString path2;      // 同上（槽位 2）
         // 文本维度
         QString textKind;   // "csv" / ""（未绑定）
         QString textPath;   // csv 绝对路径
@@ -160,6 +179,19 @@ private:
     static QStringList listImages(const QString& dir);
     static QStringList listVideos(const QString& dir);
     static QPair<int, int> videoIndexInDir(const QString& videoPath);
+
+    // ── 分组多图工具 ─────────────────────────────────────────────
+    // 列出 rootDir 下的所有子目录（自然序，仅一级）
+    static QStringList listSubGroups(const QString& rootDir);
+    // 把 rootDir/组A/{图...}, rootDir/组B/{图...} 拼成一条长队列（图绝对路径）
+    static QStringList listGroupedImages(const QString& rootDir);
+    // 给定视频，决定其在 grouped 长队列中的「组首」下标 base：
+    //   1) 先按子组名 == 视频所在文件夹名（不区分大小写）匹配；
+    //   2) 匹配不到，按视频组在「视频根目录的子目录列表」中的索引回退到分组列表的同序号；
+    //   3) 仍失败 → 返回 0（落在第一张）。
+    // 同时返回总长度，便于上层做边界 / 进度计算。
+    static QPair<int, int> groupedBaseIndexForVideo(const QString& videoPath,
+                                                    const QString& rootDir);
 
     // CSV 解析：
     //   读取整个文件，识别表头（取第一非空行），返回所有"数据行"，

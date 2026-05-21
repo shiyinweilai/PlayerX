@@ -70,12 +70,14 @@ ReferenceStore::~ReferenceStore() = default;
 //
 // ini 结构（v3）：
 //   [references]
-//   <base64(folder)>\kind=image|folder
+//   <base64(folder)>\kind=image|folder|grouped
 //   <base64(folder)>\path=...
+//   <base64(folder)>\kind2=image|folder|grouped
+//   <base64(folder)>\path2=...
 //   <base64(folder)>\textKind=csv
 //   <base64(folder)>\textPath=...
 //
-// 旧版本（v1 平铺、v2 仅 image/folder）会在 loadFromDisk 中静默兼容。
+// 旧版本（v1 平铺、v2 仅 image/folder、v3 无 grouped）会在 loadFromDisk 中静默兼容。
 
 void ReferenceStore::loadFromDisk() {
     QSettings s(m_settingsFile, QSettings::IniFormat);
@@ -95,10 +97,10 @@ void ReferenceStore::loadFromDisk() {
         s.endGroup();
 
         // 图片字段校验
-        if (!e.path.isEmpty() && (e.kind != "image" && e.kind != "folder")) {
+        if (!e.path.isEmpty() && (e.kind != "image" && e.kind != "folder" && e.kind != "grouped")) {
             e.kind.clear(); e.path.clear();
         }
-        if (!e.path2.isEmpty() && (e.kind2 != "image" && e.kind2 != "folder")) {
+        if (!e.path2.isEmpty() && (e.kind2 != "image" && e.kind2 != "folder" && e.kind2 != "grouped")) {
             e.kind2.clear(); e.path2.clear();
         }
         // 文本字段校验
@@ -259,6 +261,155 @@ QPair<int, int> ReferenceStore::videoIndexInDir(const QString& videoPath) {
     return {-1, total};
 }
 
+// ── 分组多图工具 ─────────────────────────────────────────────────────────
+// rootDir 下的「一级子目录」列表，按自然序排序（1 < 2 < 10），与图片排序一致。
+QStringList ReferenceStore::listSubGroups(const QString& rootDir) {
+    QStringList out;
+    QFileInfo fi(rootDir);
+    if (!fi.exists() || !fi.isDir()) return out;
+    QDir d(rootDir);
+    const QFileInfoList subs = d.entryInfoList(
+        QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable);
+    for (const QFileInfo& s : subs) {
+        out << s.absoluteFilePath();
+    }
+    QCollator coll;
+    coll.setNumericMode(true);
+    coll.setCaseSensitivity(Qt::CaseInsensitive);
+    std::sort(out.begin(), out.end(),
+              [&coll](const QString& a, const QString& b) {
+                  return coll.compare(a, b) < 0;
+              });
+    return out;
+}
+
+// 把 rootDir/{组A,组B,...}/{图...} 拍平成一条长队列。
+// 组按自然序、组内图按自然序（仅一级，避免组下还有子目录被误吞）。
+QStringList ReferenceStore::listGroupedImages(const QString& rootDir) {
+    QStringList out;
+    const QStringList groups = listSubGroups(rootDir);
+    QCollator coll;
+    coll.setNumericMode(true);
+    coll.setCaseSensitivity(Qt::CaseInsensitive);
+    for (const QString& g : groups) {
+        // 仅取该组目录下「一级」图片，不递归——避免再下一层目录误吞
+        QDir d(g);
+        const QFileInfoList files = d.entryInfoList(
+            QDir::Files | QDir::NoDotAndDotDot | QDir::Readable);
+        QStringList groupImgs;
+        for (const QFileInfo& f : files) {
+            const QString abs = f.absoluteFilePath();
+            if (inExtList(abs, kImageExts)) groupImgs << abs;
+        }
+        std::sort(groupImgs.begin(), groupImgs.end(),
+                  [&coll](const QString& a, const QString& b) {
+                      return coll.compare(a, b) < 0;
+                  });
+        out += groupImgs;
+    }
+    return out;
+}
+
+// 给定视频，确定其在 grouped 长队列中的「组首」下标 base + 总长度 total。
+//
+// 对齐策略（优先级从高到低）：
+//   1) 子组名 == 视频文件夹名（不区分大小写）→ 用这个子组；
+//      适用：视频按子目录组织，且子目录命名与图片子组一致。
+//   2) 视频本身在「所在目录视频列表」中的索引 → 同序号子组；
+//      适用：所有对比组视频放在同一个目录里（最常见场景）。
+//   3) 视频文件夹在「父目录子目录列表」中的索引 → 同序号子组；
+//      适用：视频按子目录组织，但目录命名与图片子组不一致。
+//   4) 仍失败 → 返回 0（落到长队列第 1 张）。
+QPair<int, int> ReferenceStore::groupedBaseIndexForVideo(const QString& videoPath,
+                                                         const QString& rootDir) {
+    const QStringList all = listGroupedImages(rootDir);
+    const int total = all.size();
+    if (total == 0) return {0, 0};
+
+    QFileInfo fi(videoPath);
+    if (!fi.exists()) return {0, total};
+
+    const QString videoFolder = fi.absolutePath();
+    const QString videoFolderName = QFileInfo(videoFolder).fileName();
+
+    const QStringList subGroups = listSubGroups(rootDir);  // 子组绝对路径
+    if (subGroups.isEmpty()) return {0, total};
+
+    int matchedIdx = -1;
+
+    // 策略 1：按子组名 == 视频文件夹名匹配
+    for (int i = 0; i < subGroups.size(); ++i) {
+        const QString name = QFileInfo(subGroups[i]).fileName();
+        if (name.compare(videoFolderName, Qt::CaseInsensitive) == 0) {
+            matchedIdx = i;
+            break;
+        }
+    }
+
+    // 策略 2：视频本身在「所在目录视频列表」中的索引（覆盖"同目录多视频"场景）
+    // 当视频数 > 子组数时，对子组数取模，实现 r1,r2,...,rN,r1,r2,... 循环。
+    if (matchedIdx < 0) {
+        const QStringList videos = listVideos(videoFolder);
+        const QString videoAbs = fi.absoluteFilePath();
+        int videoIdx = -1;
+        for (int i = 0; i < videos.size(); ++i) {
+            if (videos[i].compare(videoAbs, Qt::CaseInsensitive) == 0) {
+                videoIdx = i;
+                break;
+            }
+        }
+        if (videoIdx >= 0 && !subGroups.isEmpty()) {
+            matchedIdx = videoIdx % subGroups.size();
+        }
+    }
+
+    // 策略 3：视频文件夹在父目录子目录列表中的索引（覆盖"按子目录组织但命名不一致"）
+    if (matchedIdx < 0) {
+        const QString videoParent = QFileInfo(videoFolder).absolutePath();
+        QDir vp(videoParent);
+        const QFileInfoList vpSubs = vp.entryInfoList(
+            QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable);
+        QStringList vpNames;
+        for (const QFileInfo& s : vpSubs) vpNames << s.absoluteFilePath();
+        QCollator coll;
+        coll.setNumericMode(true);
+        coll.setCaseSensitivity(Qt::CaseInsensitive);
+        std::sort(vpNames.begin(), vpNames.end(),
+                  [&coll](const QString& a, const QString& b) {
+                      return coll.compare(a, b) < 0;
+                  });
+        int videoGroupIdx = -1;
+        for (int i = 0; i < vpNames.size(); ++i) {
+            if (QFileInfo(vpNames[i]).fileName()
+                    .compare(videoFolderName, Qt::CaseInsensitive) == 0) {
+                videoGroupIdx = i;
+                break;
+            }
+        }
+        // 同样取模，子组数不足时循环对应。
+        if (videoGroupIdx >= 0 && !subGroups.isEmpty()) {
+            matchedIdx = videoGroupIdx % subGroups.size();
+        }
+    }
+
+    if (matchedIdx < 0) return {0, total};
+
+    // 计算该子组在 all[] 中的「组首」下标：
+    // 把 matchedIdx 之前所有子组的图片数累加。
+    int base = 0;
+    for (int i = 0; i < matchedIdx; ++i) {
+        QDir d(subGroups[i]);
+        const QFileInfoList files = d.entryInfoList(
+            QDir::Files | QDir::NoDotAndDotDot | QDir::Readable);
+        for (const QFileInfo& f : files) {
+            if (inExtList(f.absoluteFilePath(), kImageExts)) ++base;
+        }
+    }
+    if (base >= total) base = total - 1;
+    if (base < 0) base = 0;
+    return {base, total};
+}
+
 // ── CSV 解析（RFC4180 兼容）──────────────────────────────────────────────
 //   - 支持 \r\n / \n / \r 三种行尾
 //   - 支持双引号包裹的字段，字段内 "" 表示一个 "
@@ -377,6 +528,9 @@ QString ReferenceStore::kindOf(const QString& folderPath) const {
     } else if (it->kind == "folder") {
         QFileInfo fi(it->path);
         if (!fi.exists() || !fi.isDir()) return {};
+    } else if (it->kind == "grouped") {
+        QFileInfo fi(it->path);
+        if (!fi.exists() || !fi.isDir()) return {};
     } else {
         return {};
     }
@@ -407,47 +561,11 @@ QUrl ReferenceStore::referenceUrlOf(const QString& folderPath) const {
 }
 
 QUrl ReferenceStore::referenceUrlForVideo(const QString& videoPath) const {
-    if (videoPath.isEmpty()) return {};
-    QFileInfo fi(videoPath);
-    if (!fi.exists()) return {};
-
-    const QString folder = normalizeFolder(fi.absolutePath());
-    if (folder.isEmpty()) return {};
-
-    auto it = m_map.constFind(folder);
-    if (it == m_map.constEnd()) return {};
-
-    if (it->kind == "image") {
-        if (!QFileInfo::exists(it->path)) return {};
-        return QUrl::fromLocalFile(it->path);
-    }
-    if (it->kind == "folder") {
-        const QStringList imgs = listImages(it->path);
-        if (imgs.isEmpty()) return {};
-        auto idx = videoIndexInDir(videoPath);
-        int useIdx = idx.first;
-        if (useIdx < 0) useIdx = 0;
-        if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
-        return QUrl::fromLocalFile(imgs.at(useIdx));
-    }
-    return {};
+    return referenceUrlForVideoOffset(videoPath, 0);
 }
 
 QString ReferenceStore::referenceProgressForVideo(const QString& videoPath) const {
-    if (videoPath.isEmpty()) return {};
-    QFileInfo fi(videoPath);
-    if (!fi.exists()) return {};
-    const QString folder = normalizeFolder(fi.absolutePath());
-    auto it = m_map.constFind(folder);
-    if (it == m_map.constEnd()) return {};
-    if (it->kind != "folder") return {};
-
-    const QStringList imgs = listImages(it->path);
-    if (imgs.isEmpty()) return {};
-    auto idx = videoIndexInDir(videoPath);
-    int useIdx = idx.first < 0 ? 0 : idx.first;
-    if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
-    return QString::number(useIdx + 1) + " / " + QString::number(imgs.size());
+    return referenceProgressForVideoOffset(videoPath, 0);
 }
 
 // ── 偏移版 ───────────────────────────────────────────────────────────────
@@ -471,10 +589,18 @@ QUrl ReferenceStore::referenceUrlForVideoOffset(const QString& videoPath, int of
         if (imgs.isEmpty()) return {};
         auto idx = videoIndexInDir(videoPath);
         int useIdx = idx.first < 0 ? 0 : idx.first;
-        useIdx += offset;
-        if (useIdx < 0) useIdx = 0;
-        if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
+        // 循环偏移：超出边界从另一头继续（C++ % 对负数可能为负，这里打个保险）。
+        const int n = imgs.size();
+        useIdx = ((useIdx + offset) % n + n) % n;
         return QUrl::fromLocalFile(imgs.at(useIdx));
+    }
+    if (it->kind == "grouped") {
+        const QStringList all = listGroupedImages(it->path);
+        if (all.isEmpty()) return {};
+        auto bp = groupedBaseIndexForVideo(videoPath, it->path);
+        const int n = all.size();
+        int useIdx = ((bp.first + offset) % n + n) % n;
+        return QUrl::fromLocalFile(all.at(useIdx));
     }
     return {};
 }
@@ -486,16 +612,25 @@ QString ReferenceStore::referenceProgressForVideoOffset(const QString& videoPath
     const QString folder = normalizeFolder(fi.absolutePath());
     auto it = m_map.constFind(folder);
     if (it == m_map.constEnd()) return {};
-    if (it->kind != "folder") return {};
 
-    const QStringList imgs = listImages(it->path);
-    if (imgs.isEmpty()) return {};
-    auto idx = videoIndexInDir(videoPath);
-    int useIdx = idx.first < 0 ? 0 : idx.first;
-    useIdx += offset;
-    if (useIdx < 0) useIdx = 0;
-    if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
-    return QString::number(useIdx + 1) + " / " + QString::number(imgs.size());
+    if (it->kind == "folder") {
+        const QStringList imgs = listImages(it->path);
+        if (imgs.isEmpty()) return {};
+        auto idx = videoIndexInDir(videoPath);
+        int useIdx = idx.first < 0 ? 0 : idx.first;
+        const int n = imgs.size();
+        useIdx = ((useIdx + offset) % n + n) % n;
+        return QString::number(useIdx + 1) + " / " + QString::number(n);
+    }
+    if (it->kind == "grouped") {
+        const QStringList all = listGroupedImages(it->path);
+        if (all.isEmpty()) return {};
+        auto bp = groupedBaseIndexForVideo(videoPath, it->path);
+        const int n = all.size();
+        int useIdx = ((bp.first + offset) % n + n) % n;
+        return QString::number(useIdx + 1) + " / " + QString::number(n);
+    }
+    return {};
 }
 
 int ReferenceStore::referenceImageCountForVideo(const QString& videoPath) const {
@@ -505,8 +640,9 @@ int ReferenceStore::referenceImageCountForVideo(const QString& videoPath) const 
     const QString folder = normalizeFolder(fi.absolutePath());
     auto it = m_map.constFind(folder);
     if (it == m_map.constEnd()) return 0;
-    if (it->kind != "folder") return 0;
-    return listImages(it->path).size();
+    if (it->kind == "folder") return listImages(it->path).size();
+    if (it->kind == "grouped") return listGroupedImages(it->path).size();
+    return 0;
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -558,6 +694,49 @@ bool ReferenceStore::setReferenceFolderUrl(const QString& folderPath, const QUrl
     if (imageDirUrl.isLocalFile()) p = imageDirUrl.toLocalFile();
     else p = imageDirUrl.toString();
     return setReferenceFolder(folderPath, p);
+}
+
+// 「分组多图」模式（槽位 1）：rootDir 必须是「两级结构」的根目录
+//   rootDir/组A/{图...}, rootDir/组B/{图...}
+// 校验：rootDir 必须存在 + 至少有一个子组 + 长队列至少 1 张图。
+bool ReferenceStore::setGroupedFolder(const QString& folderPath, const QString& rootDir) {
+    const QString k = normalizeFolder(folderPath);
+    if (k.isEmpty()) return false;
+    const QString d = normalizeFolder(urlOrPathToLocal(rootDir));
+    if (d.isEmpty()) return false;
+    QFileInfo fi(d);
+    if (!fi.exists() || !fi.isDir()) return false;
+    if (listSubGroups(d).isEmpty()) return false;
+    if (listGroupedImages(d).isEmpty()) return false;
+
+    Entry e = m_map.value(k);
+    e.kind = "grouped"; e.path = d;
+    m_map.insert(k, e);
+    saveToDisk();
+    emit referenceChanged(k);
+    return true;
+}
+
+bool ReferenceStore::setGroupedFolderUrl(const QString& folderPath, const QUrl& rootDirUrl) {
+    QString p;
+    if (rootDirUrl.isLocalFile()) p = rootDirUrl.toLocalFile();
+    else p = rootDirUrl.toString();
+    return setGroupedFolder(folderPath, p);
+}
+
+bool ReferenceStore::isGrouped(const QString& folderPath) const {
+    return kindOf(folderPath) == QStringLiteral("grouped");
+}
+
+QString ReferenceStore::groupedRootOf(const QString& folderPath) const {
+    const QString k = normalizeFolder(folderPath);
+    if (k.isEmpty()) return {};
+    auto it = m_map.constFind(k);
+    if (it == m_map.constEnd()) return {};
+    if (it->kind != "grouped") return {};
+    QFileInfo fi(it->path);
+    if (!fi.exists() || !fi.isDir()) return {};
+    return it->path;
 }
 
 void ReferenceStore::clearReference(const QString& folderPath) {
@@ -760,6 +939,9 @@ QString ReferenceStore::kindOf2(const QString& folderPath) const {
     } else if (it->kind2 == "folder") {
         QFileInfo fi(it->path2);
         if (!fi.exists() || !fi.isDir()) return {};
+    } else if (it->kind2 == "grouped") {
+        QFileInfo fi(it->path2);
+        if (!fi.exists() || !fi.isDir()) return {};
     } else {
         return {};
     }
@@ -796,10 +978,17 @@ QUrl ReferenceStore::referenceUrlForVideoOffset2(const QString& videoPath, int o
         if (imgs.isEmpty()) return {};
         auto idx = videoIndexInDir(videoPath);
         int useIdx = idx.first < 0 ? 0 : idx.first;
-        useIdx += offset;
-        if (useIdx < 0) useIdx = 0;
-        if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
+        const int n = imgs.size();
+        useIdx = ((useIdx + offset) % n + n) % n;
         return QUrl::fromLocalFile(imgs.at(useIdx));
+    }
+    if (it->kind2 == "grouped") {
+        const QStringList all = listGroupedImages(it->path2);
+        if (all.isEmpty()) return {};
+        auto bp = groupedBaseIndexForVideo(videoPath, it->path2);
+        const int n = all.size();
+        int useIdx = ((bp.first + offset) % n + n) % n;
+        return QUrl::fromLocalFile(all.at(useIdx));
     }
     return {};
 }
@@ -811,16 +1000,25 @@ QString ReferenceStore::referenceProgressForVideoOffset2(const QString& videoPat
     const QString folder = normalizeFolder(fi.absolutePath());
     auto it = m_map.constFind(folder);
     if (it == m_map.constEnd()) return {};
-    if (it->kind2 != "folder") return {};
 
-    const QStringList imgs = listImages(it->path2);
-    if (imgs.isEmpty()) return {};
-    auto idx = videoIndexInDir(videoPath);
-    int useIdx = idx.first < 0 ? 0 : idx.first;
-    useIdx += offset;
-    if (useIdx < 0) useIdx = 0;
-    if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
-    return QString::number(useIdx + 1) + " / " + QString::number(imgs.size());
+    if (it->kind2 == "folder") {
+        const QStringList imgs = listImages(it->path2);
+        if (imgs.isEmpty()) return {};
+        auto idx = videoIndexInDir(videoPath);
+        int useIdx = idx.first < 0 ? 0 : idx.first;
+        const int n = imgs.size();
+        useIdx = ((useIdx + offset) % n + n) % n;
+        return QString::number(useIdx + 1) + " / " + QString::number(n);
+    }
+    if (it->kind2 == "grouped") {
+        const QStringList all = listGroupedImages(it->path2);
+        if (all.isEmpty()) return {};
+        auto bp = groupedBaseIndexForVideo(videoPath, it->path2);
+        const int n = all.size();
+        int useIdx = ((bp.first + offset) % n + n) % n;
+        return QString::number(useIdx + 1) + " / " + QString::number(n);
+    }
+    return {};
 }
 
 int ReferenceStore::referenceImageCountForVideo2(const QString& videoPath) const {
@@ -830,8 +1028,9 @@ int ReferenceStore::referenceImageCountForVideo2(const QString& videoPath) const
     const QString folder = normalizeFolder(fi.absolutePath());
     auto it = m_map.constFind(folder);
     if (it == m_map.constEnd()) return 0;
-    if (it->kind2 != "folder") return 0;
-    return listImages(it->path2).size();
+    if (it->kind2 == "folder") return listImages(it->path2).size();
+    if (it->kind2 == "grouped") return listGroupedImages(it->path2).size();
+    return 0;
 }
 
 bool ReferenceStore::setReference2(const QString& folderPath, const QString& imagePath) {
@@ -879,6 +1078,47 @@ bool ReferenceStore::setReferenceFolderUrl2(const QString& folderPath, const QUr
     if (imageDirUrl.isLocalFile()) p = imageDirUrl.toLocalFile();
     else p = imageDirUrl.toString();
     return setReferenceFolder2(folderPath, p);
+}
+
+// 「分组多图」模式（槽位 2）
+bool ReferenceStore::setGroupedFolder2(const QString& folderPath, const QString& rootDir) {
+    const QString k = normalizeFolder(folderPath);
+    if (k.isEmpty()) return false;
+    const QString d = normalizeFolder(urlOrPathToLocal(rootDir));
+    if (d.isEmpty()) return false;
+    QFileInfo fi(d);
+    if (!fi.exists() || !fi.isDir()) return false;
+    if (listSubGroups(d).isEmpty()) return false;
+    if (listGroupedImages(d).isEmpty()) return false;
+
+    Entry e = m_map.value(k);
+    e.kind2 = "grouped"; e.path2 = d;
+    m_map.insert(k, e);
+    saveToDisk();
+    emit reference2Changed(k);
+    return true;
+}
+
+bool ReferenceStore::setGroupedFolderUrl2(const QString& folderPath, const QUrl& rootDirUrl) {
+    QString p;
+    if (rootDirUrl.isLocalFile()) p = rootDirUrl.toLocalFile();
+    else p = rootDirUrl.toString();
+    return setGroupedFolder2(folderPath, p);
+}
+
+bool ReferenceStore::isGrouped2(const QString& folderPath) const {
+    return kindOf2(folderPath) == QStringLiteral("grouped");
+}
+
+QString ReferenceStore::groupedRootOf2(const QString& folderPath) const {
+    const QString k = normalizeFolder(folderPath);
+    if (k.isEmpty()) return {};
+    auto it = m_map.constFind(k);
+    if (it == m_map.constEnd()) return {};
+    if (it->kind2 != "grouped") return {};
+    QFileInfo fi(it->path2);
+    if (!fi.exists() || !fi.isDir()) return {};
+    return it->path2;
 }
 
 void ReferenceStore::clearReference2(const QString& folderPath) {

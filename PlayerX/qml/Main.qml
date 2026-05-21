@@ -1549,6 +1549,12 @@ ApplicationWindow {
         if (root.refCurrentVideo.length === 0) return 0
         return Reference.referenceImageCountForVideo(root.refCurrentVideo)
     }
+    // ◀ ▶ / Lightbox 「可翻页」语义：
+    //   folder 模式：能在同一文件夹里翻图；
+    //   grouped 模式：能在「长队列」里跨组递归翻图（主要需求）。
+    //   image / 未绑定：不可翻。
+    readonly property bool refCanNav: (root.refCurrentMode === "folder"
+                                       || root.refCurrentMode === "grouped")
     // 当前在参考图文件夹里的真实索引（0-based），用于 ◀ ▶ 按钮可用性判断
     readonly property int refCurrentImageIndex: {
         var t = root.refProgressText
@@ -1597,6 +1603,9 @@ ApplicationWindow {
         if (root.refCurrentVideo.length === 0) return 0
         return Reference.referenceImageCountForVideo2(root.refCurrentVideo)
     }
+    // 跳 nav 语义（槽位 2）
+    readonly property bool refCanNav2: (root.refCurrentMode2 === "folder"
+                                        || root.refCurrentMode2 === "grouped")
     readonly property int refCurrentImageIndex2: {
         var t = root.refProgressText2
         if (!t || t.length === 0) return -1
@@ -3003,7 +3012,13 @@ ApplicationWindow {
                 //   · 副作用：内存略升（从动态变为常驻 1024 上限），但侧栏只 1 张图，可忽略
                 sourceSize.width:  1024
                 sourceSize.height: 1024
-                visible: root.refHasCurrent && status === Image.Ready
+                // 切换图片时不闪"加载中…"：
+                //   · Image 在 source 变更但新图未 Ready 时，仍持有上一张已解码的纹理；
+                //     只要保持 visible:true，这一张旧图就会原地停留到新图 Ready 才被替换。
+                //   · 之前用 status === Ready 作为 visible 条件，会在 Loading 瞬间把图隐藏，
+                //     让位给"加载中…"占位 → 视觉上一闪。
+                //   · 现在改为"未出错就一直显示"：Ready 显新图、Loading 续旧图、Error/Null 让位占位。
+                visible: root.refHasCurrent && status !== Image.Error
                 asynchronous: true
 
                 // 双击图片本体也能放大查看（与右上角 ⤢ 按钮等价）
@@ -3070,7 +3085,14 @@ ApplicationWindow {
                         ToolTip.delay: 400
                         ToolTip.text: {
                             var u = String(root.refCurrentUrl)
-                            if (u.length === 0) return "更多操作（重新选择图片 / 文件夹）"
+                            if (u.length === 0) return "更多操作（重新选择图片 / 文件夹 / 分组多图）"
+                            // grouped 模式优先显示「根目录 + 当前图」，便于诊断
+                            if (root.refCurrentMode === "grouped") {
+                                var rootDir = Reference.groupedRootOf(root.refCurrentFolder) || ""
+                                var cur = decodeURIComponent(u.replace(/^file:\/\//, ""))
+                                if (rootDir.length > 0) return "[分组多图] 根目录: " + rootDir + "\n当前: " + cur
+                                return cur
+                            }
                             return decodeURIComponent(u.replace(/^file:\/\//, ""))
                         }
                     }
@@ -3082,8 +3104,12 @@ ApplicationWindow {
                         y: refImageMoreBtn.height + 2
                         padding: 4
                         background: Rectangle {
-                            implicitWidth: 160
-                            color: "#1a1a1d"
+                            // 文案由“重新选择图片”简化为“图片/文件夹/多文件夹”，
+                            // 宽度同步收窄，避免右侧出现大片空白。
+                            // 背景与头部“三个点”按钮保持一致的玻璃半透明风格：
+                            //   · 颜色给 cc 约 80% alpha，边框与按钮同款 #3a3a45。
+                            implicitWidth: 110
+                            color: "#1a1a1dcc"
                             border.color: "#3a3a45"
                             border.width: 1
                             radius: 4
@@ -3108,9 +3134,11 @@ ApplicationWindow {
                         // 通过 model/Repeater 实例化的项生效），所以样式必须写在每个
                         // MenuItem 自身。需求：纯深色底 + 白字，去掉所有 highlight 变色，
                         // 鼠标悬停/选中均不变色，点击直接 onTriggered 起效。
+                        // 样式说明：默认透明底；hover 时整行加一个深灰底，文字保持不变，
+                        // 不再使用下划线，避免视觉过重。
                         MenuItem {
                             id: refImageMoreItem1
-                            text: "重新选择图片"
+                            text: "图片"
                             implicitHeight: 28
                             onTriggered: refSidebarFileDlg.open()
                             contentItem: Text {
@@ -3121,13 +3149,16 @@ ApplicationWindow {
                                 color: "#e8e8ec"
                                 font.pixelSize: 12
                             }
-                            background: Rectangle { color: "transparent" }
+                            background: Rectangle {
+                                radius: 3
+                                color: refImageMoreItem1.hovered ? "#2a2a32cc" : "transparent"
+                            }
                             arrow: Item {}
                             indicator: Item {}
                         }
                         MenuItem {
                             id: refImageMoreItem2
-                            text: "重新选择文件夹"
+                            text: "文件夹"
                             implicitHeight: 28
                             onTriggered: refSidebarDirDlg.open()
                             contentItem: Text {
@@ -3138,7 +3169,32 @@ ApplicationWindow {
                                 color: "#e8e8ec"
                                 font.pixelSize: 12
                             }
-                            background: Rectangle { color: "transparent" }
+                            background: Rectangle {
+                                radius: 3
+                                color: refImageMoreItem2.hovered ? "#2a2a32cc" : "transparent"
+                            }
+                            arrow: Item {}
+                            indicator: Item {}
+                        }
+                        // 分组多图根目录：root/组A/图... · root/组B/图...
+                        // 跟随对比组跳到同名子组的「组首」；◀▶递归跨组翻图。
+                        MenuItem {
+                            id: refImageMoreItem3
+                            text: "多文件夹"
+                            implicitHeight: 28
+                            onTriggered: refSidebarGroupedDlg.open()
+                            contentItem: Text {
+                                leftPadding: 10
+                                rightPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: refImageMoreItem3.text
+                                color: "#e8e8ec"
+                                font.pixelSize: 12
+                            }
+                            background: Rectangle {
+                                radius: 3
+                                color: refImageMoreItem3.hovered ? "#2a2a32cc" : "transparent"
+                            }
                             arrow: Item {}
                             indicator: Item {}
                         }
@@ -3231,7 +3287,7 @@ ApplicationWindow {
                             return "请选中任一通道，\n或在「打开文件夹」对话框中为该路绑定参考图"
                         if (!root.refHasCurrent)
                             return "该文件夹未绑定参考图\n\n选一张固定图，或让参考图随对比组切换\n（也可直接把图片或图片文件夹拖进来）"
-                        if (refImage.status === Image.Loading)  return "加载中…"
+                        // Loading 分支移除：Image 在 Loading 期间仍 visible 显示旧图，占位根本不会出现。
                         if (refImage.status === Image.Error)    return "图片无法加载（可能已被移动或删除）"
                         return ""
                     }
@@ -3294,6 +3350,34 @@ ApplicationWindow {
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
+                    // 「分组多图」入口：root/组A/图... · root/组B/图...
+                    // 跟随对比组跳到同名子组首图；◀▶递归跨组翻图。
+                    Button {
+                        id: refPickGroupedBtnCenter
+                        text: "🗂 分组多图"
+                        implicitWidth: 96
+                        implicitHeight: 28
+                        hoverEnabled: true
+                        onClicked: refSidebarGroupedDlg.open()
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 400
+                        ToolTip.text: "选择两级文件夹：root/组A/图... · root/组B/图...\n跟随对比组跳到同名子组首图；◀▶递归跨组翻图"
+                        background: Rectangle {
+                            color: refPickGroupedBtnCenter.down ? "#4a4a55"
+                                 : refPickGroupedBtnCenter.hovered ? "#33333a"
+                                 : "#202024"
+                            border.color: refPickGroupedBtnCenter.hovered ? "#c89020" : "#3a3a45"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: refPickGroupedBtnCenter.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
                 }
             }
 
@@ -3342,7 +3426,7 @@ ApplicationWindow {
                 anchors.bottom: parent.bottom
                 anchors.margins: 6
                 spacing: 4
-                visible: root.refCurrentMode === "folder" && root.refImageCount > 1
+                visible: root.refCanNav && root.refImageCount > 1
 
                 // ── 上一张 ───────────────────────────────────────
                 Rectangle {
@@ -3354,7 +3438,8 @@ ApplicationWindow {
                           : "#1a1a1da0"   // 半透明深底，避免遮挡图片
                     border.color: refPrevBtn.enabled ? "#5a5a65" : "#2a2a32"
                     border.width: 1
-                    property bool enabled: root.refCurrentImageIndex > 0
+                    // 循环切换：只要≥2 张图就可用（越过头/尾会装回）。
+                    property bool enabled: root.refImageCount > 1
                     Text {
                         anchors.centerIn: parent
                         text: "◀"
@@ -3386,9 +3471,8 @@ ApplicationWindow {
                           : "#1a1a1da0"
                     border.color: refNextBtn.enabled ? "#5a5a65" : "#2a2a32"
                     border.width: 1
-                    property bool enabled: root.refImageCount > 0
-                                            && root.refCurrentImageIndex >= 0
-                                            && root.refCurrentImageIndex < root.refImageCount - 1
+                    // 循环切换：与 ◀ 保持一致。
+                    property bool enabled: root.refImageCount > 1
                     Text {
                         anchors.centerIn: parent
                         text: "▶"
@@ -3408,35 +3492,6 @@ ApplicationWindow {
                     ToolTip.visible: nextMA.containsMouse
                     ToolTip.delay: 400
                     ToolTip.text: "下一张参考图（手动浏览）"
-                }
-
-                // ── 复位按钮（仅 offset!=0 时显示，让用户回到"自动同步"状态）─────
-                Rectangle {
-                    id: refResetBtn
-                    width: 28; height: 24
-                    radius: 3
-                    visible: root._refImgOffset !== 0
-                    color: resetMA.pressed ? "#3a3a45"
-                          : resetMA.containsMouse ? "#2a2a32"
-                          : "#1a1a1da0"
-                    border.color: "#7fe5cc"
-                    border.width: 1
-                    Text {
-                        anchors.centerIn: parent
-                        text: "⟳"
-                        font.pixelSize: 13
-                        color: "#7fe5cc"
-                    }
-                    MouseArea {
-                        id: resetMA
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root._refImgOffset = 0
-                    }
-                    ToolTip.visible: resetMA.containsMouse
-                    ToolTip.delay: 400
-                    ToolTip.text: "回到自动同步索引"
                 }
             }
         }
@@ -3548,7 +3603,8 @@ ApplicationWindow {
                 cache: true
                 sourceSize.width:  1024
                 sourceSize.height: 1024
-                visible: root.refHasCurrent2 && status === Image.Ready
+                // 与 refImage 同策略：Loading 期间续显旧图，避免"加载中…"闪现。
+                visible: root.refHasCurrent2 && status !== Image.Error
                 asynchronous: true
 
                 MouseArea {
@@ -3605,18 +3661,24 @@ ApplicationWindow {
                         ToolTip.delay: 400
                         ToolTip.text: {
                             var u = String(root.refCurrentUrl2)
-                            if (u.length === 0) return "更多操作（重新选择图片 / 文件夹）"
+                            if (u.length === 0) return "更多操作（重新选择图片 / 文件夹 / 分组多图）"
+                            if (root.refCurrentMode2 === "grouped") {
+                                var rootDir = Reference.groupedRootOf2(root.refCurrentFolder) || ""
+                                var cur = decodeURIComponent(u.replace(/^file:\/\//, ""))
+                                if (rootDir.length > 0) return "[分组多图] 根目录: " + rootDir + "\n当前: " + cur
+                                return cur
+                            }
                             return decodeURIComponent(u.replace(/^file:\/\//, ""))
                         }
                     }
-                    // 重选菜单（slot2 版）：深色主题
+                    // 重选菜单（slot2 版）：玻璃半透明主题，与三个点按钮一致。
                     Menu {
                         id: refImageMoreMenu2
                         y: refImageMoreBtn2.height + 2
                         padding: 4
                         background: Rectangle {
-                            implicitWidth: 160
-                            color: "#1a1a1d"
+                            implicitWidth: 110
+                            color: "#1a1a1dcc"
                             border.color: "#3a3a45"
                             border.width: 1
                             radius: 4
@@ -3640,7 +3702,7 @@ ApplicationWindow {
                         // 同图1：直接 MenuItem 不走 delegate，样式写在自身。
                         MenuItem {
                             id: refImageMoreItem2_1
-                            text: "重新选择图片"
+                            text: "图片"
                             implicitHeight: 28
                             onTriggered: refSidebarFileDlg2.open()
                             contentItem: Text {
@@ -3651,13 +3713,16 @@ ApplicationWindow {
                                 color: "#e8e8ec"
                                 font.pixelSize: 12
                             }
-                            background: Rectangle { color: "transparent" }
+                            background: Rectangle {
+                                radius: 3
+                                color: refImageMoreItem2_1.hovered ? "#2a2a32cc" : "transparent"
+                            }
                             arrow: Item {}
                             indicator: Item {}
                         }
                         MenuItem {
                             id: refImageMoreItem2_2
-                            text: "重新选择文件夹"
+                            text: "文件夹"
                             implicitHeight: 28
                             onTriggered: refSidebarDirDlg2.open()
                             contentItem: Text {
@@ -3668,7 +3733,30 @@ ApplicationWindow {
                                 color: "#e8e8ec"
                                 font.pixelSize: 12
                             }
-                            background: Rectangle { color: "transparent" }
+                            background: Rectangle {
+                                radius: 3
+                                color: refImageMoreItem2_2.hovered ? "#2a2a32cc" : "transparent"
+                            }
+                            arrow: Item {}
+                            indicator: Item {}
+                        }
+                        MenuItem {
+                            id: refImageMoreItem2_3
+                            text: "多文件夹"
+                            implicitHeight: 28
+                            onTriggered: refSidebarGroupedDlg2.open()
+                            contentItem: Text {
+                                leftPadding: 10
+                                rightPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: refImageMoreItem2_3.text
+                                color: "#e8e8ec"
+                                font.pixelSize: 12
+                            }
+                            background: Rectangle {
+                                radius: 3
+                                color: refImageMoreItem2_3.hovered ? "#2a2a32cc" : "transparent"
+                            }
                             arrow: Item {}
                             indicator: Item {}
                         }
@@ -3759,7 +3847,7 @@ ApplicationWindow {
                             return "请选中任一通道，\n或在「打开文件夹」对话框中为该路绑定参考图"
                         if (!root.refHasCurrent2)
                             return "该文件夹未绑定第 2 张参考图\n\n选一张固定图，或让参考图随对比组切换\n（也可直接把图片或图片文件夹拖进来）"
-                        if (refImage2.status === Image.Loading) return "加载中…"
+                // Loading 分支移除：理由同 refImage 占位文案。
                         if (refImage2.status === Image.Error)   return "图片无法加载（可能已被移动或删除）"
                         return ""
                     }
@@ -3821,6 +3909,33 @@ ApplicationWindow {
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
+                    // 「分组多图」入口（slot2 版）
+                    Button {
+                        id: refPickGroupedBtnCenter2
+                        text: "🗂 分组多图"
+                        implicitWidth: 96
+                        implicitHeight: 28
+                        hoverEnabled: true
+                        onClicked: refSidebarGroupedDlg2.open()
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 400
+                        ToolTip.text: "选择两级文件夹：root/组A/图... · root/组B/图...\n跟随对比组跳到同名子组首图；◀▶ 递归跨组翻图"
+                        background: Rectangle {
+                            color: refPickGroupedBtnCenter2.down ? "#4a4a55"
+                                 : refPickGroupedBtnCenter2.hovered ? "#33333a"
+                                 : "#202024"
+                            border.color: refPickGroupedBtnCenter2.hovered ? "#c89020" : "#3a3a45"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: refPickGroupedBtnCenter2.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
                 }
             }
 
@@ -3856,7 +3971,7 @@ ApplicationWindow {
                 anchors.bottom: parent.bottom
                 anchors.margins: 6
                 spacing: 4
-                visible: root.refCurrentMode2 === "folder" && root.refImageCount2 > 1
+                visible: root.refCanNav2 && root.refImageCount2 > 1
 
                 Rectangle {
                     id: refPrevBtn2
@@ -3867,7 +3982,8 @@ ApplicationWindow {
                           : "#1a1a1da0"
                     border.color: refPrevBtn2.enabled ? "#5a5a65" : "#2a2a32"
                     border.width: 1
-                    property bool enabled: root.refCurrentImageIndex2 > 0
+                    // 循环切换：只要≥2 张图就可用。
+                    property bool enabled: root.refImageCount2 > 1
                     Text {
                         anchors.centerIn: parent
                         text: "◀"
@@ -3895,9 +4011,8 @@ ApplicationWindow {
                           : "#1a1a1da0"
                     border.color: refNextBtn2.enabled ? "#5a5a65" : "#2a2a32"
                     border.width: 1
-                    property bool enabled: root.refImageCount2 > 0
-                                            && root.refCurrentImageIndex2 >= 0
-                                            && root.refCurrentImageIndex2 < root.refImageCount2 - 1
+                    // 循环切换。
+                    property bool enabled: root.refImageCount2 > 1
                     Text {
                         anchors.centerIn: parent
                         text: "▶"
@@ -3914,34 +4029,6 @@ ApplicationWindow {
                     ToolTip.visible: nextMA2.containsMouse
                     ToolTip.delay: 400
                     ToolTip.text: "下一张参考图（手动浏览）"
-                }
-
-                Rectangle {
-                    id: refResetBtn2
-                    width: 28; height: 24
-                    radius: 3
-                    visible: root._refImgOffset2 !== 0
-                    color: resetMA2.pressed ? "#3a3a45"
-                          : resetMA2.containsMouse ? "#2a2a32"
-                          : "#1a1a1da0"
-                    border.color: "#7fe5cc"
-                    border.width: 1
-                    Text {
-                        anchors.centerIn: parent
-                        text: "⟳"
-                        font.pixelSize: 13
-                        color: "#7fe5cc"
-                    }
-                    MouseArea {
-                        id: resetMA2
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root._refImgOffset2 = 0
-                    }
-                    ToolTip.visible: resetMA2.containsMouse
-                    ToolTip.delay: 400
-                    ToolTip.text: "回到自动同步索引"
                 }
             }
         }
@@ -4008,6 +4095,20 @@ ApplicationWindow {
         }
     }
 
+    // 侧边栏：选择「分组多图」根目录（grouped 模式）
+    //   预期结构：root/组A/图1.jpg · root/组A/图2.jpg · root/组B/图1.jpg ...
+    //   跟随对比组切换时：按名称/索引对齐到同名子组的「组首」；◀▶在长队列上递归跨组。
+    FolderDialog {
+        id: refSidebarGroupedDlg
+        title: "选择参考图根目录（分组多图、两级文件夹）"
+        onAccepted: {
+            if (root.refCurrentFolder.length === 0) return
+            if (!Reference.setGroupedFolderUrl(root.refCurrentFolder, selectedFolder)) {
+                // 路径结构不符合（无子目录 / 子目录里无图片）时静默失败。
+            }
+        }
+    }
+
     // 侧边栏（槽位 2）：选择单张参考图
     FileDialog {
         id: refSidebarFileDlg2
@@ -4027,6 +4128,18 @@ ApplicationWindow {
         onAccepted: {
             if (root.refCurrentFolder.length === 0) return
             if (!Reference.setReferenceFolderUrl2(root.refCurrentFolder, selectedFolder)) {
+                // 静默失败
+            }
+        }
+    }
+
+    // 侧边栏（槽位 2）：选择「分组多图」根目录
+    FolderDialog {
+        id: refSidebarGroupedDlg2
+        title: "选择第 2 张参考图根目录（分组多图、两级文件夹）"
+        onAccepted: {
+            if (root.refCurrentFolder.length === 0) return
+            if (!Reference.setGroupedFolderUrl2(root.refCurrentFolder, selectedFolder)) {
                 // 静默失败
             }
         }
@@ -4062,7 +4175,13 @@ ApplicationWindow {
         anchors.bottom: parent.bottom
         readonly property bool hasContent: root.refTextHasCurrent
         readonly property bool hasBinding: root.refTextKind === "csv"
-        readonly property bool showFull: root.csvBottomBarExpanded && hasContent
+        // 展开/折叠完全由用户意图控制（csvBottomBarExpanded），与"是否有内容"解耦：
+        //   旧逻辑 showFull = expanded && hasContent，导致清除 CSV 后 hasContent=false，
+        //   底栏被锁死在 24px 折叠态，无法再展开 → 也就看不到「CSV」选择按钮，
+        //   用户陷入"清除即不可恢复"的死循环。
+        //   现在展开态在无内容时会展示"未绑定 CSV"占位提示 + 右上角「CSV」按钮，
+        //   点击「CSV」即可重新选择文件。
+        readonly property bool showFull: root.csvBottomBarExpanded
         // 高度：仅当侧边栏可见 + 有视频时才占位；展开使用用户拖拽值、折叠 24
         height: (!root.refSidebarVisible || Engine.fileCount <= 0) ? 0
               : (showFull ? root.csvBottomBarUserHeight : 24)
@@ -5223,6 +5342,18 @@ ApplicationWindow {
         property int currentSlot: 1
         readonly property url currentSrc: currentSlot === 2 ? root.refCurrentUrl2 : root.refCurrentUrl
         readonly property bool currentHas: currentSlot === 2 ? root.refHasCurrent2 : root.refHasCurrent
+        // 翻图相关属性按当前槽位路由：避免 Lightbox 里 ◀ ▶ 永远只动槽位 1 的偏移。
+        //   · 之前 Bug：从下半图（slot=2）点 ⤢ 放大后，Lightbox 内 ◀ ▶ / ←/→ 改的是
+        //     _refImgOffset（槽位 1），但显示的是 refCurrentUrl2（槽位 2），所以
+        //     底层窗口看着切了，放大窗口却纹丝不动。
+        readonly property int    currentCount: currentSlot === 2 ? root.refImageCount2 : root.refImageCount
+        readonly property int    currentIndex: currentSlot === 2 ? root.refCurrentImageIndex2 : root.refCurrentImageIndex
+        readonly property bool   currentCanNav: currentSlot === 2 ? root.refCanNav2 : root.refCanNav
+        // 推进当前槽位的偏移；Lightbox 内的 ◀ ▶ 与键盘 ←/→ 都走这一个出口。
+        function bumpOffset(delta) {
+            if (currentSlot === 2) root._refImgOffset2 += delta
+            else                   root._refImgOffset  += delta
+        }
         // 是否处于"100%（实际像素）"状态（用于切换标签 / 高亮按钮）
         readonly property bool atFit:    Math.abs(zoom - 1.0) < 0.001
         readonly property bool atActual: refLightboxImg.sourceSize.width > 0
@@ -5444,7 +5575,8 @@ ApplicationWindow {
 
                 Label {
                     text: {
-                        var p = String(root.refCurrentUrl)
+                        // 跟随当前查看的槽位显示文件名，而非永远显示槽位 1。
+                        var p = String(refLightbox.currentSrc)
                         if (p.length === 0) return ""
                         var i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"))
                         return i >= 0 ? decodeURIComponent(p.substring(i + 1)) : p
@@ -5455,17 +5587,42 @@ ApplicationWindow {
                     Layout.fillWidth: true
                 }
                 Label {
-                    visible: root.refImageCount > 1
-                    text: (root.refCurrentImageIndex + 1) + " / " + root.refImageCount
+                    visible: refLightbox.currentCount > 1
+                    text: (refLightbox.currentIndex + 1) + " / " + refLightbox.currentCount
                     color: "#9a9aa8"
                     font.pixelSize: 12
                 }
-                // 关闭
-                ToolButton {
-                    text: "✕"
-                    onClicked: refLightbox.close()
-                    ToolTip.visible: hovered
-                    ToolTip.text: "关闭（Esc）"
+                // 关闭：与「⋯」「⤢」按钮统一的玻璃半透明风格，
+                // 不再使用 ToolButton 默认主题色（避免出现实心方块底色）。
+                Rectangle {
+                    id: lbCloseBtn
+                    Layout.preferredWidth: 28
+                    Layout.preferredHeight: 28
+                    radius: 4
+                    color: lbCloseBtnMA.pressed ? "#3a3a45"
+                         : lbCloseBtnMA.containsMouse ? "#2a2a32cc"
+                         : "#1a1a1d99"
+                    border.color: lbCloseBtnMA.containsMouse ? "#5a8fd8" : "#3a3a45"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "✕"
+                        color: lbCloseBtnMA.containsMouse ? "#ffffff" : "#d0d0d8"
+                        font.pixelSize: 14
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: lbCloseBtnMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: refLightbox.close()
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "关闭（Esc）"
+                    }
                 }
             }
         }
@@ -5477,8 +5634,8 @@ ApplicationWindow {
             anchors.bottomMargin: 24
             spacing: 16
             visible: refLightboxToolsVisible
-                     && root.refCurrentMode === "folder"
-                     && root.refImageCount > 1
+                     && refLightbox.currentCanNav
+                     && refLightbox.currentCount > 1
             opacity: visible ? 1.0 : 0.0
             Behavior on opacity { NumberAnimation { duration: 180 } }
 
@@ -5488,7 +5645,7 @@ ApplicationWindow {
                       : lbPrevMA.containsMouse ? "#2a2a32"
                       : "#1a1a1de0"
                 id: lbPrev
-                property bool canGo: root.refCurrentImageIndex > 0
+                property bool canGo: refLightbox.currentCount > 1
                 border.color: lbPrev.canGo ? "#5a5a65" : "#2a2a32"
                 border.width: 1
                 Text { anchors.centerIn: parent; text: "◀"; font.pixelSize: 16; color: lbPrev.canGo ? "#e8e8ec" : "#555" }
@@ -5499,7 +5656,7 @@ ApplicationWindow {
                     cursorShape: lbPrev.canGo ? Qt.PointingHandCursor : Qt.ArrowCursor
                     onClicked: {
                         if (!lbPrev.canGo) return
-                        root._refImgOffset -= 1
+                        refLightbox.bumpOffset(-1)
                         refLightbox.fitToWindow()
                         refLightbox.autoHideTimer.restart()
                     }
@@ -5511,9 +5668,7 @@ ApplicationWindow {
                       : lbNextMA.containsMouse ? "#2a2a32"
                       : "#1a1a1de0"
                 id: lbNext
-                property bool canGo: root.refImageCount > 0
-                                     && root.refCurrentImageIndex >= 0
-                                     && root.refCurrentImageIndex < root.refImageCount - 1
+                property bool canGo: refLightbox.currentCount > 1
                 border.color: lbNext.canGo ? "#5a5a65" : "#2a2a32"
                 border.width: 1
                 Text { anchors.centerIn: parent; text: "▶"; font.pixelSize: 16; color: lbNext.canGo ? "#e8e8ec" : "#555" }
@@ -5524,7 +5679,7 @@ ApplicationWindow {
                     cursorShape: lbNext.canGo ? Qt.PointingHandCursor : Qt.ArrowCursor
                     onClicked: {
                         if (!lbNext.canGo) return
-                        root._refImgOffset += 1
+                        refLightbox.bumpOffset(+1)
                         refLightbox.fitToWindow()
                         refLightbox.autoHideTimer.restart()
                     }
@@ -5563,16 +5718,14 @@ ApplicationWindow {
                 //   · F 用于切换整窗全屏
                 //   Lightbox 内的"适配/100%"切换仍可通过双击图片完成
                 case Qt.Key_Left:
-                    if (root.refCurrentMode === "folder" && root.refCurrentImageIndex > 0) {
-                        root._refImgOffset -= 1
+                    if (refLightbox.currentCanNav && refLightbox.currentCount > 1) {
+                        refLightbox.bumpOffset(-1)
                         refLightbox.fitToWindow()
                     }
                     event.accepted = true; break
                 case Qt.Key_Right:
-                    if (root.refCurrentMode === "folder"
-                        && root.refImageCount > 0
-                        && root.refCurrentImageIndex < root.refImageCount - 1) {
-                        root._refImgOffset += 1
+                    if (refLightbox.currentCanNav && refLightbox.currentCount > 1) {
+                        refLightbox.bumpOffset(+1)
                         refLightbox.fitToWindow()
                     }
                     event.accepted = true; break
