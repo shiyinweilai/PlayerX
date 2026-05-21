@@ -1464,7 +1464,13 @@ ApplicationWindow {
     //              切到下一组（下一段视频）时自动跟着切到下一张参考图。
     // 与播放内核完全解耦：仅依赖 Engine.filePathAt / Reference.* 的 Q_INVOKABLE。
     property bool refSidebarVisible: false
-    readonly property int refSidebarWidth: refSidebarVisible ? 320 : 0
+    // 用户拖拽后的侧边栏宽度（仅在 refSidebarVisible 为 true 时生效）
+    // 限制 [200, 600]：太窄会让图1/图2 缩成一团；太宽会挤压视频区
+    property int refSidebarUserWidth: 320
+    readonly property int refSidebarWidth: refSidebarVisible ? refSidebarUserWidth : 0
+    // 用户拖拽后的底栏（提示词）展开高度，仅在 csvBottomBarExpanded 时生效
+    // 限制 [60, 280]：低于 60 看不见文字；高于 280 视频区太矮
+    property int csvBottomBarUserHeight: 88
 
     // 触发器：Reference.referenceChanged / 文件切换时 ++，让下面的 readonly 重算
     property int _refTick: 0
@@ -2922,7 +2928,8 @@ ApplicationWindow {
             }
         }
 
-        // 当前文件夹名（只显示叶节点目录名，避免长路径挤压）
+        // 当前文件夹名：已隐藏（路径信息转移到侧栏右上角 ⋯ 按钮 ToolTip）
+        // 保留 id，refTopPane.anchors.top 与 _refContentTop 计算均依赖它。height:0 不占位。
         Label {
             id: refFolderLabel
             anchors.left: parent.left
@@ -2930,8 +2937,9 @@ ApplicationWindow {
             anchors.top: refHeader.bottom
             anchors.leftMargin: 10
             anchors.rightMargin: 10
-            anchors.topMargin: 6
-            height: 18
+            anchors.topMargin: 0
+            height: 0
+            visible: false
             // 文件名过长时左侧省略，关键后缀（叶节点名）始终可见
             LayoutMirroring.enabled: false
             horizontalAlignment: Text.AlignLeft
@@ -3016,67 +3024,276 @@ ApplicationWindow {
                 }
             }
 
-            // 右上角显性"放大查看"按钮 → 弹出 Lightbox 覆盖层
-            //   · 改为显性按钮符合常见图片查看器交互（Finder / Preview / 浏览器图床等）
-            //   · 仅当图片加载完成时显示，避免空区/失败态误触
+            // 右上角操作按钮组：⋯ 重选 / ⤢ 放大 / ✕ 清除
+            //   · 仅在已绑定参考图时显示（与视频窗口右上角同风格、同语义）
+            //   · 释放底部按钮条空间，让图片预览区获得更大显示面积
             //   · z:2 置顶，覆盖于 DropArea 之上；按钮自身只吃点击，不影响整体拖拽接收
-            Rectangle {
-                id: refImageZoomBtn
-                visible: refImage.visible
+            Row {
+                id: refImageBtnRow
                 z: 2
                 anchors.top: refImage.top
                 anchors.right: refImage.right
                 anchors.topMargin: 8
                 anchors.rightMargin: 8
-                width: 28
-                height: 28
-                radius: 4
-                color: refImageZoomBtnMA.pressed ? "#3a3a45"
-                     : refImageZoomBtnMA.containsMouse ? "#2a2a32cc"
-                     : "#1a1a1d99"
-                border.color: refImageZoomBtnMA.containsMouse ? "#5a8fd8" : "#3a3a45"
-                border.width: 1
-                Behavior on color { ColorAnimation { duration: 120 } }
+                spacing: 4
+                visible: refImage.visible
 
-                // 图标：⤢（对角双向箭头，通用"放大/全屏"语义）
-                Text {
-                    anchors.centerIn: parent
-                    text: "⤢"
-                    color: refImageZoomBtnMA.containsMouse ? "#ffffff" : "#d0d0d8"
-                    font.pixelSize: 16
-                    font.bold: true
+                // ⋯ 重选菜单（弹出小菜单：重选图片 / 重选文件夹）
+                Rectangle {
+                    id: refImageMoreBtn
+                    width: 28; height: 28
+                    radius: 4
+                    color: refImageMoreBtnMA.pressed ? "#3a3a45"
+                         : refImageMoreBtnMA.containsMouse ? "#2a2a32cc"
+                         : "#1a1a1d99"
+                    border.color: refImageMoreBtnMA.containsMouse ? "#5a8fd8" : "#3a3a45"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Text {
+                        anchors.centerIn: parent
+                        anchors.verticalCenterOffset: -2
+                        text: "⋯"
+                        color: refImageMoreBtnMA.containsMouse ? "#ffffff" : "#d0d0d8"
+                        font.pixelSize: 18
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: refImageMoreBtnMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: refImageMoreMenu.open()
+                        // ToolTip 直接显示当前参考图完整路径（去掉 file:// 前缀），
+                        // 未绑定时回退为"更多操作"提示。
+                        ToolTip.visible: containsMouse && !refImageMoreMenu.visible
+                        ToolTip.delay: 400
+                        ToolTip.text: {
+                            var u = String(root.refCurrentUrl)
+                            if (u.length === 0) return "更多操作（重新选择图片 / 文件夹）"
+                            return decodeURIComponent(u.replace(/^file:\/\//, ""))
+                        }
+                    }
+                    // 重选菜单：深色主题，与侧栏胶囊按钮同调。
+                    //   · Menu.background：不透明深色背景 + 薄边框，区别于底层画面
+                    //   · MenuItem.background / contentItem：hover 高亮、文字颜色与控件主题一致
+                    Menu {
+                        id: refImageMoreMenu
+                        y: refImageMoreBtn.height + 2
+                        padding: 4
+                        background: Rectangle {
+                            implicitWidth: 160
+                            color: "#1a1a1d"
+                            border.color: "#3a3a45"
+                            border.width: 1
+                            radius: 4
+                        }
+                        delegate: MenuItem {
+                            id: refImageMoreMenuItem
+                            implicitHeight: 28
+                            contentItem: Text {
+                                leftPadding: 10
+                                rightPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: refImageMoreMenuItem.text
+                                color: refImageMoreMenuItem.highlighted ? "#ffffff" : "#d0d0d8"
+                                font.pixelSize: 12
+                            }
+                            background: Rectangle {
+                                radius: 3
+                                color: refImageMoreMenuItem.highlighted ? "#2a2a32" : "transparent"
+                            }
+                        }
+                        // 注意：直接子 MenuItem 不会走上面的 delegate（delegate 只对
+                        // 通过 model/Repeater 实例化的项生效），所以样式必须写在每个
+                        // MenuItem 自身。需求：纯深色底 + 白字，去掉所有 highlight 变色，
+                        // 鼠标悬停/选中均不变色，点击直接 onTriggered 起效。
+                        MenuItem {
+                            id: refImageMoreItem1
+                            text: "重新选择图片"
+                            implicitHeight: 28
+                            onTriggered: refSidebarFileDlg.open()
+                            contentItem: Text {
+                                leftPadding: 10
+                                rightPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: refImageMoreItem1.text
+                                color: "#e8e8ec"
+                                font.pixelSize: 12
+                            }
+                            background: Rectangle { color: "transparent" }
+                            arrow: Item {}
+                            indicator: Item {}
+                        }
+                        MenuItem {
+                            id: refImageMoreItem2
+                            text: "重新选择文件夹"
+                            implicitHeight: 28
+                            onTriggered: refSidebarDirDlg.open()
+                            contentItem: Text {
+                                leftPadding: 10
+                                rightPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: refImageMoreItem2.text
+                                color: "#e8e8ec"
+                                font.pixelSize: 12
+                            }
+                            background: Rectangle { color: "transparent" }
+                            arrow: Item {}
+                            indicator: Item {}
+                        }
+                    }
                 }
 
-                MouseArea {
-                    id: refImageZoomBtnMA
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    acceptedButtons: Qt.LeftButton
-                    onClicked: refLightbox.open()
-                    ToolTip.visible: containsMouse
-                    ToolTip.delay: 400
-                    ToolTip.text: "放大查看（滚轮缩放，← → 翻页，Esc 关闭）"
+                // ⤢ 放大查看（弹 Lightbox）
+                Rectangle {
+                    id: refImageZoomBtn
+                    width: 28; height: 28
+                    radius: 4
+                    color: refImageZoomBtnMA.pressed ? "#3a3a45"
+                         : refImageZoomBtnMA.containsMouse ? "#2a2a32cc"
+                         : "#1a1a1d99"
+                    border.color: refImageZoomBtnMA.containsMouse ? "#5a8fd8" : "#3a3a45"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "⤢"
+                        color: refImageZoomBtnMA.containsMouse ? "#ffffff" : "#d0d0d8"
+                        font.pixelSize: 16
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: refImageZoomBtnMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: refLightbox.open()
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "放大查看（滚轮缩放，← → 翻页，Esc 关闭）"
+                    }
+                }
+
+                // ✕ 清除当前绑定
+                Rectangle {
+                    id: refImageClearBtn
+                    width: 28; height: 28
+                    radius: 4
+                    color: refImageClearBtnMA.pressed ? "#5a2a2a"
+                         : refImageClearBtnMA.containsMouse ? "#3a2228cc"
+                         : "#1a1a1d99"
+                    border.color: refImageClearBtnMA.containsMouse ? "#e0454d" : "#3a3a45"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "✕"
+                        color: refImageClearBtnMA.containsMouse ? "#ffffff" : "#e8b0b0"
+                        font.pixelSize: 14
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: refImageClearBtnMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: {
+                            if (root.refCurrentFolder.length > 0)
+                                Reference.clearReference(root.refCurrentFolder)
+                        }
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "清除当前参考图绑定"
+                    }
                 }
             }
 
             // 加载中 / 失败 / 未绑定占位
-            Label {
+            //   · 未绑定时：占位文案 + 居中两按钮（📷 图片 / 📁 文件夹），
+            //     替代原先底部按钮条的入口，让图片区铺满更多空间。
+            Column {
                 anchors.centerIn: parent
                 width: parent.width - 24
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.WordWrap
+                spacing: 12
                 visible: !refImage.visible
-                color: "#6a6a78"
-                font.pixelSize: 12
-                text: {
-                    if (root.refCurrentFolder.length === 0)
-                        return "请选中任一通道，\n或在「打开文件夹」对话框中为该路绑定参考图"
-                    if (!root.refHasCurrent)
-                        return "该文件夹未绑定参考图\n\n点击下方「图片」选一张固定图\n或「文件夹」让参考图随对比组切换\n（也可直接把图片或图片文件夹拖进来）"
-                    if (refImage.status === Image.Loading)  return "加载中…"
-                    if (refImage.status === Image.Error)    return "图片无法加载（可能已被移动或删除）"
-                    return ""
+
+                Label {
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    color: "#6a6a78"
+                    font.pixelSize: 12
+                    text: {
+                        if (root.refCurrentFolder.length === 0)
+                            return "请选中任一通道，\n或在「打开文件夹」对话框中为该路绑定参考图"
+                        if (!root.refHasCurrent)
+                            return "该文件夹未绑定参考图\n\n选一张固定图，或让参考图随对比组切换\n（也可直接把图片或图片文件夹拖进来）"
+                        if (refImage.status === Image.Loading)  return "加载中…"
+                        if (refImage.status === Image.Error)    return "图片无法加载（可能已被移动或删除）"
+                        return ""
+                    }
+                }
+
+                // 中央两个选择按钮：仅在"未绑定但已选中通道"时出现
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 8
+                    visible: root.refCurrentFolder.length > 0 && !root.refHasCurrent
+                    Button {
+                        id: refPickImgBtnCenter
+                        text: "📷 图片"
+                        implicitWidth: 96
+                        implicitHeight: 28
+                        hoverEnabled: true
+                        onClicked: refSidebarFileDlg.open()
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 400
+                        ToolTip.text: "选择一张固定参考图（整组对比始终显示这张）"
+                        background: Rectangle {
+                            color: refPickImgBtnCenter.down ? "#4a4a55"
+                                 : refPickImgBtnCenter.hovered ? "#33333a"
+                                 : "#202024"
+                            border.color: refPickImgBtnCenter.hovered ? "#5a8fd8" : "#3a3a45"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: refPickImgBtnCenter.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    Button {
+                        id: refPickDirBtnCenter
+                        text: "📁 文件夹"
+                        implicitWidth: 96
+                        implicitHeight: 28
+                        hoverEnabled: true
+                        onClicked: refSidebarDirDlg.open()
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 400
+                        ToolTip.text: "选择图片文件夹（参考图按对比组自动同步）"
+                        background: Rectangle {
+                            color: refPickDirBtnCenter.down ? "#4a4a55"
+                                 : refPickDirBtnCenter.hovered ? "#33333a"
+                                 : "#202024"
+                            border.color: refPickDirBtnCenter.hovered ? "#0fa085" : "#3a3a45"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: refPickDirBtnCenter.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
                 }
             }
 
@@ -3224,151 +3441,34 @@ ApplicationWindow {
             }
         }
 
-        // 模式 / 进度小标签：folder 模式时显示 "📂 跟随对比组 · N / M"，image 模式时显示 "🖼 固定图"
-        // 紧贴在按钮区上方，不占图片显示区。
+        // 模式 / 进度小标签：已隐藏（信息与 CSV 底栏重复，这里不再占用侧栏高度）
         Rectangle {
             id: refModeBar
             anchors.left: refTopPane.left
             anchors.right: refTopPane.right
             anchors.bottom: refButtonsBar.top
-            height: visible ? 22 : 0
-            visible: root.refHasCurrent
+            height: 0
+            visible: false
             color: "transparent"
-            Label {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.leftMargin: 10
-                anchors.rightMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                horizontalAlignment: Text.AlignLeft
-                elide: Text.ElideRight
-                font.pixelSize: 11
-                color: root.refCurrentMode === "folder" ? "#7fe5cc" : "#9a9aa8"
-                text: {
-                    if (root.refCurrentMode === "folder") {
-                        return "📂 跟随对比组" + (root.refProgressText.length > 0
-                                                  ? "   ·   " + root.refProgressText
-                                                  : "")
-                    }
-                    if (root.refCurrentMode === "image") return "🖼 固定图"
-                    return ""
-                }
-            }
         }
 
-        // 底部按钮：图片（image 模式）/ 文件夹（folder 模式）/ 清除
+        // 底部按钮条：已移除（选择入口合并到右上角 ⋯ 菜单 + 未绑定时中央两按钮）
+        // 保留空壳，让 anchors.bottom: refButtonsBar.top 这类既有引用继续生效；
+        // height: 0 / visible: false 不占任何高度。
         Rectangle {
             id: refButtonsBar
             anchors.left: refTopPane.left
             anchors.right: refTopPane.right
             anchors.bottom: refTopPane.bottom
-            height: 40
+            height: 0
+            visible: false
             color: "transparent"
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 6
-
-                // 图片按钮：单图 image 模式（已在 image 模式时高亮）
-                Button {
-                    id: refPickImgBtn
-                    text: "图片"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 24
-                    enabled: root.refCurrentFolder.length > 0
-                    hoverEnabled: true
-                    onClicked: refSidebarFileDlg.open()
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 400
-                    ToolTip.text: "选择一张固定参考图（整组对比始终显示这张）"
-                    background: Rectangle {
-                        readonly property bool active: root.refCurrentMode === "image"
-                        color: !refPickImgBtn.enabled ? "#1a1a1d"
-                              : refPickImgBtn.down ? "#4a4a55"
-                              : refPickImgBtn.hovered ? "#33333a"
-                              : (active ? "#2a2a32" : "#202024")
-                        border.color: !refPickImgBtn.enabled ? "#2a2a32"
-                                      : (active ? "#5a8fd8" : "#3a3a45")
-                        border.width: 1
-                        radius: 3
-                    }
-                    contentItem: Text {
-                        text: refPickImgBtn.text
-                        color: refPickImgBtn.enabled ? "#e8e8ec" : "#555"
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-
-                // 文件夹按钮：folder 模式（已在 folder 模式时绿色高亮）
-                Button {
-                    id: refPickDirBtn
-                    text: "文件夹"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 24
-                    enabled: root.refCurrentFolder.length > 0
-                    hoverEnabled: true
-                    onClicked: refSidebarDirDlg.open()
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 400
-                    ToolTip.text: "选择一个图片文件夹\n参考图按当前视频在其文件夹中的序号自动同步"
-                    background: Rectangle {
-                        readonly property bool active: root.refCurrentMode === "folder"
-                        color: !refPickDirBtn.enabled ? "#1a1a1d"
-                              : refPickDirBtn.down ? "#4a4a55"
-                              : refPickDirBtn.hovered ? "#33333a"
-                              : (active ? "#1f2e2a" : "#202024")
-                        border.color: !refPickDirBtn.enabled ? "#2a2a32"
-                                      : (active ? "#0fa085" : "#3a3a45")
-                        border.width: 1
-                        radius: 3
-                    }
-                    contentItem: Text {
-                        text: refPickDirBtn.text
-                        color: !refPickDirBtn.enabled ? "#555"
-                               : (root.refCurrentMode === "folder" ? "#7fe5cc" : "#e8e8ec")
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-
-                Button {
-                    id: refClearBtn
-                    text: "清除"
-                    Layout.preferredWidth: 56
-                    Layout.preferredHeight: 24
-                    visible: root.refHasCurrent
-                    hoverEnabled: true
-                    onClicked: {
-                        if (root.refCurrentFolder.length > 0)
-                            Reference.clearReference(root.refCurrentFolder)
-                    }
-                    background: Rectangle {
-                        color: refClearBtn.down ? "#5a2a2a"
-                              : refClearBtn.hovered ? "#3a2228"
-                                                     : "#202024"
-                        border.color: "#3a3a42"
-                        border.width: 1
-                        radius: 3
-                    }
-                    contentItem: Text {
-                        text: refClearBtn.text
-                        color: "#e8b0b0"
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-            }
         }
 
         // ─── 上下分隔条（可拖动调整上下两栏比例）─────────────────────
         // 用 fraction 表示上半占"内容区"剩余高度的比例（0.18 ~ 0.85），
         // 拖动时实时改变，但不持久化（保持轻量）。
-        property real refTopFraction: 0.55
+        property real refTopFraction: 0.5
         // 内容区起点 = refFolderLabel 底部 + 4；终点 = refSidebar 底部
         readonly property real _refContentTop: refFolderLabel.y + refFolderLabel.height + 4
         readonly property real _refContentBottom: height
@@ -3411,7 +3511,7 @@ ApplicationWindow {
                     newY = Math.max(topMin, Math.min(topMax, newY))
                     refSidebar.refTopFraction = (newY - refSidebar._refContentTop) / refSidebar._refContentH
                 }
-                onDoubleClicked: refSidebar.refTopFraction = 0.55  // 双击复位
+                onDoubleClicked: refSidebar.refTopFraction = 0.5  // 双击复位（上下均分）
             }
         }
 
@@ -3464,61 +3564,263 @@ ApplicationWindow {
                 }
             }
 
-            // 右上角放大按钮
-            Rectangle {
-                id: refImageZoomBtn2
-                visible: refImage2.visible
+            // 右上角操作按钮组：⋯ 重选 / ⤢ 放大 / ✕ 清除（slot2 版）
+            Row {
+                id: refImageBtnRow2
                 z: 2
                 anchors.top: refImage2.top
                 anchors.right: refImage2.right
                 anchors.topMargin: 8
                 anchors.rightMargin: 8
-                width: 28
-                height: 28
-                radius: 4
-                color: refImageZoomBtn2MA.pressed ? "#3a3a45"
-                     : refImageZoomBtn2MA.containsMouse ? "#2a2a32cc"
-                     : "#1a1a1d99"
-                border.color: refImageZoomBtn2MA.containsMouse ? "#5a8fd8" : "#3a3a45"
-                border.width: 1
-                Behavior on color { ColorAnimation { duration: 120 } }
-                Text {
-                    anchors.centerIn: parent
-                    text: "⤢"
-                    color: refImageZoomBtn2MA.containsMouse ? "#ffffff" : "#d0d0d8"
-                    font.pixelSize: 16
-                    font.bold: true
+                spacing: 4
+                visible: refImage2.visible
+
+                // ⋯ 重选菜单
+                Rectangle {
+                    id: refImageMoreBtn2
+                    width: 28; height: 28
+                    radius: 4
+                    color: refImageMoreBtn2MA.pressed ? "#3a3a45"
+                         : refImageMoreBtn2MA.containsMouse ? "#2a2a32cc"
+                         : "#1a1a1d99"
+                    border.color: refImageMoreBtn2MA.containsMouse ? "#5a8fd8" : "#3a3a45"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Text {
+                        anchors.centerIn: parent
+                        anchors.verticalCenterOffset: -2
+                        text: "⋯"
+                        color: refImageMoreBtn2MA.containsMouse ? "#ffffff" : "#d0d0d8"
+                        font.pixelSize: 18
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: refImageMoreBtn2MA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: refImageMoreMenu2.open()
+                        ToolTip.visible: containsMouse && !refImageMoreMenu2.visible
+                        ToolTip.delay: 400
+                        ToolTip.text: {
+                            var u = String(root.refCurrentUrl2)
+                            if (u.length === 0) return "更多操作（重新选择图片 / 文件夹）"
+                            return decodeURIComponent(u.replace(/^file:\/\//, ""))
+                        }
+                    }
+                    // 重选菜单（slot2 版）：深色主题
+                    Menu {
+                        id: refImageMoreMenu2
+                        y: refImageMoreBtn2.height + 2
+                        padding: 4
+                        background: Rectangle {
+                            implicitWidth: 160
+                            color: "#1a1a1d"
+                            border.color: "#3a3a45"
+                            border.width: 1
+                            radius: 4
+                        }
+                        delegate: MenuItem {
+                            id: refImageMoreMenu2Item
+                            implicitHeight: 28
+                            contentItem: Text {
+                                leftPadding: 10
+                                rightPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: refImageMoreMenu2Item.text
+                                color: refImageMoreMenu2Item.highlighted ? "#ffffff" : "#d0d0d8"
+                                font.pixelSize: 12
+                            }
+                            background: Rectangle {
+                                radius: 3
+                                color: refImageMoreMenu2Item.highlighted ? "#2a2a32" : "transparent"
+                            }
+                        }
+                        // 同图1：直接 MenuItem 不走 delegate，样式写在自身。
+                        MenuItem {
+                            id: refImageMoreItem2_1
+                            text: "重新选择图片"
+                            implicitHeight: 28
+                            onTriggered: refSidebarFileDlg2.open()
+                            contentItem: Text {
+                                leftPadding: 10
+                                rightPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: refImageMoreItem2_1.text
+                                color: "#e8e8ec"
+                                font.pixelSize: 12
+                            }
+                            background: Rectangle { color: "transparent" }
+                            arrow: Item {}
+                            indicator: Item {}
+                        }
+                        MenuItem {
+                            id: refImageMoreItem2_2
+                            text: "重新选择文件夹"
+                            implicitHeight: 28
+                            onTriggered: refSidebarDirDlg2.open()
+                            contentItem: Text {
+                                leftPadding: 10
+                                rightPadding: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: refImageMoreItem2_2.text
+                                color: "#e8e8ec"
+                                font.pixelSize: 12
+                            }
+                            background: Rectangle { color: "transparent" }
+                            arrow: Item {}
+                            indicator: Item {}
+                        }
+                    }
                 }
-                MouseArea {
-                    id: refImageZoomBtn2MA
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    acceptedButtons: Qt.LeftButton
-                    onClicked: refLightbox.openSlot(2)
-                    ToolTip.visible: containsMouse
-                    ToolTip.delay: 400
-                    ToolTip.text: "放大查看（滚轮缩放，← → 翻页，Esc 关闭）"
+
+                // ⤢ 放大
+                Rectangle {
+                    id: refImageZoomBtn2
+                    width: 28; height: 28
+                    radius: 4
+                    color: refImageZoomBtn2MA.pressed ? "#3a3a45"
+                         : refImageZoomBtn2MA.containsMouse ? "#2a2a32cc"
+                         : "#1a1a1d99"
+                    border.color: refImageZoomBtn2MA.containsMouse ? "#5a8fd8" : "#3a3a45"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "⤢"
+                        color: refImageZoomBtn2MA.containsMouse ? "#ffffff" : "#d0d0d8"
+                        font.pixelSize: 16
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: refImageZoomBtn2MA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: refLightbox.openSlot(2)
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "放大查看（滚轮缩放，← → 翻页，Esc 关闭）"
+                    }
+                }
+
+                // ✕ 清除当前绑定
+                Rectangle {
+                    id: refImageClearBtn2
+                    width: 28; height: 28
+                    radius: 4
+                    color: refImageClearBtn2MA.pressed ? "#5a2a2a"
+                         : refImageClearBtn2MA.containsMouse ? "#3a2228cc"
+                         : "#1a1a1d99"
+                    border.color: refImageClearBtn2MA.containsMouse ? "#e0454d" : "#3a3a45"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "✕"
+                        color: refImageClearBtn2MA.containsMouse ? "#ffffff" : "#e8b0b0"
+                        font.pixelSize: 14
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: refImageClearBtn2MA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: {
+                            if (root.refCurrentFolder.length > 0)
+                                Reference.clearReference2(root.refCurrentFolder)
+                        }
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "清除当前参考图绑定"
+                    }
                 }
             }
 
-            // 占位提示
-            Label {
+            // 占位 + 未绑定时居中两按钮（slot2 版）
+            Column {
                 anchors.centerIn: parent
                 width: parent.width - 24
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.WordWrap
+                spacing: 12
                 visible: !refImage2.visible
-                color: "#6a6a78"
-                font.pixelSize: 12
-                text: {
-                    if (root.refCurrentFolder.length === 0)
-                        return "请选中任一通道，\n或在「打开文件夹」对话框中为该路绑定参考图"
-                    if (!root.refHasCurrent2)
-                        return "该文件夹未绑定第 2 张参考图\n\n点击下方「图片」选一张固定图\n或「文件夹」让参考图随对比组切换\n（也可直接把图片或图片文件夹拖进来）"
-                    if (refImage2.status === Image.Loading) return "加载中…"
-                    if (refImage2.status === Image.Error)   return "图片无法加载（可能已被移动或删除）"
-                    return ""
+
+                Label {
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    color: "#6a6a78"
+                    font.pixelSize: 12
+                    text: {
+                        if (root.refCurrentFolder.length === 0)
+                            return "请选中任一通道，\n或在「打开文件夹」对话框中为该路绑定参考图"
+                        if (!root.refHasCurrent2)
+                            return "该文件夹未绑定第 2 张参考图\n\n选一张固定图，或让参考图随对比组切换\n（也可直接把图片或图片文件夹拖进来）"
+                        if (refImage2.status === Image.Loading) return "加载中…"
+                        if (refImage2.status === Image.Error)   return "图片无法加载（可能已被移动或删除）"
+                        return ""
+                    }
+                }
+
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 8
+                    visible: root.refCurrentFolder.length > 0 && !root.refHasCurrent2
+                    Button {
+                        id: refPickImgBtnCenter2
+                        text: "📷 图片"
+                        implicitWidth: 96
+                        implicitHeight: 28
+                        hoverEnabled: true
+                        onClicked: refSidebarFileDlg2.open()
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 400
+                        ToolTip.text: "选择一张固定参考图（整组对比始终显示这张）"
+                        background: Rectangle {
+                            color: refPickImgBtnCenter2.down ? "#4a4a55"
+                                 : refPickImgBtnCenter2.hovered ? "#33333a"
+                                 : "#202024"
+                            border.color: refPickImgBtnCenter2.hovered ? "#5a8fd8" : "#3a3a45"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: refPickImgBtnCenter2.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    Button {
+                        id: refPickDirBtnCenter2
+                        text: "📁 文件夹"
+                        implicitWidth: 96
+                        implicitHeight: 28
+                        hoverEnabled: true
+                        onClicked: refSidebarDirDlg2.open()
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 400
+                        ToolTip.text: "选择图片文件夹（参考图按对比组自动同步）"
+                        background: Rectangle {
+                            color: refPickDirBtnCenter2.down ? "#4a4a55"
+                                 : refPickDirBtnCenter2.hovered ? "#33333a"
+                                 : "#202024"
+                            border.color: refPickDirBtnCenter2.hovered ? "#0fa085" : "#3a3a45"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: refPickDirBtnCenter2.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
                 }
             }
 
@@ -3644,142 +3946,27 @@ ApplicationWindow {
             }
         }
 
-        // 模式 / 进度小标签（slot2 版）
+        // 模式 / 进度小标签（slot2 版）：已隐藏（信息与 CSV 底栏冗余）
         Rectangle {
             id: refModeBar2
             anchors.left: refBottomPane.left
             anchors.right: refBottomPane.right
             anchors.bottom: refButtonsBar2.top
-            height: visible ? 22 : 0
-            visible: root.refHasCurrent2
+            height: 0
+            visible: false
             color: "transparent"
-            Label {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.leftMargin: 10
-                anchors.rightMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                horizontalAlignment: Text.AlignLeft
-                elide: Text.ElideRight
-                font.pixelSize: 11
-                color: root.refCurrentMode2 === "folder" ? "#7fe5cc" : "#9a9aa8"
-                text: {
-                    if (root.refCurrentMode2 === "folder") {
-                        return "📂 跟随对比组" + (root.refProgressText2.length > 0
-                                                  ? "   ·   " + root.refProgressText2
-                                                  : "")
-                    }
-                    if (root.refCurrentMode2 === "image") return "🖼 固定图"
-                    return ""
-                }
-            }
         }
 
-        // 底部按钮：图片 / 文件夹 / 清除（slot2 版）
+        // 底部按钮条（slot2 版）：已移除（选择入口合并到右上角 ⋯ 菜单 + 未绑定时中央两按钮）
+        // 保留空壳，让 anchors.bottom: refButtonsBar2.top 这类既有引用继续生效。
         Rectangle {
             id: refButtonsBar2
             anchors.left: refBottomPane.left
             anchors.right: refBottomPane.right
             anchors.bottom: refBottomPane.bottom
-            height: 40
+            height: 0
+            visible: false
             color: "transparent"
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 6
-
-                Button {
-                    id: refPickImgBtn2
-                    text: "图片"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 24
-                    enabled: root.refCurrentFolder.length > 0
-                    hoverEnabled: true
-                    onClicked: refSidebarFileDlg2.open()
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 400
-                    ToolTip.text: "选择一张固定参考图（整组对比始终显示这张）"
-                    background: Rectangle {
-                        readonly property bool active: root.refCurrentMode2 === "image"
-                        color: !refPickImgBtn2.enabled ? "#1a1a1d"
-                              : refPickImgBtn2.down ? "#4a4a55"
-                              : refPickImgBtn2.hovered ? "#33333a"
-                              : (active ? "#2a2a32" : "#202024")
-                        border.color: !refPickImgBtn2.enabled ? "#2a2a32"
-                                      : (active ? "#5a8fd8" : "#3a3a45")
-                        border.width: 1
-                        radius: 3
-                    }
-                    contentItem: Text {
-                        text: refPickImgBtn2.text
-                        color: refPickImgBtn2.enabled ? "#e8e8ec" : "#555"
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-
-                Button {
-                    id: refPickDirBtn2
-                    text: "文件夹"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 24
-                    enabled: root.refCurrentFolder.length > 0
-                    hoverEnabled: true
-                    onClicked: refSidebarDirDlg2.open()
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 400
-                    ToolTip.text: "选择一个图片文件夹\n参考图按当前视频在其文件夹中的序号自动同步"
-                    background: Rectangle {
-                        readonly property bool active: root.refCurrentMode2 === "folder"
-                        color: !refPickDirBtn2.enabled ? "#1a1a1d"
-                              : refPickDirBtn2.down ? "#4a4a55"
-                              : refPickDirBtn2.hovered ? "#33333a"
-                              : (active ? "#1f2e2a" : "#202024")
-                        border.color: !refPickDirBtn2.enabled ? "#2a2a32"
-                                      : (active ? "#0fa085" : "#3a3a45")
-                        border.width: 1
-                        radius: 3
-                    }
-                    contentItem: Text {
-                        text: refPickDirBtn2.text
-                        color: !refPickDirBtn2.enabled ? "#555"
-                               : (root.refCurrentMode2 === "folder" ? "#7fe5cc" : "#e8e8ec")
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-
-                Button {
-                    id: refClearBtn2
-                    text: "清除"
-                    Layout.preferredWidth: 56
-                    Layout.preferredHeight: 24
-                    visible: root.refHasCurrent2
-                    hoverEnabled: true
-                    onClicked: {
-                        if (root.refCurrentFolder.length > 0)
-                            Reference.clearReference2(root.refCurrentFolder)
-                    }
-                    background: Rectangle {
-                        color: refClearBtn2.down ? "#5a2a2a"
-                              : refClearBtn2.hovered ? "#3a2228"
-                                                     : "#202024"
-                        border.color: "#3a3a42"
-                        border.width: 1
-                        radius: 3
-                    }
-                    contentItem: Text {
-                        text: refClearBtn2.text
-                        color: "#e8b0b0"
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-            }
         }
     }
 
@@ -3876,9 +4063,9 @@ ApplicationWindow {
         readonly property bool hasContent: root.refTextHasCurrent
         readonly property bool hasBinding: root.refTextKind === "csv"
         readonly property bool showFull: root.csvBottomBarExpanded && hasContent
-        // 高度：仅当侧边栏可见 + 有视频时才占位；展开 88、折叠 24
+        // 高度：仅当侧边栏可见 + 有视频时才占位；展开使用用户拖拽值、折叠 24
         height: (!root.refSidebarVisible || Engine.fileCount <= 0) ? 0
-              : (showFull ? 88 : 24)
+              : (showFull ? root.csvBottomBarUserHeight : 24)
         visible: height > 0
         color: "#15151a"
 
@@ -4258,6 +4445,95 @@ ApplicationWindow {
                     }
                 }
             }
+        }
+    }
+
+    // ─── 可拖拽分隔条：竖向（拖动调整左侧参考栏宽度）──────────────────
+    // 设计要点：
+    //   1) 仅当 refSidebarVisible 为 true 时显示并接收事件，关闭后零占位；
+    //   2) 与视频/播放内核完全解耦——只通过 root.refSidebarUserWidth 一个属性
+    //      与 refSidebar.width 联动，videoArea 的左边界本来就 anchors 跟随；
+    //   3) z:100 抬到视频上方，避免被 GridView 的 cell 抢走鼠标事件；
+    //   4) 双击复位到 320 默认宽度。
+    Rectangle {
+        id: refSidebarHSplitter
+        visible: root.refSidebarVisible
+        z: 100
+        anchors.top: parent.top
+        anchors.bottom: csvBottomBar.top
+        // 中心对齐到 refSidebar 的右边缘上，分隔条本身 6px 宽
+        x: refSidebar.x + refSidebar.width - 3
+        width: 6
+        color: refSidebarHSplitterMA.containsMouse || refSidebarHSplitterMA.pressed
+               ? "#2a2a32" : "transparent"
+        // 中线小提示
+        Column {
+            anchors.centerIn: parent
+            spacing: 4
+            Repeater {
+                model: 3
+                Rectangle { width: 3; height: 3; radius: 1.5; color: "#5a5a66" }
+            }
+        }
+        MouseArea {
+            id: refSidebarHSplitterMA
+            anchors.fill: parent
+            anchors.leftMargin: -2
+            anchors.rightMargin: -2
+            hoverEnabled: true
+            cursorShape: Qt.SplitHCursor
+            property real _grabX: 0
+            onPressed: function(mouse) { _grabX = mouse.x }
+            onPositionChanged: function(mouse) {
+                if (!pressed) return
+                var newW = root.refSidebarUserWidth + (mouse.x - _grabX)
+                // 限制 [200, 600]：避免栏太窄/太宽
+                var maxW = Math.max(200, root.width - 400) // 至少给视频留 400
+                root.refSidebarUserWidth = Math.max(200, Math.min(Math.min(600, maxW), newW))
+            }
+            onDoubleClicked: root.refSidebarUserWidth = 320
+        }
+    }
+
+    // ─── 可拖拽分隔条：横向（拖动调整底部提示词栏高度）─────────────────
+    // 仅当 csvBottomBar 处于"展开 + 有内容"状态时显示；折叠或无视频时隐藏。
+    Rectangle {
+        id: csvBottomVSplitter
+        visible: csvBottomBar.showFull && csvBottomBar.height > 0
+        z: 100
+        anchors.left: csvBottomBar.left
+        anchors.right: csvBottomBar.right
+        // 中心贴到 csvBottomBar 顶边
+        y: csvBottomBar.y - 3
+        height: 6
+        color: csvBottomVSplitterMA.containsMouse || csvBottomVSplitterMA.pressed
+               ? "#2a2a32" : "transparent"
+        Row {
+            anchors.centerIn: parent
+            spacing: 4
+            Repeater {
+                model: 3
+                Rectangle { width: 3; height: 3; radius: 1.5; color: "#5a5a66" }
+            }
+        }
+        MouseArea {
+            id: csvBottomVSplitterMA
+            anchors.fill: parent
+            anchors.topMargin: -2
+            anchors.bottomMargin: -2
+            hoverEnabled: true
+            cursorShape: Qt.SplitVCursor
+            property real _grabY: 0
+            onPressed: function(mouse) { _grabY = mouse.y }
+            onPositionChanged: function(mouse) {
+                if (!pressed) return
+                // 鼠标向上拖 -> 高度增大
+                var newH = root.csvBottomBarUserHeight - (mouse.y - _grabY)
+                // 限制 [60, 280]：太低看不清，太高挤压视频
+                var maxH = Math.max(60, root.height - 200) // 至少给视频留 200
+                root.csvBottomBarUserHeight = Math.max(60, Math.min(Math.min(280, maxH), newH))
+            }
+            onDoubleClicked: root.csvBottomBarUserHeight = 88
         }
     }
 
