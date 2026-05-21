@@ -1472,6 +1472,7 @@ ApplicationWindow {
         target: typeof Reference !== "undefined" ? Reference : null
         function onReferenceChanged(folder)     { root._refTick++ }
         function onReferenceTextChanged(folder) { root._refTick++ }
+        function onReference2Changed(folder)    { root._refTick++ }
     }
     Connections {
         target: Engine
@@ -1557,7 +1558,46 @@ ApplicationWindow {
         function onFilesChanged() {
             root._refImgOffset = 0
             root._refTextOffset = 0
+            root._refImgOffset2 = 0
         }
+    }
+
+    // ─── 参考图（槽位 2）─────────────────────────────────────────────
+    // 与槽位 1 完全镜像，作为下半区的独立参考图。
+    // 持久化由 Reference.kindOf2 / setReference*2 / clearReference2 提供。
+    property int _refImgOffset2: 0
+    readonly property url refCurrentUrl2: {
+        _refTick;
+        if (typeof Reference === "undefined") return ""
+        if (root.refCurrentVideo.length === 0) return ""
+        return Reference.referenceUrlForVideoOffset2(root.refCurrentVideo, root._refImgOffset2)
+    }
+    readonly property bool refHasCurrent2: String(root.refCurrentUrl2).length > 0
+    readonly property string refCurrentMode2: {
+        _refTick;
+        if (typeof Reference === "undefined") return ""
+        if (root.refCurrentFolder.length === 0) return ""
+        return Reference.kindOf2(root.refCurrentFolder)
+    }
+    readonly property string refProgressText2: {
+        _refTick;
+        if (typeof Reference === "undefined") return ""
+        if (root.refCurrentVideo.length === 0) return ""
+        return Reference.referenceProgressForVideoOffset2(root.refCurrentVideo, root._refImgOffset2)
+    }
+    readonly property int refImageCount2: {
+        _refTick;
+        if (typeof Reference === "undefined") return 0
+        if (root.refCurrentVideo.length === 0) return 0
+        return Reference.referenceImageCountForVideo2(root.refCurrentVideo)
+    }
+    readonly property int refCurrentImageIndex2: {
+        var t = root.refProgressText2
+        if (!t || t.length === 0) return -1
+        var slash = t.indexOf("/")
+        if (slash < 0) return -1
+        var n = parseInt(t.substring(0, slash).trim(), 10)
+        return isNaN(n) ? -1 : (n - 1)
     }
 
     // ─── 参考文本（CSV）─────────────────────────────────────────────
@@ -1827,10 +1867,10 @@ ApplicationWindow {
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: root.refSidebarVisible
-                              ? "隐藏参考图侧边栏"
+                              ? "隐藏参考图侧边栏与提示词底栏"
                               : (root.refHasCurrent
-                                 ? "显示参考图（当前文件夹已绑定）"
-                                 : "显示参考图侧边栏")
+                                 ? "显示参考图与提示词（当前文件夹已绑定）"
+                                 : "显示参考图侧边栏与提示词底栏")
                 background: Rectangle {
                     color: refToggleBtn.down ? "#4a4a55"
                           : refToggleBtn.hovered ? "#33333a"
@@ -2825,6 +2865,8 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.topMargin: 2
+        // 撑满到窗口底部：让左栏的图1/图2两个区域上下均分整个高度，
+        // 不再为底部 CSV 提示词条让位（CSV 底栏只占视频区下方）。
         anchors.bottom: parent.bottom
         width: root.refSidebarWidth
         visible: root.refSidebarVisible && width > 0
@@ -3373,7 +3415,7 @@ ApplicationWindow {
             }
         }
 
-        // ─── 下半："参考文本"区 ─────────────────────────────────────
+        // ─── 下半："参考图 2" 区（与上半完全镜像）───────────────────
         Item {
             id: refBottomPane
             anchors.left: parent.left
@@ -3382,40 +3424,81 @@ ApplicationWindow {
             anchors.bottom: parent.bottom
         }
 
-        // 文本视图框（带滚动）
+        // 中央图片区 + 拖拽接收 + 占位提示（与 refImageBox 完全对齐，但操作的是 slot2）
         Rectangle {
-            id: refTextBox
+            id: refImageBox2
             anchors.left: refBottomPane.left
             anchors.right: refBottomPane.right
             anchors.top: refBottomPane.top
-            anchors.bottom: refTextModeBar.top
+            anchors.bottom: refButtonsBar2.top
             anchors.margins: 8
             color: "#0e0e10"
-            border.color: refTextDrop.containsDrag ? "#5a8fd8" : "#2c2c32"
+            border.color: refDrop2.containsDrag ? "#5a8fd8" : "#2c2c32"
             border.width: 1
             radius: 4
 
-            Flickable {
-                id: refTextScroll
+            Image {
+                id: refImage2
                 anchors.fill: parent
-                anchors.margins: 8
-                clip: true
-                contentWidth: width
-                contentHeight: refTextLabel.implicitHeight
-                visible: root.refTextHasCurrent
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                anchors.margins: 4
+                source: root.refCurrentUrl2
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                mipmap: true
+                cache: true
+                sourceSize.width:  1024
+                sourceSize.height: 1024
+                visible: root.refHasCurrent2 && status === Image.Ready
+                asynchronous: true
 
+                MouseArea {
+                    id: refImage2DblMA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton
+                    cursorShape: Qt.PointingHandCursor
+                    onDoubleClicked: refLightbox.openSlot(2)
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 800
+                    ToolTip.text: "双击放大查看"
+                }
+            }
+
+            // 右上角放大按钮
+            Rectangle {
+                id: refImageZoomBtn2
+                visible: refImage2.visible
+                z: 2
+                anchors.top: refImage2.top
+                anchors.right: refImage2.right
+                anchors.topMargin: 8
+                anchors.rightMargin: 8
+                width: 28
+                height: 28
+                radius: 4
+                color: refImageZoomBtn2MA.pressed ? "#3a3a45"
+                     : refImageZoomBtn2MA.containsMouse ? "#2a2a32cc"
+                     : "#1a1a1d99"
+                border.color: refImageZoomBtn2MA.containsMouse ? "#5a8fd8" : "#3a3a45"
+                border.width: 1
+                Behavior on color { ColorAnimation { duration: 120 } }
                 Text {
-                    id: refTextLabel
-                    width: refTextScroll.width
-                    wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
-                    text: root.refTextDisplay
-                    color: "#d8d8e0"
-                    font.pixelSize: 12
-                    lineHeight: 1.45
-                    // 中文文本左右对齐更耐看；纯英文也兼容
-                    horizontalAlignment: Text.AlignLeft
+                    anchors.centerIn: parent
+                    text: "⤢"
+                    color: refImageZoomBtn2MA.containsMouse ? "#ffffff" : "#d0d0d8"
+                    font.pixelSize: 16
+                    font.bold: true
+                }
+                MouseArea {
+                    id: refImageZoomBtn2MA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    acceptedButtons: Qt.LeftButton
+                    onClicked: refLightbox.openSlot(2)
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "放大查看（滚轮缩放，← → 翻页，Esc 关闭）"
                 }
             }
 
@@ -3425,127 +3508,119 @@ ApplicationWindow {
                 width: parent.width - 24
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                visible: !refTextScroll.visible
+                visible: !refImage2.visible
                 color: "#6a6a78"
                 font.pixelSize: 12
                 text: {
                     if (root.refCurrentFolder.length === 0)
-                        return "请选中任一通道"
-                    if (root.refTextKind === "")
-                        return "未绑定参考文本（CSV）\n\n点击下方「CSV」选择文件\n或把 .csv 直接拖进来\n\n建议表头包含：Image, prompt, en_prompt"
-                    return "已绑定 CSV，但当前行为空 / 越界\n（视频序号超出 CSV 行数）"
+                        return "请选中任一通道，\n或在「打开文件夹」对话框中为该路绑定参考图"
+                    if (!root.refHasCurrent2)
+                        return "该文件夹未绑定第 2 张参考图\n\n点击下方「图片」选一张固定图\n或「文件夹」让参考图随对比组切换\n（也可直接把图片或图片文件夹拖进来）"
+                    if (refImage2.status === Image.Loading) return "加载中…"
+                    if (refImage2.status === Image.Error)   return "图片无法加载（可能已被移动或删除）"
+                    return ""
                 }
             }
 
-            // 拖拽接收：仅识别 .csv
+            // 拖拽接收（slot2 版）
             DropArea {
-                id: refTextDrop
+                id: refDrop2
                 anchors.fill: parent
                 onDropped: function(drop) {
-                    if (root.refCurrentFolder.length === 0) {
-                        drop.accepted = false; return
-                    }
+                    if (root.refCurrentFolder.length === 0) { drop.accepted = false; return }
                     if (!drop.hasUrls) { drop.accepted = false; return }
                     for (var i = 0; i < drop.urls.length; ++i) {
                         var u = drop.urls[i]
-                        var s = String(u).toLowerCase()
-                        if (s.endsWith(".csv")) {
-                            if (Reference.setReferenceCsvUrl(root.refCurrentFolder, u)) {
+                        if (Fs.isDirectory(u)) {
+                            if (Reference.setReferenceFolderUrl2(root.refCurrentFolder, u)) {
                                 drop.accepted = true; return
                             }
+                        }
+                    }
+                    for (var j = 0; j < drop.urls.length; ++j) {
+                        var u2 = drop.urls[j]
+                        if (Reference.setReferenceUrl2(root.refCurrentFolder, u2)) {
+                            drop.accepted = true; return
                         }
                     }
                     drop.accepted = false
                 }
             }
 
-            // ◀ ▶ 浮层切换按钮（仅 csv 模式 / 总行数>1 时可见）
-            //   ◀：在自动行号上 -1（夹紧到 0）
-            //   ▶：在自动行号上 +1（夹紧到 M-1）
-            //   悬浮在文本框右下角，不占按钮条；点击时文本自动重新加载。
-            //   样式与图片端 ◀ ▶ 完全对齐。
+            // ◀ ▶ 浮层切换按钮（slot2 版，仅 folder 模式 / 总数>1 时可见）
             Row {
-                id: refTextNavBar
+                id: refImgNavBar2
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: 6
                 spacing: 4
-                visible: root.refTextKind === "csv" && root.refTextRowCount > 1
+                visible: root.refCurrentMode2 === "folder" && root.refImageCount2 > 1
 
-                // ── 上一行 ───────────────────────────────────────
                 Rectangle {
-                    id: refTextPrevBtn
+                    id: refPrevBtn2
                     width: 28; height: 24
                     radius: 3
-                    color: textPrevMA.pressed ? "#3a3a45"
-                          : textPrevMA.containsMouse ? "#2a2a32"
-                          : "#1a1a1da0"   // 半透明深底，避免遮挡文字
-                    border.color: refTextPrevBtn.enabled ? "#5a5a65" : "#2a2a32"
+                    color: prevMA2.pressed ? "#3a3a45"
+                          : prevMA2.containsMouse ? "#2a2a32"
+                          : "#1a1a1da0"
+                    border.color: refPrevBtn2.enabled ? "#5a5a65" : "#2a2a32"
                     border.width: 1
-                    property bool enabled: root.refTextCurrentRow > 0
+                    property bool enabled: root.refCurrentImageIndex2 > 0
                     Text {
                         anchors.centerIn: parent
                         text: "◀"
                         font.pixelSize: 12
-                        color: refTextPrevBtn.enabled ? "#e8e8ec" : "#555"
+                        color: refPrevBtn2.enabled ? "#e8e8ec" : "#555"
                     }
                     MouseArea {
-                        id: textPrevMA
+                        id: prevMA2
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: refTextPrevBtn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: {
-                            if (!refTextPrevBtn.enabled) return
-                            root._refTextOffset -= 1
-                        }
+                        cursorShape: refPrevBtn2.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: { if (refPrevBtn2.enabled) root._refImgOffset2 -= 1 }
                     }
-                    ToolTip.visible: textPrevMA.containsMouse
+                    ToolTip.visible: prevMA2.containsMouse
                     ToolTip.delay: 400
-                    ToolTip.text: "上一行参考文本（手动浏览）"
+                    ToolTip.text: "上一张参考图（手动浏览）"
                 }
 
-                // ── 下一行 ───────────────────────────────────────
                 Rectangle {
-                    id: refTextNextBtn
+                    id: refNextBtn2
                     width: 28; height: 24
                     radius: 3
-                    color: textNextMA.pressed ? "#3a3a45"
-                          : textNextMA.containsMouse ? "#2a2a32"
+                    color: nextMA2.pressed ? "#3a3a45"
+                          : nextMA2.containsMouse ? "#2a2a32"
                           : "#1a1a1da0"
-                    border.color: refTextNextBtn.enabled ? "#5a5a65" : "#2a2a32"
+                    border.color: refNextBtn2.enabled ? "#5a5a65" : "#2a2a32"
                     border.width: 1
-                    property bool enabled: root.refTextRowCount > 0
-                                            && root.refTextCurrentRow >= 0
-                                            && root.refTextCurrentRow < root.refTextRowCount - 1
+                    property bool enabled: root.refImageCount2 > 0
+                                            && root.refCurrentImageIndex2 >= 0
+                                            && root.refCurrentImageIndex2 < root.refImageCount2 - 1
                     Text {
                         anchors.centerIn: parent
                         text: "▶"
                         font.pixelSize: 12
-                        color: refTextNextBtn.enabled ? "#e8e8ec" : "#555"
+                        color: refNextBtn2.enabled ? "#e8e8ec" : "#555"
                     }
                     MouseArea {
-                        id: textNextMA
+                        id: nextMA2
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: refTextNextBtn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: {
-                            if (!refTextNextBtn.enabled) return
-                            root._refTextOffset += 1
-                        }
+                        cursorShape: refNextBtn2.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: { if (refNextBtn2.enabled) root._refImgOffset2 += 1 }
                     }
-                    ToolTip.visible: textNextMA.containsMouse
+                    ToolTip.visible: nextMA2.containsMouse
                     ToolTip.delay: 400
-                    ToolTip.text: "下一行参考文本（手动浏览）"
+                    ToolTip.text: "下一张参考图（手动浏览）"
                 }
 
-                // ── 复位按钮（仅 offset!=0 时显示，让用户回到"自动同步"状态）─────
                 Rectangle {
-                    id: refTextResetBtn
+                    id: refResetBtn2
                     width: 28; height: 24
                     radius: 3
-                    visible: root._refTextOffset !== 0
-                    color: textResetMA.pressed ? "#3a3a45"
-                          : textResetMA.containsMouse ? "#2a2a32"
+                    visible: root._refImgOffset2 !== 0
+                    color: resetMA2.pressed ? "#3a3a45"
+                          : resetMA2.containsMouse ? "#2a2a32"
                           : "#1a1a1da0"
                     border.color: "#7fe5cc"
                     border.width: 1
@@ -3556,27 +3631,27 @@ ApplicationWindow {
                         color: "#7fe5cc"
                     }
                     MouseArea {
-                        id: textResetMA
+                        id: resetMA2
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root._refTextOffset = 0
+                        onClicked: root._refImgOffset2 = 0
                     }
-                    ToolTip.visible: textResetMA.containsMouse
+                    ToolTip.visible: resetMA2.containsMouse
                     ToolTip.delay: 400
-                    ToolTip.text: "回到自动同步行号"
+                    ToolTip.text: "回到自动同步索引"
                 }
             }
         }
 
-        // 文本进度 / 模式标签
+        // 模式 / 进度小标签（slot2 版）
         Rectangle {
-            id: refTextModeBar
+            id: refModeBar2
             anchors.left: refBottomPane.left
             anchors.right: refBottomPane.right
-            anchors.bottom: refTextButtonsBar.top
+            anchors.bottom: refButtonsBar2.top
             height: visible ? 22 : 0
-            visible: root.refTextHasCurrent
+            visible: root.refHasCurrent2
             color: "transparent"
             Label {
                 anchors.left: parent.left
@@ -3587,21 +3662,22 @@ ApplicationWindow {
                 horizontalAlignment: Text.AlignLeft
                 elide: Text.ElideRight
                 font.pixelSize: 11
-                color: "#7fe5cc"
+                color: root.refCurrentMode2 === "folder" ? "#7fe5cc" : "#9a9aa8"
                 text: {
-                    var p = root.refTextProgress
-                    var imgName = root.refTextData && root.refTextData.image ? root.refTextData.image : ""
-                    var pre = "📝 跟随对比组"
-                    if (p.length > 0) pre += "   ·   " + p
-                    if (imgName.length > 0) pre += "   ·   " + imgName
-                    return pre
+                    if (root.refCurrentMode2 === "folder") {
+                        return "📂 跟随对比组" + (root.refProgressText2.length > 0
+                                                  ? "   ·   " + root.refProgressText2
+                                                  : "")
+                    }
+                    if (root.refCurrentMode2 === "image") return "🖼 固定图"
+                    return ""
                 }
             }
         }
 
-        // 文本区底部按钮：CSV / 中/英 / 清除
+        // 底部按钮：图片 / 文件夹 / 清除（slot2 版）
         Rectangle {
-            id: refTextButtonsBar
+            id: refButtonsBar2
             anchors.left: refBottomPane.left
             anchors.right: refBottomPane.right
             anchors.bottom: refBottomPane.bottom
@@ -3613,90 +3689,90 @@ ApplicationWindow {
                 anchors.margins: 8
                 spacing: 6
 
-                // CSV 按钮：选 csv（已绑定时绿色高亮）
                 Button {
-                    id: refPickCsvBtn
-                    text: "CSV"
+                    id: refPickImgBtn2
+                    text: "图片"
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
                     enabled: root.refCurrentFolder.length > 0
                     hoverEnabled: true
-                    onClicked: refSidebarCsvDlg.open()
+                    onClicked: refSidebarFileDlg2.open()
                     ToolTip.visible: hovered
                     ToolTip.delay: 400
-                    ToolTip.text: "选择一个 CSV 文件\n参考文本按当前视频在其文件夹中的序号自动同步"
+                    ToolTip.text: "选择一张固定参考图（整组对比始终显示这张）"
                     background: Rectangle {
-                        readonly property bool active: root.refTextKind === "csv"
-                        color: !refPickCsvBtn.enabled ? "#1a1a1d"
-                              : refPickCsvBtn.down ? "#4a4a55"
-                              : refPickCsvBtn.hovered ? "#33333a"
+                        readonly property bool active: root.refCurrentMode2 === "image"
+                        color: !refPickImgBtn2.enabled ? "#1a1a1d"
+                              : refPickImgBtn2.down ? "#4a4a55"
+                              : refPickImgBtn2.hovered ? "#33333a"
+                              : (active ? "#2a2a32" : "#202024")
+                        border.color: !refPickImgBtn2.enabled ? "#2a2a32"
+                                      : (active ? "#5a8fd8" : "#3a3a45")
+                        border.width: 1
+                        radius: 3
+                    }
+                    contentItem: Text {
+                        text: refPickImgBtn2.text
+                        color: refPickImgBtn2.enabled ? "#e8e8ec" : "#555"
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Button {
+                    id: refPickDirBtn2
+                    text: "文件夹"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    enabled: root.refCurrentFolder.length > 0
+                    hoverEnabled: true
+                    onClicked: refSidebarDirDlg2.open()
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: "选择一个图片文件夹\n参考图按当前视频在其文件夹中的序号自动同步"
+                    background: Rectangle {
+                        readonly property bool active: root.refCurrentMode2 === "folder"
+                        color: !refPickDirBtn2.enabled ? "#1a1a1d"
+                              : refPickDirBtn2.down ? "#4a4a55"
+                              : refPickDirBtn2.hovered ? "#33333a"
                               : (active ? "#1f2e2a" : "#202024")
-                        border.color: !refPickCsvBtn.enabled ? "#2a2a32"
+                        border.color: !refPickDirBtn2.enabled ? "#2a2a32"
                                       : (active ? "#0fa085" : "#3a3a45")
                         border.width: 1
                         radius: 3
                     }
                     contentItem: Text {
-                        text: refPickCsvBtn.text
-                        color: !refPickCsvBtn.enabled ? "#555"
-                               : (root.refTextKind === "csv" ? "#7fe5cc" : "#e8e8ec")
+                        text: refPickDirBtn2.text
+                        color: !refPickDirBtn2.enabled ? "#555"
+                               : (root.refCurrentMode2 === "folder" ? "#7fe5cc" : "#e8e8ec")
                         font.pixelSize: 11
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
 
-                // 中 / 英语言切换：仅当两种语言都有时显示
                 Button {
-                    id: refLangBtn
-                    text: root.refTextLang === "zh" ? "中" : "EN"
-                    Layout.preferredWidth: 40
-                    Layout.preferredHeight: 24
-                    visible: root.refTextHasBothLangs
-                    hoverEnabled: true
-                    onClicked: root.refTextLang = (root.refTextLang === "zh" ? "en" : "zh")
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 400
-                    ToolTip.text: "切换中文 / 英文 prompt"
-                    background: Rectangle {
-                        color: refLangBtn.down ? "#4a4a55"
-                              : refLangBtn.hovered ? "#33333a"
-                                                    : "#202024"
-                        border.color: "#3a3a45"
-                        border.width: 1
-                        radius: 3
-                    }
-                    contentItem: Text {
-                        text: refLangBtn.text
-                        color: "#e8e8ec"
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-
-                // 清除文本绑定
-                Button {
-                    id: refTextClearBtn
+                    id: refClearBtn2
                     text: "清除"
                     Layout.preferredWidth: 56
                     Layout.preferredHeight: 24
-                    visible: root.refTextKind === "csv"
+                    visible: root.refHasCurrent2
                     hoverEnabled: true
                     onClicked: {
                         if (root.refCurrentFolder.length > 0)
-                            Reference.clearText(root.refCurrentFolder)
+                            Reference.clearReference2(root.refCurrentFolder)
                     }
                     background: Rectangle {
-                        color: refTextClearBtn.down ? "#5a2a2a"
-                              : refTextClearBtn.hovered ? "#3a2228"
-                                                       : "#202024"
+                        color: refClearBtn2.down ? "#5a2a2a"
+                              : refClearBtn2.hovered ? "#3a2228"
+                                                     : "#202024"
                         border.color: "#3a3a42"
                         border.width: 1
                         radius: 3
                     }
                     contentItem: Text {
-                        text: refTextClearBtn.text
+                        text: refClearBtn2.text
                         color: "#e8b0b0"
                         font.pixelSize: 11
                         horizontalAlignment: Text.AlignHCenter
@@ -3745,6 +3821,446 @@ ApplicationWindow {
         }
     }
 
+    // 侧边栏（槽位 2）：选择单张参考图
+    FileDialog {
+        id: refSidebarFileDlg2
+        title: "选择参考图（固定图）"
+        nameFilters: [ "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.gif)" ]
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            if (root.refCurrentFolder.length === 0) return
+            Reference.setReferenceUrl2(root.refCurrentFolder, selectedFile)
+        }
+    }
+
+    // 侧边栏（槽位 2）：选择参考图文件夹
+    FolderDialog {
+        id: refSidebarDirDlg2
+        title: "选择第 2 张参考图文件夹（跟随对比组）"
+        onAccepted: {
+            if (root.refCurrentFolder.length === 0) return
+            if (!Reference.setReferenceFolderUrl2(root.refCurrentFolder, selectedFolder)) {
+                // 静默失败
+            }
+        }
+    }
+
+    // ─── 全局 CSV 文本底栏 ────────────────────────────────────────────
+    //
+    // 设计动机：
+    //   把原侧边栏「下半区 CSV 文本」搬到窗口最底（位于 videoArea 之下、
+    //   ApplicationWindow 底部）。原因有三：
+    //     1) prompt 是横向长文本，窄竖侧栏不适合阅读，横向底栏天然适配；
+    //     2) 看视频时希望 prompt 与画面"始终同步可见"，底栏不与视频争空间；
+    //     3) 与窗口底部其他全局元素对齐，符合常见编辑器/查看器布局。
+    //
+    // 折叠机制：
+    //   csvBottomBarExpanded 控制展开/折叠：
+    //     · 展开：完整显示 prompt + 中/英 / ◀▶ / 重置 / CSV / 清除按钮（约 88px 高）
+    //     · 折叠：仅显示一行高度的标题条（含展开箭头 + 进度，约 24px 高）
+    //   都没绑定 CSV / 没视频时整个底栏隐藏，零占位。
+    //   注：当前为 session 内状态（重启后回到默认展开），保持轻量；
+    //       后续如需持久化可加 Qt.labs.settings 模块。
+    property bool csvBottomBarExpanded: true
+
+    Rectangle {
+        id: csvBottomBar
+        // 与视频窗口同宽：左侧紧贴 refSidebar 右边，避开左栏图片区域。
+        //   - 这样左栏的「图1 / 图2」可以上下均分撑满整个高度，没有黑色空白；
+        //   - prompt 文本只占视频区下方的横向空间，与视频画面始终对齐。
+        // 与「参考图侧边栏」作为一个整体出现/隐藏（用户工作流：要么同时看图+词，
+        // 要么都不看），由 refSidebarVisible 一并控制。
+        anchors.left: refSidebar.right
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        readonly property bool hasContent: root.refTextHasCurrent
+        readonly property bool hasBinding: root.refTextKind === "csv"
+        readonly property bool showFull: root.csvBottomBarExpanded && hasContent
+        // 高度：仅当侧边栏可见 + 有视频时才占位；展开 88、折叠 24
+        height: (!root.refSidebarVisible || Engine.fileCount <= 0) ? 0
+              : (showFull ? 88 : 24)
+        visible: height > 0
+        color: "#15151a"
+
+        // 顶部 1px 分隔线
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 1
+            color: "#2c2c32"
+        }
+
+        // ── 折叠态：仅一行标题条（展开箭头 + 进度文字）──────────────
+        Item {
+            id: csvBottomCollapsedRow
+            visible: !csvBottomBar.showFull
+            anchors.fill: parent
+            anchors.topMargin: 1
+            // 折叠箭头（▶ 展开）
+            Rectangle {
+                id: csvExpandBtn
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 6
+                width: 22; height: 18
+                radius: 3
+                color: csvExpandBtnMA.containsMouse ? "#2a2a32" : "transparent"
+                Text {
+                    anchors.centerIn: parent
+                    text: "▶"
+                    color: "#9a9aa8"
+                    font.pixelSize: 10
+                }
+                MouseArea {
+                    id: csvExpandBtnMA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.csvBottomBarExpanded = true
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "展开参考文本"
+                }
+            }
+            Label {
+                anchors.left: csvExpandBtn.right
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 6
+                anchors.rightMargin: 10
+                elide: Text.ElideRight
+                font.pixelSize: 11
+                color: csvBottomBar.hasBinding ? "#7fe5cc" : "#6a6a78"
+                text: {
+                    if (!csvBottomBar.hasBinding) return "📝 未绑定参考文本（CSV）— 点击展开后选择"
+                    var p = root.refTextProgress
+                    var imgName = root.refTextData && root.refTextData.image ? root.refTextData.image : ""
+                    var pre = "📝 跟随对比组"
+                    if (p.length > 0) pre += "   ·   " + p
+                    if (imgName.length > 0) pre += "   ·   " + imgName
+                    return pre
+                }
+            }
+        }
+
+        // ── 展开态：完整 prompt + 控件区 ──────────────────────────────
+        Item {
+            id: csvBottomFullRow
+            visible: csvBottomBar.showFull
+            anchors.fill: parent
+            anchors.topMargin: 1
+
+            // 第一行：折叠箭头 + 进度标签
+            Item {
+                id: csvBottomTitleRow
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 22
+                Rectangle {
+                    id: csvCollapseBtn
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: 6
+                    width: 22; height: 18
+                    radius: 3
+                    color: csvCollapseBtnMA.containsMouse ? "#2a2a32" : "transparent"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "▼"
+                        color: "#9a9aa8"
+                        font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: csvCollapseBtnMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.csvBottomBarExpanded = false
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "折叠参考文本"
+                    }
+                }
+                Label {
+                    anchors.left: csvCollapseBtn.right
+                    anchors.right: csvBottomCtrlRow.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 8
+                    elide: Text.ElideRight
+                    font.pixelSize: 11
+                    color: "#7fe5cc"
+                    text: {
+                        var p = root.refTextProgress
+                        var imgName = root.refTextData && root.refTextData.image ? root.refTextData.image : ""
+                        var pre = "📝 跟随对比组"
+                        if (p.length > 0) pre += "   ·   " + p
+                        if (imgName.length > 0) pre += "   ·   " + imgName
+                        return pre
+                    }
+                }
+
+                // 第一行右侧：◀ ▶ 翻行 + 重置 + 中/英 + CSV + 清除
+                Row {
+                    id: csvBottomCtrlRow
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.rightMargin: 8
+                    spacing: 4
+
+                    // ◀ 上一行
+                    Rectangle {
+                        id: csvPrevBtn
+                        width: 24; height: 18
+                        radius: 3
+                        visible: root.refTextKind === "csv" && root.refTextRowCount > 1
+                        property bool enabled: root.refTextCurrentRow > 0
+                        color: csvPrevMA.pressed ? "#3a3a45"
+                              : csvPrevMA.containsMouse ? "#2a2a32"
+                              : "#1a1a1d"
+                        border.color: csvPrevBtn.enabled ? "#5a5a65" : "#2a2a32"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "◀"
+                            font.pixelSize: 10
+                            color: csvPrevBtn.enabled ? "#e8e8ec" : "#555"
+                        }
+                        MouseArea {
+                            id: csvPrevMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: csvPrevBtn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: { if (csvPrevBtn.enabled) root._refTextOffset -= 1 }
+                        }
+                        ToolTip.visible: csvPrevMA.containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "上一行"
+                    }
+                    // ▶ 下一行
+                    Rectangle {
+                        id: csvNextBtn
+                        width: 24; height: 18
+                        radius: 3
+                        visible: root.refTextKind === "csv" && root.refTextRowCount > 1
+                        property bool enabled: root.refTextRowCount > 0
+                                                && root.refTextCurrentRow >= 0
+                                                && root.refTextCurrentRow < root.refTextRowCount - 1
+                        color: csvNextMA.pressed ? "#3a3a45"
+                              : csvNextMA.containsMouse ? "#2a2a32"
+                              : "#1a1a1d"
+                        border.color: csvNextBtn.enabled ? "#5a5a65" : "#2a2a32"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "▶"
+                            font.pixelSize: 10
+                            color: csvNextBtn.enabled ? "#e8e8ec" : "#555"
+                        }
+                        MouseArea {
+                            id: csvNextMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: csvNextBtn.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: { if (csvNextBtn.enabled) root._refTextOffset += 1 }
+                        }
+                        ToolTip.visible: csvNextMA.containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "下一行"
+                    }
+                    // ⟳ 复位
+                    Rectangle {
+                        id: csvResetBtn
+                        width: 24; height: 18
+                        radius: 3
+                        visible: root._refTextOffset !== 0
+                        color: csvResetMA.pressed ? "#3a3a45"
+                              : csvResetMA.containsMouse ? "#2a2a32"
+                              : "#1a1a1d"
+                        border.color: "#7fe5cc"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "⟳"
+                            font.pixelSize: 11
+                            color: "#7fe5cc"
+                        }
+                        MouseArea {
+                            id: csvResetMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root._refTextOffset = 0
+                        }
+                        ToolTip.visible: csvResetMA.containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "回到自动同步行"
+                    }
+                    // 中/英
+                    Rectangle {
+                        id: csvLangBtn
+                        width: 28; height: 18
+                        radius: 3
+                        visible: root.refTextHasBothLangs
+                        color: csvLangMA.pressed ? "#3a3a45"
+                              : csvLangMA.containsMouse ? "#2a2a32"
+                              : "#1a1a1d"
+                        border.color: "#3a3a45"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: root.refTextLang === "zh" ? "中" : "EN"
+                            font.pixelSize: 10
+                            color: "#e8e8ec"
+                        }
+                        MouseArea {
+                            id: csvLangMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.refTextLang = (root.refTextLang === "zh" ? "en" : "zh")
+                        }
+                        ToolTip.visible: csvLangMA.containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "切换中文 / 英文"
+                    }
+                    // CSV 选择
+                    Rectangle {
+                        id: csvPickBtn
+                        width: 38; height: 18
+                        radius: 3
+                        readonly property bool active: root.refTextKind === "csv"
+                        color: csvPickMA.pressed ? "#3a3a45"
+                              : csvPickMA.containsMouse ? "#2a2a32"
+                              : (active ? "#1f2e2a" : "#1a1a1d")
+                        border.color: active ? "#0fa085" : "#3a3a45"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "CSV"
+                            font.pixelSize: 10
+                            color: csvPickBtn.active ? "#7fe5cc" : "#e8e8ec"
+                        }
+                        MouseArea {
+                            id: csvPickMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: refSidebarCsvDlg.open()
+                        }
+                        ToolTip.visible: csvPickMA.containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: "选择 CSV 文件"
+                    }
+                    // 清除
+                    Rectangle {
+                        id: csvClearBtn
+                        width: 38; height: 18
+                        radius: 3
+                        visible: root.refTextKind === "csv"
+                        color: csvClearMA.pressed ? "#5a2a2a"
+                              : csvClearMA.containsMouse ? "#3a2228"
+                              : "#1a1a1d"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "清除"
+                            font.pixelSize: 10
+                            color: "#e8b0b0"
+                        }
+                        MouseArea {
+                            id: csvClearMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (root.refCurrentFolder.length > 0)
+                                    Reference.clearText(root.refCurrentFolder)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 第二行：完整 prompt 文本（一整行带横向滚动 / wrap）
+            Rectangle {
+                id: csvBottomTextBox
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: csvBottomTitleRow.bottom
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                anchors.topMargin: 2
+                anchors.bottomMargin: 6
+                color: "#0e0e10"
+                border.color: csvBottomTextDrop.containsDrag ? "#5a8fd8" : "#2c2c32"
+                border.width: 1
+                radius: 4
+
+                Flickable {
+                    id: csvBottomScroll
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    clip: true
+                    contentWidth: width
+                    contentHeight: csvBottomLabel.implicitHeight
+                    visible: root.refTextHasCurrent
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    Text {
+                        id: csvBottomLabel
+                        width: csvBottomScroll.width
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        text: root.refTextDisplay
+                        color: "#d8d8e0"
+                        font.pixelSize: 12
+                        lineHeight: 1.4
+                    }
+                }
+                Label {
+                    anchors.centerIn: parent
+                    width: parent.width - 16
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                    visible: !csvBottomScroll.visible
+                    color: "#6a6a78"
+                    font.pixelSize: 11
+                    text: {
+                        if (root.refCurrentFolder.length === 0)
+                            return "请选中任一通道"
+                        if (root.refTextKind === "")
+                            return "未绑定参考文本（CSV）— 点击右侧「CSV」选择文件，或拖入 .csv"
+                        return "已绑定 CSV，但当前行为空 / 越界（视频序号超出 CSV 行数）"
+                    }
+                }
+
+                // 拖拽接收：CSV 文件
+                DropArea {
+                    id: csvBottomTextDrop
+                    anchors.fill: parent
+                    onDropped: function(drop) {
+                        if (root.refCurrentFolder.length === 0) { drop.accepted = false; return }
+                        if (!drop.hasUrls) { drop.accepted = false; return }
+                        for (var i = 0; i < drop.urls.length; ++i) {
+                            var u = drop.urls[i]
+                            var s = String(u).toLowerCase()
+                            if (s.endsWith(".csv")) {
+                                if (Reference.setReferenceCsvUrl(root.refCurrentFolder, u)) {
+                                    drop.accepted = true; return
+                                }
+                            }
+                        }
+                        drop.accepted = false
+                    }
+                }
+            }
+        }
+    }
+
     // ─── 视频网格容器 ────────────────────────────────────────────────────
     // 顶部留 2px 余白，避免与 ToolBar 视觉粘连；同时让 cell 的 2px 选中边
     // 框不被 ToolBar 阴影/分隔线压住。
@@ -3754,7 +4270,7 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.topMargin: 2
-        anchors.bottom: parent.bottom
+        anchors.bottom: csvBottomBar.top
 
         focus: true
 
@@ -4427,13 +4943,19 @@ ApplicationWindow {
         property real panY: 0
         readonly property real minZoom: 1.0
         readonly property real maxZoom: 10.0
+        // 当前查看的是哪一槽位的参考图：1 = 上半（默认），2 = 下半
+        property int currentSlot: 1
+        readonly property url currentSrc: currentSlot === 2 ? root.refCurrentUrl2 : root.refCurrentUrl
+        readonly property bool currentHas: currentSlot === 2 ? root.refHasCurrent2 : root.refHasCurrent
         // 是否处于"100%（实际像素）"状态（用于切换标签 / 高亮按钮）
         readonly property bool atFit:    Math.abs(zoom - 1.0) < 0.001
         readonly property bool atActual: refLightboxImg.sourceSize.width > 0
                                          && Math.abs(zoom * fitScale - 1.0) < 0.001
 
-        function open() {
-            if (!root.refHasCurrent) return
+        function open() { openSlot(1) }
+        function openSlot(slot) {
+            currentSlot = (slot === 2 ? 2 : 1)
+            if (!currentHas) return
             zoom = 1.0; panX = 0; panY = 0
             visible = true
             forceActiveFocus()
@@ -4549,7 +5071,7 @@ ApplicationWindow {
         //   · 切图（refCurrentUrl 变）时才会重新走 Loading；窗口 resize / 缩放 / 平移都不触发。
         Image {
             id: refLightboxImg
-            source: root.refCurrentUrl
+            source: refLightbox.currentSrc
             asynchronous: true
             cache: true
             smooth: true

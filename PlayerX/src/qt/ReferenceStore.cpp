@@ -88,6 +88,8 @@ void ReferenceStore::loadFromDisk() {
         Entry e;
         e.kind     = s.value("kind", "").toString();
         e.path     = s.value("path", "").toString();
+        e.kind2    = s.value("kind2", "").toString();
+        e.path2    = s.value("path2", "").toString();
         e.textKind = s.value("textKind", "").toString();
         e.textPath = s.value("textPath", "").toString();
         s.endGroup();
@@ -96,12 +98,15 @@ void ReferenceStore::loadFromDisk() {
         if (!e.path.isEmpty() && (e.kind != "image" && e.kind != "folder")) {
             e.kind.clear(); e.path.clear();
         }
+        if (!e.path2.isEmpty() && (e.kind2 != "image" && e.kind2 != "folder")) {
+            e.kind2.clear(); e.path2.clear();
+        }
         // 文本字段校验
         if (!e.textPath.isEmpty() && e.textKind != "csv") {
             e.textKind.clear(); e.textPath.clear();
         }
         // 全部为空 → 跳过
-        if (e.path.isEmpty() && e.textPath.isEmpty()) continue;
+        if (e.path.isEmpty() && e.path2.isEmpty() && e.textPath.isEmpty()) continue;
 
         const QString folder = decodeKey(g);
         if (folder.isEmpty()) continue;
@@ -137,6 +142,10 @@ void ReferenceStore::saveToDisk() const {
         if (!e.kind.isEmpty() && !e.path.isEmpty()) {
             s.setValue("kind", e.kind);
             s.setValue("path", e.path);
+        }
+        if (!e.kind2.isEmpty() && !e.path2.isEmpty()) {
+            s.setValue("kind2", e.kind2);
+            s.setValue("path2", e.path2);
         }
         if (!e.textKind.isEmpty() && !e.textPath.isEmpty()) {
             s.setValue("textKind", e.textKind);
@@ -557,7 +566,8 @@ void ReferenceStore::clearReference(const QString& folderPath) {
     if (!m_map.contains(k)) return;
     Entry& e = m_map[k];
     e.kind.clear(); e.path.clear();
-    if (e.textKind.isEmpty() && e.textPath.isEmpty()) {
+    if (e.kind2.isEmpty() && e.path2.isEmpty()
+        && e.textKind.isEmpty() && e.textPath.isEmpty()) {
         m_map.remove(k);
     }
     saveToDisk();
@@ -712,7 +722,8 @@ void ReferenceStore::clearText(const QString& folderPath) {
     if (!m_map.contains(k)) return;
     Entry& e = m_map[k];
     e.textKind.clear(); e.textPath.clear();
-    if (e.kind.isEmpty() && e.path.isEmpty()) {
+    if (e.kind.isEmpty() && e.path.isEmpty()
+        && e.kind2.isEmpty() && e.path2.isEmpty()) {
         m_map.remove(k);
     }
     saveToDisk();
@@ -725,6 +736,163 @@ void ReferenceStore::clearText(const QString& folderPath) {
 
 QStringList ReferenceStore::allFolders() const {
     return m_map.keys();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// (A2) 参考图 槽位 2 — 与槽位 1 完全对称的实现
+// ════════════════════════════════════════════════════════════════════════
+//
+// 这一段是槽位 1 (kindOf / referenceUrlForVideo* / setReference* / clearReference)
+// 的完全镜像，只是把字段名从 kind/path 改成 kind2/path2、信号改成 reference2Changed。
+// 单独写一份是为了让槽位 1 的"老 API 行为零变化"——所有现存代码（包括 MultiGroupRow 等）
+// 不需要改一行就能继续工作。
+//
+// 设计动机：左侧栏现在要展示「两份」参考图（如原型图 + 草图），二者各自独立绑定，
+// 都跟随对比组同步切换。如果把两份合并到同一字段，clearReference 等行为会变得歧义。
+
+QString ReferenceStore::kindOf2(const QString& folderPath) const {
+    const QString k = normalizeFolder(folderPath);
+    if (k.isEmpty()) return {};
+    auto it = m_map.constFind(k);
+    if (it == m_map.constEnd()) return {};
+    if (it->kind2 == "image") {
+        if (!QFileInfo::exists(it->path2)) return {};
+    } else if (it->kind2 == "folder") {
+        QFileInfo fi(it->path2);
+        if (!fi.exists() || !fi.isDir()) return {};
+    } else {
+        return {};
+    }
+    return it->kind2;
+}
+
+bool ReferenceStore::hasReference2(const QString& folderPath) const {
+    return !kindOf2(folderPath).isEmpty();
+}
+
+QUrl ReferenceStore::referenceUrlForVideo2(const QString& videoPath) const {
+    return referenceUrlForVideoOffset2(videoPath, 0);
+}
+
+QString ReferenceStore::referenceProgressForVideo2(const QString& videoPath) const {
+    return referenceProgressForVideoOffset2(videoPath, 0);
+}
+
+QUrl ReferenceStore::referenceUrlForVideoOffset2(const QString& videoPath, int offset) const {
+    if (videoPath.isEmpty()) return {};
+    QFileInfo fi(videoPath);
+    if (!fi.exists()) return {};
+    const QString folder = normalizeFolder(fi.absolutePath());
+    if (folder.isEmpty()) return {};
+    auto it = m_map.constFind(folder);
+    if (it == m_map.constEnd()) return {};
+
+    if (it->kind2 == "image") {
+        if (!QFileInfo::exists(it->path2)) return {};
+        return QUrl::fromLocalFile(it->path2);
+    }
+    if (it->kind2 == "folder") {
+        const QStringList imgs = listImages(it->path2);
+        if (imgs.isEmpty()) return {};
+        auto idx = videoIndexInDir(videoPath);
+        int useIdx = idx.first < 0 ? 0 : idx.first;
+        useIdx += offset;
+        if (useIdx < 0) useIdx = 0;
+        if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
+        return QUrl::fromLocalFile(imgs.at(useIdx));
+    }
+    return {};
+}
+
+QString ReferenceStore::referenceProgressForVideoOffset2(const QString& videoPath, int offset) const {
+    if (videoPath.isEmpty()) return {};
+    QFileInfo fi(videoPath);
+    if (!fi.exists()) return {};
+    const QString folder = normalizeFolder(fi.absolutePath());
+    auto it = m_map.constFind(folder);
+    if (it == m_map.constEnd()) return {};
+    if (it->kind2 != "folder") return {};
+
+    const QStringList imgs = listImages(it->path2);
+    if (imgs.isEmpty()) return {};
+    auto idx = videoIndexInDir(videoPath);
+    int useIdx = idx.first < 0 ? 0 : idx.first;
+    useIdx += offset;
+    if (useIdx < 0) useIdx = 0;
+    if (useIdx >= imgs.size()) useIdx = imgs.size() - 1;
+    return QString::number(useIdx + 1) + " / " + QString::number(imgs.size());
+}
+
+int ReferenceStore::referenceImageCountForVideo2(const QString& videoPath) const {
+    if (videoPath.isEmpty()) return 0;
+    QFileInfo fi(videoPath);
+    if (!fi.exists()) return 0;
+    const QString folder = normalizeFolder(fi.absolutePath());
+    auto it = m_map.constFind(folder);
+    if (it == m_map.constEnd()) return 0;
+    if (it->kind2 != "folder") return 0;
+    return listImages(it->path2).size();
+}
+
+bool ReferenceStore::setReference2(const QString& folderPath, const QString& imagePath) {
+    const QString k = normalizeFolder(folderPath);
+    if (k.isEmpty()) return false;
+    const QString p = urlOrPathToLocal(imagePath);
+    if (p.isEmpty()) return false;
+    if (!isSupportedImage(p)) return false;
+    if (!QFileInfo::exists(p)) return false;
+
+    Entry e = m_map.value(k);
+    e.kind2 = "image"; e.path2 = p;
+    m_map.insert(k, e);
+    saveToDisk();
+    emit reference2Changed(k);
+    return true;
+}
+
+bool ReferenceStore::setReferenceUrl2(const QString& folderPath, const QUrl& imageUrl) {
+    QString p;
+    if (imageUrl.isLocalFile()) p = imageUrl.toLocalFile();
+    else p = imageUrl.toString();
+    return setReference2(folderPath, p);
+}
+
+bool ReferenceStore::setReferenceFolder2(const QString& folderPath, const QString& imageDir) {
+    const QString k = normalizeFolder(folderPath);
+    if (k.isEmpty()) return false;
+    const QString d = normalizeFolder(urlOrPathToLocal(imageDir));
+    if (d.isEmpty()) return false;
+    QFileInfo fi(d);
+    if (!fi.exists() || !fi.isDir()) return false;
+    if (listImages(d).isEmpty()) return false;
+
+    Entry e = m_map.value(k);
+    e.kind2 = "folder"; e.path2 = d;
+    m_map.insert(k, e);
+    saveToDisk();
+    emit reference2Changed(k);
+    return true;
+}
+
+bool ReferenceStore::setReferenceFolderUrl2(const QString& folderPath, const QUrl& imageDirUrl) {
+    QString p;
+    if (imageDirUrl.isLocalFile()) p = imageDirUrl.toLocalFile();
+    else p = imageDirUrl.toString();
+    return setReferenceFolder2(folderPath, p);
+}
+
+void ReferenceStore::clearReference2(const QString& folderPath) {
+    const QString k = normalizeFolder(folderPath);
+    if (k.isEmpty()) return;
+    if (!m_map.contains(k)) return;
+    Entry& e = m_map[k];
+    e.kind2.clear(); e.path2.clear();
+    if (e.kind.isEmpty() && e.path.isEmpty()
+        && e.textKind.isEmpty() && e.textPath.isEmpty()) {
+        m_map.remove(k);
+    }
+    saveToDisk();
+    emit reference2Changed(k);
 }
 
 } // namespace rbqt

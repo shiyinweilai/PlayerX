@@ -62,6 +62,29 @@ public:
     Q_INVOKABLE void clearReference(const QString& folderPath);
 
     // ════════════════════════════════════════════════════════════════
+    // (A2) 参考图 槽位 2（独立于槽位 1，行为完全对等）
+    //
+    // 设计动机：
+    //   左侧栏需要同时展示「两份」参考图（如原型图 + 草图），二者各自独立绑定，
+    //   都跟随对比组同步切换。这里的接口是「槽位 1」的完全镜像，
+    //   持久化字段为 kind2 / path2，与 kind/path 不冲突。
+    // ════════════════════════════════════════════════════════════════
+    Q_INVOKABLE QString kindOf2(const QString& folderPath) const;
+    Q_INVOKABLE bool hasReference2(const QString& folderPath) const;
+
+    Q_INVOKABLE QUrl referenceUrlForVideo2(const QString& videoPath) const;
+    Q_INVOKABLE QString referenceProgressForVideo2(const QString& videoPath) const;
+    Q_INVOKABLE QUrl referenceUrlForVideoOffset2(const QString& videoPath, int offset) const;
+    Q_INVOKABLE QString referenceProgressForVideoOffset2(const QString& videoPath, int offset) const;
+    Q_INVOKABLE int referenceImageCountForVideo2(const QString& videoPath) const;
+
+    Q_INVOKABLE bool setReference2(const QString& folderPath, const QString& imagePath);
+    Q_INVOKABLE bool setReferenceUrl2(const QString& folderPath, const QUrl& imageUrl);
+    Q_INVOKABLE bool setReferenceFolder2(const QString& folderPath, const QString& imageDir);
+    Q_INVOKABLE bool setReferenceFolderUrl2(const QString& folderPath, const QUrl& imageDirUrl);
+    Q_INVOKABLE void clearReference2(const QString& folderPath);
+
+    // ════════════════════════════════════════════════════════════════
     // (B) 参考文本（CSV）维度 — 与参考图相互独立
     // ════════════════════════════════════════════════════════════════
 
@@ -108,14 +131,19 @@ signals:
     void referenceChanged(const QString& folderPath);
     // 参考文本（CSV）发生变化
     void referenceTextChanged(const QString& folderPath);
+    // 参考图（槽位 2）发生变化
+    void reference2Changed(const QString& folderPath);
 
 private:
     // ── 内部数据结构 ────────────────────────────────────────────────
     // 一个文件夹同时拥有图片绑定 + 文本绑定，二者独立。
     struct Entry {
-        // 图片维度
+        // 图片维度（槽位 1）
         QString kind;       // "image" / "folder" / ""（未绑定）
         QString path;       // 图片或图片文件夹绝对路径
+        // 图片维度（槽位 2，与槽位 1 完全独立）
+        QString kind2;      // "image" / "folder" / ""（未绑定）
+        QString path2;      // 图片或图片文件夹绝对路径
         // 文本维度
         QString textKind;   // "csv" / ""（未绑定）
         QString textPath;   // csv 绝对路径
