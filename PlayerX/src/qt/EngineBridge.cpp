@@ -269,6 +269,84 @@ void EngineBridge::setSpeed(double speed) {
     }
 }
 
+// ═════════════════════════════════════════════════════════════════════
+// 全局视图变换（缩放 / 平移）
+// 存在 EngineBridge 中一份，所有 cell / 滑动对比视图同步读同一组状态。
+// 画质策略：zoom == 1 且 pan == 0 时走原有快路径，按位不动；
+// 只要任一项偏移，才走 srcRect→dstRect 采样路径（详 VideoFrameProvider::paint）。
+// ═════════════════════════════════════════════════════════════════════
+void EngineBridge::rbClampViewPan() {
+    // pan 可活动范围：zoom 越大，允许越大的 |pan|，以保证画面不被拖出身体完全可见范围。
+    // 具体使用"src 边界必须覆盖显示矩形"作为约束：
+    //   srcW = areaW / zoom，src 中心偏移 pan*areaW 后，需保证 src 区间仍在 [0,areaW] 内。
+    //   → |pan| <= (1 - 1/zoom) / 2。zoom<=1 时则强制 pan=0（全画面可见，无需平移）。
+    if (m_viewZoom <= 1.0 + 1e-9) {
+        m_viewPanX = 0.0;
+        m_viewPanY = 0.0;
+        return;
+    }
+    const double maxPan = (1.0 - 1.0 / m_viewZoom) * 0.5;
+    if (m_viewPanX >  maxPan) m_viewPanX =  maxPan;
+    if (m_viewPanX < -maxPan) m_viewPanX = -maxPan;
+    if (m_viewPanY >  maxPan) m_viewPanY =  maxPan;
+    if (m_viewPanY < -maxPan) m_viewPanY = -maxPan;
+}
+
+void EngineBridge::zoomBy(double factor, double anchorNX, double anchorNY) {
+    if (!(factor > 0.0)) return;
+    const double oldZoom = m_viewZoom;
+    double newZoom = oldZoom * factor;
+    if (newZoom < kZoomMin) newZoom = kZoomMin;
+    if (newZoom > kZoomMax) newZoom = kZoomMax;
+    if (std::abs(newZoom - oldZoom) < 1e-9 &&
+        std::abs(m_viewPanX) < 1e-9 && std::abs(m_viewPanY) < 1e-9) {
+        return;
+    }
+    // 以 anchor 为中心缩放：保持 anchor 在屏幕上对应的"视频内容点"不动。
+    // 在归一化坐标下：
+    //   src_old(anchor) = (anchor - 0.5)/oldZoom + 0.5 + panOld
+    //   src_new(anchor) = (anchor - 0.5)/newZoom + 0.5 + panNew
+    //   令 src_new == src_old → panNew = panOld + (anchor - 0.5)*(1/oldZoom - 1/newZoom)
+    const double ax = (anchorNX - 0.5);
+    const double ay = (anchorNY - 0.5);
+    m_viewPanX += ax * (1.0/oldZoom - 1.0/newZoom);
+    m_viewPanY += ay * (1.0/oldZoom - 1.0/newZoom);
+    m_viewZoom  = newZoom;
+    rbClampViewPan();
+    emit viewTransformChanged();
+    emit requestRepaint();
+}
+
+void EngineBridge::zoomTo(double absZoom, double anchorNX, double anchorNY) {
+    if (!(absZoom > 0.0)) return;
+    if (m_viewZoom <= 0.0) return;
+    zoomBy(absZoom / m_viewZoom, anchorNX, anchorNY);
+}
+
+void EngineBridge::panBy(double dxN, double dyN) {
+    if (m_viewZoom <= 1.0 + 1e-9) return; // 1× 下不可平移
+    // 画面跟随鼠标方向：鼠标向右拖，dxN > 0 → 看到的内容向左移动一个鼠标偏移量，
+    // 即 src 区间在归一化坐标上向左偏移 → pan -= d (考虑 zoom 的实际肆例)。
+    m_viewPanX -= dxN / m_viewZoom;
+    m_viewPanY -= dyN / m_viewZoom;
+    rbClampViewPan();
+    emit viewTransformChanged();
+    emit requestRepaint();
+}
+
+void EngineBridge::resetViewTransform() {
+    if (std::abs(m_viewZoom - 1.0) < 1e-9 &&
+        std::abs(m_viewPanX) < 1e-9 &&
+        std::abs(m_viewPanY) < 1e-9) {
+        return;
+    }
+    m_viewZoom = 1.0;
+    m_viewPanX = 0.0;
+    m_viewPanY = 0.0;
+    emit viewTransformChanged();
+    emit requestRepaint();
+}
+
 // 单路
 void EngineBridge::togglePauseAt(int idx) {
     if (!m_engine) return;

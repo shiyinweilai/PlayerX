@@ -66,6 +66,88 @@ Rectangle {
         antialiasing: false
     }
 
+    // ─── 全局同步缩放/平移交互层 ────────────────────────────────
+    // 设计说明：
+    //   · 全部装在一个 MouseArea 上（panArea），MouseArea 只接 RightButton：
+    //       - 右键拖拽 → Engine.panBy()
+    //       - 右键点击未拖拽 → 切换本 cell 信息面板
+    //   · WheelHandler 装在同一个 panArea 上（PointerHandler 与 MouseArea 可同层存）：
+    //       - 滚轮 → Engine.zoomBy() 以鼠标位置为锚点
+    //   · TapHandler 装在 panArea 上仅接 LeftButton + ControlModifier：
+    //       - Ctrl + 左键双击 → Engine.resetViewTransform()
+    //   · 原有 cellMouse 的普通左键点击 / 双击：MouseArea 未接 LeftButton → 左键事件
+    //     会被透传给下层 cellMouse。
+    //   · z = 1：低于所有叠加控件（pathBar/channelBar/cellBar，它们 z>=5），按钮依然可点。
+    MouseArea {
+        id: panArea
+        anchors.fill: vp
+        z: 1
+        // 只接 RightButton。左键、中键事件不在接收列表 → 自动透传给下层 cellMouse。
+        acceptedButtons: Qt.RightButton
+        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.ArrowCursor
+
+        property real _lastX: 0
+        property real _lastY: 0
+        property bool _moved: false
+
+        function _normMouse(mx, my) {
+            var w = Math.max(1, panArea.width)
+            var h = Math.max(1, panArea.height)
+            return Qt.point(Math.max(0, Math.min(1, mx / w)),
+                            Math.max(0, Math.min(1, my / h)))
+        }
+
+        onPressed: function(mouse) {
+            _lastX = mouse.x
+            _lastY = mouse.y
+            _moved = false
+            mouse.accepted = true
+        }
+        onPositionChanged: function(mouse) {
+            if (Engine.viewZoom <= 1.0001) return
+            var dx = mouse.x - _lastX
+            var dy = mouse.y - _lastY
+            _lastX = mouse.x
+            _lastY = mouse.y
+            if (Math.abs(dx) + Math.abs(dy) < 0.5) return
+            _moved = true
+            var w = Math.max(1, panArea.width)
+            var h = Math.max(1, panArea.height)
+            // 画面跟随鼠标：dx>0 鼠标向右 → 画面向右走 → panBy 内部反向偏移 src。
+            Engine.panBy(dx / w, dy / h)
+        }
+        onReleased: function(mouse) {
+            // 右键专职用于拖拽平移；信息面板切换已迁移到左键单击（cellMouse.onClicked）。
+            // 这里不再处理
+        }
+
+        // 滚轮缩放：装在同一个 MouseArea 上，避免与 MouseArea 抢事件问题。
+        // angleDelta.y 每 120 = 1 个"棘轮齿"（鼠标滚轮）；触控板会下发较小的增量。
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            target: null
+            onWheel: function(event) {
+                if (Engine.fileCount <= 0) return
+                var dy = event.angleDelta.y
+                if (dy === 0) return
+                var step = dy / 120.0
+                // 触控板增量可能很小，使 step 不为 0
+                if (Math.abs(step) < 1e-3) step = (dy > 0 ? 0.05 : -0.05)
+                var factor = Math.pow(2.0, step / 12.0)
+                // WheelHandler 中 event.x/event.y 是鼠标在装载容器中的坐标
+                var n = panArea._normMouse(event.x, event.y)
+                Engine.zoomBy(factor, n.x, n.y)
+                event.accepted = true
+            }
+        }
+
+        // Ctrl + 左键双击 → 复位。TapHandler 独立接收 LeftButton，与 MouseArea acceptedButtons 无关。
+        TapHandler {
+            acceptedButtons: Qt.LeftButton
+            acceptedModifiers: Qt.ControlModifier
+            onDoubleTapped: Engine.resetViewTransform()
+        }
+    }
     // 序号徽标（受全局"通道信息"开关控制，默认显示）
     Rectangle {
         id: idxBadge
@@ -511,19 +593,19 @@ Rectangle {
     // 因为 MouseArea.containsMouse 会被子项（ToolButton 等）截获，
     // 导致鼠标移到工具条按钮上时 cellMouse.containsMouse 变 false → 工具条隐藏
     // → 按钮也消失 → 鼠标又"回到"cell → 工具条出现……陷入抖动闪烁。
+    // 左键：选中本路 / 双击切换该路暂停（保留与原行为一致）
+    // 右键：已迁到上方 panArea（zoom>1 时拖拽，否则点击切换信息面板），
+    //       这里不再接 RightButton，避免双向监听时事件竞争。
     MouseArea {
         id: cellMouse
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        acceptedButtons: Qt.LeftButton
         onClicked: (mouse) => {
-            if (mouse.button === Qt.RightButton) {
-                // 右键：刷新信息并切换信息面板显示
-                cell.localInfoVisible = !cell.localInfoVisible
-            } else {
-                Engine.activeIndex = cell.playerIdx
-                viewRoot.selectedIdx   = cell.playerIdx   // 同步 UI 选中态
-                viewRoot.focusVideoArea()
-            }
+            Engine.activeIndex = cell.playerIdx
+            viewRoot.selectedIdx   = cell.playerIdx   // 同步 UI 选中态
+            viewRoot.focusVideoArea()
+            // 左键单击切换本 cell 信息面板（与全局 V 快捷键效果一致，但只针对本路）。
+            cell.localInfoVisible = !cell.localInfoVisible
         }
         onDoubleClicked: (mouse) => {
             // 仅在「单路悬停控制条」开关开启时，双击才切换该路暂停。

@@ -41,6 +41,21 @@ class EngineBridge : public QObject {
     // 避免跳出合理范围。
     Q_PROPERTY(double     speed       READ speed       NOTIFY speedChanged)
 
+    // ─── 全局视图变换（窗口内缩放 / 平移）─────────────────────────────────
+    // 设计要点：
+    //   ① 全局共享一份 zoom/panX/panY，所有 VideoFrameProvider 与 SliderCompareItem
+    //      读同一组状态 → 任意一路操作，所有路同步缩放/平移，无需手动对齐。
+    //   ② panX/panY 是"归一化平移"：以视频显示矩形宽/高为单位（[-1,1] 安全区，
+    //      具体由 C++ 渲染端按 zoom 夹紧）。这样不同分辨率/不同 cell 尺寸的视频
+    //      都按"对应内容点"同步平移，永远像素级对齐。
+    //   ③ 1.0× 时 panX=panY=0，渲染走与现状字节级一致的快路径，画质零回退。
+    Q_PROPERTY(double     viewZoom    READ viewZoom    NOTIFY viewTransformChanged)
+    Q_PROPERTY(double     viewPanX    READ viewPanX    NOTIFY viewTransformChanged)
+    Q_PROPERTY(double     viewPanY    READ viewPanY    NOTIFY viewTransformChanged)
+    // 派生属性：是否处于非默认变换（zoom != 1 或 pan != 0），
+    // 用于底部"视图复位"按钮的高亮 / 启用判断。
+    Q_PROPERTY(bool       viewTransformed READ viewTransformed NOTIFY viewTransformChanged)
+
 public:
     // 与 QML 同步的 layout 枚举
     // 注意：Single 模式仍保留（数字键 1-9 第二次按下时使用），但默认布局是 SideBySide。
@@ -74,6 +89,15 @@ public:
     QStringList titles()      const;
     double      speed()       const { return m_lastSpeed; }
 
+    double      viewZoom()      const { return m_viewZoom; }
+    double      viewPanX()      const { return m_viewPanX; }
+    double      viewPanY()      const { return m_viewPanY; }
+    bool        viewTransformed() const {
+        return std::abs(m_viewZoom - 1.0) > 1e-6
+            || std::abs(m_viewPanX) > 1e-6
+            || std::abs(m_viewPanY) > 1e-6;
+    }
+
     void setActiveIndex(int v);
     void setLayoutMode(int v);
 
@@ -105,6 +129,18 @@ public slots:
     void resetSpeed();
     void setSpeed(double speed);
 
+    // ─── 全局视图变换 slot ──────────────────────────────────────────────
+    // anchorNX/anchorNY ∈ [0,1]：缩放锚点在"视频显示矩形"内的归一化坐标，
+    // 用来实现"以鼠标当前位置为中心"的缩放。anchor 缺省（0.5,0.5）即中心缩放。
+    // 实现行为：保持锚点对应的视频内容点在屏幕上的位置不变，更新 zoom/pan。
+    void zoomBy(double factor, double anchorNX, double anchorNY);
+    void zoomTo(double absZoom, double anchorNX, double anchorNY);
+    // 增量平移：dxN/dyN 为"显示矩形"为单位的归一化增量（鼠标拖拽 dx/areaW、dy/areaH）。
+    // 画面跟随鼠标方向移动（鼠标向右拖 → 画面向右走）。
+    void panBy(double dxN, double dyN);
+    // 复位到 zoom=1, pan=(0,0)
+    void resetViewTransform();
+
     // 单路控制
     void togglePauseAt(int idx);
     void seekAt(int idx, double seconds);
@@ -132,6 +168,7 @@ signals:
     void positionChanged();
     void durationChanged();
     void speedChanged();
+    void viewTransformChanged();
     void requestRepaint(); // 通知所有 VideoFrameProvider 刷新
 
 private slots:
@@ -154,6 +191,18 @@ private:
     double  m_lastDuration{-1.0};
     int     m_lastFileCount{0};
     double  m_lastSpeed{1.0};
+
+    // 全局视图变换（缩放 / 平移），所有路同步生效
+    double  m_viewZoom{1.0};
+    double  m_viewPanX{0.0}; // 归一化：以视频显示矩形宽为单位
+    double  m_viewPanY{0.0}; // 归一化：以视频显示矩形高为单位
+
+    // 缩放范围（与产品需求保持一致）
+    static constexpr double kZoomMin = 0.2;
+    static constexpr double kZoomMax = 8.0;
+
+    // 把 pan 限制在合法范围（避免拖出黑边过远）。zoom<=1 时强制 pan=0。
+    void rbClampViewPan();
 };
 
 } // namespace rbqt

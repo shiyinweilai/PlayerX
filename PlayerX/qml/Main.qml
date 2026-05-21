@@ -1985,6 +1985,20 @@ ApplicationWindow {
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("全部重置到开头（R）")
             }
+            // 视图复位：缩放 + 平移一并归零（同：Ctrl + 鼠标双击）
+            // 仅在已有缩放/平移状态时高亮启用，否则置灰但仍占位，避免界面跳动。
+            FlatButton {
+                text: "⊙"
+                visible: Engine.fileCount > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                font.pixelSize: 16
+                enabled: Engine.viewTransformed
+                opacity: enabled ? 1.0 : 0.45
+                onClicked: Engine.resetViewTransform()
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("视图复位（缩放/平移归零，同 Ctrl+双击）")
+            }
 
             // ── 多组对比模式专用：上一组 / 下一组 + 组号指示 ──
             // 仅在 multiGroupDialog.active = true 且当前确实有视频时可见；

@@ -161,6 +161,8 @@ void VideoFrameProvider::setEngine(EngineBridge* eng) {
     if (m_engine) {
         disconnect(m_engine.data(), &EngineBridge::requestRepaint,
                    this, &VideoFrameProvider::onEngineRepaint);
+        disconnect(m_engine.data(), &EngineBridge::viewTransformChanged,
+                   this, &VideoFrameProvider::onEngineRepaint);
     }
     m_engine = eng;
 
@@ -173,6 +175,12 @@ void VideoFrameProvider::setEngine(EngineBridge* eng) {
             m_player.reset();
         }
         connect(m_engine.data(), &EngineBridge::requestRepaint,
+                this, &VideoFrameProvider::onEngineRepaint);
+        // 视图变换（全局 zoom/pan）变化同样需要刷新本 Item。
+        // requestRepaint 路径在 onTick 里每帧都会走，但加上这条连接后：
+        //   ① 暂停态下拖拽 / 滚轮 → onTick 同步报 requestRepaint依然可以走，
+        //   ② 但明确加上 viewTransformChanged 让代码意图更清晰，且避免不必要的满 16ms 满。
+        connect(m_engine.data(), &EngineBridge::viewTransformChanged,
                 this, &VideoFrameProvider::onEngineRepaint);
     } else {
         // 退出引擎模式：恢复自持有 timer
@@ -430,7 +438,56 @@ void VideoFrameProvider::paint(QPainter* painter) {
     // 否则 Qt 还会做一次双线性插值——网格伪影 / 文字糊化的元凶。
     painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
     painter->setRenderHint(QPainter::Antialiasing,           false);
-    painter->drawImage(target, m_currentImage);
+
+    // ─── 全局视图变换（zoom / pan）───────────────────────────────────────
+    // 设计原则：zoom == 1 && pan == 0 时走与原有完全一致的快路径（画质零回退）。
+    // 仅在存在变换时才走 srcRect → dstRect 采样，Qt 做单次双线性采样。
+    double zoom = 1.0, panX = 0.0, panY = 0.0;
+    if (m_engine) {
+        zoom = m_engine->viewZoom();
+        panX = m_engine->viewPanX();
+        panY = m_engine->viewPanY();
+    }
+    const bool transformed =
+        std::abs(zoom - 1.0) > 1e-6 ||
+        std::abs(panX)       > 1e-6 ||
+        std::abs(panY)       > 1e-6;
+
+    if (!transformed) {
+        painter->drawImage(target, m_currentImage);
+        return;
+    }
+
+    // src 区间（在 m_currentImage 中，以像素为单位）：
+    //   srcW = dstW / zoom，srcH = dstH / zoom
+    //   src 中心 = (dstW/2 + panX*dstW, dstH/2 + panY*dstH)
+    // dst 区间始终是整个 target（逻辑坐标的显示矩形）。
+    const double srcW = double(dstW) / zoom;
+    const double srcH = double(dstH) / zoom;
+    const double cx   = double(dstW) * 0.5 + panX * double(dstW);
+    const double cy   = double(dstH) * 0.5 + panY * double(dstH);
+    QRectF srcRect(cx - srcW * 0.5, cy - srcH * 0.5, srcW, srcH);
+
+    // 画面裁剪到 target 中：如果 srcRect 超出 [0, dstW]x[0, dstH]，黑边交给底色。
+    // 底色已由 setFillColor(Qt::black) 填充；这里只需采样 srcRect 中与可用区间重叠部分。
+    QRectF imgBounds(0, 0, m_currentImage.width(), m_currentImage.height());
+    QRectF srcClip = srcRect.intersected(imgBounds);
+    if (srcClip.isEmpty()) return;
+
+    // 按 srcClip 相对 srcRect 的偏移，反推出对应的 dst 子区间。
+    const double sx = (srcClip.x()      - srcRect.x()) / srcRect.width();
+    const double sy = (srcClip.y()      - srcRect.y()) / srcRect.height();
+    const double sw = srcClip.width()                 / srcRect.width();
+    const double sh = srcClip.height()                / srcRect.height();
+    QRectF dstClip(target.x() + sx * target.width(),
+                   target.y() + sy * target.height(),
+                   sw * target.width(),
+                   sh * target.height());
+
+    // zoom > 1 时为了避免锉齿，这里允许 Qt 做单次双线性采样（取代原本关闭插值的选项）。
+    // zoom < 1 时 sws 已经拿 Lanczos 缩到了 dstW/dstH，这里只是贴上屏，同样不会产生伪影。
+    painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter->drawImage(dstClip, m_currentImage, srcClip);
 }
 
 } // namespace rbqt

@@ -72,10 +72,15 @@ void SliderCompareItem::setEngineObject(QObject* obj) {
     if (m_engine) {
         disconnect(m_engine.data(), &EngineBridge::requestRepaint,
                    this, &SliderCompareItem::onEngineRepaint);
+        disconnect(m_engine.data(), &EngineBridge::viewTransformChanged,
+                   this, &SliderCompareItem::onEngineRepaint);
     }
     m_engine = eng;
     if (m_engine) {
         connect(m_engine.data(), &EngineBridge::requestRepaint,
+                this, &SliderCompareItem::onEngineRepaint);
+        // 全局视图变换（zoom / pan）变化同样需要重绘本 Item。
+        connect(m_engine.data(), &EngineBridge::viewTransformChanged,
                 this, &SliderCompareItem::onEngineRepaint);
     }
     emit engineChanged();
@@ -212,54 +217,95 @@ void SliderCompareItem::paint(QPainter* painter) {
     painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
     painter->setRenderHint(QPainter::Antialiasing,           false);
 
+    // ─── 全局视图变换（zoom / pan）───────────────────────────────────────
+    // 与 VideoFrameProvider 使用同一组 zoom/panX/panY；默认 1× 且 pan=0 时走原有快路径。
+    const double zoom = m_engine ? m_engine->viewZoom() : 1.0;
+    const double panX = m_engine ? m_engine->viewPanX() : 0.0;
+    const double panY = m_engine ? m_engine->viewPanY() : 0.0;
+    const bool transformed =
+        std::abs(zoom - 1.0) > 1e-6 ||
+        std::abs(panX)       > 1e-6 ||
+        std::abs(panY)       > 1e-6;
+
     // 把 widget 物理像素坐标转成逻辑像素 QRectF（QPainter 用逻辑坐标）
-    auto physToLogical = [dpr, &rect](int x, int y, int w, int h) {
-        return QRectF(rect.x() + double(x) / dpr,
-                      rect.y() + double(y) / dpr,
-                      double(w) / dpr,
-                      double(h) / dpr);
+    auto physToLogical = [dpr, &rect](double x, double y, double w, double h) {
+        return QRectF(rect.x() + x / dpr,
+                      rect.y() + y / dpr,
+                      w / dpr,
+                      h / dpr);
     };
 
-    // ─── 画左半（widget 物理像素 [0, splitX]）─────────────────────────
-    if (!m_left.image.isNull() && splitX > 0) {
-        // 左图在 widget 物理像素中的覆盖矩形：[m_left.offX, m_left.offX+m_left.dstW]
-        const int imgL = m_left.offX;
-        const int imgR = m_left.offX + m_left.dstW;
-        const int clipL = std::max(0, imgL);
-        const int clipR = std::min(splitX, imgR);
-        if (clipR > clipL) {
-            // 取图像内部对应子矩形（源）
-            const int srcX = clipL - imgL;       // ≥ 0
-            const int srcW = clipR - clipL;
-            const QRectF srcRect(srcX, 0, srcW, m_left.dstH);
-            const QRectF dstRect = physToLogical(clipL, m_left.offY,
-                                                 srcW, m_left.dstH);
-            painter->drawImage(dstRect, m_left.image, srcRect);
-        }
-    }
-
-    // ─── 画右半（widget 物理像素 [splitX, areaW]）─────────────────────
-    if (!m_right.image.isNull() && splitX < areaW) {
-        const int imgL = m_right.offX;
-        const int imgR = m_right.offX + m_right.dstW;
-        const int clipL = std::max(splitX, imgL);
-        const int clipR = std::min(areaW,  imgR);
-        if (clipR > clipL) {
+    // 辅助函数：把单路在"widget 物理像素子区间 [physL, physR]×[0,areaH]"上画出。
+    // physL/physR 是 widget 物理像素；Side.image 是"应该贴到整个 [offX,offX+dstW]x[offY,offY+dstH]"的原始图。
+    // 1× 走现有逻辑；zoom/pan 走变换后的逻辑。
+    auto drawSide = [&](const Side& s, int physL, int physR) {
+        if (s.image.isNull() || physR <= physL) return;
+        if (!transformed) {
+            // 原状逻辑保持：物理像素 1:1 上屏，无任何二次采样。
+            const int imgL  = s.offX;
+            const int imgR  = s.offX + s.dstW;
+            const int clipL = std::max(physL, imgL);
+            const int clipR = std::min(physR, imgR);
+            if (clipR <= clipL) return;
             const int srcX = clipL - imgL;
             const int srcW = clipR - clipL;
-            const QRectF srcRect(srcX, 0, srcW, m_right.dstH);
-            const QRectF dstRect = physToLogical(clipL, m_right.offY,
-                                                 srcW, m_right.dstH);
-            painter->drawImage(dstRect, m_right.image, srcRect);
+            const QRectF srcRect(srcX, 0, srcW, s.dstH);
+            const QRectF dstRect = physToLogical(clipL, s.offY, srcW, s.dstH);
+            painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
+            painter->drawImage(dstRect, s.image, srcRect);
+            return;
         }
-    }
+        // zoom/pan 走 srcRect → dstRect 采样：
+        // 本路原本变换前上屏矩形 = widget 物理像素 [imgL,imgR]×[offY,offY+dstH]。
+        // 变换后：src 区间 = 原上屏矩形，在原上屏矩形内取 srcW=dstW/zoom、中心偏移 pan。
+        const int imgL = s.offX;
+        const int imgR = s.offX + s.dstW;
+        const QRectF target = physToLogical(imgL, s.offY, s.dstW, s.dstH);
+        const double srcW = double(s.dstW) / zoom;
+        const double srcH = double(s.dstH) / zoom;
+        const double cx   = double(s.dstW) * 0.5 + panX * double(s.dstW);
+        const double cy   = double(s.dstH) * 0.5 + panY * double(s.dstH);
+        QRectF srcRect(cx - srcW * 0.5, cy - srcH * 0.5, srcW, srcH);
+        QRectF imgBounds(0, 0, s.image.width(), s.image.height());
+        QRectF srcClip = srcRect.intersected(imgBounds);
+        if (srcClip.isEmpty()) return;
+        // src 裁剪 → 对应 dst 裁剪
+        const double sx = (srcClip.x() - srcRect.x()) / srcRect.width();
+        const double sy = (srcClip.y() - srcRect.y()) / srcRect.height();
+        const double sw = srcClip.width()              / srcRect.width();
+        const double sh = srcClip.height()             / srcRect.height();
+        QRectF dstClip(target.x() + sx * target.width(),
+                       target.y() + sy * target.height(),
+                       sw * target.width(),
+                       sh * target.height());
+        // 再按分割条裁剪到 [physL, physR]（逻辑像素）
+        const QRectF clipRect = physToLogical(physL, 0, physR - physL, areaH);
+        QRectF dstFinal = dstClip.intersected(clipRect);
+        if (dstFinal.isEmpty()) return;
+        // 反推对应 src 子区间
+        const double tx = (dstFinal.x() - dstClip.x()) / dstClip.width();
+        const double ty = (dstFinal.y() - dstClip.y()) / dstClip.height();
+        const double tw = dstFinal.width()             / dstClip.width();
+        const double th = dstFinal.height()            / dstClip.height();
+        QRectF srcFinal(srcClip.x() + tx * srcClip.width(),
+                        srcClip.y() + ty * srcClip.height(),
+                        tw * srcClip.width(),
+                        th * srcClip.height());
+        painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter->drawImage(dstFinal, s.image, srcFinal);
+    };
 
-    // ─── 中间分割线（1 物理像素白色） ────────────────────────────────
+    // ─── 画左半（widget 物理像素 [0, splitX]）─────────────────
+    drawSide(m_left, 0, splitX);
+
+    // ─── 画右半（widget 物理像素 [splitX, areaW]）───────────────
+    drawSide(m_right, splitX, areaW);
+
+    // ─── 中间分割线（1 物理像素白色） ──────────────────────────
     if (splitX >= 0 && splitX <= areaW) {
         const QRectF lineRect = physToLogical(std::max(0, splitX - 0), 0,
                                               1, areaH);
         painter->fillRect(lineRect, QColor(255, 255, 255, 220));
     }
 }
-
 } // namespace rbqt

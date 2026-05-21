@@ -62,6 +62,67 @@ Item {
         // 鼠标离开时保持上一次位置（不强制回中），符合 video-compare 习惯
     }
 
+    // ─── 全局缩放/平移交互层（与 VideoCellDelegate 用同一组 Engine 状态）────────
+    // 关键设计：把 MouseArea + WheelHandler + TapHandler 装在同一容器上，避免
+    // QML 中"两层 MouseArea 嵌套" + "WheelHandler 在 Item 上"的事件丢失问题。
+    // 与左键跟随分割条互不冲突：本 MouseArea 只接 RightButton；左键事件继续透传给 tracker。
+    MouseArea {
+        id: viewXformLayer
+        anchors.fill: parent
+        z: 4   // 高于 tracker 的左键跟随，但低于左右通道信息条 (z:5)
+        acceptedButtons: Qt.RightButton
+        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.ArrowCursor
+
+        function _normMouse(mx, my) {
+            var w = Math.max(1, viewXformLayer.width)
+            var h = Math.max(1, viewXformLayer.height)
+            return Qt.point(Math.max(0, Math.min(1, mx / w)),
+                            Math.max(0, Math.min(1, my / h)))
+        }
+
+        property real _lastX: 0
+        property real _lastY: 0
+        onPressed: function(mouse) {
+            _lastX = mouse.x
+            _lastY = mouse.y
+            mouse.accepted = true
+        }
+        onPositionChanged: function(mouse) {
+            if (!view.engine) return
+            if (view.engine.viewZoom <= 1.0001) return
+            var dx = mouse.x - _lastX
+            var dy = mouse.y - _lastY
+            _lastX = mouse.x
+            _lastY = mouse.y
+            if (Math.abs(dx) + Math.abs(dy) < 0.5) return
+            var w = Math.max(1, viewXformLayer.width)
+            var h = Math.max(1, viewXformLayer.height)
+            view.engine.panBy(dx / w, dy / h)
+        }
+
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            target: null
+            onWheel: function(event) {
+                if (!view.engine || view.engine.fileCount <= 0) return
+                var dy = event.angleDelta.y
+                if (dy === 0) return
+                var step = dy / 120.0
+                if (Math.abs(step) < 1e-3) step = (dy > 0 ? 0.05 : -0.05)
+                var factor = Math.pow(2.0, step / 12.0)
+                var n = viewXformLayer._normMouse(event.x, event.y)
+                view.engine.zoomBy(factor, n.x, n.y)
+                event.accepted = true
+            }
+        }
+
+        TapHandler {
+            acceptedButtons: Qt.LeftButton
+            acceptedModifiers: Qt.ControlModifier
+            onDoubleTapped: { if (view.engine) view.engine.resetViewTransform() }
+        }
+    }
+
     // ─── 左侧通道信息条 ──────────────────────────────────────────────
     Rectangle {
         id: leftBar
