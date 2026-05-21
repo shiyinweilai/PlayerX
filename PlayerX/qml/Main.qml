@@ -24,6 +24,32 @@ ApplicationWindow {
     title: "PlayerX"
     color: "#101012"
 
+    // ─── 全局 ToolTip 主题（深色半透明 + 浅字 + 圆角，统一观感）──────────────
+    // Qt 的 ToolTip.attached 共享同一个全局 popup 实例（QQuickToolTipAttached.sharedTip）。
+    // 因此只要在窗口创建时一次性修改其 background.color 与 contentItem.color，
+    // 后续 50+ 处的 `ToolTip.text/visible` 附加属性都会自动套用此暗色主题，
+    // 不需要逐处改写 background/contentItem，最大限度避免破坏既有功能。
+    Component.onCompleted: {
+        try {
+            var tip = ToolTip.toolTip
+            if (tip) {
+                if (tip.background) {
+                    tip.background.color = "#cc1a1a1f"           // 半透明深色（伪毛玻璃）
+                    if (tip.background.border !== undefined) {
+                        tip.background.border.color = "#33ffffff"
+                        tip.background.border.width = 1
+                    }
+                    tip.background.radius = 6
+                }
+                if (tip.contentItem) {
+                    tip.contentItem.color = "#e8e8ec"            // 浅色文字
+                }
+            }
+        } catch (e) {
+            console.log("[ToolTip][theme] init failed:", e)
+        }
+    }
+
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
     // 用法：菜单「帮助 → 教程…」点击时，会通过 Qt.openUrlExternally(tutorialUrl) 打开默认浏览器
     property url tutorialUrl: "https://iwiki.woa.com/p/4020492089"
@@ -633,11 +659,17 @@ ApplicationWindow {
                 ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组 windows是command+↑") }
                 ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组 windows是command+↓") }
             }
-            // 右列 3 占位：让最后一组左对齐时另一列也保持网格结构稳定
-            // （GridLayout 会自动对齐，这里留空 Item 让视觉更平衡）
-            Item {
+            // 右列 3：视图缩放 / 平移（所有路同步）
+            //   滚轮以鼠标位置为锚点缩放；右键按住拖拽同步平移；
+            //   Ctrl+双击 或 底部 ⊙ 按钮 复位（缩放/平移归零）。
+            ScSection {
+                title: qsTr("视图缩放 / 平移（所有路同步）")
                 Layout.fillWidth: true
-                Layout.preferredHeight: 1
+                Layout.alignment: Qt.AlignTop
+                ScRow { keys: qsTr("鼠标滚轮");    desc: qsTr("以鼠标位置为锚点缩放（0.2× ~ 8×）") }
+                ScRow { keys: qsTr("右键拖拽");    desc: qsTr("同步平移所有路（画面跟随鼠标方向）") }
+                ScRow { keys: qsTr("Ctrl+双击");   desc: qsTr("视图复位（缩放/平移归零）") }
+                ScRow { keys: "⊙";              desc: qsTr("底部工具栏 视图复位按钮") }
             }
         }
     }
@@ -1988,6 +2020,7 @@ ApplicationWindow {
             // 视图复位：缩放 + 平移一并归零（同：Ctrl + 鼠标双击）
             // 仅在已有缩放/平移状态时高亮启用，否则置灰但仍占位，避免界面跳动。
             FlatButton {
+                id: viewResetBtn
                 text: "⊙"
                 visible: Engine.fileCount > 0
                 Layout.preferredWidth: visible ? implicitWidth : 0
@@ -1995,7 +2028,11 @@ ApplicationWindow {
                 enabled: Engine.viewTransformed
                 opacity: enabled ? 1.0 : 0.45
                 onClicked: Engine.resetViewTransform()
-                ToolTip.visible: hovered
+                // 用 HoverHandler 独立检测 hover：FlatButton.hovered 在 disabled 时不会
+                // 触发，会导致按钮被置灰时无 tooltip，用户不知道这是什么按钮。
+                // HoverHandler 不受 enabled 影响，且不会抢走点击事件。
+                HoverHandler { id: viewResetHover }
+                ToolTip.visible: hovered || viewResetHover.hovered
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("视图复位（缩放/平移归零，同 Ctrl+双击）")
             }
@@ -5020,10 +5057,15 @@ ApplicationWindow {
                                 ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组") }
                                 ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组") }
                             }
-                            // 右列 3：占位，让网格视觉对齐（与 shortcutsDialog 处理方式一致）
-                            Item {
+                            // 右列 3：视图缩放 / 平移（所有路同步）
+                            ScSection {
+                                title: qsTr("视图缩放 / 平移（所有路同步）")
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 1
+                                Layout.alignment: Qt.AlignTop
+                                ScRow { keys: qsTr("鼠标滚轮");    desc: qsTr("以鼠标位置为锚点缩放（0.2× ~ 8×）") }
+                                ScRow { keys: qsTr("右键拖拽");    desc: qsTr("同步平移所有路（画面跟随鼠标方向）") }
+                                ScRow { keys: qsTr("Ctrl+双击");   desc: qsTr("视图复位（缩放/平移归零）") }
+                                ScRow { keys: "⊙";              desc: qsTr("底部工具栏 视图复位按钮") }
                             }
                         }
 
