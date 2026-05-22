@@ -430,23 +430,33 @@ Window {
     // 收集已勾选、但还未评完的文件夹（用于上传前拦截）。
     // 返回元素：{ name, path, ratedCount, totalVideos }
     // 设计原则：不评完不让上传 → 避免云端出现"半成品"打分集合污染统计。
+    // quality_slide 模式下同时检查普通打分（_folders）和滑动打分（_slideFolders）：
+    // 只要勾选的文件夹在任意一组中未评完，都应拦截上传。
     function _collectCheckedIncomplete() {
         var out = []
-        for (var i = 0; i < _folders.length; ++i) {
-            var d = _folders[i]
-            if (!_isFolderChecked(d.key)) continue
-            // path 为空（"(未知文件夹)" 兜底）的不参与校验：它本来也不会上传
-            if (!d.path || d.path.length === 0) continue
-            var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
-            var total = (d.totalVideos === undefined ? rated : d.totalVideos)
-            if (total > 0 && rated < total) {
-                out.push({
-                    name: d.name,
-                    path: d.path,
-                    ratedCount: rated,
-                    totalVideos: total
-                })
+        // 辅助：检查单个文件夹列表
+        function _checkList(list) {
+            for (var i = 0; i < list.length; ++i) {
+                var d = list[i]
+                if (!_isFolderChecked(d.key)) continue
+                // path 为空（"(未知文件夹)" 兜底）的不参与校验：它本来也不会上传
+                if (!d.path || d.path.length === 0) continue
+                var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
+                var total = (d.totalVideos === undefined ? rated : d.totalVideos)
+                if (total > 0 && rated < total) {
+                    out.push({
+                        name: d.name,
+                        path: d.path,
+                        ratedCount: rated,
+                        totalVideos: total
+                    })
+                }
             }
+        }
+        _checkList(_folders)
+        // quality_slide 模式：滑动打分文件夹也参与完整性校验
+        if ((typeof Rating !== "undefined") && Rating.currentMode === "quality_slide") {
+            _checkList(_slideFolders)
         }
         return out
     }
