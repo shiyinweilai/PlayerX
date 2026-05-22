@@ -4695,7 +4695,7 @@ ApplicationWindow {
                         text: root.refTextDisplay
                         color: "#d8d8e0"
                         font.pixelSize: root.refTextFontSize
-                        lineHeight: 1.4
+                        lineHeight: 1.1
                     }
                 }
                 Label {
