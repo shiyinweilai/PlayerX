@@ -350,7 +350,11 @@ void RBPlayerEngine::rbPlay() {
             if (!p) continue;
             // 仅对"还在主时钟模式"的路重新走主时钟 ▶；脱离主时钟的单路
             // （独立播放或独立暂停）保留各自状态不动。
-            if (p->rbUseMasterClock()) {
+            // 🐞 修复：跳过已 Ended 的路——Ended 路的 rbPlay() 会触发
+            // rbSeekTo(0)+重播，但此时主时钟 anchorPts 停在暂停位置（如 3s），
+            // 导致该路从 0 开始以超速追赶主时钟，视觉上"快速跑完"。
+            // 已播完的路不应被全局恢复播放触发重播，保持 Ended 状态即可。
+            if (p->rbUseMasterClock() && !p->rbIsEnded()) {
                 p->rbPlay();
             }
         }
@@ -368,7 +372,8 @@ void RBPlayerEngine::rbPlay() {
     // Windows 上可能发生 double-start race。已加日志 [RBE-PLAY-INDIE] 确认。
     for (auto& p : m_players) {
         if (!p) continue;
-        if (!p->rbUseMasterClock() && !p->rbIsPlaying()) {
+        // 跳过 Ended 路：独立时钟下已播完的路不应被全局 ▶ 触发重播。
+        if (!p->rbUseMasterClock() && !p->rbIsPlaying() && !p->rbIsEnded()) {
             fprintf(stderr,
                     "[RBE-PLAY-INDIE] revive independent lane: player=%p "
                     "isPaused=%d isEnded=%d curT=%.3f\n",
