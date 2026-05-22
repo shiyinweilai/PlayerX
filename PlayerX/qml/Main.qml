@@ -1653,7 +1653,8 @@ ApplicationWindow {
     //   refTextData : { image, zh, en, raw, row, total }
     //   refTextLang : "zh" / "en"，UI 偏好（持久化在 Settings 里，session 内共享）
     property string refTextLang: "zh"
-    // 文本端"手动浏览"偏移：与参考图 _refImgOffset 一一对应。
+    property int refTextFontSize: 16   // CSV 提示词显示字号，A-/A+ 按钮调节，不随切组重置
+    // 文本端    // 文本端"手动浏览"偏移：与参考图 _refImgOffset 一一对应。
     //   ◀ ▶ 在自动同步行的基础上 ±1（C++ 端做边界裁剪）；
     //   切换对比组（onFilesChanged）时归零，回到自动同步状态。
     property int _refTextOffset: 0
@@ -4576,6 +4577,60 @@ ApplicationWindow {
                         ToolTip.delay: 400
                         ToolTip.text: "选择 CSV 文件"
                     }
+                    // 字号调节 A- / A+
+                    Row {
+                        spacing: 2
+                        Rectangle {
+                            width: 22; height: 18
+                            radius: 3
+                            color: csvFontDecMA.pressed ? "#3a3a45"
+                                  : csvFontDecMA.containsMouse ? "#2a2a32"
+                                  : "#1a1a1d"
+                            border.color: "#3a3a45"
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: "A-"
+                                font.pixelSize: 10
+                                color: "#e8e8ec"
+                            }
+                            MouseArea {
+                                id: csvFontDecMA
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: if (root.refTextFontSize > 10) root.refTextFontSize -= 1
+                            }
+                            ToolTip.visible: csvFontDecMA.containsMouse
+                            ToolTip.delay: 400
+                            ToolTip.text: "缩小字号"
+                        }
+                        Rectangle {
+                            width: 22; height: 18
+                            radius: 3
+                            color: csvFontIncMA.pressed ? "#3a3a45"
+                                  : csvFontIncMA.containsMouse ? "#2a2a32"
+                                  : "#1a1a1d"
+                            border.color: "#3a3a45"
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: "A+"
+                                font.pixelSize: 10
+                                color: "#e8e8ec"
+                            }
+                            MouseArea {
+                                id: csvFontIncMA
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: if (root.refTextFontSize < 32) root.refTextFontSize += 1
+                            }
+                            ToolTip.visible: csvFontIncMA.containsMouse
+                            ToolTip.delay: 400
+                            ToolTip.text: "放大字号"
+                        }
+                    }
                     // 清除
                     Rectangle {
                         id: csvClearBtn
@@ -4607,7 +4662,7 @@ ApplicationWindow {
                 }
             }
 
-            // 第二行：完整 prompt 文本（一整行带横向滚动 / wrap）
+    // 第二行：完整 prompt 文本（一整行带横向滚动 / wrap）
             Rectangle {
                 id: csvBottomTextBox
                 anchors.left: parent.left
@@ -4639,7 +4694,7 @@ ApplicationWindow {
                         textFormat: Text.PlainText
                         text: root.refTextDisplay
                         color: "#d8d8e0"
-                        font.pixelSize: 12
+                        font.pixelSize: root.refTextFontSize
                         lineHeight: 1.4
                     }
                 }
