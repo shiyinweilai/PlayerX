@@ -80,10 +80,13 @@ Window {
     //   file:    { key:'file:<file_path>', name, path, items:[row...], latest, avg }
     // _expanded: { key -> bool }，文件夹与文件用不同前缀互不冲突；刷新不丢失
     // _visibleRows: 当前 ListView 实际渲染的行数组，元素形态为：
+    //   { kind:'section', label, icon }  ← quality_slide 模式下的分组标题行
     //   { kind:'folder', d:<folder> }
     //   { kind:'file',   d:<folder>, g:<file> }
     //   { kind:'item',   d:<folder>, g:<file>, r:<row> }
     property var _folders: []
+    // quality_slide 模式下的滑动打分文件夹组（与 _folders 普通打分分开存储）
+    property var _slideFolders: []
     property var _expanded: ({})
     property var _visibleRows: []
 
@@ -144,7 +147,151 @@ Window {
     // _sortDesc 影响：
     //   · 同一文件下记录始终倒序（最新在前，便于一眼看到最近评分）
     //   · 文件之间、文件夹之间则按 _sortDesc 排（按各自组内最新时间）
+    // quality_slide 模式下，_rows 中含 _source 字段（"normal"/"slide"），
+    // 会分别建 _folders（普通打分）和 _slideFolders（滑动打分）两组。
+    function _buildFoldersFromRows(rows) {
+        var fileMap = {}
+        var fileOrder = []
+        for (var i = 0; i < rows.length; ++i) {
+            var r = rows[i]
+            var fkey = r.file_path && r.file_path.length > 0
+                       ? r.file_path
+                       : ("name:" + (r.file_name || "(unknown)"))
+            if (!fileMap[fkey]) {
+                var rawName = r.file_name || _baseName(fkey)
+                fileMap[fkey] = {
+                    key: "file:" + fkey,
+                    name: _stripChannelPrefix(rawName),
+                    rawName: rawName,
+                    path: r.file_path || "",
+                    items: [],
+                    latest: "",
+                    avg: 0
+                }
+                fileOrder.push(fkey)
+            }
+            fileMap[fkey].items.push(r)
+        }
+        // 文件内时间倒序 + 算文件汇总
+        for (var k = 0; k < fileOrder.length; ++k) {
+            var g = fileMap[fileOrder[k]]
+            g.items.sort(function(a, b) {
+                var ta = a.updated_at || "", tb = b.updated_at || ""
+                if (ta === tb) return 0
+                return ta < tb ? 1 : -1
+            })
+            g.latest = g.items.length > 0 ? (g.items[0].updated_at || "") : ""
+            var sum = 0, cnt = 0
+            for (var j = 0; j < g.items.length; ++j) {
+                var s = parseInt(g.items[j].stars) || 0
+                if (s >= 1) {
+                    if (s > root._maxStars) s = root._maxStars
+                    sum += s
+                    ++cnt
+                }
+            }
+            g.avg = cnt > 0 ? Math.round(sum / cnt * 10) / 10 : 0
+        }
+        // 按目录聚成文件夹
+        var dirMap = {}
+        var dirOrder = []
+        for (var m = 0; m < fileOrder.length; ++m) {
+            var f = fileMap[fileOrder[m]]
+            var dir = _dirOf(f.path)
+            var dkey = dir.length > 0 ? dir : "(未知文件夹)"
+            if (!dirMap[dkey]) {
+                dirMap[dkey] = {
+                    key: "dir:" + dkey,
+                    name: dir.length > 0 ? _baseName(dir) : qsTr("(未知文件夹)"),
+                    path: dir,
+                    files: [],
+                    latest: "",
+                    avg: 0,
+                    totalItems: 0
+                }
+                dirOrder.push(dkey)
+            }
+            dirMap[dkey].files.push(f)
+        }
+        var folders = []
+        for (var n = 0; n < dirOrder.length; ++n) {
+            var d = dirMap[dirOrder[n]]
+            d.files.sort(function(a, b) {
+                var ta = a.latest || "", tb = b.latest || ""
+                if (ta === tb) return 0
+                if (root._sortDesc) return ta < tb ? 1 : -1
+                return ta < tb ? -1 : 1
+            })
+            var dSum = 0, dCnt = 0, dLatest = "", total = 0
+            for (var p = 0; p < d.files.length; ++p) {
+                var fg = d.files[p]
+                total += fg.items.length
+                if ((fg.latest || "") > dLatest) dLatest = fg.latest || ""
+                for (var q = 0; q < fg.items.length; ++q) {
+                    var sc = parseInt(fg.items[q].stars) || 0
+                    if (sc >= 1) {
+                        if (sc > root._maxStars) sc = root._maxStars
+                        dSum += sc
+                        ++dCnt
+                    }
+                }
+            }
+            d.latest = dLatest
+            d.avg = dCnt > 0 ? Math.round(dSum / dCnt * 10) / 10 : 0
+            d.ratedCount = d.files.length
+            var tot2 = d.ratedCount
+            if (d.path && d.path.length > 0 && typeof Reference !== "undefined"
+                    && typeof Reference.videoCountInFolder === "function") {
+                var n2 = Reference.videoCountInFolder(d.path)
+                if (n2 > tot2) tot2 = n2
+            }
+            d.totalVideos = tot2
+            d.fullyRated = (d.totalVideos > 0) && (d.ratedCount >= d.totalVideos)
+            folders.push(d)
+        }
+        folders.sort(function(a, b) {
+            var ta = a.latest || "", tb = b.latest || ""
+            if (ta === tb) return 0
+            if (root._sortDesc) return ta < tb ? 1 : -1
+            return ta < tb ? -1 : 1
+        })
+        return folders
+    }
+
     function _rebuildGroups() {
+        var isQS = (typeof Rating !== "undefined") && Rating.currentMode === "quality_slide"
+        var normalRows, slideRows
+        if (isQS) {
+            normalRows = []
+            slideRows = []
+            for (var si = 0; si < _rows.length; ++si) {
+                if (_rows[si]._source === "slide") slideRows.push(_rows[si])
+                else normalRows.push(_rows[si])
+            }
+        } else {
+            normalRows = _rows
+            slideRows = []
+        }
+
+        var normalFolders = _buildFoldersFromRows(normalRows)
+        var slideFolders  = _buildFoldersFromRows(slideRows)
+        _folders      = normalFolders
+        _slideFolders = slideFolders
+
+        // ── 同步 _checkedFolders（仅针对普通打分文件夹）
+        var nextChecked = {}
+        for (var ci = 0; ci < normalFolders.length; ++ci) {
+            var ck = normalFolders[ci].key
+            nextChecked[ck] = (root._checkedFolders[ck] === false) ? false : true
+        }
+        _checkedFolders = nextChecked
+
+        _rebuildVisibleRows()
+    }
+
+    // ── 以下是原 _rebuildGroups 里被提取到 _buildFoldersFromRows 之前的旧代码占位，
+    //    保留空函数体以防万一有其他地方引用（实际已全部迁移到上面）──────────────
+    function _rebuildGroups_unused() {
         var fileMap = {}
         var fileOrder = []
         // 第一轮：按 file_path 聚成「文件」组
@@ -168,118 +315,17 @@ Window {
             }
             fileMap[fkey].items.push(r)
         }
-        // 文件内时间倒序 + 算文件汇总
-        for (var k = 0; k < fileOrder.length; ++k) {
-            var g = fileMap[fileOrder[k]]
-            g.items.sort(function(a, b) {
-                var ta = a.updated_at || "", tb = b.updated_at || ""
-                if (ta === tb) return 0
-                return ta < tb ? 1 : -1
-            })
-            g.latest = g.items.length > 0 ? (g.items[0].updated_at || "") : ""
-            var sum = 0, cnt = 0
-            for (var j = 0; j < g.items.length; ++j) {
-                var s = parseInt(g.items[j].stars) || 0
-                // 超出当前模式上限的钉到 maxStars（防御旧数据/手改误值）
-                if (s >= 1) {
-                    if (s > root._maxStars) s = root._maxStars
-                    sum += s
-                    ++cnt
-                }
-            }
-            g.avg = cnt > 0 ? Math.round(sum / cnt * 10) / 10 : 0
-        }
-        // 第二轮：把「文件」按所在目录聚成「文件夹」
-        var dirMap = {}
-        var dirOrder = []
-        for (var m = 0; m < fileOrder.length; ++m) {
-            var f = fileMap[fileOrder[m]]
-            var dir = _dirOf(f.path)
-            var dkey = dir.length > 0 ? dir : "(未知文件夹)"
-            if (!dirMap[dkey]) {
-                dirMap[dkey] = {
-                    key: "dir:" + dkey,
-                    name: dir.length > 0 ? _baseName(dir) : qsTr("(未知文件夹)"),
-                    path: dir,
-                    files: [],
-                    latest: "",
-                    avg: 0,
-                    totalItems: 0
-                }
-                dirOrder.push(dkey)
-            }
-            dirMap[dkey].files.push(f)
-        }
-        // 文件夹内文件按 _sortDesc 排，并算汇总指标
-        var folders = []
-        for (var n = 0; n < dirOrder.length; ++n) {
-            var d = dirMap[dirOrder[n]]
-            d.files.sort(function(a, b) {
-                var ta = a.latest || "", tb = b.latest || ""
-                if (ta === tb) return 0
-                if (root._sortDesc) return ta < tb ? 1 : -1
-                return ta < tb ? -1 : 1
-            })
-            // 汇总：合并文件夹下所有 items 来算平均分与最新时间
-            var dSum = 0, dCnt = 0, dLatest = "", total = 0
-            for (var p = 0; p < d.files.length; ++p) {
-                var fg = d.files[p]
-                total += fg.items.length
-                if ((fg.latest || "") > dLatest) dLatest = fg.latest || ""
-                for (var q = 0; q < fg.items.length; ++q) {
-                    var sc = parseInt(fg.items[q].stars) || 0
-                    if (sc >= 1) {
-                        if (sc > root._maxStars) sc = root._maxStars
-                        dSum += sc
-                        ++dCnt
-                    }
-                }
-            }
-            d.totalItems = total
-            d.latest = dLatest
-            d.avg = dCnt > 0 ? Math.round(dSum / dCnt * 10) / 10 : 0
-            // ── 进度统计：用于汇总文案 + 上传前校验 ──────────────────
-            // ratedCount: 该文件夹下"已被评过分（至少 1 次）"的不同视频数 = 已聚合的文件条目数。
-            // totalVideos: 该文件夹下视频文件总数（递归，扩展名口径与播放器一致），
-            //              通过 Reference.videoCountInFolder() 实时枚举文件系统得到。
-            //              当 path 为空（"(未知文件夹)" 兜底）或后端不可用时回退为 ratedCount，
-            //              此时 fullyRated 必然为 true，不会误拦上传。
-            d.ratedCount = d.files.length
-            var tot = d.ratedCount
-            if (d.path && d.path.length > 0 && typeof Reference !== "undefined"
-                    && typeof Reference.videoCountInFolder === "function") {
-                var n2 = Reference.videoCountInFolder(d.path)
-                // 若枚举到的总数比已评数还小（极端情况：文件被移走 / 路径变更），
-                // 至少要把"已评"也算进去，避免出现 1/0 这种诡异显示。
-                if (n2 > tot) tot = n2
-            }
-            d.totalVideos = tot
-            d.fullyRated = (d.totalVideos > 0) && (d.ratedCount >= d.totalVideos)
-            folders.push(d)
-        }
-        // 文件夹之间按 _sortDesc 排（按文件夹内最新时间）
-        folders.sort(function(a, b) {
-            var ta = a.latest || "", tb = b.latest || ""
-            if (ta === tb) return 0
-            if (root._sortDesc) return ta < tb ? 1 : -1
-            return ta < tb ? -1 : 1
-        })
-        _folders = folders
+    }   // end _rebuildGroups_unused
 
-        // ── 同步 _checkedFolders：保留旧勾选，新增的文件夹默认勾上，已消失的清掉
-        var nextChecked = {}
-        for (var ci = 0; ci < folders.length; ++ci) {
-            var ck = folders[ci].key
-            // 没显式置 false 的都视作勾上（默认全选 + 保留用户手动勾上的）
-            nextChecked[ck] = (root._checkedFolders[ck] === false) ? false : true
-        }
-        _checkedFolders = nextChecked
-
-        _rebuildVisibleRows()
-    }
-    // 根据当前展开状态，把 _folders 展平为 ListView 数据源
+    // 根据当前展开状态，把 _folders（+ quality_slide 模式下的 _slideFolders）展平为 ListView 数据源
     function _rebuildVisibleRows() {
         var out = []
+        var isQS = (typeof Rating !== "undefined") && Rating.currentMode === "quality_slide"
+
+        // 普通打分分组
+        if (isQS && (_folders.length > 0 || _slideFolders.length > 0)) {
+            out.push({ kind: "section", label: "📋 普通打分", icon: "" })
+        }
         for (var i = 0; i < _folders.length; ++i) {
             var d = _folders[i]
             out.push({ kind: "folder", d: d })
@@ -293,6 +339,25 @@ Window {
                 }
             }
         }
+
+        // 滑动打分分组（仅 quality_slide 模式）
+        if (isQS) {
+            out.push({ kind: "section", label: "🎬 滑动对比打分", icon: "" })
+            for (var si = 0; si < _slideFolders.length; ++si) {
+                var sd = _slideFolders[si]
+                out.push({ kind: "folder", d: sd })
+                if (!_expanded[sd.key]) continue
+                for (var sj = 0; sj < sd.files.length; ++sj) {
+                    var sg = sd.files[sj]
+                    out.push({ kind: "file", d: sd, g: sg })
+                    if (!_expanded[sg.key]) continue
+                    for (var sk = 0; sk < sg.items.length; ++sk) {
+                        out.push({ kind: "item", d: sd, g: sg, r: sg.items[sk] })
+                    }
+                }
+            }
+        }
+
         _visibleRows = out
     }
     function _toggleKey(key) {
@@ -400,6 +465,24 @@ Window {
             }
         } else {
             raw = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
+            // quality_slide 模式：追加滑动打分数据，打 _source 标记以便分组显示
+            if ((typeof Rating !== "undefined") && Rating.currentMode === "quality_slide") {
+                var slideRaw = Rating.getSlideRatings() || []
+                // 普通打分标记
+                for (var ni = 0; ni < raw.length; ++ni) {
+                    var nr = {}
+                    for (var nk in raw[ni]) nr[nk] = raw[ni][nk]
+                    nr._source = "normal"
+                    raw[ni] = nr
+                }
+                // 滑动打分标记
+                for (var si = 0; si < slideRaw.length; ++si) {
+                    var sr = {}
+                    for (var sk in slideRaw[si]) sr[sk] = slideRaw[si][sk]
+                    sr._source = "slide"
+                    raw.push(sr)
+                }
+            }
         }
         _rows = _applySort(raw || [])
         _rebuildGroups()
@@ -1000,23 +1083,64 @@ Window {
                 delegate: Loader {
                     id: rowLoader
                     width: listView.width
-                    sourceComponent: modelData.kind === "folder" ? folderRowComp
-                                   : modelData.kind === "file"   ? fileRowComp
-                                                                  : itemRowComp
+                    sourceComponent: modelData.kind === "section" ? sectionRowComp
+                                   : modelData.kind === "folder"  ? folderRowComp
+                                   : modelData.kind === "file"    ? fileRowComp
+                                                                   : itemRowComp
                     // 把当前行数据与索引推送给 sourceComponent 实例；
                     // Component 内部通过 parent.rowData / parent.rowIndex 读取。
                     property var rowData: modelData
                     property int rowIndex: index
-                }
+}
 
                 // 空状态
                 Text {
                     anchors.centerIn: parent
-                    visible: root._rows.length === 0
+                    visible: root._folders.length === 0 && root._slideFolders.length === 0
                     text: qsTr("暂无评分数据\n在视频窗的 ⋯ 菜单中选择星级即可记录")
                     horizontalAlignment: Text.AlignHCenter
                     color: "#6a6a72"
                     font.pixelSize: 12
+                }
+            }
+
+            // ── 零级：分组标题行（quality_slide 模式下区分普通打分 / 滑动打分）─────
+            Component {
+                id: sectionRowComp
+                Rectangle {
+                    height: 26
+                    width: parent ? parent.width : 0
+                    color: "#1e1e26"
+                    property var rowData: parent ? parent.rowData : null
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 10
+                        spacing: 0
+                        // 左侧强调色竖线
+                        Rectangle {
+                            width: 3; height: 14
+                            radius: 2
+                            color: "#3a7afe"
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Item { width: 7; height: 1 }
+                        Text {
+                            text: rowData ? (rowData.label || "") : ""
+                            color: "#a0a8c0"
+                            font.pixelSize: 11
+                            font.weight: Font.Medium
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+                    // 底部分隔线
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        height: 1
+                        color: "#2a2a36"
+                    }
                 }
             }
 

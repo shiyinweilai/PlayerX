@@ -104,15 +104,16 @@ ApplicationWindow {
         try {
             if (typeof Rating === "undefined" || !Rating) return "off"
             var m = Rating.currentMode || "off"
-            if (m === "subjective" || m === "quality" || m === "off") return m
+            if (m === "subjective" || m === "quality" || m === "quality_slide" || m === "off") return m
             return "off"
         } catch (e) { return "off" }
     }
     // 当前模式的人类可读标签，用于弹窗"作用域提示"
     function _modeLabel() {
         var m = _modeSlug()
-        if (m === "subjective") return "主观评分"
-        if (m === "quality")    return "质量比较"
+        if (m === "subjective")    return "主观评分"
+        if (m === "quality")       return "质量比较"
+        if (m === "quality_slide") return "质量比较2（含滑动对比）"
         return "未启用评分"
     }
     // 旧版本用的固定 key / 文件名：仅用于一次性迁移，迁完即删
@@ -2718,10 +2719,24 @@ ApplicationWindow {
 
                                     // 星星：点击即评分；评分后驻留显示，便于回看分数。
                     // 颗数随当前评分模式 maxStars（主观评分=5 / 质量比较=2）动态变化。
+                                    // quality_slide 模式专用 sentinel（chIdx < 0）：
+                                    //   -1 = 未进入滑动对比 / -2 = 滑动 L 待打分 / -3 = 滑动 R 待打分
+                                    // 这类 sentinel 不能内联评分，必须回主窗按 B 进入滑动模式手动打分。
+                                    Label {
+                                        visible: chIdx < 0
+                                        text: chIdx === -1 ? "需进入滑动对比 (按 B)"
+                                            : chIdx === -2 ? "需在滑动模式打 L 分"
+                                            : chIdx === -3 ? "需在滑动模式打 R 分"
+                                            : ""
+                                        color: "#ffb86c"
+                                        font.pixelSize: 11
+                                        font.italic: true
+                                    }
                                     Row {
+                                        visible: chIdx >= 0
                                         spacing: 2
                                         Repeater {
-                                            model: (typeof Rating !== "undefined" && Rating.maxStars > 0) ? Rating.maxStars : 5
+                                            model: (chIdx >= 0 && typeof Rating !== "undefined" && Rating.maxStars > 0) ? Rating.maxStars : 0
                                             delegate: Rectangle {
                                                 // 同样把内层 index 显式抬出来，避免闭包陷阱
                                                 property int starOrder: index    // 0..4

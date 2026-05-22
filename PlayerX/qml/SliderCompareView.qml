@@ -27,7 +27,14 @@ Item {
     // 是否显示两侧通道信息条（与 Main.qml 的 effectiveChannelVisible 联动）
     property bool channelVisible: true
 
-    // 当前分割比（0~1），由 hover 跟随鼠标 x 更新
+    // ── 质量比较2（quality_slide）专用：是否显示左右 2 星打分条 ──
+    // 由 Main.qml 直接绑定到 root.isQualitySlideMode；非该模式时整组评分条不渲染。
+    property bool slideRatingEnabled: false
+    // 当前 L/R 评分（0/1/2），由 Main.qml 的 root.slideRatingL/R 绑定回来
+    property int  slideRatingL: 0
+    property int  slideRatingR: 0
+    // 评分回调：side ∈ {"L", "R"}, score ∈ {0, 1, 2}
+    property var  setSlideRatingFn: null
     property real splitRatio: 0.5
 
     // ─── 渲染主体 ─────────────────────────────────────────────────────
@@ -89,7 +96,6 @@ Item {
         }
         onPositionChanged: function(mouse) {
             if (!view.engine) return
-            if (view.engine.viewZoom <= 1.0001) return
             var dx = mouse.x - _lastX
             var dy = mouse.y - _lastY
             _lastX = mouse.x
@@ -97,6 +103,7 @@ Item {
             if (Math.abs(dx) + Math.abs(dy) < 0.5) return
             var w = Math.max(1, viewXformLayer.width)
             var h = Math.max(1, viewXformLayer.height)
+            // zoom>1 时平移放大后的画面；zoom==1 时平移也生效（同步偏移视角）。
             view.engine.panBy(dx / w, dy / h)
         }
 
@@ -275,7 +282,7 @@ Item {
         }
     }
 
-    // ─── 顶部中央"滑动模式"小标识 ───────────────────────────────────
+    // ─── 顶部中央"滑动模式"小标识 ───────────────────────────────────────────────
     Rectangle {
         anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
@@ -292,5 +299,83 @@ Item {
             color: "#cfcfd2"
             font.pixelSize: 11
         }
+    }
+
+    // ─── 质量比较2 · 左右 2 星打分条（仅 quality_slide 模式显示）─────────────────
+    // 设计：
+    //   · 两个独立胶囊，分别贴左下角 / 右下角，与顶部 leftBar/rightBar 视觉呼应；
+    //   · 每个胶囊：标签 (L/R 评分) + 2 颗星；2 星制 → 0=未打 1=较差 2=较好；
+    //   · z=6 高于通道条(z:5)，星星本身只接收左键点击，右键拖拽/滚轮继续透传到 xform 层。
+    component SlideRateBar : Rectangle {
+        id: bar
+        property string side: "L"
+        property int    score: 0
+        property color  accent: "#a8d8ff"
+        radius: 4
+        color: "#aa000000"
+        z: 6
+        visible: view.slideRatingEnabled
+        width:  180
+        implicitHeight: barRow.implicitHeight + 8
+
+        RowLayout {
+            id: barRow
+            anchors.centerIn: parent
+            spacing: 8
+            Text {
+                color: bar.accent
+                font.pixelSize: 11
+                font.bold: true
+                text: bar.side + " · 评分"
+            }
+            Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 12; color: "#55ffffff" }
+            // 2 颗星：点击即赋分；再次点击当前分数 = 取消（与 setSlideRating 的 toggle 一致）
+            Repeater {
+                model: 2
+                delegate: Item {
+                    Layout.preferredWidth: 20
+                    Layout.preferredHeight: 20
+                    property int starIdx: index + 1
+                    property bool filled: bar.score >= starIdx
+                    Text {
+                        anchors.centerIn: parent
+                        text: filled ? "★" : "☆"
+                        color: filled ? "#ffd24a" : "#7a7f86"
+                        font.pixelSize: 16
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (typeof view.setSlideRatingFn === "function")
+                                view.setSlideRatingFn(bar.side, starIdx)
+                        }
+                    }
+                }
+            }
+
+        }
+    }
+
+    // 右侧下方：R 评分条（先定义，供 L 条的 anchors.bottom 引用）
+    SlideRateBar {
+        id: rBar
+        side: "R"
+        accent: "#ffd0a8"
+        score: view.slideRatingR
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 12
+        anchors.bottomMargin: 12
+    }
+    // 右侧上方：L 评分条（紧贴 R 条上方）
+    SlideRateBar {
+        side: "L"
+        accent: "#a8d8ff"
+        score: view.slideRatingL
+        anchors.right: parent.right
+        anchors.bottom: rBar.top
+        anchors.rightMargin: 12
+        anchors.bottomMargin: 6
     }
 }

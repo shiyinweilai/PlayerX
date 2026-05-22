@@ -276,16 +276,22 @@ void EngineBridge::setSpeed(double speed) {
 // 只要任一项偏移，才走 srcRect→dstRect 采样路径（详 VideoFrameProvider::paint）。
 // ═════════════════════════════════════════════════════════════════════
 void EngineBridge::rbClampViewPan() {
-    // pan 可活动范围：zoom 越大，允许越大的 |pan|，以保证画面不被拖出身体完全可见范围。
-    // 具体使用"src 边界必须覆盖显示矩形"作为约束：
-    //   srcW = areaW / zoom，src 中心偏移 pan*areaW 后，需保证 src 区间仍在 [0,areaW] 内。
-    //   → |pan| <= (1 - 1/zoom) / 2。zoom<=1 时则强制 pan=0（全画面可见，无需平移）。
-    if (m_viewZoom <= 1.0 + 1e-9) {
+    // pan 可活动范围：zoom 越大，允许越大的 |pan|，以保证画面不被拖出完全可见范围。
+    // zoom > 1：srcW = areaW/zoom，src 中心偏移 pan*areaW 后需保证 src 区间仍在 [0,areaW] 内
+    //   → maxPan = (1 - 1/zoom) / 2。
+    // zoom == 1：画面铺满，pan 偏移会露出黑边；允许最大 ±0.5（即画面完全移出一侧），
+    //   实际使用中用户只会小幅拖拽，不会拖到极端位置。
+    // zoom < 1（理论上不会出现，kZoomMin>=1）：强制归零。
+    double maxPan;
+    if (m_viewZoom >= 1.0 - 1e-9) {
+        maxPan = (m_viewZoom > 1.0 + 1e-9)
+                 ? (1.0 - 1.0 / m_viewZoom) * 0.5
+                 : 0.5;  // zoom==1 时允许最大半屏偏移
+    } else {
         m_viewPanX = 0.0;
         m_viewPanY = 0.0;
         return;
     }
-    const double maxPan = (1.0 - 1.0 / m_viewZoom) * 0.5;
     if (m_viewPanX >  maxPan) m_viewPanX =  maxPan;
     if (m_viewPanX < -maxPan) m_viewPanX = -maxPan;
     if (m_viewPanY >  maxPan) m_viewPanY =  maxPan;
@@ -324,11 +330,12 @@ void EngineBridge::zoomTo(double absZoom, double anchorNX, double anchorNY) {
 }
 
 void EngineBridge::panBy(double dxN, double dyN) {
-    if (m_viewZoom <= 1.0 + 1e-9) return; // 1× 下不可平移
+    // zoom==1 时也允许平移（画面会偏移露出黑边，用于多路对比时同步移动视角）。
     // 画面跟随鼠标方向：鼠标向右拖，dxN > 0 → 看到的内容向左移动一个鼠标偏移量，
-    // 即 src 区间在归一化坐标上向左偏移 → pan -= d (考虑 zoom 的实际肆例)。
-    m_viewPanX -= dxN / m_viewZoom;
-    m_viewPanY -= dyN / m_viewZoom;
+    // 即 src 区间在归一化坐标上向左偏移 → pan -= d / zoom。
+    const double zoomFactor = (m_viewZoom > 1.0 + 1e-9) ? m_viewZoom : 1.0;
+    m_viewPanX -= dxN / zoomFactor;
+    m_viewPanY -= dyN / zoomFactor;
     rbClampViewPan();
     emit viewTransformChanged();
     emit requestRepaint();

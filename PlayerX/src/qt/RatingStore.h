@@ -107,6 +107,19 @@ public slots:
                       int stars,
                       int channelIndex = -1);
 
+    // 记录一次滑动对比评分（quality_slide 模式专用）。
+    // 滑动评分独立存储到 ratings_quality_slide_slide.csv，
+    // 与普通打分（ratings_quality_slide.csv）完全隔离，互不覆盖。
+    // 每次打分立即持久化；同 (file_path, rater) 覆盖最新一条。
+    // starsL/starsR ∈ {0,1,2}；0 = 取消/未打，也会写入便于审计。
+    // 非 quality_slide 模式下调用安静返回 false。
+    Q_INVOKABLE bool recordSlideRating(const QString& filePathL,
+                                       const QString& fileNameL,
+                                       int starsL,
+                                       const QString& filePathR,
+                                       const QString& fileNameR,
+                                       int starsR);
+
     // 查询某文件路径在 *当前评分人 + 当前模式* 下的评分。
     //   · 命中：返回 0..maxStars（含 0 = 已取消评分）
     //   · 未命中 / off 模式：返回 -1
@@ -117,6 +130,11 @@ public slots:
     // 返回所有评分行（每行一个 QVariantMap，键名同 CSV 列）。
     // 排序：updated_at 倒序（新→旧）。仅返回当前模式的数据。
     QVariantList getAllRatings() const;
+
+    // 返回滑动对比评分行（quality_slide 模式专用）。
+    // 数据来自 slide/ratings_quality_slide.csv，与普通打分完全隔离。
+    // 非 quality_slide 模式下返回空列表。
+    Q_INVOKABLE QVariantList getSlideRatings() const;
 
     // 导出到任意路径（CSV，UTF-8 with BOM，便于 Excel 直接打开中文不乱码）。
     // 成功返回 true。导出的是「当前模式」的数据。
@@ -328,6 +346,14 @@ private:
     QString ensureFileForMode(const QString& mode) const;
     // 当前模式对应的 CSV 路径（off 模式返回空串）
     QString currentDataFile() const { return ensureFileForMode(currentMode()); }
+
+    // 向指定 CSV 文件写入一条评分（不依赖 currentMode）。
+    // csvPath 为空时安静返回 false。
+    bool recordRatingToFile(const QString& csvPath,
+                            const QString& filePath,
+                            const QString& fileName,
+                            int stars,
+                            int channelIndex = -1);
 
     QString m_baseDir;    // 数据根目录（AppDataLocation/PlayerX）
 

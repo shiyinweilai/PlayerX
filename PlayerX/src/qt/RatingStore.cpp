@@ -30,7 +30,7 @@ namespace rbqt {
 
 namespace {
 constexpr const char* kCsvHeader =
-    "updated_at,rater,file_name,file_path,file_size,quick_hash,stars";
+    "updated_at,rater,file_name,file_path,file_size,quick_hash,stars,slide_type";
 constexpr const char* kSettingsUserKey      = "rating/user";
 constexpr const char* kSettingsModeKey      = "rating/mode";
 constexpr const char* kSettingsUploadUrlKey = "rating/uploadUrl";
@@ -41,8 +41,12 @@ constexpr const char* kSettingsUploadTagKey = "rating/uploadTag";
 // QML 会通过 modeList 自动拿到所有字段生成 UI。
 struct ModeDef { const char* id; const char* label; int maxStars; };
 static const ModeDef kModeTable[] = {
-    {"subjective", "主观评分（五分制）",     5},
-    {"quality",    "质量比较（差/相当/好）", 2},
+    {"subjective",    "主观评分（五分制）",          5},
+    {"quality",       "质量比较（差/相当/好）",       2},
+    // 质量比较 2：行为与 quality 完全一致（CSV 格式/写入逻辑均不变），
+    // 仅在 QML 层额外要求"必须进入滑动对比并对 L/R 各打分"才能切下一组。
+    // CSV 文件名 ratings_quality_slide.csv，与 quality 隔离不冲突。
+    {"quality_slide", "质量比较 2（含滑动对比）",     2},
 };
 static constexpr int kModeCount = sizeof(kModeTable) / sizeof(kModeTable[0]);
 
@@ -98,6 +102,11 @@ RatingStore::RatingStore(QObject* parent) : QObject(parent) {
 //   - 其他 → ratings_<mode>.csv，不存在则创建空文件 + 表头
 QString RatingStore::ensureFileForMode(const QString& mode) const {
     if (mode.isEmpty() || mode == QStringLiteral("off")) return {};
+    // quality_slide_slide 是滑动评分的内部标识，实际写入主 CSV（ratings_quality_slide.csv），
+    // 通过 slide_type 列区分普通打分与滑动打分，不再使用独立文件。
+    if (mode == QStringLiteral("quality_slide_slide")) {
+        return ensureFileForMode(QStringLiteral("quality_slide"));
+    }
     if (!findMode(mode)) return {};
 
     const QString fp = QDir(m_baseDir).filePath(
@@ -234,7 +243,43 @@ int RatingStore::totalCount() const {
 
 QVariantList RatingStore::getAllRatings() const {
     QList<QVariantMap> rows = readAll();
+    // quality_slide 模式下只返回普通打分（slide_type != "slide"），
+    // 滑动打分通过 getSlideRatings() 单独获取，避免在同一列表里混淆。
+    const bool isQS = (currentMode() == QStringLiteral("quality_slide"));
+    QList<QVariantMap> filtered;
+    filtered.reserve(rows.size());
+    for (const auto& r : rows) {
+        if (isQS && r.value("slide_type").toString() == QStringLiteral("slide"))
+            continue;
+        filtered.push_back(r);
+    }
     // updated_at 倒序（字符串 ISO8601 直接字典序倒序即可近似时间倒序）
+    std::sort(filtered.begin(), filtered.end(),
+              [](const QVariantMap& a, const QVariantMap& b) {
+                  return a.value("updated_at").toString() > b.value("updated_at").toString();
+              });
+    QVariantList out;
+    out.reserve(filtered.size());
+    for (const auto& r : filtered) out << r;
+    return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 读取滑动对比评分（quality_slide 模式专用）
+// 从 slide/ratings_quality_slide.csv 读取，与普通打分完全隔离。
+// 非 quality_slide 模式下返回空列表。
+// ════════════════════════════════════════════════════════════════════════
+
+QVariantList RatingStore::getSlideRatings() const {
+    if (currentMode() != QStringLiteral("quality_slide")) return {};
+    // 从主 CSV 过滤 slide_type=="slide" 的行，与普通打分共用同一文件
+    QList<QVariantMap> all = readAll();
+    QList<QVariantMap> rows;
+    rows.reserve(all.size());
+    for (const auto& r : all) {
+        if (r.value("slide_type").toString() == QStringLiteral("slide"))
+            rows.push_back(r);
+    }
     std::sort(rows.begin(), rows.end(),
               [](const QVariantMap& a, const QVariantMap& b) {
                   return a.value("updated_at").toString() > b.value("updated_at").toString();
@@ -273,6 +318,59 @@ bool RatingStore::recordRating(const QString& filePath,
     }
 
     QVariantMap row;
+    row["updated_at"]  = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    row["rater"]       = rater;
+    row["file_name"]   = name;
+    row["file_path"]   = filePath;
+    row["file_size"]   = fileSizeOf(filePath);
+    row["quick_hash"]  = quickHashOf(filePath);
+    row["stars"]       = stars;
+    // quality_slide 模式下普通打分标记 slide_type=normal，便于与滑动打分区分
+    row["slide_type"]  = (modeNow == QStringLiteral("quality_slide"))
+                         ? QStringLiteral("normal") : QString();
+
+    QList<QVariantMap> rows = readAll();
+    bool replaced = false;
+    for (auto& r : rows) {
+        // 同 file_path + 同 rater + 同 slide_type 视为同一条 → 覆盖
+        if (r.value("file_path").toString() == filePath &&
+            r.value("rater").toString() == rater &&
+            r.value("slide_type").toString() == row["slide_type"].toString()) {
+            r = row;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) rows.push_back(row);
+
+    if (!writeAll(rows)) return false;
+    emit changed();
+    return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 向指定 CSV 文件写入一条评分（不依赖 currentMode）
+// ════════════════════════════════════════════════════════════════════════
+
+bool RatingStore::recordRatingToFile(const QString& csvPath,
+                                     const QString& filePath,
+                                     const QString& fileName,
+                                     int stars,
+                                     int channelIndex) {
+    if (csvPath.isEmpty() || filePath.trimmed().isEmpty()) return false;
+    if (stars < 0) stars = 0;
+    if (stars > 2) stars = 2;   // 滑动评分固定 2 星制
+
+    QString rater = currentUser();
+    if (rater.isEmpty()) rater = systemUserName();
+
+    QString name = fileName;
+    if (name.isEmpty()) name = QFileInfo(filePath).fileName();
+    if (channelIndex >= 0) {
+        name = QString::number(channelIndex + 1) + QStringLiteral("_") + name;
+    }
+
+    QVariantMap row;
     row["updated_at"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
     row["rater"]      = rater;
     row["file_name"]  = name;
@@ -281,11 +379,33 @@ bool RatingStore::recordRating(const QString& filePath,
     row["quick_hash"] = quickHashOf(filePath);
     row["stars"]      = stars;
 
-    QList<QVariantMap> rows = readAll();
+    // 读取目标 CSV 文件的现有行
+    QList<QVariantMap> rows;
+    QFile rf(csvPath);
+    if (rf.exists() && rf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream ts(&rf);
+        ts.setEncoding(QStringConverter::Utf8);
+        bool firstLine = true;
+        while (!ts.atEnd()) {
+            QString line = ts.readLine();
+            if (firstLine) { firstLine = false; continue; }
+            if (line.trimmed().isEmpty()) continue;
+            QStringList cols = parseCsvLine(line);
+            if (cols.size() < 7) continue;
+            QVariantMap r;
+            r["updated_at"] = cols.value(0);
+            r["rater"]      = cols.value(1);
+            r["file_name"]  = cols.value(2);
+            r["file_path"]  = cols.value(3);
+            r["file_size"]  = cols.value(4).toLongLong();
+            r["quick_hash"] = cols.value(5);
+            r["stars"]      = cols.value(6).toInt();
+            rows.push_back(r);
+        }
+    }
+
     bool replaced = false;
     for (auto& r : rows) {
-        // 同 file_path + 同 rater 视为同一条 → 覆盖
-        // （不同评分人是不同记录，多人共用一台机也能各自留痕）
         if (r.value("file_path").toString() == filePath &&
             r.value("rater").toString() == rater) {
             r = row;
@@ -294,6 +414,87 @@ bool RatingStore::recordRating(const QString& filePath,
         }
     }
     if (!replaced) rows.push_back(row);
+
+    // 写回目标 CSV
+    QFile wf(csvPath);
+    if (!wf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
+    QTextStream ts(&wf);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts.setGenerateByteOrderMark(true);
+    ts << kCsvHeader << "\n";
+    for (const auto& r : rows) {
+        ts << csvEscape(r.value("updated_at").toString()) << ","
+           << csvEscape(r.value("rater").toString())      << ","
+           << csvEscape(r.value("file_name").toString())  << ","
+           << csvEscape(r.value("file_path").toString())  << ","
+           << r.value("file_size").toLongLong()           << ","
+           << csvEscape(r.value("quick_hash").toString()) << ","
+           << r.value("stars").toInt()                    << ","
+           << csvEscape(r.value("slide_type").toString()) << "\n";
+    }
+    emit changed();
+    return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 滑动对比评分持久化（quality_slide 模式专用）
+// 写入主 CSV（ratings_quality_slide.csv），slide_type=slide 区分普通打分。
+// 每次打分立即调用，同 (file_path, rater, slide_type) 覆盖最新一条。
+// ════════════════════════════════════════════════════════════════════════
+
+bool RatingStore::recordSlideRating(const QString& filePathL,
+                                    const QString& fileNameL,
+                                    int starsL,
+                                    const QString& filePathR,
+                                    const QString& fileNameR,
+                                    int starsR) {
+    // 仅在 quality_slide 模式下生效
+    if (currentMode() != QStringLiteral("quality_slide")) return false;
+
+    const int cap = maxStars();
+    QString rater = currentUser();
+    if (rater.isEmpty()) rater = systemUserName();
+
+    auto makeRow = [&](const QString& fp, const QString& fn, int stars, int ch) -> QVariantMap {
+        QString name = fn.isEmpty() ? QFileInfo(fp).fileName() : fn;
+        if (ch >= 0) name = QString::number(ch + 1) + QStringLiteral("_") + name;
+        if (stars < 0) stars = 0;
+        if (cap > 0 && stars > cap) stars = cap;
+        QVariantMap r;
+        r["updated_at"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+        r["rater"]      = rater;
+        r["file_name"]  = name;
+        r["file_path"]  = fp;
+        r["file_size"]  = fileSizeOf(fp);
+        r["quick_hash"] = quickHashOf(fp);
+        r["stars"]      = stars;
+        r["slide_type"] = QStringLiteral("slide");
+        return r;
+    };
+
+    // 读取主 CSV，替换同 (file_path, rater, slide_type=slide, file_name) 的行
+    // 注意：file_name 含 ch+1_ 前缀（如 "1_foo.mp4" vs "2_foo.mp4"），
+    // 用于区分 L/R 两侧，避免同路径文件互相覆盖。
+    QList<QVariantMap> rows = readAll();
+    auto upsert = [&](const QString& fp, const QString& fn, int stars, int ch) {
+        if (fp.trimmed().isEmpty()) return;
+        QVariantMap row = makeRow(fp, fn, stars, ch);
+        bool replaced = false;
+        for (auto& r : rows) {
+            if (r.value("file_path").toString() == fp &&
+                r.value("rater").toString() == rater &&
+                r.value("slide_type").toString() == QStringLiteral("slide") &&
+                r.value("file_name").toString() == row.value("file_name").toString()) {
+                r = row;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) rows.push_back(row);
+    };
+
+    upsert(filePathL, fileNameL, starsL, 0);
+    upsert(filePathR, fileNameR, starsR, 1);
 
     if (!writeAll(rows)) return false;
     emit changed();
@@ -379,7 +580,7 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
     QTextStream ts(&buf, QIODevice::WriteOnly);
     ts.setEncoding(QStringConverter::Utf8);
     ts.setGenerateByteOrderMark(true);
-    ts << "updated_at,rater,folder,file_name,stars\n";
+    ts << "updated_at,rater,folder,file_name,stars,slide_type\n";
 
     // 历史本地 CSV 里 file_name 形如 "1_xxx.mp4"（带通道前缀）。
     // 上传/导出阶段把通道前缀剥掉，只保留原始文件名；通道维度由
@@ -420,19 +621,19 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
         const QString fileName =
             stripChannelPrefix(r.value("file_name").toString());
 
-        ts << csvEscape(prettyTs)  << ","
-           << csvEscape(rater)     << ","
-           << csvEscape(folder)    << ","
-           << csvEscape(fileName)  << ","
-           << r.value("stars").toInt() << "\n";
+        ts << csvEscape(prettyTs)                          << ","
+           << csvEscape(rater)                             << ","
+           << csvEscape(folder)                            << ","
+           << csvEscape(fileName)                          << ","
+           << r.value("stars").toInt()                     << ","
+           << csvEscape(r.value("slide_type").toString())  << "\n";
     }
     ts.flush();
     return buf;
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// 把某归档批次的 CSV 转成与 buildExportCsvBytes 完全一致的“精简 CSV”，
-// 用于上传归档批次时复用 postCsvBytesToServer 的 multipart / 表单链路。
+// 把某归档批次的 CSV 转成与 buildExportCsvBytes 完全一致的// 用于上传归档批次时复用 postCsvBytesToServer 的 multipart / 表单链路。
 //
 // 与 buildExportCsvBytes 的差异仅在于：
 //   · 数据源：archive/<mode>/<batchName>/ratings.csv（而非主 CSV readAll）。
@@ -481,6 +682,8 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
             row["file_name"]  = cols.value(2);
             row["file_path"]  = cols.value(3);
             row["stars"]      = cols.value(6).toInt();
+            // 第8列 slide_type（向后兼容：旧归档无此列时为空）
+            row["slide_type"] = cols.size() >= 8 ? cols.value(7) : QString();
             rows.push_back(row);
         }
     }
@@ -501,7 +704,7 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
     QTextStream ts(&buf, QIODevice::WriteOnly);
     ts.setEncoding(QStringConverter::Utf8);
     ts.setGenerateByteOrderMark(true);
-    ts << "updated_at,rater,folder,file_name,stars\n";
+    ts << "updated_at,rater,folder,file_name,stars,slide_type\n";
 
     auto stripChannelPrefix = [](const QString& name) -> QString {
         int i = 0;
@@ -532,11 +735,12 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
         const QString fileName =
             stripChannelPrefix(r.value("file_name").toString());
 
-        ts << csvEscape(prettyTs)  << ","
-           << csvEscape(rater)     << ","
-           << csvEscape(folder)    << ","
-           << csvEscape(fileName)  << ","
-           << r.value("stars").toInt() << "\n";
+        ts << csvEscape(prettyTs)                          << ","
+           << csvEscape(rater)                             << ","
+           << csvEscape(folder)                            << ","
+           << csvEscape(fileName)                          << ","
+           << r.value("stars").toInt()                     << ","
+           << csvEscape(r.value("slide_type").toString())  << "\n";
     }
     ts.flush();
     return buf;
@@ -1475,13 +1679,14 @@ bool RatingStore::writeAll(const QList<QVariantMap>& rows) const {
     ts.setGenerateByteOrderMark(true);
     ts << kCsvHeader << "\n";
     for (const auto& r : rows) {
-        ts << csvEscape(r.value("updated_at").toString()) << ","
-           << csvEscape(r.value("rater").toString())      << ","
-           << csvEscape(r.value("file_name").toString())  << ","
-           << csvEscape(r.value("file_path").toString())  << ","
-           << r.value("file_size").toLongLong()           << ","
-           << csvEscape(r.value("quick_hash").toString()) << ","
-           << r.value("stars").toInt()                    << "\n";
+        ts << csvEscape(r.value("updated_at").toString())  << ","
+           << csvEscape(r.value("rater").toString())       << ","
+           << csvEscape(r.value("file_name").toString())   << ","
+           << csvEscape(r.value("file_path").toString())   << ","
+           << r.value("file_size").toLongLong()            << ","
+           << csvEscape(r.value("quick_hash").toString())  << ","
+           << r.value("stars").toInt()                     << ","
+           << csvEscape(r.value("slide_type").toString())  << "\n";
     }
     return true;
 }
@@ -1510,6 +1715,8 @@ QList<QVariantMap> RatingStore::readAll() const {
         row["file_size"]  = cols.value(4).toLongLong();
         row["quick_hash"] = cols.value(5);
         row["stars"]      = cols.value(6).toInt();
+        // 第8列 slide_type（向后兼容：旧行无此列时视为 normal）
+        row["slide_type"] = cols.size() >= 8 ? cols.value(7) : QString();
         out.push_back(row);
     }
     return out;

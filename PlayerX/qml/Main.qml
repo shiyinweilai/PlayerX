@@ -1424,6 +1424,59 @@ ApplicationWindow {
     readonly property int reviewMaxStars:
         (typeof Rating !== "undefined") ? Rating.maxStars : 5
 
+    // ── 质量比较 2（quality_slide）专用：滑动模式评分本地状态 ──
+    //   · 实时写入 ratings_quality_slide_slide.csv（与普通打分文件完全隔离）
+    //   · 与普通 quality 评分（cellRatings）解耦，互不覆盖
+    //   · 切到下一组后必须清空（_resetSlideRatings），下一组重新进入再评
+    readonly property bool isQualitySlideMode:
+        (typeof Rating !== "undefined") && Rating.currentMode === "quality_slide"
+    property bool slideEnteredOnce: false   // 本组中是否进入过滑动对比
+    property int  slideRatingL: 0           // 滑动模式左侧评分（0=未打，1/2）
+    property int  slideRatingR: 0           // 滑动模式右侧评分（0=未打，1/2）
+    function _resetSlideRatings() {
+        slideEnteredOnce = false
+        slideRatingL = 0
+        slideRatingR = 0
+    }
+    // 切换到新一组后，从 CSV 恢复该组已有的滑动评分（避免循环切组时评分被清零）
+    function _restoreSlideRatings() {
+        if (!isQualitySlideMode) return
+        if (typeof Rating === "undefined" || Engine.fileCount < 2) return
+        var fpL = Engine.filePathAt(0)
+        var fpR = Engine.filePathAt(1)
+        if (!fpL || !fpR) return
+        var fnL = Engine.fileNameAt(0)
+        var fnR = Engine.fileNameAt(1)
+        // file_name 存储时加了 ch+1_ 前缀：L侧="1_xxx"，R侧="2_xxx"
+        var storedNameL = "1_" + fnL
+        var storedNameR = "2_" + fnR
+        var rows = Rating.getSlideRatings()
+        var rL = 0, rR = 0
+        for (var i = 0; i < rows.length; ++i) {
+            var r = rows[i]
+            if (r.file_path === fpL && r.file_name === storedNameL) rL = r.stars || 0
+            else if (r.file_path === fpR && r.file_name === storedNameR) rR = r.stars || 0
+        }
+        slideRatingL = rL
+        slideRatingR = rR
+        // 如果任意一侧已有评分，说明本组曾经进入过滑动对比
+        if (rL > 0 || rR > 0) slideEnteredOnce = true
+    }
+    function setSlideRating(side, score) {
+        if (score < 0) score = 0
+        if (score > 2) score = 2
+        if (side === "L") slideRatingL = (slideRatingL === score ? 0 : score)
+        else if (side === "R") slideRatingR = (slideRatingR === score ? 0 : score)
+
+        // 立即持久化到 ratings_quality_slide_slide.csv（与普通打分隔离）
+        if (typeof Rating !== "undefined" && Engine.fileCount >= 2) {
+            var fpL = Engine.filePathAt(0)
+            var fpR = Engine.filePathAt(1)
+            var fnL = Engine.fileNameAt(0)
+            var fnR = Engine.fileNameAt(1)
+            Rating.recordSlideRating(fpL, fnL, slideRatingL, fpR, fnR, slideRatingR)
+        }
+    }
 
     // -1 表示未选中——默认就是 -1，避免一打开应用就有一路被高亮，造成视觉干扰。
     // 设计动机：Engine.activeIndex 是底层渲染状态（Single 模式靠它选画面、数字键
@@ -1739,6 +1792,10 @@ ApplicationWindow {
             // 切换文件 / 翻组 / 改宫格后，主动复位 selectedIdx，避免上一组的
             // 选中（蓝边）残留误导。用户若需要再选中，单击或 [ / ] 即可。
             root.selectedIdx = -1
+            // quality_slide：先清零再从 CSV 恢复本组已有的滑动评分，
+            // 避免循环切组时评分被清零，同时防止上一组评分残留。
+            root._resetSlideRatings()
+            root._restoreSlideRatings()
         }
     }
 
@@ -1748,6 +1805,8 @@ ApplicationWindow {
             compareSliderActive = false
         } else if (compareSliderAvailable) {
             compareSliderActive = true
+            // quality_slide：用户进入过滑动对比即记一次；切组时清空（见 onFilesChanged）。
+            if (root.isQualitySlideMode) root.slideEnteredOnce = true
         }
     }
     // fileCount 变化时若不再满足 2 路条件，自动退出滑动模式
@@ -2046,7 +2105,7 @@ ApplicationWindow {
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 font.pixelSize: 14
                 enabled: multiGroupDialog.active && Engine.fileCount > 0
-                onClicked: multiGroupDialog.prevGroup()
+                onClicked: { if (root.compareSliderActive) root.compareSliderActive = false; multiGroupDialog.prevGroup() }
                 onVisibleChanged: console.log("[MGD][debug] ⏮ btn visible=", visible, "active=", multiGroupDialog.active, "fileCount=", Engine.fileCount)
                 Component.onCompleted: console.log("[MGD][debug] ⏮ btn init visible=", visible, "active=", multiGroupDialog.active, "fileCount=", Engine.fileCount)
                 ToolTip.visible: hovered
@@ -2059,7 +2118,7 @@ ApplicationWindow {
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 font.pixelSize: 14
                 enabled: multiGroupDialog.active && Engine.fileCount > 0
-                onClicked: multiGroupDialog.nextGroup()
+                onClicked: { if (root.compareSliderActive) root.compareSliderActive = false; multiGroupDialog.nextGroup() }
                 onVisibleChanged: console.log("[MGD][debug] ⏭ btn visible=", visible, "active=", multiGroupDialog.active, "fileCount=", Engine.fileCount)
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
@@ -2910,12 +2969,12 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+Up";   context: Qt.ApplicationShortcut
         enabled: multiGroupDialog.active && Engine.fileCount > 0
-        onActivated: multiGroupDialog.prevGroup()
+        onActivated: { if (root.compareSliderActive) root.compareSliderActive = false; multiGroupDialog.prevGroup() }
     }
     Shortcut {
         sequence: "Ctrl+Down"; context: Qt.ApplicationShortcut
         enabled: multiGroupDialog.active && Engine.fileCount > 0
-        onActivated: multiGroupDialog.nextGroup()
+        onActivated: { if (root.compareSliderActive) root.compareSliderActive = false; multiGroupDialog.nextGroup() }
     }
 
     // ─── 参考图侧边栏 ───────────────────────────────────────────────
@@ -5223,6 +5282,11 @@ ApplicationWindow {
             leftIndex: 0
             rightIndex: 1
             channelVisible: root.effectiveChannelVisible
+            // ── 质量比较 2 专用：左右 2 星评分条与本地状态双向同步 ──
+            slideRatingEnabled: root.isQualitySlideMode
+            slideRatingL: root.slideRatingL
+            slideRatingR: root.slideRatingR
+            setSlideRatingFn: function(side, score) { root.setSlideRating(side, score) }
         }
 
         // ─── 评分提示 Toast（屏幕中央浮层）───────────────────
@@ -5334,10 +5398,20 @@ ApplicationWindow {
             for (var i = 0; i < n; ++i) {
                 if (root.ratingAt(i) <= 0) miss.push(i)
             }
+            // quality_slide：仅当 fileCount===2 时滑动对比才有意义；
+            // 多于 2 路的场景退化回普通 quality 校验，避免误拦。
+            // 每组需要 4 次打分：普通A、普通B、滑动A、滑动B。
+            if (root.isQualitySlideMode && Engine.fileCount === 2) {
+                if (root.slideRatingL <= 0) miss.push(-2)   // 滑动 L 未打分
+                if (root.slideRatingR <= 0) miss.push(-3)   // 滑动 R 未打分
+            }
             return miss
         }
         // 提示弹窗用：把 idx 转成"通道 N · 文件名"展示
         getCellLabel: function(idx) {
+            // quality_slide 引入的负值 sentinel：渲染为友好提示
+            if (idx === -2) return "⇆ 滑动 L · 待打分（请进入滑动对比后打分）"
+            if (idx === -3) return "⇆ 滑动 R · 待打分（请进入滑动对比后打分）"
             var name = ""
             try { name = Engine.fileNameAt(idx) || "" } catch (e) { name = "" }
             return "通道 " + (idx + 1) + (name ? " · " + name : "")

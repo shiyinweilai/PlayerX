@@ -66,88 +66,28 @@ Rectangle {
         antialiasing: false
     }
 
-    // ─── 全局同步缩放/平移交互层 ────────────────────────────────
-    // 设计说明：
-    //   · 全部装在一个 MouseArea 上（panArea），MouseArea 只接 RightButton：
-    //       - 右键拖拽 → Engine.panBy()
-    //       - 右键点击未拖拽 → 切换本 cell 信息面板
-    //   · WheelHandler 装在同一个 panArea 上（PointerHandler 与 MouseArea 可同层存）：
-    //       - 滚轮 → Engine.zoomBy() 以鼠标位置为锚点
-    //   · TapHandler 装在 panArea 上仅接 LeftButton + ControlModifier：
-    //       - Ctrl + 左键双击 → Engine.resetViewTransform()
-    //   · 原有 cellMouse 的普通左键点击 / 双击：MouseArea 未接 LeftButton → 左键事件
-    //     会被透传给下层 cellMouse。
-    //   · z = 1：低于所有叠加控件（pathBar/channelBar/cellBar，它们 z>=5），按钮依然可点。
-    MouseArea {
-        id: panArea
-        anchors.fill: vp
-        z: 1
-        // 只接 RightButton。左键、中键事件不在接收列表 → 自动透传给下层 cellMouse。
-        acceptedButtons: Qt.RightButton
-        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.ArrowCursor
-
-        property real _lastX: 0
-        property real _lastY: 0
-        property bool _moved: false
-
-        function _normMouse(mx, my) {
-            var w = Math.max(1, panArea.width)
-            var h = Math.max(1, panArea.height)
-            return Qt.point(Math.max(0, Math.min(1, mx / w)),
-                            Math.max(0, Math.min(1, my / h)))
-        }
-
-        onPressed: function(mouse) {
-            _lastX = mouse.x
-            _lastY = mouse.y
-            _moved = false
-            mouse.accepted = true
-        }
-        onPositionChanged: function(mouse) {
-            if (Engine.viewZoom <= 1.0001) return
-            var dx = mouse.x - _lastX
-            var dy = mouse.y - _lastY
-            _lastX = mouse.x
-            _lastY = mouse.y
-            if (Math.abs(dx) + Math.abs(dy) < 0.5) return
-            _moved = true
-            var w = Math.max(1, panArea.width)
-            var h = Math.max(1, panArea.height)
-            // 画面跟随鼠标：dx>0 鼠标向右 → 画面向右走 → panBy 内部反向偏移 src。
-            Engine.panBy(dx / w, dy / h)
-        }
-        onReleased: function(mouse) {
-            // 右键专职用于拖拽平移；信息面板切换已迁移到左键单击（cellMouse.onClicked）。
-            // 这里不再处理
-        }
-
-        // 滚轮缩放：装在同一个 MouseArea 上，避免与 MouseArea 抢事件问题。
-        // angleDelta.y 每 120 = 1 个"棘轮齿"（鼠标滚轮）；触控板会下发较小的增量。
-        WheelHandler {
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            target: null
-            onWheel: function(event) {
-                if (Engine.fileCount <= 0) return
-                var dy = event.angleDelta.y
-                if (dy === 0) return
-                var step = dy / 120.0
-                // 触控板增量可能很小，使 step 不为 0
-                if (Math.abs(step) < 1e-3) step = (dy > 0 ? 0.05 : -0.05)
-                var factor = Math.pow(2.0, step / 12.0)
-                // WheelHandler 中 event.x/event.y 是鼠标在装载容器中的坐标
-                var n = panArea._normMouse(event.x, event.y)
-                Engine.zoomBy(factor, n.x, n.y)
-                event.accepted = true
-            }
-        }
-
-        // Ctrl + 左键双击 → 复位。TapHandler 独立接收 LeftButton，与 MouseArea acceptedButtons 无关。
-        TapHandler {
-            acceptedButtons: Qt.LeftButton
-            acceptedModifiers: Qt.ControlModifier
-            onDoubleTapped: Engine.resetViewTransform()
+    // ─── 滚轮缩放（独立 WheelHandler，挂在 cell 根 Item 上）────────────────
+    // 不依赖任何 MouseArea，避免与左/右键 MouseArea 的层级竞争。
+    WheelHandler {
+        id: wheelZoom
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        target: null
+        onWheel: function(event) {
+            if (Engine.fileCount <= 0) return
+            var dy = event.angleDelta.y
+            if (dy === 0) return
+            var step = dy / 120.0
+            if (Math.abs(step) < 1e-3) step = (dy > 0 ? 0.05 : -0.05)
+            var factor = Math.pow(2.0, step / 12.0)
+            var w = Math.max(1, cell.width)
+            var h = Math.max(1, cell.height)
+            Engine.zoomBy(factor,
+                Math.max(0, Math.min(1, event.x / w)),
+                Math.max(0, Math.min(1, event.y / h)))
+            event.accepted = true
         }
     }
+
     // 序号徽标（受全局"通道信息"开关控制，默认显示）
     Rectangle {
         id: idxBadge
@@ -333,88 +273,60 @@ Rectangle {
                 Layout.alignment: Qt.AlignRight
                 spacing: 6
 
-                // 内联评分星条（仅在 viewRoot.reviewMode 开启时显示，否则整段 0 宽不占位）：
-                //  · 单击第 N 颗星 → 写入 N 分（与原 cellMenu 内星条一致逻辑）
-                //  · 右键任意位置  → 清空（0 分），方便误评后修正
-                //  · 鼠标悬停时整条变成"预览态"，移开还原当前真实分值
-            // 设计意图：开启评分模式后，5 颗星和"是否已评分"应该在 cell
-            // 上一眼可见，而不是要点 ⋯ 菜单才看见——这条要求来自图 1 / 图 2。
-            Rectangle {
-                visible: viewRoot.reviewMode
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: 12
-                color: "#55ffffff"
-            }
-            Row {
-                id: inlineStarRow
-                visible: viewRoot.reviewMode
-                spacing: 1
-                // 鼠标悬停预览（0 = 未悬停，显示真实分值）。
-                property int hoverRating: 0
-                // 实时读取真实分值；ratingAt 依赖 cellRatings 数组属性，
-                // 整体替换写入会触发绑定刷新。
-                readonly property int currentRating: {
-                    // 显式引用 viewRoot.cellRatings 让本绑定依赖它，
-                    // 写分（_writeRating 整体替换数组）后能自动重算。
-                    var arr = viewRoot.cellRatings
-                    var i = cell.playerIdx
-                    if (i < 0 || i >= arr.length) return 0
-                    var v = arr[i]
-                    return (typeof v === "number" && v > 0) ? v : 0
-                }
-                Repeater {
-                // 当前模式的星级上限：主观评分=5 / 质量比较=2；Rating 实例不在时兜底 5
-                    model: viewRoot.reviewMaxStars > 0 ? viewRoot.reviewMaxStars : 5
-                    delegate: Item {
-                        width: 14
-                        height: 14
-                        property int starIndex: index + 1
-                        property bool active: inlineStarRow.hoverRating > 0
-                            ? starIndex <= inlineStarRow.hoverRating
-                            : starIndex <= inlineStarRow.currentRating
-                        Text {
-                            anchors.centerIn: parent
-                            text: parent.active ? "★" : "☆"
-                            color: parent.active ? "#f5c518" : "#bfc4ca"
-                            font.pixelSize: 13
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            acceptedButtons: Qt.LeftButton | Qt.RightButton
-                            onEntered: inlineStarRow.hoverRating = parent.starIndex
-                            onExited:  inlineStarRow.hoverRating = 0
-                            onClicked: function(mouse) {
-                                if (mouse.button === Qt.RightButton) {
-                                    // 右键清空评分（0 = 未评）
-                                    viewRoot._writeRating(cell.playerIdx, 0)
-                                } else {
-                                    // 左键写入 N 分（强制覆盖，与 Shift+N 快捷键一致）
-                                    viewRoot._writeRating(cell.playerIdx, parent.starIndex)
+                // 评分星条：与 ⋯ ⤢ ✕ 同行，reviewMode 开启时常驻
+                Row {
+                    id: inlineStarRow
+                    spacing: 2
+                    visible: viewRoot.reviewMode
+                    Layout.alignment: Qt.AlignVCenter
+                    property int hoverRating: 0
+                    readonly property int currentRating: {
+                        var arr = viewRoot.cellRatings
+                        var i = cell.playerIdx
+                        if (i < 0 || i >= arr.length) return 0
+                        var v = arr[i]
+                        return (typeof v === "number" && v > 0) ? v : 0
+                    }
+                    Repeater {
+                        model: viewRoot.reviewMaxStars > 0 ? viewRoot.reviewMaxStars : 5
+                        delegate: Item {
+                            width: 18
+                            height: 18
+                            property int starIndex: index + 1
+                            property bool active: inlineStarRow.hoverRating > 0
+                                ? starIndex <= inlineStarRow.hoverRating
+                                : starIndex <= inlineStarRow.currentRating
+                            Text {
+                                anchors.centerIn: parent
+                                text: parent.active ? "★" : "☆"
+                                color: parent.active ? "#f5c518" : "#bfc4ca"
+                                font.pixelSize: 15
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                onEntered: inlineStarRow.hoverRating = parent.starIndex
+                                onExited:  inlineStarRow.hoverRating = 0
+                                onClicked: function(mouse) {
+                                    if (mouse.button === Qt.RightButton) {
+                                        viewRoot._writeRating(cell.playerIdx, 0)
+                                    } else {
+                                        viewRoot._writeRating(cell.playerIdx, parent.starIndex)
+                                    }
+                                    inlineStarRow.hoverRating = 0
                                 }
-                                inlineStarRow.hoverRating = 0
                             }
                         }
                     }
+                    ToolTip.visible: inlineStarRow.hoverRating > 0
+                    ToolTip.delay: 200
+                    ToolTip.timeout: 1500
+                    ToolTip.text: "左键打分 · 右键清空"
                 }
-                ToolTip.visible: inlineStarRow.hoverRating > 0
-                ToolTip.delay: 200
-                ToolTip.timeout: 1500
-                ToolTip.text: "左键打分 · 右键清空"
-            }
-            // 文件名已从胶囊条移除：
-            // 【cell hover 工具按钮】两个同风格的圆点：⋯ 替换本路、✕ 关闭本路。
-            // 二者均常驻显示（不随鼠标移出 cell 消失），仅在用户按 C
-            // 关闭通道信息条 / 全屏抑制角标时才隐藏，避免按钮闪烁或定位丢失。
-            //  - ⋯：单击直接进入「替换本路视频」流程；hover 显示完整路径
-            //         （新增一路已在顶部工具栏／下拉菜单提供，cell 内不再重复）
-            //  - ✕：调 Engine.closeAt(idx)，fileCount 变化会触发 visibleCount/Repeater
-            //         重新求值，UI 自动收拢。
-            // ⋯ 按钮：单击直接进入「替换本路视频」流程；
-            // 评分入口已迁到顶部内联星条（reviewMode 开启时常驻），
-            // 不再需要弹出菜单，避免「2.mp4」这类短文件名让弹窗右侧出现大片空白。
-            // hover 时 ToolTip 显示当前路的完整绝对路径，便于在「同名不同目录」场景下区分。
+
+                // 【cell hover 工具按钮】⋯ 替换本路、⤢ 放大/还原、✕ 关闭本路
             Rectangle {
                 id: moreBtn
                 Layout.preferredWidth: 18
@@ -582,39 +494,71 @@ Rectangle {
         }   // ← end of channelCol（ColumnLayout 两行布局）
     }
 
-    // 评分入口已迁至顶部胶囊条 channelBar 的内联星条（reviewMode 开启时常驻显示），
-    // ⋯ 按钮单击即触发替换流程，不再需要中间的 Popup 菜单。
-    // 这样可避免短文件名（如 "2.mp4"）导致弹窗右侧大片空白；
-    // 同时三点按钮的 ToolTip 已直接显示完整路径，便于区分同名不同目录。
-
-    // 鼠标交互：单击选中、双击切换该路暂停
-    // 注意：_pos / _dur / _playing 在上面已定义，这里不重复
-    // 注意：MouseArea 仅用于点击/双击。hover 检测改用下面的 HoverHandler，
-    // 因为 MouseArea.containsMouse 会被子项（ToolButton 等）截获，
-    // 导致鼠标移到工具条按钮上时 cellMouse.containsMouse 变 false → 工具条隐藏
-    // → 按钮也消失 → 鼠标又"回到"cell → 工具条出现……陷入抖动闪烁。
-    // 左键：选中本路 / 双击切换该路暂停（保留与原行为一致）
-    // 右键：已迁到上方 panArea（zoom>1 时拖拽，否则点击切换信息面板），
-    //       这里不再接 RightButton，避免双向监听时事件竞争。
+    // ─── 主交互层：左键选中/双击暂停 + 右键拖拽平移/单击信息面板 ──────────
+    // 设计说明：
+    //   · 单一 MouseArea 同时接 LeftButton | RightButton，彻底消除层级竞争。
+    //   · 左键单击：选中本路（Engine.activeIndex + selectedIdx）。
+    //     【绝对不允许】切换信息面板，信息面板仅右键单击或快捷键 V 触发。
+    //   · 左键双击：仅在 singleControlsHoverEnabled 开启时切换该路暂停。
+    //   · 右键按住拖拽：Engine.panBy() 平移（zoom>1 时平移放大画面，zoom==1 时同步偏移）。
+    //   · 右键单击（未拖拽）：切换本 cell 信息面板。
+    //   · Ctrl+左键双击：TapHandler 负责复位视图变换。
     MouseArea {
         id: cellMouse
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton
-        onClicked: (mouse) => {
-            Engine.activeIndex = cell.playerIdx
-            viewRoot.selectedIdx   = cell.playerIdx   // 同步 UI 选中态
-            viewRoot.focusVideoArea()
-            // 左键单击切换本 cell 信息面板（与全局 V 快捷键效果一致，但只针对本路）。
-            cell.localInfoVisible = !cell.localInfoVisible
+        z: 2
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        cursorShape: (pressed && pressedButtons & Qt.RightButton) ? Qt.ClosedHandCursor : Qt.ArrowCursor
+
+        property real _rLastX: 0
+        property real _rLastY: 0
+        property bool _rMoved: false
+
+        onPressed: function(mouse) {
+            if (mouse.button === Qt.RightButton) {
+                _rLastX = mouse.x
+                _rLastY = mouse.y
+                _rMoved = false
+            }
         }
-        onDoubleClicked: (mouse) => {
+        onPositionChanged: function(mouse) {
+            if (!(pressedButtons & Qt.RightButton)) return
+            var dx = mouse.x - _rLastX
+            var dy = mouse.y - _rLastY
+            _rLastX = mouse.x
+            _rLastY = mouse.y
+            if (Math.abs(dx) + Math.abs(dy) < 0.5) return
+            _rMoved = true
+            var w = Math.max(1, cellMouse.width)
+            var h = Math.max(1, cellMouse.height)
+            Engine.panBy(dx / w, dy / h)
+        }
+        onClicked: function(mouse) {
+            if (mouse.button === Qt.LeftButton) {
+                Engine.activeIndex = cell.playerIdx
+                viewRoot.selectedIdx = cell.playerIdx
+                viewRoot.focusVideoArea()
+            }
+            // 右键单击由 onReleased 处理（需区分是否拖拽）
+        }
+        onReleased: function(mouse) {
+            if (mouse.button === Qt.RightButton && !_rMoved) {
+                cell.localInfoVisible = !cell.localInfoVisible
+            }
+        }
+        onDoubleClicked: function(mouse) {
             // 仅在「单路悬停控制条」开关开启时，双击才切换该路暂停。
-            // 关闭时（默认）双击不再触发单路暂停，避免与多路对比场景下
-            // 的误操作冲突；用户仍可通过空格切换全局暂停。
             if (mouse.button === Qt.LeftButton
                     && viewRoot && viewRoot.singleControlsHoverEnabled) {
                 Engine.togglePauseAt(cell.playerIdx)
             }
+        }
+
+        // Ctrl + 左键双击 → 复位所有路视图变换。
+        TapHandler {
+            acceptedButtons: Qt.LeftButton
+            acceptedModifiers: Qt.ControlModifier
+            onDoubleTapped: Engine.resetViewTransform()
         }
     }
 
