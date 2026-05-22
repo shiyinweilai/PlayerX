@@ -2124,6 +2124,17 @@ ApplicationWindow {
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("下一组（Ctrl+↓）")
             }
+            // ── 滑动对比模式切换按钮（质量模式2 且恰好2路时显示，等价于快捷键B）──
+            FlatButton {
+                text: root.compareSliderActive ? qsTr("⊟ 普通") : qsTr("⊞ 滑动")
+                visible: root.isQualitySlideMode && root.compareSliderAvailable
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                enabled: visible
+                onClicked: root._toggleCompareSlider()
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: root.compareSliderActive ? qsTr("退出滑动对比，回到普通模式（B）") : qsTr("进入滑动对比模式（B）")
+            }
             // ── 单视频浏览模式专用：宫格切换（1/2/4/6/9） ──
             // 仅在 singleLaneMode（即来源为单文件夹或"添加文件"等单路情形）下显示。
             // 点击弹出菜单选择 N → 调 setViewCount(n)：从当前页起点连续取 N 个视频铺到 N 宫格里。
