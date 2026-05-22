@@ -354,13 +354,29 @@ ApplicationWindow {
     // ─── "更新可用"胶囊按钮已迁移到底部工具栏（参考图按钮右侧），
     //      避免浮在右上角遮挡视频画面/控制条。具体实现见 RowLayout 内 refUpdateBtn。
 
-    // ─── 启动 5 秒后静默自检；同时连接 Updater 信号驱动 UI ───────────────
+    // ─── 启动自检策略：500ms 首次尝试，失败后 3s 自动重试一次 ──────────────
+    // 设计：首次 500ms 发起（UI 已渲染完成），若网络未就绪导致失败，
+    //       retryTimer 会在 3s 后补发一次；成功或用户手动触发后不再重试。
+    property bool _autoCheckRetried: false   // 是否已重试过，防止无限重试
+
     Timer {
         id: updateAutoCheckTimer
-        interval: 5000
+        interval: 500
         running: true
         repeat: false
         onTriggered: Updater.checkForUpdates(true)
+    }
+
+    // 首次失败后的重试定时器（仅触发一次）
+    Timer {
+        id: updateRetryTimer
+        interval: 3000
+        running: false
+        repeat: false
+        onTriggered: {
+            root._autoCheckRetried = true
+            Updater.checkForUpdates(true)
+        }
     }
 
     Connections {
@@ -375,11 +391,15 @@ ApplicationWindow {
                 updateDialog.open()
             }
         }
-        // 已是最新版 / 网络错误：仅在用户手动点了"检查更新"时弹 toast
+        // 已是最新版 / 网络错误：仅在用户手动点了"检查更新"时弹 toast；
+        // 静默自检失败且尚未重试过 → 启动重试定时器
         function onCheckFailed(reason) {
             if (updateDialog.userInitiated) {
                 updateToast.text = reason
                 updateToast.open()
+            } else if (!root._autoCheckRetried) {
+                // 静默首次失败，3s 后重试一次
+                updateRetryTimer.restart()
             }
         }
     }
