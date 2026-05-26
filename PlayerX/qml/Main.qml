@@ -1674,6 +1674,32 @@ ApplicationWindow {
     //   refTextLang : "zh" / "en"，UI 偏好（持久化在 Settings 里，session 内共享）
     property string refTextLang: "zh"
     property int refTextFontSize: 16   // CSV 提示词显示字号，A-/A+ 按钮调节，不随切组重置
+
+    // ─── 视频显示比例 / 固定尺寸锁定（手机屏预览，类浏览器调试器）──────────
+    // 三种状态（优先级：fixed > ratio > 关闭）：
+    //   1) phoneFixedWidth>0 && phoneFixedHeight>0  → 固定像素尺寸模式：
+    //      cell 内视频显示区按 (W,H) 像素显示；若 cell 装不下则等比缩放至 cell 内。
+    //   2) phoneAspectRatio>0                       → 仅锁定宽高比模式（旧行为）。
+    //   3) 全部 = 0                                 → 关闭，视频按原宽高比铺满 cell。
+    //
+    // 仅 session 内生效，切换对比组不重置（与字号一致）。
+    //
+    // 常用尺寸预设见 phonePresetModel（点击预设会同时写入 W/H 与 ratio）。
+    property real phoneAspectRatio: 0
+    property int  phoneFixedWidth: 0    // 0=未启用固定尺寸
+    property int  phoneFixedHeight: 0   // 0=未启用固定尺寸
+    readonly property bool phoneFixedActive: phoneFixedWidth > 0 && phoneFixedHeight > 0
+    readonly property string phoneAspectLabel: {
+        if (root.phoneFixedActive) {
+            return root.phoneFixedWidth + "×" + root.phoneFixedHeight
+        }
+        var r = root.phoneAspectRatio
+        if (r <= 0) return "原始"
+        if (Math.abs(r - 9/19.5) < 0.001) return "9:19.5"
+        if (Math.abs(r - 9/16)   < 0.001) return "9:16"
+        if (Math.abs(r - 3/4)    < 0.001) return "3:4"
+        return r.toFixed(3)
+    }
     // 文本端    // 文本端"手动浏览"偏移：与参考图 _refImgOffset 一一对应。
     //   ◀ ▶ 在自动同步行的基础上 ±1（C++ 端做边界裁剪）；
     //   切换对比组（onFilesChanged）时归零，回到自动同步状态。
@@ -1927,6 +1953,423 @@ ApplicationWindow {
 
             // 打开 / 多组对比 入口已统一收纳到顶部系统菜单栏【文件】。
             // 这里只保留一个 fillWidth 的 spacer，把后面的播放控制组推到工具栏右端。
+
+            // ── 手机比例锁定按钮（📱）紧贴 🖼 按钮左侧 ─────────────────
+            // 锁定后每路视频按选定宽高比 (= 宽÷高) 居中显示，模拟手机屏形状，
+            // 方便多路对比时画面尺寸与移动端实机一致。常用预设：9:19.5（iPhone）、
+            // 9:16（安卓）、3:4（iPad）。状态写到 root.phoneAspectRatio，session 内常驻。
+            // 视觉风格与右侧 🖼 按钮保持一致：原生 Button + 自绘背景；锁定时
+            // 描边/底色高亮，与 🖼 展开态用同一套配色（#0fa085 / #2a2a32）。
+            Button {
+                id: phoneAspectBtn
+                text: "📱"
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 28
+                Layout.alignment: Qt.AlignVCenter
+                hoverEnabled: true
+                onClicked: phoneAspectPopup.openAt(phoneAspectBtn)
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: (root.phoneFixedActive || root.phoneAspectRatio > 0)
+                              ? ("已锁定显示尺寸：" + root.phoneAspectLabel + "（点击切换/关闭）")
+                              : "锁定视频显示尺寸（点击选择常见手机机型或自定义 W×H）"
+                background: Rectangle {
+                    color: phoneAspectBtn.down ? "#4a4a55"
+                          : phoneAspectBtn.hovered ? "#33333a"
+                          : ((root.phoneFixedActive || root.phoneAspectRatio > 0) ? "#2a2a32" : "#202024")
+                    border.color: (root.phoneFixedActive || root.phoneAspectRatio > 0) ? "#0fa085" : "#3a3a42"
+                    border.width: 1
+                    radius: 5
+                }
+                contentItem: Text {
+                    text: phoneAspectBtn.text
+                    color: (root.phoneFixedActive || root.phoneAspectRatio > 0) ? "#7fe5cc" : "#e8e8ec"
+                    font.pixelSize: 14
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                // 视频显示尺寸预设面板：浏览器调试器（Chrome DevTools / Safari）风格。
+                // 顶部 W×H 数字输入（实时改 root.phoneFixedWidth/Height），
+                // 中部常见手机机型预设（点击即应用），底部"关闭锁定"。
+                //
+                // 完全自绘的 Popup（不用 Menu，规避 macOS 上 QtQuick.Controls 把
+                // Menu 转成原生 NSMenu 导致 background/delegate 全部失效、出现
+                // "白底黑字"的问题）。
+                //
+                // ── 视觉规范：与全局 ToolTip 主题一致（半透明深色 + 浅字）──────
+                //  · 背景 #cc1a1a1f（伪毛玻璃，AARRGGBB：α≈80% / 色 #1a1a1f）
+                //  · 描边 #33ffffff（白 20% α），圆角 6
+                //  · 行高 28，字色 #e8e8ec，font.pixelSize 13
+                //  · 悬停整行蓝底 #0a64f0 + 白字（macOS 原生选择观感）
+                //  · 已勾选项左侧 ✓（白色 #e8e8ec），不用蓝色（蓝色让位 hover）
+                //  · 分隔线 1px #33ffffff
+                Popup {
+                    id: phoneAspectPopup
+                    padding: 6
+                    width: 320
+                    implicitHeight: phonePopupContent.implicitHeight + padding * 2
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+
+                    // 由按钮触发：相对 ToolBar 弹在按钮顶部上方
+                    function openAt(anchorBtn) {
+                        var p = anchorBtn.mapToItem(phoneAspectPopup.parent, 0, 0)
+                        phoneAspectPopup.x = p.x
+                        phoneAspectPopup.y = p.y - phoneAspectPopup.implicitHeight - 2
+                        phoneAspectPopup.open()
+                    }
+
+                    background: Rectangle {
+                        color: "#cc1a1a1f"
+                        border.color: "#33ffffff"
+                        border.width: 1
+                        radius: 6
+                    }
+
+                    // 常见机型预设（来源：Chrome DevTools 设备列表 / 各厂商公开规格，截至 2026-05）。
+                    // 这里的 w/h 是 CSS 像素 / 设备无关像素（= 物理分辨率 ÷ DPR），与
+                    // Chrome DevTools 设备模式口径一致，用作"预览参考尺寸"，不要求与设备
+                    // 物理像素严格一致——目标是给视觉上的尺寸感。
+                    //
+                    // header: true 表示分组小标题（不可点击，仅作视觉分组）。
+                    ListModel {
+                        id: phonePresetModel
+                        // ── Apple iPhone ──
+                        ListElement { label: "Apple iPhone";                header: true;  w: 0;   h: 0 }
+                        ListElement { label: "iPhone 17 Pro Max";           header: false; w: 440; h: 956 }
+                        ListElement { label: "iPhone 17 Pro";               header: false; w: 402; h: 874 }
+                        ListElement { label: "iPhone 17";                   header: false; w: 402; h: 874 }
+                        ListElement { label: "iPhone 16 Pro Max";           header: false; w: 440; h: 956 }
+                        ListElement { label: "iPhone 16 Pro";               header: false; w: 402; h: 874 }
+                        ListElement { label: "iPhone 16 Plus";              header: false; w: 430; h: 932 }
+                        ListElement { label: "iPhone 16";                   header: false; w: 393; h: 852 }
+                        ListElement { label: "iPhone 15 Pro Max";           header: false; w: 430; h: 932 }
+                        ListElement { label: "iPhone 15 / 14 Pro";          header: false; w: 393; h: 852 }
+                        ListElement { label: "iPhone 13 / 12";              header: false; w: 390; h: 844 }
+                        ListElement { label: "iPhone SE (3rd gen)";         header: false; w: 375; h: 667 }
+                        // ── Huawei 华为 ──
+                        ListElement { label: "华为 Huawei";                 header: true;  w: 0;   h: 0 }
+                        ListElement { label: "Huawei Mate 70 Pro";          header: false; w: 412; h: 916 }
+                        ListElement { label: "Huawei Mate 60 Pro";          header: false; w: 412; h: 900 }
+                        ListElement { label: "Huawei Pura 70 Pro";          header: false; w: 412; h: 900 }
+                        ListElement { label: "Huawei Pura 70";              header: false; w: 412; h: 919 }
+                        // ── Xiaomi 小米 ──
+                        ListElement { label: "小米 Xiaomi";                 header: true;  w: 0;   h: 0 }
+                        ListElement { label: "Xiaomi 15 Pro";               header: false; w: 412; h: 919 }
+                        ListElement { label: "Xiaomi 15";                   header: false; w: 393; h: 852 }
+                        ListElement { label: "Xiaomi 14 Pro";               header: false; w: 412; h: 915 }
+                        ListElement { label: "Xiaomi 14";                   header: false; w: 393; h: 852 }
+                        ListElement { label: "Redmi K70 Pro";               header: false; w: 412; h: 919 }
+                        // ── OPPO ──
+                        ListElement { label: "OPPO";                        header: true;  w: 0;   h: 0 }
+                        ListElement { label: "OPPO Find X8 Pro";            header: false; w: 412; h: 919 }
+                        ListElement { label: "OPPO Find X8";                header: false; w: 393; h: 852 }
+                        ListElement { label: "OPPO Find X7 Ultra";          header: false; w: 412; h: 919 }
+                        // ── vivo ──
+                        ListElement { label: "vivo";                        header: true;  w: 0;   h: 0 }
+                        ListElement { label: "vivo X200 Pro";               header: false; w: 412; h: 919 }
+                        ListElement { label: "vivo X200";                   header: false; w: 412; h: 919 }
+                        ListElement { label: "vivo X100 Pro";               header: false; w: 412; h: 919 }
+                        // ── Honor 荣耀 ──
+                        ListElement { label: "荣耀 Honor";                  header: true;  w: 0;   h: 0 }
+                        ListElement { label: "Honor Magic 6 Pro";           header: false; w: 412; h: 894 }
+                        ListElement { label: "Honor Magic 5 Pro";           header: false; w: 412; h: 893 }
+                        // ── Samsung / Google（保留参考）──
+                        ListElement { label: "Samsung / Google";            header: true;  w: 0;   h: 0 }
+                        ListElement { label: "Samsung Galaxy S24 Ultra";    header: false; w: 412; h: 915 }
+                        ListElement { label: "Samsung Galaxy S20+";         header: false; w: 384; h: 854 }
+                        ListElement { label: "Google Pixel 8 Pro";          header: false; w: 412; h: 892 }
+                        ListElement { label: "Google Pixel 7";              header: false; w: 412; h: 915 }
+                        // ── 平板 ──
+                        ListElement { label: "平板 Tablet";                 header: true;  w: 0;   h: 0 }
+                        ListElement { label: "iPad mini";                   header: false; w: 768; h: 1024 }
+                        ListElement { label: "iPad Pro 11\"";               header: false; w: 834; h: 1194 }
+                    }
+
+                    contentItem: ColumnLayout {
+                        id: phonePopupContent
+                        spacing: 0
+                        width: phoneAspectPopup.width - phoneAspectPopup.padding * 2
+
+                        // ── 顶部：W × H 输入框 ───────────────────────────────
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 38
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                spacing: 6
+
+                                Label {
+                                    text: "尺寸"
+                                    color: "#9aa0a6"
+                                    font.pixelSize: 12
+                                }
+                                // 宽度
+                                TextField {
+                                    id: phoneWInput
+                                    Layout.preferredWidth: 70
+                                    Layout.preferredHeight: 26
+                                    text: root.phoneFixedWidth > 0 ? root.phoneFixedWidth.toString() : ""
+                                    placeholderText: "宽"
+                                    placeholderTextColor: "#6c7079"
+                                    color: "#e8e8ec"
+                                    selectionColor: "#0a64f0"
+                                    selectedTextColor: "#e8e8ec"
+                                    font.pixelSize: 13
+                                    horizontalAlignment: TextInput.AlignHCenter
+                                    validator: IntValidator { bottom: 0; top: 8192 }
+                                    background: Rectangle {
+                                        color: "#22ffffff"
+                                        border.color: phoneWInput.activeFocus ? "#0a64f0" : "#33ffffff"
+                                        border.width: 1
+                                        radius: 4
+                                    }
+                                    onEditingFinished: {
+                                        var v = parseInt(text || "0", 10)
+                                        if (isNaN(v) || v <= 0) {
+                                            root.phoneFixedWidth = 0
+                                        } else {
+                                            root.phoneFixedWidth = v
+                                        }
+                                        // 若两边都设了，自动同步比例
+                                        if (root.phoneFixedWidth > 0 && root.phoneFixedHeight > 0) {
+                                            root.phoneAspectRatio = root.phoneFixedWidth / root.phoneFixedHeight
+                                        }
+                                    }
+                                }
+                                Label {
+                                    text: "×"
+                                    color: "#9aa0a6"
+                                    font.pixelSize: 13
+                                }
+                                // 高度
+                                TextField {
+                                    id: phoneHInput
+                                    Layout.preferredWidth: 70
+                                    Layout.preferredHeight: 26
+                                    text: root.phoneFixedHeight > 0 ? root.phoneFixedHeight.toString() : ""
+                                    placeholderText: "高"
+                                    placeholderTextColor: "#6c7079"
+                                    color: "#e8e8ec"
+                                    selectionColor: "#0a64f0"
+                                    selectedTextColor: "#e8e8ec"
+                                    font.pixelSize: 13
+                                    horizontalAlignment: TextInput.AlignHCenter
+                                    validator: IntValidator { bottom: 0; top: 8192 }
+                                    background: Rectangle {
+                                        color: "#22ffffff"
+                                        border.color: phoneHInput.activeFocus ? "#0a64f0" : "#33ffffff"
+                                        border.width: 1
+                                        radius: 4
+                                    }
+                                    onEditingFinished: {
+                                        var v = parseInt(text || "0", 10)
+                                        if (isNaN(v) || v <= 0) {
+                                            root.phoneFixedHeight = 0
+                                        } else {
+                                            root.phoneFixedHeight = v
+                                        }
+                                        if (root.phoneFixedWidth > 0 && root.phoneFixedHeight > 0) {
+                                            root.phoneAspectRatio = root.phoneFixedWidth / root.phoneFixedHeight
+                                        }
+                                    }
+                                }
+                                Item { Layout.fillWidth: true }
+                                // 旋转 W↔H
+                                Button {
+                                    id: phoneRotateBtn
+                                    Layout.preferredWidth: 26
+                                    Layout.preferredHeight: 26
+                                    hoverEnabled: true
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 400
+                                    ToolTip.text: "旋转方向（横竖切换）"
+                                    background: Rectangle {
+                                        color: phoneRotateBtn.hovered ? "#33ffffff" : "transparent"
+                                        radius: 4
+                                    }
+                                    contentItem: Text {
+                                        text: "⇅"
+                                        color: "#e8e8ec"
+                                        font.pixelSize: 14
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    onClicked: {
+                                        var w = root.phoneFixedWidth
+                                        var h = root.phoneFixedHeight
+                                        if (w > 0 && h > 0) {
+                                            root.phoneFixedWidth = h
+                                            root.phoneFixedHeight = w
+                                            root.phoneAspectRatio = root.phoneFixedWidth / root.phoneFixedHeight
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 分隔线
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 6
+                            Layout.rightMargin: 6
+                            Layout.preferredHeight: 1
+                            color: "#33ffffff"
+                        }
+
+                        // ── 中部：常见机型预设（可滚动）────────────────────
+                        // 列表条目较多，用 ListView 自带滚动而非 Repeater，整体高度封顶。
+                        ListView {
+                            id: phonePresetList
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(360, contentHeight)
+                            clip: true
+                            interactive: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            model: phonePresetModel
+                            spacing: 0
+
+                            ScrollBar.vertical: ScrollBar {
+                                policy: ScrollBar.AsNeeded
+                                width: 6
+                                contentItem: Rectangle {
+                                    implicitWidth: 6
+                                    radius: 3
+                                    color: "#55ffffff"
+                                }
+                            }
+
+                            delegate: Item {
+                                width: phonePresetList.width
+                                height: model.header ? 24 : 28
+
+                                // ── 分组小标题（不可点击）──────────────────
+                                Text {
+                                    visible: model.header
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 8
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 12
+                                    text: model.label
+                                    color: "#9aa0a6"
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+
+                                // ── 机型行 ─────────────────────────────────
+                                Rectangle {
+                                    visible: !model.header
+                                    anchors.fill: parent
+                                    radius: 4
+                                    color: presetHover.hovered ? "#0a64f0" : "transparent"
+
+                                    readonly property bool _picked: root.phoneFixedWidth === model.w
+                                                                  && root.phoneFixedHeight === model.h
+
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 8
+                                        width: 14
+                                        text: parent._picked ? "✓" : ""
+                                        color: "#e8e8ec"
+                                        font.pixelSize: 12
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 28
+                                        text: model.label
+                                        color: "#e8e8ec"
+                                        font.pixelSize: 13
+                                        elide: Text.ElideRight
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.right: parent.right
+                                        anchors.rightMargin: 12
+                                        text: model.w + " × " + model.h
+                                        color: presetHover.hovered ? "#e8e8ec" : "#9aa0a6"
+                                        font.pixelSize: 12
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+
+                                    HoverHandler {
+                                        id: presetHover
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
+                                    TapHandler {
+                                        onTapped: {
+                                            root.phoneFixedWidth = model.w
+                                            root.phoneFixedHeight = model.h
+                                            root.phoneAspectRatio = model.w / model.h
+                                            phoneAspectPopup.close()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 分隔线
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 6
+                            Layout.rightMargin: 6
+                            Layout.preferredHeight: 1
+                            color: "#33ffffff"
+                        }
+
+                        // ── 底部：关闭锁定 ─────────────────────────────────
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 28
+                            radius: 4
+                            color: clearHover.hovered ? "#0a64f0" : "transparent"
+
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left
+                                anchors.leftMargin: 8
+                                width: 14
+                                text: (root.phoneFixedWidth <= 0 && root.phoneFixedHeight <= 0
+                                       && root.phoneAspectRatio <= 0) ? "✓" : ""
+                                color: "#e8e8ec"
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left
+                                anchors.leftMargin: 28
+                                text: "原始（关闭锁定）"
+                                color: "#e8e8ec"
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            HoverHandler {
+                                id: clearHover
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                            TapHandler {
+                                onTapped: {
+                                    root.phoneFixedWidth = 0
+                                    root.phoneFixedHeight = 0
+                                    root.phoneAspectRatio = 0
+                                    phoneAspectPopup.close()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // ── 左侧"参考图侧边栏"切换 ──
             // 已展开 → 绿色描边作为状态指示；折叠 → 普通描边。
@@ -4426,6 +4869,7 @@ ApplicationWindow {
                         ToolTip.text: "折叠参考文本"
                     }
                 }
+
                 Label {
                     anchors.left: csvCollapseBtn.right
                     anchors.right: csvBottomCtrlRow.left

@@ -41,7 +41,11 @@ Rectangle {
     //   - 未选中保持深灰 #222，与原视觉一致
     //   - 120ms 过渡，切换 / 评分时观感顺滑
     readonly property bool _isActive: viewRoot.selectedIdx === cell.playerIdx
-    border.color: cell._isActive ? "#4a6fa5" : "#222"
+    // 锁定手机比例时，cell 自身边框淡化为黑（黑边里看不见），选中框由内框 videoBox 绘制；
+    // 未锁定时 cell 边框 = 选中框（保持原视觉）。
+    readonly property bool _phoneLocked: viewRoot && (viewRoot.phoneFixedActive || viewRoot.phoneAspectRatio > 0)
+    border.color: cell._phoneLocked ? "#000"
+                : (cell._isActive ? "#4a6fa5" : "#222")
     border.width: 2
     Behavior on border.color { ColorAnimation { duration: 120 } }
 
@@ -53,9 +57,61 @@ Rectangle {
     function _dur() { Engine.duration; return Engine.durationAt(cell.playerIdx) }
     function _playing() { Engine.playing; return Engine.playingAt(cell.playerIdx) }
 
+    // ─── 内容内框（手机比例 / 固定尺寸锁定）─────────────────────────────
+    // 三种模式（与 Main.qml root 上的属性保持一致）：
+    //   1) viewRoot.phoneFixedActive (W>0 && H>0)：固定像素尺寸；
+    //      cell 装得下就 1:1 显示，装不下则等比缩放到 cell 内框。
+    //   2) viewRoot.phoneAspectRatio > 0：按比例（宽÷高）居中开框。
+    //   3) 都 = 0：videoBox 退化为整个 cell（行为同改造前）。
+    // 所有 HUD（序号、路径、控制条、选中框）都锚定到 videoBox。
+    Item {
+        id: videoBox
+        readonly property real _cellAspect: Math.max(0.0001, cell.width / Math.max(1, cell.height))
+        readonly property bool _fixed: viewRoot && viewRoot.phoneFixedActive
+        readonly property real _fixW: _fixed ? viewRoot.phoneFixedWidth  : 0
+        readonly property real _fixH: _fixed ? viewRoot.phoneFixedHeight : 0
+        readonly property real _lock: _fixed
+                                       ? (_fixW / Math.max(1, _fixH))
+                                       : ((viewRoot && viewRoot.phoneAspectRatio > 0)
+                                          ? viewRoot.phoneAspectRatio : 0)
+        // 固定尺寸模式：cell 装得下用原始像素，装不下按 cell 等比缩放
+        // （等比缩放等价于"按 _lock 比例填满 cell 内框"，保留比例不裁剪）。
+        readonly property real _fitScale: {
+            if (!_fixed) return 1
+            var sx = cell.width  / Math.max(1, _fixW)
+            var sy = cell.height / Math.max(1, _fixH)
+            var s = Math.min(sx, sy)
+            return s < 1 ? s : 1
+        }
+        readonly property real _w: _fixed
+                                    ? _fixW * _fitScale
+                                    : (_lock <= 0
+                                        ? cell.width
+                                        : (_cellAspect > _lock ? cell.height * _lock : cell.width))
+        readonly property real _h: _fixed
+                                    ? _fixH * _fitScale
+                                    : (_lock <= 0
+                                        ? cell.height
+                                        : (_cellAspect > _lock ? cell.height : cell.width / _lock))
+        width:  _w
+        height: _h
+        anchors.centerIn: parent
+
+        // 锁定态下，由内框绘制选中框（与 cell.border 二选一，避免双层框）
+        Rectangle {
+            anchors.fill: parent
+            color: "transparent"
+            visible: cell._phoneLocked
+            border.color: cell._isActive ? "#4a6fa5" : "#222"
+            border.width: 2
+            Behavior on border.color { ColorAnimation { duration: 120 } }
+            z: 100   // 压过视频帧，但低于上层 HUD/控制条
+        }
+    }
+
     VideoFrameProvider {
         id: vp
-        anchors.fill: parent
+        anchors.fill: videoBox
         anchors.margins: 2
         engine: Engine
         playerIndex: cell.playerIdx
@@ -79,11 +135,15 @@ Rectangle {
             var step = dy / 120.0
             if (Math.abs(step) < 1e-3) step = (dy > 0 ? 0.05 : -0.05)
             var factor = Math.pow(2.0, step / 12.0)
-            var w = Math.max(1, cell.width)
-            var h = Math.max(1, cell.height)
+            // 以 videoBox（画面区）归一化：锁定手机比例后，黑边上滚轮也能合理定位
+            // （黑边区域被 clamp 到画面边界）。
+            var w = Math.max(1, videoBox.width)
+            var h = Math.max(1, videoBox.height)
+            var lx = (event.x - videoBox.x) / w
+            var ly = (event.y - videoBox.y) / h
             Engine.zoomBy(factor,
-                Math.max(0, Math.min(1, event.x / w)),
-                Math.max(0, Math.min(1, event.y / h)))
+                Math.max(0, Math.min(1, lx)),
+                Math.max(0, Math.min(1, ly)))
             event.accepted = true
         }
     }
@@ -91,8 +151,8 @@ Rectangle {
     // 序号徽标（受全局"通道信息"开关控制，默认显示）
     Rectangle {
         id: idxBadge
-        anchors.left: parent.left
-        anchors.top: parent.top
+        anchors.left: videoBox.left
+        anchors.top: videoBox.top
         anchors.margins: 6
         width: 22; height: 22; radius: 4
         color: "#cc000000"
@@ -141,7 +201,7 @@ Rectangle {
         // channelBar 不可见时 (effectiveChannelVisible=false) 以 0 计，路径可独享整个顶部。
         readonly property int _channelOccupiedW: channelBar.visible ? (channelBar.width + 6 + 8) : 8
         readonly property int _maxAvailWidth:
-            Math.max(80, cell.width - (idxBadge.x + idxBadge.width) - 6 - _channelOccupiedW)
+            Math.max(80, videoBox.width - (idxBadge.width + 6) - 6 - _channelOccupiedW)
         implicitWidth:  pathRow.implicitWidth + 12
         implicitHeight: pathRow.implicitHeight + 4
         width:  Math.min(implicitWidth, _maxAvailWidth)
@@ -221,8 +281,8 @@ Rectangle {
     // 受全局"通道信息"开关控制，默认显示；帧号/时间戳随 Engine.position 自动刷新。
     Rectangle {
         id: channelBar
-        anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.right: videoBox.right
+        anchors.top: videoBox.top
         anchors.margins: 6
         radius: 3
         // 调稀透明度（0xaa≈67% → 0x33≈20%），与 pathBar 保持一致：
@@ -235,7 +295,7 @@ Rectangle {
         // 上限 = cell 宽 − 右锚 margin (6) − 左上角序号徽标占位 (22+6 margin+6 安全间距 = 34) ≈ cell.width − 40。
         // 当 implicitWidth 超过上限时，width 收敛到上限，channelRow 在 anchors.fill
         // 下被同步压缩，唯一可压缩项 pathLabelWrap 触发 ElideLeft 省略。
-        readonly property int _maxAvailWidth: Math.max(120, cell.width - 40)
+        readonly property int _maxAvailWidth: Math.max(120, videoBox.width - 40)
         implicitWidth:  channelCol.implicitWidth + 12
         implicitHeight: channelCol.implicitHeight + 6
         width:  Math.min(implicitWidth, _maxAvailWidth)
@@ -529,8 +589,9 @@ Rectangle {
             _rLastY = mouse.y
             if (Math.abs(dx) + Math.abs(dy) < 0.5) return
             _rMoved = true
-            var w = Math.max(1, cellMouse.width)
-            var h = Math.max(1, cellMouse.height)
+            // 以 videoBox（画面区）归一化：锁定手机比例后拖拽在黑边/画面中表现一致。
+            var w = Math.max(1, videoBox.width)
+            var h = Math.max(1, videoBox.height)
             Engine.panBy(dx / w, dy / h)
         }
         onClicked: function(mouse) {
@@ -572,8 +633,8 @@ Rectangle {
     // 每次 positionChanged 时自动刷新帧号/帧类型/pts。
     Rectangle {
         id: infoPanel
-        anchors.left: parent.left
-        anchors.top: parent.top
+        anchors.left: videoBox.left
+        anchors.top: videoBox.top
         anchors.leftMargin: 6
         anchors.topMargin: 34   // 序号徽标(22px) + 6px margin + 6px gap
         width: infoPanelCol.implicitWidth + 20
@@ -710,9 +771,9 @@ Rectangle {
     // 所有控制只作用于 cell.playerIdx 对应的单路。
     Rectangle {
         id: cellBar
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
+        anchors.left: videoBox.left
+        anchors.right: videoBox.right
+        anchors.bottom: videoBox.bottom
         anchors.margins: 6
         height: 68
         radius: 6
