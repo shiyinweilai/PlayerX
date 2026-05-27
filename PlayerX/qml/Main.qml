@@ -1694,25 +1694,74 @@ ApplicationWindow {
     //   预设值（如 iPhone 17 Pro Max = 440×956）保留 CSS px 标准口径，不被污染；
     //   每台显示器的物理 PPI 不同（macOS Retina 不同型号有差异），用一次校准把蓝框
     //   屏显大小拉到接近真机即可。
-    //   合法范围 0.5 ~ 1.5；<=0 视为无效，回退到 1.0。
+    //   合法范围 0.1 ~ 5.0（外接低 PPI 显示器可能需要明显大于 1.0）；<=0 视为无效，回退到 1.0。
     //
     // 自动跟随 macOS 系统设置 → 显示器 → 缩放档位（更大字体 / … / 默认 / … / 更多空间）：
     //   不同档位下 Screen.width（逻辑 px）会变，用查表得到对应校准系数。
     //   表内未命中则取最近邻；用户一旦在校准框手动输入，关闭自动跟随。
     property real phoneDisplayScale: 1.0
     property bool phoneScaleAutoTrack: true
-    // 校准预设：[逻辑宽 px, 校准系数]。覆盖 16" MBP 实测 5 档：
-    //   1168×755=更大字体 / 1312×848 / 1496×967 / 1728×1117=默认 / 2056×1329=更多空间。
-    readonly property var _phoneScalePresets: [
+    // 校准预设：按显示器名归类，每张表条目为 [逻辑宽 px, 校准系数]。
+    //   不同显示器物理 PPI 不同，仅靠 logicalWidth 不足以唯一确定校准值
+    //   （例如内建屏 1728 与某些外接屏的逻辑宽度可能重叠）。因此用 Screen.name 选表。
+    //
+    //   内建（16" MBP, 内建视网膜显示器）实测 5 档：
+    //     1168=更大字体 / 1312 / 1496 / 1728=默认 / 2056=更多空间
+    //   外接（PHL 278B1, 27" 4K）实测 5 档：
+    //     1920=更大字体 / 2560 / 3008 / 3360=默认 / 3840=更多空间
+    //
+    //   未匹配到的显示器走 _phoneScalePresetsDefault（同内建表，按最近邻取值）。
+    readonly property var _phoneScalePresetsByScreen: ({
+        "内建视网膜显示器": [
+            [1168, 0.60],
+            [1312, 0.68],
+            [1496, 0.77],
+            [1728, 0.88],
+            [2056, 1.06]
+        ],
+        "PHL 278B1": [
+            [1920, 0.57],
+            [2560, 0.76],
+            [3008, 0.90],
+            [3360, 1.00],
+            [3840, 1.14]
+        ]
+    })
+    readonly property var _phoneScalePresetsDefault: [
         [1168, 0.60],
         [1312, 0.68],
         [1496, 0.77],
         [1728, 0.88],
         [2056, 1.06]
     ]
-    function _autoPhoneScaleForLogicalWidth(w) {
-        if (!w || w <= 0) return 1.0
-        var presets = root._phoneScalePresets
+    // 公式自适应目标：让"手机蓝框"在屏幕上的物理宽度恒为 ~77.7mm（iPhone 17 Pro Max
+    // 实测物理宽 77.6mm，与已校准的内建/PHL 5 档预设完全吻合，误差 < 0.5mm）。
+    //
+    //   phoneDisplayScale = TARGET_MM / (phoneFixedWidth × mmPerLogicalPx)
+    //
+    // 其中 mmPerLogicalPx 由 QML Screen 的 pixelDensity（物理像素/mm）和 devicePixelRatio
+    // 反推：mmPerLogicalPx = devicePixelRatio / pixelDensity。
+    // 该公式与显示器型号无关——任何 macOS / Windows 显示器、任何缩放档位都成立。
+    readonly property real _phoneTargetPhysicalMm: 77.7
+    function _phoneScalePresetsForScreen(name) {
+        var map = root._phoneScalePresetsByScreen
+        if (name && map.hasOwnProperty(name)) return map[name]
+        return null
+    }
+    function _autoPhoneScaleByFormula() {
+        // 优先用 QML Screen 暴露的物理像素密度
+        var pd = Screen.pixelDensity   // 物理像素 / mm
+        var dpr = Screen.devicePixelRatio || 1
+        if (pd && pd > 0) {
+            var mmPerLogicalPx = dpr / pd
+            var fw = root.phoneFixedWidth > 0 ? root.phoneFixedWidth : 440
+            var s = root._phoneTargetPhysicalMm / (fw * mmPerLogicalPx)
+            if (s > 0) return s
+        }
+        return -1
+    }
+    function _autoPhoneScaleNearestPreset(w, presets) {
+        if (!presets || presets.length === 0) return -1
         var best = presets[0]
         var bestDiff = Math.abs(w - best[0])
         for (var i = 1; i < presets.length; ++i) {
@@ -1725,7 +1774,22 @@ ApplicationWindow {
         if (!root.phoneScaleAutoTrack) return
         var w = Screen.width
         if (!w || w <= 0) return
-        var s = root._autoPhoneScaleForLogicalWidth(w)
+        // 1) 已知显示器：完全走预设表（保护已校准的内建/PHL 体验，不动）
+        var presets = root._phoneScalePresetsForScreen(Screen.name)
+        var s = -1
+        if (presets) {
+            s = root._autoPhoneScaleNearestPreset(w, presets)
+        } else {
+            // 2) 未知显示器：物理 mm 公式自适应
+            s = root._autoPhoneScaleByFormula()
+            // 3) 公式失效兜底：用默认表最近邻
+            if (s <= 0)
+                s = root._autoPhoneScaleNearestPreset(w, root._phoneScalePresetsDefault)
+        }
+        if (s <= 0) return
+        // 与 SpinBox 校准框范围一致（0.1 ~ 5.0）
+        if (s < 0.1) s = 0.1
+        else if (s > 5.0) s = 5.0
         if (Math.abs(s - root.phoneDisplayScale) > 0.001)
             root.phoneDisplayScale = s
     }
@@ -1733,7 +1797,12 @@ ApplicationWindow {
         target: Screen
         function onWidthChanged()  { root._applyAutoPhoneScale() }
         function onHeightChanged() { root._applyAutoPhoneScale() }
+        function onNameChanged()   { root._applyAutoPhoneScale() }
+        function onPixelDensityChanged() { root._applyAutoPhoneScale() }
+        function onDevicePixelRatioChanged() { root._applyAutoPhoneScale() }
     }
+    // 切换手机尺寸预设（440×956 / 402×874 …）时，若仍在自动跟随，重算系数
+    onPhoneFixedWidthChanged: _applyAutoPhoneScale()
     readonly property bool phoneFixedActive: phoneFixedWidth > 0 && phoneFixedHeight > 0
     readonly property string phoneAspectLabel: {
         if (root.phoneFixedActive) {
@@ -2247,7 +2316,7 @@ ApplicationWindow {
                                     selectedTextColor: "#e8e8ec"
                                     font.pixelSize: 13
                                     horizontalAlignment: TextInput.AlignHCenter
-                                    validator: DoubleValidator { bottom: 0.5; top: 1.5; decimals: 2; notation: DoubleValidator.StandardNotation }
+                                    validator: DoubleValidator { bottom: 0.1; top: 5.0; decimals: 2; notation: DoubleValidator.StandardNotation }
                                     background: Rectangle {
                                         color: "#22ffffff"
                                         border.color: phoneScaleInput.activeFocus ? "#0a64f0" : "#33ffffff"
@@ -2256,12 +2325,12 @@ ApplicationWindow {
                                     }
                                     ToolTip.visible: hovered
                                     ToolTip.delay: 400
-                                    ToolTip.text: "屏幕校准系数（0.5 ~ 1.5）\n蓝框尺寸 = W×H × 此系数\n预设值保持 CSS px 标准不变"
+                                    ToolTip.text: "屏幕校准系数（0.1 ~ 5.0）\n蓝框尺寸 = W×H × 此系数\n预设值保持 CSS px 标准不变"
                                     onEditingFinished: {
                                         var v = parseFloat(text || "1")
                                         if (isNaN(v) || v <= 0) v = 1.0
-                                        if (v < 0.5) v = 0.5
-                                        if (v > 1.5) v = 1.5
+                                        if (v < 0.1) v = 0.1
+                                        if (v > 5.0) v = 5.0
                                         root.phoneScaleAutoTrack = false
                                         root.phoneDisplayScale = v
                                         text = v.toFixed(2)
