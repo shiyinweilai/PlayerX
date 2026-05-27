@@ -48,6 +48,8 @@ ApplicationWindow {
         } catch (e) {
             console.log("[ToolTip][theme] init failed:", e)
         }
+        // 初始化手机模式校准系数（按当前 Screen.width 查表，跟随系统显示档位变化）
+        root._applyAutoPhoneScale()
     }
 
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
@@ -1691,9 +1693,47 @@ ApplicationWindow {
     // 显示器校准系数：所有手机模式下的渲染尺寸 = phoneFixedWidth × phoneDisplayScale。
     //   预设值（如 iPhone 17 Pro Max = 440×956）保留 CSS px 标准口径，不被污染；
     //   每台显示器的物理 PPI 不同（macOS Retina 不同型号有差异），用一次校准把蓝框
-    //   屏显大小拉到接近真机即可。换显示器再调一次，所有机型同步缩放。
+    //   屏显大小拉到接近真机即可。
     //   合法范围 0.5 ~ 1.5；<=0 视为无效，回退到 1.0。
+    //
+    // 自动跟随 macOS 系统设置 → 显示器 → 缩放档位（更大字体 / … / 默认 / … / 更多空间）：
+    //   不同档位下 Screen.width（逻辑 px）会变，用查表得到对应校准系数。
+    //   表内未命中则取最近邻；用户一旦在校准框手动输入，关闭自动跟随。
     property real phoneDisplayScale: 1.0
+    property bool phoneScaleAutoTrack: true
+    // 校准预设：[逻辑宽 px, 校准系数]。覆盖 16" MBP 实测 5 档：
+    //   1168×755=更大字体 / 1312×848 / 1496×967 / 1728×1117=默认 / 2056×1329=更多空间。
+    readonly property var _phoneScalePresets: [
+        [1168, 0.60],
+        [1312, 0.68],
+        [1496, 0.77],
+        [1728, 0.88],
+        [2056, 1.06]
+    ]
+    function _autoPhoneScaleForLogicalWidth(w) {
+        if (!w || w <= 0) return 1.0
+        var presets = root._phoneScalePresets
+        var best = presets[0]
+        var bestDiff = Math.abs(w - best[0])
+        for (var i = 1; i < presets.length; ++i) {
+            var d = Math.abs(w - presets[i][0])
+            if (d < bestDiff) { best = presets[i]; bestDiff = d }
+        }
+        return best[1]
+    }
+    function _applyAutoPhoneScale() {
+        if (!root.phoneScaleAutoTrack) return
+        var w = Screen.width
+        if (!w || w <= 0) return
+        var s = root._autoPhoneScaleForLogicalWidth(w)
+        if (Math.abs(s - root.phoneDisplayScale) > 0.001)
+            root.phoneDisplayScale = s
+    }
+    Connections {
+        target: Screen
+        function onWidthChanged()  { root._applyAutoPhoneScale() }
+        function onHeightChanged() { root._applyAutoPhoneScale() }
+    }
     readonly property bool phoneFixedActive: phoneFixedWidth > 0 && phoneFixedHeight > 0
     readonly property string phoneAspectLabel: {
         if (root.phoneFixedActive) {
@@ -2222,6 +2262,7 @@ ApplicationWindow {
                                         if (isNaN(v) || v <= 0) v = 1.0
                                         if (v < 0.5) v = 0.5
                                         if (v > 1.5) v = 1.5
+                                        root.phoneScaleAutoTrack = false
                                         root.phoneDisplayScale = v
                                         text = v.toFixed(2)
                                     }
