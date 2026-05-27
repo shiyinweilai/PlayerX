@@ -9,6 +9,14 @@
     "mac-arm64": {
       "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-3.0.7-arm64-mac.zip",
       "sha256": "b47483e3b8d0cf0546d30ed3f36f16b15c00f5cf27dafd4a3dbba07aabdfefb9"
+    },
+    "win-install": {
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-Setup-3.0.7.exe",
+      "sha256": "31bb114cdcf92899952b55f4dd78edfc4d05d4719566d110ce6d8c765c191e40"
+    },
+    "win-portable": {
+      "url": "https://YOUR-CDN.example.com/PlayerX/PlayerX-3.0.7-win64-portable.zip",
+      "sha256": "efeff3741428654ac60ae1ba49557c3787316f8cbf6700f7810d284a53229fef"
     }
   }
 }

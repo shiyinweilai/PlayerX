@@ -102,10 +102,10 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     # 应用自动更新（远端 latest.json 比对 + 下载 + relaunch；与播放内核解耦）
     src/qt/Updater.cpp
     # 屏幕状态主动探测（绕开 macOS 外接屏 Screen 附加属性缓存问题）
-    # macOS 走 ScreenProbe.mm（Cocoa NSScreen + 系统通知，事件驱动）
-    # 其他平台走 ScreenProbe_generic.cpp（QScreen 回退）
+    # macOS 走 ScreenProbe.mm（Cocoa NSScreen + CoreGraphics + 系统通知，事件驱动）
+    # 其他平台走 ScreenProbe.cpp（Qt QScreen 回退）
     $<$<PLATFORM_ID:Darwin>:src/qt/ScreenProbe.mm>
-    $<$<NOT:$<PLATFORM_ID:Darwin>>:src/qt/ScreenProbe_generic.cpp>
+    $<$<NOT:$<PLATFORM_ID:Darwin>>:src/qt/ScreenProbe.cpp>
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────

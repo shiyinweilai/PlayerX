@@ -1,9 +1,11 @@
 /**
- * ScreenProbe_generic.cpp — 非 APPLE 平台的回退实现
+ * ScreenProbe.cpp — 非 APPLE 平台（Windows/Linux）的回退实现
  *
- * macOS 走 ScreenProbe.mm（Cocoa NSScreen 原生 API）；
- * 其他平台（Windows/Linux）回退到 Qt QScreen。
- * 注意：本文件仅在非 APPLE 时被 CMake 加入编译列表。
+ * macOS 走同目录下的 ScreenProbe.mm（Cocoa NSScreen + CoreGraphics 原生 API），
+ * 由 CMakeLists.txt 按平台二选一加入编译列表。
+ *
+ * 本文件文件名 stem 与 ScreenProbe.h 一致，AUTOMOC 会自动把 moc_ScreenProbe.cpp
+ * 挂接到本 TU，无需手动 include moc 输出。
  */
 #include "ScreenProbe.h"
 
@@ -14,6 +16,7 @@
 
 namespace rbqt {
 
+// 非 APPLE 平台不需要平台私有状态，留个空 Impl 让 .h 里 PIMPL 形状保持一致。
 class ScreenProbeImpl {
 public:
     explicit ScreenProbeImpl(ScreenProbe* /*owner*/) {}
