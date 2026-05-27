@@ -1688,6 +1688,12 @@ ApplicationWindow {
     property real phoneAspectRatio: 0
     property int  phoneFixedWidth: 0    // 0=未启用固定尺寸
     property int  phoneFixedHeight: 0   // 0=未启用固定尺寸
+    // 显示器校准系数：所有手机模式下的渲染尺寸 = phoneFixedWidth × phoneDisplayScale。
+    //   预设值（如 iPhone 17 Pro Max = 440×956）保留 CSS px 标准口径，不被污染；
+    //   每台显示器的物理 PPI 不同（macOS Retina 不同型号有差异），用一次校准把蓝框
+    //   屏显大小拉到接近真机即可。换显示器再调一次，所有机型同步缩放。
+    //   合法范围 0.5 ~ 1.5；<=0 视为无效，回退到 1.0。
+    property real phoneDisplayScale: 1.0
     readonly property bool phoneFixedActive: phoneFixedWidth > 0 && phoneFixedHeight > 0
     readonly property string phoneAspectLabel: {
         if (root.phoneFixedActive) {
@@ -2026,64 +2032,67 @@ ApplicationWindow {
                         radius: 6
                     }
 
-                    // 常见机型预设（来源：Chrome DevTools 设备列表 / 各厂商公开规格，截至 2026-05）。
-                    // 这里的 w/h 是 CSS 像素 / 设备无关像素（= 物理分辨率 ÷ DPR），与
-                    // Chrome DevTools 设备模式口径一致，用作"预览参考尺寸"，不要求与设备
-                    // 物理像素严格一致——目标是给视觉上的尺寸感。
+                    // 常见机型预设（来源：各厂商官网公开规格 mm 数据，截至 2026-05）。
+                    // ⚠ 数据口径：【整机外壳】像素比例（按 W:H mm 换算），不是 Chrome DevTools
+                    // 的 CSS 视口尺寸。原因：本工具是视频对比播放器，主要场景是"模拟真机
+                    // 实物大小"，CSS 视口比整机更瘦长（不含上下边框），按视口对齐时蓝框
+                    // 高度会比真机多约 4%。
+                    //   规则：保留 DevTools 标准宽度 W，高度 H 按 (mm_H / mm_W) × W 重算。
+                    //   想做 H5 调试参考的同学可以乘上约 1.04 心算补回视口高度。
                     //
                     // header: true 表示分组小标题（不可点击，仅作视觉分组）。
                     ListModel {
                         id: phonePresetModel
                         // ── Apple iPhone ──
                         ListElement { label: "Apple iPhone";                header: true;  w: 0;   h: 0 }
-                        ListElement { label: "iPhone 17 Pro Max";           header: false; w: 440; h: 956 }
-                        ListElement { label: "iPhone 17 Pro";               header: false; w: 402; h: 874 }
-                        ListElement { label: "iPhone 17";                   header: false; w: 402; h: 874 }
-                        ListElement { label: "iPhone 16 Pro Max";           header: false; w: 440; h: 956 }
-                        ListElement { label: "iPhone 16 Pro";               header: false; w: 402; h: 874 }
-                        ListElement { label: "iPhone 16 Plus";              header: false; w: 430; h: 932 }
-                        ListElement { label: "iPhone 16";                   header: false; w: 393; h: 852 }
-                        ListElement { label: "iPhone 15 Pro Max";           header: false; w: 430; h: 932 }
-                        ListElement { label: "iPhone 15 / 14 Pro";          header: false; w: 393; h: 852 }
-                        ListElement { label: "iPhone 13 / 12";              header: false; w: 390; h: 844 }
-                        ListElement { label: "iPhone SE (3rd gen)";         header: false; w: 375; h: 667 }
+                        ListElement { label: "iPhone 17 Pro Max";           header: false; w: 440; h: 922 }
+                        ListElement { label: "iPhone 17 Pro";               header: false; w: 402; h: 839 }
+                        ListElement { label: "iPhone 17";                   header: false; w: 402; h: 841 }
+                        ListElement { label: "iPhone 16 Pro Max";           header: false; w: 440; h: 924 }
+                        ListElement { label: "iPhone 16 Pro";               header: false; w: 402; h: 841 }
+                        ListElement { label: "iPhone 16 Plus";              header: false; w: 430; h: 889 }
+                        ListElement { label: "iPhone 16";                   header: false; w: 393; h: 810 }
+                        ListElement { label: "iPhone 15 Pro Max";           header: false; w: 430; h: 897 }
+                        ListElement { label: "iPhone 15 / 14 Pro";          header: false; w: 393; h: 816 }
+                        ListElement { label: "iPhone 13 / 12";              header: false; w: 390; h: 800 }
+                        ListElement { label: "iPhone SE (3rd gen)";         header: false; w: 375; h: 771 }
                         // ── Huawei 华为 ──
                         ListElement { label: "华为 Huawei";                 header: true;  w: 0;   h: 0 }
-                        ListElement { label: "Huawei Mate 70 Pro";          header: false; w: 412; h: 916 }
-                        ListElement { label: "Huawei Mate 60 Pro";          header: false; w: 412; h: 900 }
-                        ListElement { label: "Huawei Pura 70 Pro";          header: false; w: 412; h: 900 }
-                        ListElement { label: "Huawei Pura 70";              header: false; w: 412; h: 919 }
+                        ListElement { label: "Huawei Mate 70 Pro";          header: false; w: 412; h: 851 }
+                        ListElement { label: "Huawei Mate 60 Pro";          header: false; w: 412; h: 882 }
+                        ListElement { label: "Huawei Pura 70 Pro";          header: false; w: 412; h: 851 }
+                        ListElement { label: "Huawei Pura 70";              header: false; w: 412; h: 877 }
                         // ── Xiaomi 小米 ──
                         ListElement { label: "小米 Xiaomi";                 header: true;  w: 0;   h: 0 }
-                        ListElement { label: "Xiaomi 15 Pro";               header: false; w: 412; h: 919 }
-                        ListElement { label: "Xiaomi 15";                   header: false; w: 393; h: 852 }
-                        ListElement { label: "Xiaomi 14 Pro";               header: false; w: 412; h: 915 }
-                        ListElement { label: "Xiaomi 14";                   header: false; w: 393; h: 852 }
-                        ListElement { label: "Redmi K70 Pro";               header: false; w: 412; h: 919 }
+                        ListElement { label: "Xiaomi 15 Pro";               header: false; w: 412; h: 883 }
+                        ListElement { label: "Xiaomi 15";                   header: false; w: 393; h: 841 }
+                        ListElement { label: "Xiaomi 14 Pro";               header: false; w: 412; h: 883 }
+                        ListElement { label: "Xiaomi 14";                   header: false; w: 393; h: 840 }
+                        ListElement { label: "Redmi K70 Pro";               header: false; w: 412; h: 881 }
                         // ── OPPO ──
                         ListElement { label: "OPPO";                        header: true;  w: 0;   h: 0 }
-                        ListElement { label: "OPPO Find X8 Pro";            header: false; w: 412; h: 919 }
-                        ListElement { label: "OPPO Find X8";                header: false; w: 393; h: 852 }
-                        ListElement { label: "OPPO Find X7 Ultra";          header: false; w: 412; h: 919 }
+                        ListElement { label: "OPPO Find X8 Pro";            header: false; w: 412; h: 871 }
+                        ListElement { label: "OPPO Find X8";                header: false; w: 393; h: 847 }
+                        ListElement { label: "OPPO Find X7 Ultra";          header: false; w: 412; h: 883 }
                         // ── vivo ──
                         ListElement { label: "vivo";                        header: true;  w: 0;   h: 0 }
-                        ListElement { label: "vivo X200 Pro";               header: false; w: 412; h: 919 }
-                        ListElement { label: "vivo X200";                   header: false; w: 412; h: 919 }
-                        ListElement { label: "vivo X100 Pro";               header: false; w: 412; h: 919 }
+                        ListElement { label: "vivo X200 Pro";               header: false; w: 412; h: 894 }
+                        ListElement { label: "vivo X200";                   header: false; w: 412; h: 899 }
+                        ListElement { label: "vivo X100 Pro";               header: false; w: 412; h: 897 }
                         // ── Honor 荣耀 ──
                         ListElement { label: "荣耀 Honor";                  header: true;  w: 0;   h: 0 }
-                        ListElement { label: "Honor Magic 6 Pro";           header: false; w: 412; h: 894 }
-                        ListElement { label: "Honor Magic 5 Pro";           header: false; w: 412; h: 893 }
+                        ListElement { label: "Honor Magic 6 Pro";           header: false; w: 412; h: 883 }
+                        ListElement { label: "Honor Magic 5 Pro";           header: false; w: 412; h: 875 }
                         // ── Samsung / Google（保留参考）──
                         ListElement { label: "Samsung / Google";            header: true;  w: 0;   h: 0 }
-                        ListElement { label: "Samsung Galaxy S24 Ultra";    header: false; w: 412; h: 915 }
-                        ListElement { label: "Samsung Galaxy S20+";         header: false; w: 384; h: 854 }
-                        ListElement { label: "Google Pixel 8 Pro";          header: false; w: 412; h: 892 }
-                        ListElement { label: "Google Pixel 7";              header: false; w: 412; h: 915 }
+                        ListElement { label: "Samsung Galaxy S24 Ultra";    header: false; w: 412; h: 846 }
+                        ListElement { label: "Samsung Galaxy S20+";         header: false; w: 384; h: 844 }
+                        ListElement { label: "Google Pixel 8 Pro";          header: false; w: 412; h: 876 }
+                        ListElement { label: "Google Pixel 7";              header: false; w: 412; h: 876 }
                         // ── 平板 ──
                         ListElement { label: "平板 Tablet";                 header: true;  w: 0;   h: 0 }
-                        ListElement { label: "iPad mini";                   header: false; w: 768; h: 1024 }
-                        ListElement { label: "iPad Pro 11\"";               header: false; w: 834; h: 1194 }
+                        ListElement { label: "iPad mini";                   header: false; w: 768; h: 1114 }
+                        ListElement { label: "iPad Pro 11\"";               header: false; w: 834; h: 1167 }
                     }
 
                     contentItem: ColumnLayout {
@@ -2175,6 +2184,46 @@ ApplicationWindow {
                                         if (root.phoneFixedWidth > 0 && root.phoneFixedHeight > 0) {
                                             root.phoneAspectRatio = root.phoneFixedWidth / root.phoneFixedHeight
                                         }
+                                    }
+                                }
+                                // ── 屏幕校准系数：×0.91 这种 ─────────────
+                                // 用于把 CSS px 预设缩放到当前显示器上接近真机大小。
+                                // 仅影响渲染尺寸，不修改 W/H 的用户输入值。
+                                Label {
+                                    text: "×"
+                                    color: "#9aa0a6"
+                                    font.pixelSize: 13
+                                    Layout.leftMargin: 4
+                                }
+                                TextField {
+                                    id: phoneScaleInput
+                                    Layout.preferredWidth: 56
+                                    Layout.preferredHeight: 26
+                                    text: root.phoneDisplayScale.toFixed(2)
+                                    placeholderText: "1.00"
+                                    placeholderTextColor: "#6c7079"
+                                    color: "#e8e8ec"
+                                    selectionColor: "#0a64f0"
+                                    selectedTextColor: "#e8e8ec"
+                                    font.pixelSize: 13
+                                    horizontalAlignment: TextInput.AlignHCenter
+                                    validator: DoubleValidator { bottom: 0.5; top: 1.5; decimals: 2; notation: DoubleValidator.StandardNotation }
+                                    background: Rectangle {
+                                        color: "#22ffffff"
+                                        border.color: phoneScaleInput.activeFocus ? "#0a64f0" : "#33ffffff"
+                                        border.width: 1
+                                        radius: 4
+                                    }
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 400
+                                    ToolTip.text: "屏幕校准系数（0.5 ~ 1.5）\n蓝框尺寸 = W×H × 此系数\n预设值保持 CSS px 标准不变"
+                                    onEditingFinished: {
+                                        var v = parseFloat(text || "1")
+                                        if (isNaN(v) || v <= 0) v = 1.0
+                                        if (v < 0.5) v = 0.5
+                                        if (v > 1.5) v = 1.5
+                                        root.phoneDisplayScale = v
+                                        text = v.toFixed(2)
                                     }
                                 }
                                 Item { Layout.fillWidth: true }

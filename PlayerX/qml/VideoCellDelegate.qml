@@ -34,6 +34,9 @@ Rectangle {
     width:  (parent.width  - parent.spacing * (parent.columns - 1)) / Math.max(1, parent.columns)
     height: (parent.height - parent.spacing * (parent.rows    - 1)) / Math.max(1, parent.rows)
     color: "#000"
+    // 手机固定尺寸模式下 videoBox 可能比 cell 还大（以保持"任何窗口大小都等于真机像素"），
+    // 必须裁剪到 cell 边界，避免溢出绘到隔壁 cell。常态下 clip 也无功能副作用。
+    clip: true
     // 选中边框：跟随 viewRoot.selectedIdx（QML 层显式选中状态），不跟
     // Engine.activeIndex —— 这样默认 selectedIdx=-1 时不会有任何
     // cell 被高亮，避免视觉干扰；点击空白也能取消选中。
@@ -57,39 +60,44 @@ Rectangle {
     function _dur() { Engine.duration; return Engine.durationAt(cell.playerIdx) }
     function _playing() { Engine.playing; return Engine.playingAt(cell.playerIdx) }
 
-    // ─── 内容内框（手机比例 / 固定尺寸锁定）─────────────────────────────
+    // ─── 内容内框（手机比例 / 固定尺寸锁定）───────────────────
     // 三种模式（与 Main.qml root 上的属性保持一致）：
     //   1) viewRoot.phoneFixedActive (W>0 && H>0)：固定像素尺寸；
-    //      cell 装得下就 1:1 显示，装不下则等比缩放到 cell 内框。
-    //   2) viewRoot.phoneAspectRatio > 0：按比例（宽÷高）居中开框。
+    //      videoBox 永远 = (phoneFixedWidth × phoneFixedHeight)，
+    //      与 cell 大小完全无关。窗口缩放时蓝框尺寸保持不变；
+    //      若 cell 比 videoBox 小，则由 cell.clip 裁掉超出部分。
+    //   2) viewRoot.phoneAspectRatio > 0：按比例（宽÷高）居中开框，
+    //      videoBox 在 cell 内做"contain"适配（保持比例不裁剪）。
     //   3) 都 = 0：videoBox 退化为整个 cell（行为同改造前）。
     // 所有 HUD（序号、路径、控制条、选中框）都锚定到 videoBox。
+    // 视频内部的滚轮缩放/右键拖拽/Ctrl+双击复位作用在 Engine 视图变换上，
+    // 不会改变 videoBox 自身尺寸。
     Item {
         id: videoBox
         readonly property real _cellAspect: Math.max(0.0001, cell.width / Math.max(1, cell.height))
         readonly property bool _fixed: viewRoot && viewRoot.phoneFixedActive
-        readonly property real _fixW: _fixed ? viewRoot.phoneFixedWidth  : 0
-        readonly property real _fixH: _fixed ? viewRoot.phoneFixedHeight : 0
+        // 屏幕校准系数：把 CSS px 标准预设缩放到当前显示器上接近真机大小。
+        // 保护：viewRoot 可能为空、属性可能为 undefined / 0 / NaN，统统回退到 1.0。
+        readonly property real _scale: {
+            if (!viewRoot) return 1.0
+            var s = viewRoot.phoneDisplayScale
+            if (typeof s !== "number" || isNaN(s) || s <= 0) return 1.0
+            return s
+        }
+        readonly property real _fixW: _fixed ? viewRoot.phoneFixedWidth  * _scale : 0
+        readonly property real _fixH: _fixed ? viewRoot.phoneFixedHeight * _scale : 0
         readonly property real _lock: _fixed
                                        ? (_fixW / Math.max(1, _fixH))
                                        : ((viewRoot && viewRoot.phoneAspectRatio > 0)
                                           ? viewRoot.phoneAspectRatio : 0)
-        // 固定尺寸模式：cell 装得下用原始像素，装不下按 cell 等比缩放
-        // （等比缩放等价于"按 _lock 比例填满 cell 内框"，保留比例不裁剪）。
-        readonly property real _fitScale: {
-            if (!_fixed) return 1
-            var sx = cell.width  / Math.max(1, _fixW)
-            var sy = cell.height / Math.max(1, _fixH)
-            var s = Math.min(sx, sy)
-            return s < 1 ? s : 1
-        }
+        // 固定尺寸模式：尺寸恒等于真机像素，与 cell 大小解耦。
         readonly property real _w: _fixed
-                                    ? _fixW * _fitScale
+                                    ? _fixW
                                     : (_lock <= 0
                                         ? cell.width
                                         : (_cellAspect > _lock ? cell.height * _lock : cell.width))
         readonly property real _h: _fixed
-                                    ? _fixH * _fitScale
+                                    ? _fixH
                                     : (_lock <= 0
                                         ? cell.height
                                         : (_cellAspect > _lock ? cell.height : cell.width / _lock))
