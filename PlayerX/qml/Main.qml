@@ -1727,12 +1727,27 @@ ApplicationWindow {
             [3840, 1.14]
         ]
     })
+    // 默认表：未在 _phoneScalePresetsByScreen 命中的显示器走这里，按 Screen.width
+    // 最近邻取值。
+    //   · 前 5 项（1168~2056）来自内建视网膜显示器实测，是历史校准值，**不要改**。
+    //   · 后 5 项（1920~3200）是 Windows 外接显示器实测补点，覆盖常见 1080p/2K/3K
+    //     桌面 PC 显示器的几个高频分辨率档位（用户实测）。
+    //   注意 1920 在内建表/PHL 表 / 默认表里都可能出现，但因为 _autoPhoneScaleNearestPreset
+    //   是"绝对差最小"取胜，已校准的显示器走的是各自的 by-screen 表，不会被这里
+    //   的默认表覆盖；只有 name 不在 by-screen 表里的"未知显示器"才会用到这些点。
     readonly property var _phoneScalePresetsDefault: [
+        // 内建视网膜显示器实测（保留，作为高 PPI 笔记本类显示器的近似）
         [1168, 0.60],
         [1312, 0.68],
         [1496, 0.77],
         [1728, 0.88],
-        [2056, 1.06]
+        [2056, 1.06],
+        // Windows 外接显示器实测补点（普通 PC 显示器，PPI 较低）
+        [1920, 0.76],   // 1920×2160（用户实测，竖向/拼接配置）
+        [2048, 0.64],   // 2048×1536
+        [2560, 0.76],   // 2560×1440
+        [3072, 0.72],   // 3072×1728
+        [3200, 0.63]    // 3200×1800
     ]
     // 公式自适应目标：让"手机蓝框"在屏幕上的物理宽度恒为 ~77.7mm（iPhone 17 Pro Max
     // 实测物理宽 77.6mm，与已校准的内建/PHL 5 档预设完全吻合，误差 < 0.5mm）。
@@ -1811,6 +1826,19 @@ ApplicationWindow {
         else if (s > 5.0) s = 5.0
         if (Math.abs(s - root.phoneDisplayScale) > 0.001)
             root.phoneDisplayScale = s
+    }
+    // 手动微调系数（被尺寸弹窗里 ▲/▼ 步进按钮调用）。
+    //   · delta 通常是 ±0.01；
+    //   · 用 Math.round(v*100)/100 抹掉浮点抖动（0.77+0.01=0.7800000000000001）；
+    //   · 严格夹紧到 [0.1, 5.0] —— 与 phoneScaleInput 的 DoubleValidator 一致；
+    //   · 自动关闭 phoneScaleAutoTrack，防止下次屏幕参数变化把刚校准的值覆盖。
+    function _stepPhoneScale(delta) {
+        var v = root.phoneDisplayScale + delta
+        v = Math.round(v * 100) / 100
+        if (v < 0.1) v = 0.1
+        if (v > 5.0) v = 5.0
+        root.phoneScaleAutoTrack = false
+        root.phoneDisplayScale = v
     }
     Connections {
         target: Screen
@@ -2317,15 +2345,20 @@ ApplicationWindow {
                         spacing: 0
                         width: phoneAspectPopup.width - phoneAspectPopup.padding * 2
 
-                        // ── 顶部：W × H 输入框 ───────────────────────────────
-                        Item {
+                        // ── 顶部：尺寸（W × H）+ 校准（× scale ▲▼ ↻）────────
+                        // 拆成两行：第一行专注尺寸输入与旋转，第二行专注校准系数及
+                        // 手动微调。这样 320px 弹窗宽度足够容纳，每行控件之间也有
+                        // 自然的留白，比挤一行更好读、命中更精准。
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 38
+                            Layout.leftMargin: 8
+                            Layout.rightMargin: 8
+                            spacing: 6
 
+                            // 第一行：尺寸  [宽] × [高]            [⇅]
                             RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 8
-                                anchors.rightMargin: 8
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 30
                                 spacing: 6
 
                                 Label {
@@ -2336,7 +2369,7 @@ ApplicationWindow {
                                 // 宽度
                                 TextField {
                                     id: phoneWInput
-                                    Layout.preferredWidth: 70
+                                    Layout.preferredWidth: 78
                                     Layout.preferredHeight: 26
                                     text: root.phoneFixedWidth > 0 ? root.phoneFixedWidth.toString() : ""
                                     placeholderText: "宽"
@@ -2374,7 +2407,7 @@ ApplicationWindow {
                                 // 高度
                                 TextField {
                                     id: phoneHInput
-                                    Layout.preferredWidth: 70
+                                    Layout.preferredWidth: 78
                                     Layout.preferredHeight: 26
                                     text: root.phoneFixedHeight > 0 ? root.phoneFixedHeight.toString() : ""
                                     placeholderText: "高"
@@ -2403,18 +2436,66 @@ ApplicationWindow {
                                         }
                                     }
                                 }
-                                // ── 屏幕校准系数：×0.91 这种 ─────────────
-                                // 用于把 CSS px 预设缩放到当前显示器上接近真机大小。
-                                // 仅影响渲染尺寸，不修改 W/H 的用户输入值。
+                                Item { Layout.fillWidth: true }
+                                // 旋转 W↔H（与尺寸输入同一行，语义最紧密）
+                                Button {
+                                    id: phoneRotateBtn
+                                    Layout.preferredWidth: 26
+                                    Layout.preferredHeight: 26
+                                    hoverEnabled: true
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 400
+                                    ToolTip.text: "旋转方向（横竖切换）"
+                                    background: Rectangle {
+                                        color: phoneRotateBtn.hovered ? "#33ffffff" : "transparent"
+                                        radius: 4
+                                    }
+                                    contentItem: Text {
+                                        text: "⇅"
+                                        color: "#e8e8ec"
+                                        font.pixelSize: 14
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    onClicked: {
+                                        var w = root.phoneFixedWidth
+                                        var h = root.phoneFixedHeight
+                                        if (w > 0 && h > 0) {
+                                            root.phoneFixedWidth = h
+                                            root.phoneFixedHeight = w
+                                            root.phoneAspectRatio = root.phoneFixedWidth / root.phoneFixedHeight
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 第二行：屏幕校准  × [scale] [▲][▼]   [↻]
+                            //   把 W×H 与"显示器系数"在视觉上分开 —— 二者用户认知不同：
+                            //     W×H = 机型规格（CSS px，永远不变）
+                            //     scale = 当前显示器物理大小校准（每台显示器一个值）
+                            //   独立成行后，用户实测系数时更聚焦，不会误以为系数在调机型。
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 30
+                                spacing: 6
+
+                                Label {
+                                    text: "校准"
+                                    color: "#9aa0a6"
+                                    font.pixelSize: 12
+                                    ToolTip.visible: phoneScaleLabelHover.hovered
+                                    ToolTip.delay: 400
+                                    ToolTip.text: "屏幕校准系数（蓝框尺寸 = W×H × 此系数）\n仅影响渲染显示，预设 W/H 不变"
+                                    HoverHandler { id: phoneScaleLabelHover }
+                                }
                                 Label {
                                     text: "×"
                                     color: "#9aa0a6"
                                     font.pixelSize: 13
-                                    Layout.leftMargin: 4
                                 }
                                 TextField {
                                     id: phoneScaleInput
-                                    Layout.preferredWidth: 56
+                                    Layout.preferredWidth: 70
                                     Layout.preferredHeight: 26
                                     text: root.phoneDisplayScale.toFixed(2)
                                     placeholderText: "1.00"
@@ -2443,36 +2524,134 @@ ApplicationWindow {
                                         root.phoneDisplayScale = v
                                         text = v.toFixed(2)
                                     }
+                                    // 同步 phoneDisplayScale 外部变化到输入框文本
+                                    // （onEditingFinished 里的 `text = ...` 会破坏声明式
+                                    // 绑定，需用 Connections 显式补回这条链路）。
+                                    Connections {
+                                        target: root
+                                        function onPhoneDisplayScaleChanged() {
+                                            if (!phoneScaleInput.activeFocus)
+                                                phoneScaleInput.text = root.phoneDisplayScale.toFixed(2)
+                                        }
+                                    }
                                 }
-                                Item { Layout.fillWidth: true }
-                                // 旋转 W↔H
+                                // ── 系数微调按钮组 ▲ / ▼ ─────────────────────
+                                // 点击：±0.01；长按 500ms 后以 60ms 间隔重复（≈16Hz）；
+                                // 严格夹紧到 [0.1, 5.0]；自动关闭 phoneScaleAutoTrack。
                                 Button {
-                                    id: phoneRotateBtn
-                                    Layout.preferredWidth: 26
+                                    id: phoneScaleUpBtn
+                                    Layout.preferredWidth: 24
                                     Layout.preferredHeight: 26
+                                    Layout.leftMargin: 2
                                     hoverEnabled: true
+                                    focusPolicy: Qt.NoFocus
                                     ToolTip.visible: hovered
                                     ToolTip.delay: 400
-                                    ToolTip.text: "旋转方向（横竖切换）"
+                                    ToolTip.text: "系数 +0.01（长按加速）"
                                     background: Rectangle {
-                                        color: phoneRotateBtn.hovered ? "#33ffffff" : "transparent"
+                                        color: phoneScaleUpBtn.pressed ? "#44ffffff"
+                                              : phoneScaleUpBtn.hovered ? "#33ffffff" : "#11ffffff"
+                                        border.color: "#33ffffff"
+                                        border.width: 1
                                         radius: 4
                                     }
                                     contentItem: Text {
-                                        text: "⇅"
+                                        text: "▲"
+                                        color: "#e8e8ec"
+                                        font.pixelSize: 10
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    onClicked: root._stepPhoneScale(+0.01)
+                                    Timer {
+                                        id: phoneScaleUpHoldDelay
+                                        interval: 500; repeat: false
+                                        onTriggered: phoneScaleUpRepeat.start()
+                                    }
+                                    Timer {
+                                        id: phoneScaleUpRepeat
+                                        interval: 60; repeat: true
+                                        onTriggered: root._stepPhoneScale(+0.01)
+                                    }
+                                    onPressedChanged: {
+                                        if (pressed) {
+                                            phoneScaleUpHoldDelay.start()
+                                        } else {
+                                            phoneScaleUpHoldDelay.stop()
+                                            phoneScaleUpRepeat.stop()
+                                        }
+                                    }
+                                }
+                                Button {
+                                    id: phoneScaleDownBtn
+                                    Layout.preferredWidth: 24
+                                    Layout.preferredHeight: 26
+                                    hoverEnabled: true
+                                    focusPolicy: Qt.NoFocus
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 400
+                                    ToolTip.text: "系数 −0.01（长按加速）"
+                                    background: Rectangle {
+                                        color: phoneScaleDownBtn.pressed ? "#44ffffff"
+                                              : phoneScaleDownBtn.hovered ? "#33ffffff" : "#11ffffff"
+                                        border.color: "#33ffffff"
+                                        border.width: 1
+                                        radius: 4
+                                    }
+                                    contentItem: Text {
+                                        text: "▼"
+                                        color: "#e8e8ec"
+                                        font.pixelSize: 10
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    onClicked: root._stepPhoneScale(-0.01)
+                                    Timer {
+                                        id: phoneScaleDownHoldDelay
+                                        interval: 500; repeat: false
+                                        onTriggered: phoneScaleDownRepeat.start()
+                                    }
+                                    Timer {
+                                        id: phoneScaleDownRepeat
+                                        interval: 60; repeat: true
+                                        onTriggered: root._stepPhoneScale(-0.01)
+                                    }
+                                    onPressedChanged: {
+                                        if (pressed) {
+                                            phoneScaleDownHoldDelay.start()
+                                        } else {
+                                            phoneScaleDownHoldDelay.stop()
+                                            phoneScaleDownRepeat.stop()
+                                        }
+                                    }
+                                }
+                                Item { Layout.fillWidth: true }
+                                // 恢复自动跟随（仅在已手动调过时显示）
+                                Button {
+                                    id: phoneScaleAutoBtn
+                                    visible: !root.phoneScaleAutoTrack
+                                    Layout.preferredWidth: 26
+                                    Layout.preferredHeight: 26
+                                    hoverEnabled: true
+                                    focusPolicy: Qt.NoFocus
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 400
+                                    ToolTip.text: "恢复自动跟随（按当前显示器重新匹配预设系数）"
+                                    background: Rectangle {
+                                        color: phoneScaleAutoBtn.hovered ? "#33ffffff" : "transparent"
+                                        radius: 4
+                                    }
+                                    contentItem: Text {
+                                        text: "↻"
                                         color: "#e8e8ec"
                                         font.pixelSize: 14
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
                                     }
                                     onClicked: {
-                                        var w = root.phoneFixedWidth
-                                        var h = root.phoneFixedHeight
-                                        if (w > 0 && h > 0) {
-                                            root.phoneFixedWidth = h
-                                            root.phoneFixedHeight = w
-                                            root.phoneAspectRatio = root.phoneFixedWidth / root.phoneFixedHeight
-                                        }
+                                        root.phoneScaleAutoTrack = true
+                                        root._applyAutoPhoneScale()
+                                        phoneScaleInput.text = root.phoneDisplayScale.toFixed(2)
                                     }
                                 }
                             }
