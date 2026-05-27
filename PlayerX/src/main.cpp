@@ -28,6 +28,7 @@
 #include "qt/FsUtils.h"
 #include "qt/RatingStore.h"
 #include "qt/ReferenceStore.h"
+#include "qt/ScreenProbe.h"
 #include "qt/Updater.h"
 
 extern "C" {
@@ -169,14 +170,19 @@ int main(int argc, char* argv[]) {
     // 完全独立于播放内核；macOS 已完整实现，Windows 后续接 NSIS Setup。
     rbqt::Updater updater;
 
+    // ScreenProbe：主动探测当前窗口所在屏幕的真实状态（绕开 QML Screen 附加属性
+    // 在 macOS 外接屏切档位时的缓存丢信号问题）。无状态、轻量。
+    rbqt::ScreenProbe screenProbe;
+
     QQmlApplicationEngine engine;
 
     // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
-    engine.rootContext()->setContextProperty("Engine",    &engineBridge);
-    engine.rootContext()->setContextProperty("Fs",        &fsUtils);
-    engine.rootContext()->setContextProperty("Rating",    &ratingStore);
-    engine.rootContext()->setContextProperty("Reference", &referenceStore);
-    engine.rootContext()->setContextProperty("Updater",   &updater);
+    engine.rootContext()->setContextProperty("Engine",      &engineBridge);
+    engine.rootContext()->setContextProperty("Fs",          &fsUtils);
+    engine.rootContext()->setContextProperty("Rating",      &ratingStore);
+    engine.rootContext()->setContextProperty("Reference",   &referenceStore);
+    engine.rootContext()->setContextProperty("Updater",     &updater);
+    engine.rootContext()->setContextProperty("ScreenProbe", &screenProbe);
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,

@@ -4,6 +4,13 @@ cmake_minimum_required(VERSION 3.18)
 # 发新版本时只改这一行，不要在源码里另写硬编码版本。
 project(PlayerX VERSION 3.0.7 LANGUAGES CXX C)
 
+# 在 macOS 上启用 Objective-C++（用于 ScreenProbe 直接调用 NSScreen / 注册
+# NSApplicationDidChangeScreenParametersNotification —— 绕开 Qt screen 子系统
+# 在外接屏切档位时缓存不刷新的长期问题）。
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
 # ─── C++ 标准 ────────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -94,6 +101,11 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/qt/ReferenceStore.cpp
     # 应用自动更新（远端 latest.json 比对 + 下载 + relaunch；与播放内核解耦）
     src/qt/Updater.cpp
+    # 屏幕状态主动探测（绕开 macOS 外接屏 Screen 附加属性缓存问题）
+    # macOS 走 ScreenProbe.mm（Cocoa NSScreen + 系统通知，事件驱动）
+    # 其他平台走 ScreenProbe_generic.cpp（QScreen 回退）
+    $<$<PLATFORM_ID:Darwin>:src/qt/ScreenProbe.mm>
+    $<$<NOT:$<PLATFORM_ID:Darwin>>:src/qt/ScreenProbe_generic.cpp>
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
@@ -140,12 +152,14 @@ if(APPLE)
     find_library(VIDEOTOOLBOX_LIB         VideoToolbox         REQUIRED)
     find_library(SECURITY_LIB             Security             REQUIRED)
     find_library(FOUNDATION_LIB           Foundation           REQUIRED)
+    # AppKit：ScreenProbe.mm 用 NSScreen / NSNotificationCenter
+    find_library(APPKIT_LIB               AppKit               REQUIRED)
 
     set(APPLE_FFMPEG_FRAMEWORKS
         ${COREFOUNDATION_LIB} ${COREGRAPHICS_LIB} ${COREVIDEO_LIB}
         ${COREMEDIA_LIB} ${AUDIOTOOLBOX_LIB} ${COREAUDIO_LIB}
         ${AVFOUNDATION_LIB} ${VIDEOTOOLBOX_LIB} ${SECURITY_LIB}
-        ${FOUNDATION_LIB}
+        ${FOUNDATION_LIB} ${APPKIT_LIB}
     )
 endif()
 

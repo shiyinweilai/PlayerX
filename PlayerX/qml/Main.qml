@@ -1752,6 +1752,15 @@ ApplicationWindow {
         // 优先用 QML Screen 暴露的物理像素密度
         var pd = Screen.pixelDensity   // 物理像素 / mm
         var dpr = Screen.devicePixelRatio || 1
+        // 主动从 ScreenProbe 拿一次实时值。该路径不走 QML Screen 缓存，
+        // 在 macOS 外接屏切档位时能拿到刷新后的真值（关键修复点）。
+        if (typeof ScreenProbe !== "undefined") {
+            var st = ScreenProbe.currentForWindow(root)
+            if (st && st.pixelDensity > 0) {
+                pd  = st.pixelDensity
+                dpr = st.devicePixelRatio > 0 ? st.devicePixelRatio : dpr
+            }
+        }
         if (pd && pd > 0) {
             var mmPerLogicalPx = dpr / pd
             var fw = root.phoneFixedWidth > 0 ? root.phoneFixedWidth : 440
@@ -1772,10 +1781,20 @@ ApplicationWindow {
     }
     function _applyAutoPhoneScale() {
         if (!root.phoneScaleAutoTrack) return
+        // 优先从 ScreenProbe 取实时屏幕状态（绕开 QML Screen 在 macOS 外接屏
+        // 切档位时的缓存问题）；探测失败时回退到 QML Screen 附加属性。
         var w = Screen.width
+        var nm = Screen.name
+        if (typeof ScreenProbe !== "undefined") {
+            var st = ScreenProbe.currentForWindow(root)
+            if (st && st.width > 0) {
+                w  = st.width
+                nm = st.name || nm
+            }
+        }
         if (!w || w <= 0) return
         // 1) 已知显示器：完全走预设表（保护已校准的内建/PHL 体验，不动）
-        var presets = root._phoneScalePresetsForScreen(Screen.name)
+        var presets = root._phoneScalePresetsForScreen(nm)
         var s = -1
         if (presets) {
             s = root._autoPhoneScaleNearestPreset(w, presets)
@@ -1801,6 +1820,95 @@ ApplicationWindow {
         function onPixelDensityChanged() { root._applyAutoPhoneScale() }
         function onDevicePixelRatioChanged() { root._applyAutoPhoneScale() }
     }
+    // ─── 外接显示器切换缩放档位的兜底刷新 ────────────────────────────────
+    //   背景：在 macOS 上切换"系统设置 → 显示器 → 缩放档位"时：
+    //     · 内建屏：Screen.* 一系列 changed 信号正常发 → 上面 Connections
+    //       触发 _applyAutoPhoneScale → 自适应 OK；
+    //     · 外接屏（如 PHL 278B1）：Qt 在 macOS 上长期存在"QScreen 不发
+    //       physicalDotsPerInchChanged / geometryChanged"丢信号问题，
+    //       QML 端 Screen.* 的 changed 信号也不会触发 → _applyAutoPhoneScale
+    //       不会被调用 → 蓝框尺寸"卡"在切档位前的旧值。
+    //
+    //   主修复路径（事件驱动）：C++ 端 ScreenProbe 通过订阅 macOS 系统级
+    //     NSApplicationDidChangeScreenParametersNotification
+    //   通知，转发为 Qt 信号 screenParamsChanged() —— 用户只要在系统设置里
+    //   切了任何一台显示器的档位/分辨率/接拔显示器，QML 这里都能立刻收到。
+    //   ScreenProbe.currentForWindow() 内部直接走 NSScreen 原生 API，与 Qt
+    //   QScreen 缓存路径独立，能正确反映最新值。
+    //
+    //   兜底 1：窗口本身的 screenChanged / 尺寸变化（跨屏 / 拖动 / 档位变化
+    //          导致窗口逻辑尺寸变化时也会触发）。
+    //   兜底 2：低频轮询（2s）—— 极端情况下（系统通知未发或窗口未激活）的
+    //          最后一道保险。开销可忽略。
+    Connections {
+        target: ScreenProbe
+        function onScreenParamsChanged() {
+            // 通知抵达时 NSScreen 数值已是最新；callLater 让本帧渲染先完成
+            // 再重算（避免与 Qt 内部正在进行的 screen 更新交叉）。
+            Qt.callLater(root._applyAutoPhoneScale)
+        }
+    }
+
+    onScreenChanged: {
+        root._applyAutoPhoneScale()
+        Qt.callLater(root._applyAutoPhoneScale)
+    }
+    onWidthChanged: {
+        if (root.phoneScaleAutoTrack) Qt.callLater(root._applyAutoPhoneScale)
+    }
+    onHeightChanged: {
+        if (root.phoneScaleAutoTrack) Qt.callLater(root._applyAutoPhoneScale)
+    }
+
+    // 轮询兜底：直接对比 ScreenProbe 实时快照，发现任一关键字段变化就强制
+    // 重算。注意"上次快照"也存 ScreenProbe 给的值（不是 QML Screen.*），
+    // 这样即使 QML Screen 缓存永不更新，比较也能准确发现差异。
+    property real    _lastScreenW:    -1
+    property real    _lastScreenH:    -1
+    property real    _lastScreenPd:   -1
+    property real    _lastScreenDpr:  -1
+    property string  _lastScreenName: ""
+    Timer {
+        id: _screenPollTimer
+        interval: 2000
+        running: true
+        repeat: true
+        onTriggered: {
+            var w, h, pd, dpr, nm
+            var got = false
+            if (typeof ScreenProbe !== "undefined") {
+                var st = ScreenProbe.currentForWindow(root)
+                if (st && st.width > 0) {
+                    w   = st.width
+                    h   = st.height
+                    pd  = st.pixelDensity
+                    dpr = st.devicePixelRatio
+                    nm  = st.name
+                    got = true
+                }
+            }
+            if (!got) {
+                w   = Screen.width
+                h   = Screen.height
+                pd  = Screen.pixelDensity
+                dpr = Screen.devicePixelRatio
+                nm  = Screen.name
+            }
+            if (w   !== root._lastScreenW   ||
+                h   !== root._lastScreenH   ||
+                pd  !== root._lastScreenPd  ||
+                dpr !== root._lastScreenDpr ||
+                nm  !== root._lastScreenName) {
+                root._lastScreenW    = w
+                root._lastScreenH    = h
+                root._lastScreenPd   = pd
+                root._lastScreenDpr  = dpr
+                root._lastScreenName = nm
+                root._applyAutoPhoneScale()
+            }
+        }
+    }
+
     // 切换手机尺寸预设（440×956 / 402×874 …）时，若仍在自动跟随，重算系数
     onPhoneFixedWidthChanged: _applyAutoPhoneScale()
     readonly property bool phoneFixedActive: phoneFixedWidth > 0 && phoneFixedHeight > 0
