@@ -1015,6 +1015,52 @@ def package_windows(version: str) -> dict:
     return out
 
 
+def _read_remote_url_template() -> str:
+    """读取 release/remote-url.json 的 `url` 字段，返回带 `*` 占位的 URL 模板。
+
+    设计动机：自动更新通道走真实 CDN 地址，但 CDN 域名/路径前缀和具体文件名
+    解耦——base 由外部 JSON 配置（一次性维护，跟随 CDN 变更），文件名由打包
+    流程动态生成。这样换 CDN 只改一处 JSON，不用动 build.py。
+
+    文件格式（PlayerX/release/remote-url.json）：
+        { "url": "https://example.com/path/*" }
+
+    其中 `*` 会被替换成实际产物文件名（例如 PlayerX-3.0.7-arm64-mac.zip）。
+    若 url 不含 `*`，回退到末尾拼 `/<fname>`。
+
+    返回：
+      - 模板字符串（成功）
+      - "" （文件缺失 / 字段缺失 / 解析失败 —— 调用方回退到占位 URL）
+    """
+    import json
+    cfg = os.path.join(_ensure_release_dir(), "remote-url.json")
+    if not os.path.isfile(cfg):
+        return ""
+    try:
+        with open(cfg, "r", encoding="utf-8") as f:
+            obj = json.load(f) or {}
+        u = (obj.get("url") or "").strip()
+        return u
+    except Exception as e:
+        warn(f"读取 {cfg} 失败，将回退到占位 URL: {e}")
+        return ""
+
+
+def _resolve_download_url(template: str, fname: str) -> str:
+    """按模板生成单个产物的下载 URL。
+
+    - 模板含 `*`：替换为文件名（典型用法："https://cdn/path/*"）
+    - 模板不含 `*` 但非空：当作 base 目录，末尾拼 `/<fname>`
+    - 模板为空：返回占位 URL（旧行为，提醒上传 CDN 前手工替换）
+    """
+    if not template:
+        return f"https://YOUR-CDN.example.com/PlayerX/{fname}"
+    if "*" in template:
+        return template.replace("*", fname)
+    sep = "" if template.endswith("/") else "/"
+    return f"{template}{sep}{fname}"
+
+
 def write_latest_json(version: str, downloads: dict):
     """生成/合并 release/latest.json，给云端上传用。
 
@@ -1068,15 +1114,28 @@ def write_latest_json(version: str, downloads: dict):
 
     base["version"] = version
 
-    # 合并本次新生成的下载条目；保留旧 url（如果是真实 CDN），仅刷 sha256
+    # 计算"真实 CDN URL 模板"：优先读 release/remote-url.json 的 url 字段。
+    # 这一步一旦拿到模板，本次写出的所有 downloads.url 都会被刷成模板生成的
+    # 新地址（覆盖任何旧 url，包括用户手填的）——因为模板本身就是用户维护的
+    # 单一真相源，重复维护两份地址只会带来不一致。
+    # 模板缺失（文件不存在/字段空）才退回到旧逻辑："保留用户改过的真实 url，
+    # 占位符按需重建"。
+    url_tpl = _read_remote_url_template()
+    if url_tpl:
+        info(f"使用 CDN URL 模板: {url_tpl}")
+
+    # 合并本次新生成的下载条目
     for chan, info_d in downloads.items():
         fname     = os.path.basename(info_d["path"])
-        old_entry = base["downloads"].get(chan) or {}
-        old_url   = old_entry.get("url", "") if isinstance(old_entry, dict) else ""
-        if old_url and "YOUR-CDN.example.com" not in old_url:
-            new_url = old_url   # 用户已改为真实 CDN，保留之
+        if url_tpl:
+            new_url = _resolve_download_url(url_tpl, fname)
         else:
-            new_url = f"https://YOUR-CDN.example.com/PlayerX/{fname}"
+            old_entry = base["downloads"].get(chan) or {}
+            old_url   = old_entry.get("url", "") if isinstance(old_entry, dict) else ""
+            if old_url and "YOUR-CDN.example.com" not in old_url:
+                new_url = old_url   # 用户已改为真实 CDN，保留之
+            else:
+                new_url = f"https://YOUR-CDN.example.com/PlayerX/{fname}"
         base["downloads"][chan] = {
             "url":    new_url,
             "sha256": info_d["sha256"],
@@ -1085,7 +1144,10 @@ def write_latest_json(version: str, downloads: dict):
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(base, f, ensure_ascii=False, indent=2)
     success(f"已生成 {out_path}")
-    info("⚠ notes / mandatory 等字段请手工编辑 release/latest.json；url 占位符上传 CDN 前替换为真实域名")
+    if url_tpl:
+        info("⚠ notes / mandatory 等字段请手工编辑 release/latest.json；下载 url 已按 release/remote-url.json 的模板生成")
+    else:
+        info("⚠ notes / mandatory 等字段请手工编辑 release/latest.json；url 占位符上传 CDN 前替换为真实域名（或在 release/remote-url.json 配置 url 模板自动生成）")
 
 def package(target: str):
     """对应 --package：常规 build/install 完成后生成分发包。"""

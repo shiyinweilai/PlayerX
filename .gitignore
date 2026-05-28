@@ -25,3 +25,5 @@ PlayerXQt/__pycache__
 PlayerX/__pycache__
 PlayerX/dist
 PlayerX-server/archive
+PlayerX/release/latest.json
+PlayerX/release/remote-url.json
