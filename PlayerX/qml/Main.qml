@@ -1729,25 +1729,46 @@ ApplicationWindow {
     })
     // 默认表：未在 _phoneScalePresetsByScreen 命中的显示器走这里，按 Screen.width
     // 最近邻取值。
-    //   · 前 5 项（1168~2056）来自内建视网膜显示器实测，是历史校准值，**不要改**。
-    //   · 后 5 项（1920~3200）是 Windows 外接显示器实测补点，覆盖常见 1080p/2K/3K
-    //     桌面 PC 显示器的几个高频分辨率档位（用户实测）。
-    //   注意 1920 在内建表/PHL 表 / 默认表里都可能出现，但因为 _autoPhoneScaleNearestPreset
-    //   是"绝对差最小"取胜，已校准的显示器走的是各自的 by-screen 表，不会被这里
-    //   的默认表覆盖；只有 name 不在 by-screen 表里的"未知显示器"才会用到这些点。
+    //   · 这 5 项来自 macOS 内建视网膜显示器实测，是历史校准值，**不要改**。
+    //   · Windows 的实测点不放这里 —— Windows 上 Qt 的 Screen.width 是
+    //     "物理像素 / dpr"，同一台显示器切换缩放档位会让逻辑宽落到完全不同
+    //     的数值（如 2560×1440 物理屏：100%→2560，125%→2048，150%→1707），
+    //     单纯按 Screen.width 一维近邻无法区分"低分高缩放"和"高分低缩放"
+    //     的两种状态。Windows 实测点见下方 _phoneScalePresetsWindows，按
+    //     (物理宽, dpr) 二元组精确匹配。
     readonly property var _phoneScalePresetsDefault: [
-        // 内建视网膜显示器实测（保留，作为高 PPI 笔记本类显示器的近似）
         [1168, 0.60],
         [1312, 0.68],
         [1496, 0.77],
         [1728, 0.88],
-        [2056, 1.06],
-        // Windows 外接显示器实测补点（普通 PC 显示器，PPI 较低）
-        [1920, 0.76],   // 1920×2160（用户实测，竖向/拼接配置）
-        [2048, 0.64],   // 2048×1536
-        [2560, 0.76],   // 2560×1440
-        [3072, 0.72],   // 3072×1728
-        [3200, 0.63]    // 3200×1800
+        [2056, 1.06]
+    ]
+    // ─── Windows 实测校准表 ───────────────────────────────────────────
+    // Windows 上同一台外接显示器的 Screen.pixelDensity 取自 EDID 物理尺寸，
+    // 切换"显示设置 → 显示器分辨率 / 缩放百分比"时该值不变 → 公式
+    //   scale = TARGET_MM / (fw × dpr / pd)
+    // 在不同档位下输出几乎一样，**公式自适应在 Windows 失效**。修复方式是
+    // 直接用 Windows 用户实测的"分辨率档位 → 系数"映射表精确匹配。
+    //
+    // 用 [物理宽, dpr] 而非 Screen.width 做 key 的理由：
+    //   · Windows 实测数据带"系统推荐缩放%"，物理分辨率与 dpr 是用户在系统
+    //     设置面板真正调节的两个独立变量；
+    //   · Screen.width = 物理宽 / dpr，单一维度会把不同 (物理宽, dpr) 组合
+    //     映射到相同 / 接近的逻辑宽（例如 3072×1728@125% 逻辑宽 2458 与
+    //     2560×1440@100% 逻辑宽 2560 仅差 102），按近邻会误吸；
+    //   · 用户在系统里调节缩放档位时 dpr 立刻变化，二元组天然区分。
+    //
+    // 匹配规则：精确等值（物理宽差 ≤ 8、dpr 差 ≤ 0.05）才视为命中；否则
+    // 走公式 → 默认表近邻兜底，不影响 macOS。
+    readonly property var _phoneScalePresetsWindows: [
+        // [物理宽, dpr,  系数,    备注]
+        [3200, 1.50, 0.63],   // 3200×1800 @ 150%（推荐）
+        [3072, 1.25, 0.72],   // 3072×1728 @ 125%（推荐）
+        [2560, 1.00, 0.76],   // 2560×1440 @ 100%（推荐）
+        [2048, 1.25, 0.64],   // 2048×1536 @ 125%（推荐）
+        [1920, 1.50, 0.76],   // 1920×2160 @ 150%（推荐）
+        [3840, 1.50, 0.76],   // 3840×2160 @ 150%（推荐）
+        [3120, 2.00, 0.90]    // 3120×2080 @ 200%（推荐）
     ]
     // 公式自适应目标：让"手机蓝框"在屏幕上的物理宽度恒为 ~77.7mm（iPhone 17 Pro Max
     // 实测物理宽 77.6mm，与已校准的内建/PHL 5 档预设完全吻合，误差 < 0.5mm）。
@@ -1794,39 +1815,122 @@ ApplicationWindow {
         }
         return best[1]
     }
+    // Windows 二元组查表：用 (物理宽, dpr) 精确匹配 _phoneScalePresetsWindows。
+    //   · 物理宽容差 ±8（吞掉极少数 OEM 固件四舍五入差异）；
+    //   · dpr 容差 ±0.05（覆盖 100/125/150% 等常见档位的浮点抖动）；
+    //   · 两个维度都要在容差内才命中，避免误吸到相邻档位。
+    // 命中返回系数；未命中返回 -1，让上层走公式 → 默认表兜底。
+    function _autoPhoneScaleWindowsPreset(physWidth, dpr) {
+        var t = root._phoneScalePresetsWindows
+        if (!t || t.length === 0) return -1
+        if (!(physWidth > 0) || !(dpr > 0)) return -1
+        for (var i = 0; i < t.length; ++i) {
+            var pw  = t[i][0]
+            var pdp = t[i][1]
+            if (Math.abs(physWidth - pw) <= 8 &&
+                Math.abs(dpr - pdp)      <= 0.05) {
+                return t[i][2]
+            }
+        }
+        return -1
+    }
     function _applyAutoPhoneScale() {
         if (!root.phoneScaleAutoTrack) return
         // 优先从 ScreenProbe 取实时屏幕状态（绕开 QML Screen 在 macOS 外接屏
         // 切档位时的缓存问题）；探测失败时回退到 QML Screen 附加属性。
         var w = Screen.width
         var nm = Screen.name
+        var dpr = Screen.devicePixelRatio || 1
+        var pd  = Screen.pixelDensity
+        var src = "Screen"
         if (typeof ScreenProbe !== "undefined") {
             var st = ScreenProbe.currentForWindow(root)
             if (st && st.width > 0) {
-                w  = st.width
-                nm = st.name || nm
+                w   = st.width
+                nm  = st.name || nm
+                dpr = st.devicePixelRatio > 0 ? st.devicePixelRatio : dpr
+                pd  = st.pixelDensity > 0 ? st.pixelDensity : pd
+                src = "Probe"
             }
         }
         if (!w || w <= 0) return
         // 1) 已知显示器：完全走预设表（保护已校准的内建/PHL 体验，不动）
-        var presets = root._phoneScalePresetsForScreen(nm)
+        //   注意：by-name 分支只在 **非 Windows** 平台启用。
+        //   原因：同一台外接显示器（如 PHL 278B1）在 macOS / Windows 下
+        //   Screen.name 一致，但 Windows 还会叠加"分辨率档位 × 推荐缩放"，
+        //   单凭显示器名无法区分；继续走 by-name 会拿到 macOS 校准的
+        //   单一系数，与 Windows 实测值不符（用户报 3200×1800@150%
+        //   命中 PHL 278B1 → 0.57，实际应=0.63）。
+        //   Windows 一律落到 2-Win) 物理宽+dpr 实测表 → 公式 → 默认表。
+        var presets = (Qt.platform.os === "windows")
+                    ? null
+                    : root._phoneScalePresetsForScreen(nm)
         var s = -1
+        var branch = ""
         if (presets) {
             s = root._autoPhoneScaleNearestPreset(w, presets)
+            branch = "by-name"
+        } else if (Qt.platform.os === "windows") {
+            // 2-Win) Windows 平台未知显示器：先按 (物理宽, dpr) 二元组查实测表。
+            //
+            //   背景：Windows 上 Qt 的 Screen.pixelDensity 取自 EDID 物理尺寸，
+            //   切换分辨率档位时**不会变** → 公式
+            //     scale = TARGET_MM / (fw × dpr / pd)
+            //   的输出在不同档位下几乎一样，公式自适应在 Windows 失效。
+            //
+            //   实测表覆盖了用户提供的 5 个常见 (分辨率, 推荐缩放) 组合：
+            //     3200×1800@150% / 3072×1728@125% / 2560×1440@100% /
+            //     2048×1536@125% / 1920×2160@150%
+            //   命中返回精确系数；未命中（用户用了非推荐分辨率/缩放档位）
+            //   再走公式 → 默认表兜底，行为退化到改动前。
+            //
+            //   注意：Screen.width 在 Windows 上是"物理宽 / dpr"（已除过缩放），
+            //   要还原回物理宽必须乘 dpr 后四舍五入。
+            var physW = Math.round(w * dpr)
+            s = root._autoPhoneScaleWindowsPreset(physW, dpr)
+            if (s > 0) {
+                branch = "win-preset"
+            } else {
+                s = root._autoPhoneScaleByFormula()
+                branch = "win-formula"
+                if (s <= 0) {
+                    s = root._autoPhoneScaleNearestPreset(w, root._phoneScalePresetsDefault)
+                    branch = "win-default"
+                }
+            }
         } else {
-            // 2) 未知显示器：物理 mm 公式自适应
+            // 2) 未知显示器（macOS / Linux）：物理 mm 公式自适应（保持原行为，
+            //    macOS 已验证可靠）；公式失效兜底用默认表最近邻。
             s = root._autoPhoneScaleByFormula()
-            // 3) 公式失效兜底：用默认表最近邻
-            if (s <= 0)
+            branch = "formula"
+            if (s <= 0) {
                 s = root._autoPhoneScaleNearestPreset(w, root._phoneScalePresetsDefault)
+                branch = "default"
+            }
         }
         if (s <= 0) return
         // 与 SpinBox 校准框范围一致（0.1 ~ 5.0）
         if (s < 0.1) s = 0.1
         else if (s > 5.0) s = 5.0
+        // 诊断快照：写到日志（设置 → 打开日志目录），并暴露给 UI 紫色诊断条。
+        // 包含本次 _applyAutoPhoneScale 用到的所有原始值与最终决策路径，
+        // 方便用户截图反馈时直接看出 Windows 实际拿到的 Screen 参数。
+        root._phoneScaleDiag = "os=" + Qt.platform.os
+                             + " src=" + src
+                             + " name=" + (nm || "?")
+                             + " logicW=" + w
+                             + " dpr=" + dpr.toFixed(3)
+                             + " pd=" + (pd ? pd.toFixed(3) : "0")
+                             + " physW=" + Math.round(w * dpr)
+                             + " fw=" + (root.phoneFixedWidth > 0 ? root.phoneFixedWidth : 440)
+                             + " branch=" + branch
+                             + " s=" + s.toFixed(3)
+        console.log("[phoneScale] " + root._phoneScaleDiag)
         if (Math.abs(s - root.phoneDisplayScale) > 0.001)
             root.phoneDisplayScale = s
     }
+    // 上一次自适应决策快照（人类可读字符串），仅用于排障 UI 显示与日志。
+    property string _phoneScaleDiag: ""
     // 手动微调系数（被尺寸弹窗里 ▲/▼ 步进按钮调用）。
     //   · delta 通常是 ±0.01；
     //   · 用 Math.round(v*100)/100 抹掉浮点抖动（0.77+0.01=0.7800000000000001）；
@@ -2344,6 +2448,25 @@ ApplicationWindow {
                         id: phonePopupContent
                         spacing: 0
                         width: phoneAspectPopup.width - phoneAspectPopup.padding * 2
+
+                        // ── 排障：自适应快照 ──────────────────────────────
+                        // 调试期临时显示 _applyAutoPhoneScale 用到的所有原始
+                        // Screen 参数与最终决策分支。Windows 上"自适应不准"
+                        // 的根因排查需要这些值（用户截图即可反馈）。稳定后
+                        // 可删除整段（仅一个 Label，删除不影响主功能）。
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 6
+                            Layout.rightMargin: 6
+                            Layout.topMargin: 2
+                            Layout.bottomMargin: 2
+                            visible: text.length > 0
+                            text: root._phoneScaleDiag
+                            color: "#c9a3ff"
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAnywhere
+                            elide: Text.ElideNone
+                        }
 
                         // ── 顶部：单行  [宽] × [高]  × [scale] [▲▼]   [↻] ─────
                         // 设计取舍：
