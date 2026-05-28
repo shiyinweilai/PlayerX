@@ -2345,31 +2345,33 @@ ApplicationWindow {
                         spacing: 0
                         width: phoneAspectPopup.width - phoneAspectPopup.padding * 2
 
-                        // ── 顶部：尺寸（W × H）+ 校准（× scale ▲▼ ↻）────────
-                        // 拆成两行：第一行专注尺寸输入与旋转，第二行专注校准系数及
-                        // 手动微调。这样 320px 弹窗宽度足够容纳，每行控件之间也有
-                        // 自然的留白，比挤一行更好读、命中更精准。
-                        ColumnLayout {
+                        // ── 顶部：单行  [宽] × [高]  × [scale] [▲▼]   [↻] ─────
+                        // 设计取舍：
+                        //   · 去掉"尺寸/校准"两个语义 Label（图标布局已自解释）；
+                        //   · 去掉旋转按钮（低频功能，挤占宽度且与列表预设功能重复）；
+                        //   · 左半段 W × H × scale ▲▼ 一气呵成紧凑排列，× 不再被
+                        //     fillWidth spacer 推到右边（之前 × 前出现大块空白）；
+                        //   · 弹性 spacer 移到 ▲▼ 与 ↻ 之间，让"恢复自动跟随"按钮
+                        //     仍能贴右；不显示时整组只在右侧留余白，符合阅读习惯；
+                        //   · ▲▼ 紧贴 scale 输入框右侧，做成上下半高的细长按钮，
+                        //     视觉上像一个"数字步进器"组件，整组宽度更紧凑。
+                        // Popup 总宽 320 - padding 12 = 308 可用；
+                        // 内部留 6+6=12 横向 margin → RowLayout 实际可放 296px。
+                        // 控件总宽预算（spacing 4、共 6 个间隙 = 24px）：
+                        //   64(W) + 8(×) + 64(H) + 8(×) + 50(scale) + 18(▲▼) + 26(↻) = 238
+                        //   238 + 24(spacing) + 4(stepper.leftMargin) = 266，余 30px 给
+                        //   字体度量浮动与 ↻ 显示时的弹性 spacer，避免再次溢出。
+                        RowLayout {
                             Layout.fillWidth: true
-                            Layout.leftMargin: 8
-                            Layout.rightMargin: 8
-                            spacing: 6
+                            Layout.leftMargin: 6
+                            Layout.rightMargin: 6
+                            Layout.preferredHeight: 30
+                            spacing: 4
 
-                            // 第一行：尺寸  [宽] × [高]            [⇅]
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 30
-                                spacing: 6
-
-                                Label {
-                                    text: "尺寸"
-                                    color: "#9aa0a6"
-                                    font.pixelSize: 12
-                                }
                                 // 宽度
                                 TextField {
                                     id: phoneWInput
-                                    Layout.preferredWidth: 78
+                                    Layout.preferredWidth: 64
                                     Layout.preferredHeight: 26
                                     text: root.phoneFixedWidth > 0 ? root.phoneFixedWidth.toString() : ""
                                     placeholderText: "宽"
@@ -2407,7 +2409,7 @@ ApplicationWindow {
                                 // 高度
                                 TextField {
                                     id: phoneHInput
-                                    Layout.preferredWidth: 78
+                                    Layout.preferredWidth: 64
                                     Layout.preferredHeight: 26
                                     text: root.phoneFixedHeight > 0 ? root.phoneFixedHeight.toString() : ""
                                     placeholderText: "高"
@@ -2436,66 +2438,23 @@ ApplicationWindow {
                                         }
                                     }
                                 }
-                                Item { Layout.fillWidth: true }
-                                // 旋转 W↔H（与尺寸输入同一行，语义最紧密）
-                                Button {
-                                    id: phoneRotateBtn
-                                    Layout.preferredWidth: 26
-                                    Layout.preferredHeight: 26
-                                    hoverEnabled: true
-                                    ToolTip.visible: hovered
-                                    ToolTip.delay: 400
-                                    ToolTip.text: "旋转方向（横竖切换）"
-                                    background: Rectangle {
-                                        color: phoneRotateBtn.hovered ? "#33ffffff" : "transparent"
-                                        radius: 4
-                                    }
-                                    contentItem: Text {
-                                        text: "⇅"
-                                        color: "#e8e8ec"
-                                        font.pixelSize: 14
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                    onClicked: {
-                                        var w = root.phoneFixedWidth
-                                        var h = root.phoneFixedHeight
-                                        if (w > 0 && h > 0) {
-                                            root.phoneFixedWidth = h
-                                            root.phoneFixedHeight = w
-                                            root.phoneAspectRatio = root.phoneFixedWidth / root.phoneFixedHeight
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 第二行：屏幕校准  × [scale] [▲][▼]   [↻]
-                            //   把 W×H 与"显示器系数"在视觉上分开 —— 二者用户认知不同：
-                            //     W×H = 机型规格（CSS px，永远不变）
-                            //     scale = 当前显示器物理大小校准（每台显示器一个值）
-                            //   独立成行后，用户实测系数时更聚焦，不会误以为系数在调机型。
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 30
-                                spacing: 6
-
+                                Item { Layout.preferredWidth: 1 }
+                                // ── 显示器校准系数：× [scale] [▲▼] ───────────────
+                                // 分隔符 "×" 暗示"乘以系数"，无需额外文字 Label。
+                                // 间距与左侧 [宽] × [高] 的 × 完全一致（仅靠 RowLayout
+                                // 的 spacing: 4 留白，前面的 1px 微调用于视觉对齐）。
                                 Label {
-                                    text: "校准"
+                                    text: "×"
                                     color: "#9aa0a6"
-                                    font.pixelSize: 12
+                                    font.pixelSize: 13
                                     ToolTip.visible: phoneScaleLabelHover.hovered
                                     ToolTip.delay: 400
                                     ToolTip.text: "屏幕校准系数（蓝框尺寸 = W×H × 此系数）\n仅影响渲染显示，预设 W/H 不变"
                                     HoverHandler { id: phoneScaleLabelHover }
                                 }
-                                Label {
-                                    text: "×"
-                                    color: "#9aa0a6"
-                                    font.pixelSize: 13
-                                }
                                 TextField {
                                     id: phoneScaleInput
-                                    Layout.preferredWidth: 70
+                                    Layout.preferredWidth: 50
                                     Layout.preferredHeight: 26
                                     text: root.phoneDisplayScale.toFixed(2)
                                     placeholderText: "1.00"
@@ -2535,93 +2494,108 @@ ApplicationWindow {
                                         }
                                     }
                                 }
-                                // ── 系数微调按钮组 ▲ / ▼ ─────────────────────
-                                // 点击：±0.01；长按 500ms 后以 60ms 间隔重复（≈16Hz）；
-                                // 严格夹紧到 [0.1, 5.0]；自动关闭 phoneScaleAutoTrack。
-                                Button {
-                                    id: phoneScaleUpBtn
-                                    Layout.preferredWidth: 24
+                                // ── 系数微调步进器（紧贴 scale 输入框）──────────
+                                // 设计：上下两个 13px 高的小按钮叠成 26px 步进器，
+                                //   宽 18px，整体像数字输入框自带的 spinner，
+                                //   单击 ±0.01；长按 500ms 后以 60ms 间隔重复（≈16Hz）；
+                                //   严格夹紧到 [0.1, 5.0]；自动关闭 phoneScaleAutoTrack。
+                                // 实现：用 MouseArea + Rectangle 而非 Button —— Button
+                                //   默认 padding ≈ 6px，把 preferredHeight 设到 13 时
+                                //   contentItem 被压扁，且 hover/pressed 状态切换会触
+                                //   发 implicitHeight 重算导致"第二次点击不响应"的诡
+                                //   异现象。MouseArea 直接锁死命中矩形，行为最稳。
+                                Item {
+                                    id: phoneScaleStepper
+                                    Layout.preferredWidth: 18
                                     Layout.preferredHeight: 26
-                                    Layout.leftMargin: 2
-                                    hoverEnabled: true
-                                    focusPolicy: Qt.NoFocus
-                                    ToolTip.visible: hovered
-                                    ToolTip.delay: 400
-                                    ToolTip.text: "系数 +0.01（长按加速）"
-                                    background: Rectangle {
-                                        color: phoneScaleUpBtn.pressed ? "#44ffffff"
-                                              : phoneScaleUpBtn.hovered ? "#33ffffff" : "#11ffffff"
+                                    Layout.leftMargin: 1
+
+                                    // 共享的"持续 ±0.01"Timer（按下时 500ms 延迟启动，
+                                    // 之后 60ms 一次；按下方向由 _holdDelta 决定）。
+                                    // 放在 Item 层而非每个按钮内：避免两个按钮各自一份
+                                    // 状态机互相打架，按下另一个时会自动覆盖方向。
+                                    property real _holdDelta: 0
+                                    Timer {
+                                        id: phoneScaleHoldDelay
+                                        interval: 500; repeat: false
+                                        onTriggered: phoneScaleHoldRepeat.start()
+                                    }
+                                    Timer {
+                                        id: phoneScaleHoldRepeat
+                                        interval: 60; repeat: true
+                                        onTriggered: root._stepPhoneScale(phoneScaleStepper._holdDelta)
+                                    }
+
+                                    // ▲ 上半区
+                                    Rectangle {
+                                        id: phoneScaleUpBtn
+                                        anchors { left: parent.left; right: parent.right; top: parent.top }
+                                        height: 13
+                                        radius: 3
                                         border.color: "#33ffffff"
                                         border.width: 1
-                                        radius: 4
-                                    }
-                                    contentItem: Text {
-                                        text: "▲"
-                                        color: "#e8e8ec"
-                                        font.pixelSize: 10
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                    onClicked: root._stepPhoneScale(+0.01)
-                                    Timer {
-                                        id: phoneScaleUpHoldDelay
-                                        interval: 500; repeat: false
-                                        onTriggered: phoneScaleUpRepeat.start()
-                                    }
-                                    Timer {
-                                        id: phoneScaleUpRepeat
-                                        interval: 60; repeat: true
-                                        onTriggered: root._stepPhoneScale(+0.01)
-                                    }
-                                    onPressedChanged: {
-                                        if (pressed) {
-                                            phoneScaleUpHoldDelay.start()
-                                        } else {
-                                            phoneScaleUpHoldDelay.stop()
-                                            phoneScaleUpRepeat.stop()
+                                        color: phoneScaleUpMA.pressed ? "#44ffffff"
+                                              : phoneScaleUpMA.containsMouse ? "#33ffffff" : "#22ffffff"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "▲"; color: "#e8e8ec"; font.pixelSize: 8
+                                        }
+                                        MouseArea {
+                                            id: phoneScaleUpMA
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            ToolTip.visible: containsMouse
+                                            ToolTip.delay: 400
+                                            ToolTip.text: "系数 +0.01（长按加速）"
+                                            onPressed: {
+                                                root._stepPhoneScale(+0.01)
+                                                phoneScaleStepper._holdDelta = +0.01
+                                                phoneScaleHoldDelay.restart()
+                                            }
+                                            onReleased: {
+                                                phoneScaleHoldDelay.stop()
+                                                phoneScaleHoldRepeat.stop()
+                                            }
+                                            onCanceled: {
+                                                phoneScaleHoldDelay.stop()
+                                                phoneScaleHoldRepeat.stop()
+                                            }
                                         }
                                     }
-                                }
-                                Button {
-                                    id: phoneScaleDownBtn
-                                    Layout.preferredWidth: 24
-                                    Layout.preferredHeight: 26
-                                    hoverEnabled: true
-                                    focusPolicy: Qt.NoFocus
-                                    ToolTip.visible: hovered
-                                    ToolTip.delay: 400
-                                    ToolTip.text: "系数 −0.01（长按加速）"
-                                    background: Rectangle {
-                                        color: phoneScaleDownBtn.pressed ? "#44ffffff"
-                                              : phoneScaleDownBtn.hovered ? "#33ffffff" : "#11ffffff"
+                                    // ▼ 下半区
+                                    Rectangle {
+                                        id: phoneScaleDownBtn
+                                        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                                        height: 13
+                                        radius: 3
                                         border.color: "#33ffffff"
                                         border.width: 1
-                                        radius: 4
-                                    }
-                                    contentItem: Text {
-                                        text: "▼"
-                                        color: "#e8e8ec"
-                                        font.pixelSize: 10
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                    onClicked: root._stepPhoneScale(-0.01)
-                                    Timer {
-                                        id: phoneScaleDownHoldDelay
-                                        interval: 500; repeat: false
-                                        onTriggered: phoneScaleDownRepeat.start()
-                                    }
-                                    Timer {
-                                        id: phoneScaleDownRepeat
-                                        interval: 60; repeat: true
-                                        onTriggered: root._stepPhoneScale(-0.01)
-                                    }
-                                    onPressedChanged: {
-                                        if (pressed) {
-                                            phoneScaleDownHoldDelay.start()
-                                        } else {
-                                            phoneScaleDownHoldDelay.stop()
-                                            phoneScaleDownRepeat.stop()
+                                        color: phoneScaleDownMA.pressed ? "#44ffffff"
+                                              : phoneScaleDownMA.containsMouse ? "#33ffffff" : "#22ffffff"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "▼"; color: "#e8e8ec"; font.pixelSize: 8
+                                        }
+                                        MouseArea {
+                                            id: phoneScaleDownMA
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            ToolTip.visible: containsMouse
+                                            ToolTip.delay: 400
+                                            ToolTip.text: "系数 −0.01（长按加速）"
+                                            onPressed: {
+                                                root._stepPhoneScale(-0.01)
+                                                phoneScaleStepper._holdDelta = -0.01
+                                                phoneScaleHoldDelay.restart()
+                                            }
+                                            onReleased: {
+                                                phoneScaleHoldDelay.stop()
+                                                phoneScaleHoldRepeat.stop()
+                                            }
+                                            onCanceled: {
+                                                phoneScaleHoldDelay.stop()
+                                                phoneScaleHoldRepeat.stop()
+                                            }
                                         }
                                     }
                                 }
@@ -2632,6 +2606,7 @@ ApplicationWindow {
                                     visible: !root.phoneScaleAutoTrack
                                     Layout.preferredWidth: 26
                                     Layout.preferredHeight: 26
+                                    Layout.leftMargin: 0
                                     hoverEnabled: true
                                     focusPolicy: Qt.NoFocus
                                     ToolTip.visible: hovered
@@ -2654,7 +2629,6 @@ ApplicationWindow {
                                         phoneScaleInput.text = root.phoneDisplayScale.toFixed(2)
                                     }
                                 }
-                            }
                         }
 
                         // 分隔线
