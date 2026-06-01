@@ -298,6 +298,15 @@ ApplicationWindow {
                 onTriggered: root.singleControlsHoverEnabled = !root.singleControlsHoverEnabled
             }
 
+            // ── 自动重播（播放结束后无缝从头继续，与下方自绘菜单同步）──
+            // 默认开启；关闭时回退到旧行为：播放结束停在最后一帧。
+            MenuItem {
+                text: qsTr("自动重播")
+                checkable: true
+                checked: Engine.loopEnabled
+                onTriggered: Engine.loopEnabled = !Engine.loopEnabled
+            }
+
             MenuSeparator {}
 
             // ── 打开日志目录 ──（与下方自绘菜单同名条目联动；调用同一个 Fs API）
@@ -3669,6 +3678,41 @@ ApplicationWindow {
                         }
                         Text {
                             text: singleControlsHoverItem.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+
+                // ── 自动重播（默认开启）──
+                // 开启：播放到末尾后无缝 seek 回 0 继续播放，画面不停顿。
+                // 关闭：保留旧行为，播放结束停在最后一帧（用户可主动按
+                //       空格触发 replay）。两套策略共存、互不影响。
+                MenuItem {
+                    id: autoLoopItem
+                    text: "自动重播"
+                    checkable: true
+                    checked: Engine.loopEnabled
+                    onTriggered: Engine.loopEnabled = !Engine.loopEnabled
+                    implicitHeight: 30
+                    background: Rectangle {
+                        radius: 4
+                        color: autoLoopItem.highlighted ? "#33333a" : "transparent"
+                    }
+                    contentItem: RowLayout {
+                        spacing: 0
+                        Text {
+                            leftPadding: 10
+                            text: autoLoopItem.checked ? "✓" : ""
+                            color: "#6a9fd8"
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            Layout.minimumWidth: 22
+                        }
+                        Text {
+                            text: autoLoopItem.text
                             color: "#e8e8ec"
                             font.pixelSize: 13
                             verticalAlignment: Text.AlignVCenter

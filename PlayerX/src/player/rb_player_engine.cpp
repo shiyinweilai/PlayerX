@@ -1024,25 +1024,74 @@ void RBPlayerEngine::rbTick() {
 
     double t = rbComputeMasterLocked();
 
-    // 边界：若 t 超过最长 duration，停在结尾，自动 pause
+    // 边界：若 t 超过最长 duration，根据 m_loopEnabled 选择行为
+    //
+    // ── m_loopEnabled = true（默认）：循环播放 ─────────────────────────
+    //   主时钟到达 max(duration) 时，把所有"使用主时钟"的路 seek 回 0 并
+    //   恢复播放，主时钟锚点同步重置为 0；保持 m_playing=true，整个过程
+    //   对用户透明（与原本"pause 在末尾"完全无视觉差异，只是紧接着会从
+    //   0 重新开始）。
+    //
+    // ── m_loopEnabled = false：保留旧行为 ──────────────────────────────
+    //   所有路 rbPause()，播放停在最后一帧，m_playing=false。用户可主动
+    //   按空格触发 rbPlay()，由其内部 atEndBoundary 分支重新从 0 播放。
+    //
+    // 不变量保护（务必小心）：
+    //   1) 仅当 m_playing=true 时触发循环——用户主动暂停在末尾的不应
+    //      被我们偷偷重启播放。
+    //   2) 仅对"使用主时钟"的路触发循环——已脱离主时钟独立播放/暂停
+    //      的路保留各自状态，避免破坏单路独立控制语义。
+    //   3) 不在 boundary 内调用 rbPlay()/rbPause()（会重入加锁），
+    //      直接操作每路 RBVideoPlayer 的 rbSeekTo(0)+rbPlay()——它们
+    //      内部不依赖 RBPlayerEngine 的 m_mutex，无死锁风险。
+    //   4) seek 后设 m_pendingAnchorRebase=true，让首帧到达后把 anchorPts
+    //      重锚为 max(各路实际首帧 PTS)，避免某路单独卡帧（与
+    //      rbPlay 中的 atEnd-replay 路径完全一致）。
     double dur = 0.0;
     for (auto& p : m_players) if (p) dur = std::max(dur, p->rbDuration());
     if (dur > 0.0 && t >= dur) {
         t = dur;
         if (m_playing.load()) {
-            // 详细日志：揭示 t 的来源（anchorPts + (now-anchorWall)*speed）
-            // 用于诊断"刚 rbPlay 完 t 就 ≥ dur"的异常 boundary 触发
             const double wallNow = rbWallTime();
+            const bool loop = m_loopEnabled.load();
             fprintf(stderr,
-                    "[RBE-TICK] boundary hit: t=%.3f dur=%.3f → pause all"
+                    "[RBE-TICK] boundary hit: t=%.3f dur=%.3f → %s"
                     "  anchorPts=%.3f anchorWall=%.3f now=%.3f dt=%.3f speed=%.3f"
                     "  m_pausedPts(before)=%.3f\n",
-                    t, dur,
+                    t, dur, loop ? "loop replay" : "pause all",
                     m_anchorPts, m_anchorWall, wallNow, wallNow - m_anchorWall, m_speed,
                     m_pausedPts);
-            m_pausedPts = t;
-            m_playing.store(false);
-            for (auto& p : m_players) if (p) p->rbPause();
+
+            if (loop) {
+                // ── 循环播放分支 ──
+                // 1) 把所有主时钟路 seek 回 0 并继续播放
+                for (auto& p : m_players) {
+                    if (!p) continue;
+                    if (!p->rbUseMasterClock()) continue;  // 独立时钟路不动
+                    p->rbSeekTo(0.0);  // Ended → Paused，currentTime=0
+                    p->rbPlay();       // Paused/Ready/Ended → Playing
+                }
+
+                // 2) 主时钟锚点重置为 0；保持 m_playing=true 无缝继续推进
+                m_anchorPts  = 0.0;
+                m_anchorWall = rbWallTime();
+                m_pausedPts  = 0.0;
+                // m_playing 保持 true，不调用 rbPause()
+
+                // 3) 让首帧到达后把 anchorPts 重锚为 max(各路实际首帧 PTS)，
+                //    与 rbPlay 中 atEnd-replay 路径一致，避免某路单独卡帧
+                m_pendingAnchorRebase = true;
+                fprintf(stderr, "[RBE-REBASE] schedule from rbTick(loop): pendingRebase=true\n");
+
+                // 4) 把本次 tick 下发给各路的主时钟值改为 0，避免下面 broadcast
+                //    把 t=dur 又下发一次（player 拿到 dur 后会立刻判定结束）
+                t = 0.0;
+            } else {
+                // ── 旧行为：暂停在末尾 ──
+                m_pausedPts = t;
+                m_playing.store(false);
+                for (auto& p : m_players) if (p) p->rbPause();
+            }
         }
     }
 

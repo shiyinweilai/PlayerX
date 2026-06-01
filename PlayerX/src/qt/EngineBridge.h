@@ -41,6 +41,10 @@ class EngineBridge : public QObject {
     // 避免跳出合理范围。
     Q_PROPERTY(double     speed       READ speed       NOTIFY speedChanged)
 
+    // 末尾循环播放：true=播放结束后无缝从头继续；false=播放结束后停在末尾
+    // 默认 true（自动重播）。详见 RBPlayerEngine::rbSetLoopEnabled。
+    Q_PROPERTY(bool       loopEnabled READ loopEnabled WRITE setLoopEnabled NOTIFY loopEnabledChanged)
+
     // ─── 全局视图变换（窗口内缩放 / 平移）─────────────────────────────────
     // 设计要点：
     //   ① 全局共享一份 zoom/panX/panY，所有 VideoFrameProvider 与 SliderCompareItem
@@ -88,6 +92,7 @@ public:
     double      duration()    const { return m_lastDuration; }
     QStringList titles()      const;
     double      speed()       const { return m_lastSpeed; }
+    bool        loopEnabled() const;
 
     double      viewZoom()      const { return m_viewZoom; }
     double      viewPanX()      const { return m_viewPanX; }
@@ -100,6 +105,7 @@ public:
 
     void setActiveIndex(int v);
     void setLayoutMode(int v);
+    void setLoopEnabled(bool on);
 
 public slots:
     // 文件管理
@@ -168,6 +174,7 @@ signals:
     void positionChanged();
     void durationChanged();
     void speedChanged();
+    void loopEnabledChanged();
     void viewTransformChanged();
     void requestRepaint(); // 通知所有 VideoFrameProvider 刷新
 

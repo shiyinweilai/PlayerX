@@ -93,6 +93,15 @@ public:
     void   rbAdjustSpeedLevel(int delta);
     int    rbSpeedLevel() const { return m_speedLevel; }
     void   rbResetSpeed(); // 重置为 1.0x
+
+    // ─── 末尾循环播放开关（默认 true）─────────────────────────────────
+    // true  ：主时钟到达 max(duration) 时自动 seek 回 0 继续播放（无缝循环）
+    // false ：保留旧行为——所有路 rbPause()，播放停在最后一帧
+    // 该开关只影响 rbTick 的边界处理；用户主动末尾点 ▶ 的"replay"行为
+    // （由 rbPlay 中的 atEndBoundary 分支覆盖）始终保持不变。
+    void   rbSetLoopEnabled(bool on) { m_loopEnabled.store(on); }
+    bool   rbLoopEnabled() const { return m_loopEnabled.load(); }
+
     // ─── 给渲染层调用：每帧 tick，会推进主时钟并把时钟下发给各 player ──
     // 调用者通常是 QTimer @ ~60Hz。
     void rbTick();
@@ -130,6 +139,9 @@ private:
     //   把 anchorPts 重锚到 max(各路实际首帧 PTS)，使所有路同时显示各自首帧
     //   后再对齐推进，消除"某路单独卡几帧"现象。
     bool   m_pendingAnchorRebase{false};
+
+    // 末尾循环播放开关（默认开）。详见 rbSetLoopEnabled 注释。
+    std::atomic<bool> m_loopEnabled{true};
 };
 
 } // namespace rb

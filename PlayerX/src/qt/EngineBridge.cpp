@@ -67,6 +67,17 @@ void EngineBridge::setLayoutMode(int v) {
     }
 }
 
+bool EngineBridge::loopEnabled() const {
+    return m_engine ? m_engine->rbLoopEnabled() : true;
+}
+
+void EngineBridge::setLoopEnabled(bool on) {
+    if (!m_engine) return;
+    if (m_engine->rbLoopEnabled() == on) return;
+    m_engine->rbSetLoopEnabled(on);
+    emit loopEnabledChanged();
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // 文件管理
 // ════════════════════════════════════════════════════════════════════════
