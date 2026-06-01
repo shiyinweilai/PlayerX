@@ -2283,6 +2283,108 @@ ApplicationWindow {
             }
         }
 
+        // ── 全局进度条（贴 ToolBar 顶边，跨整宽，3px 细条）──────────────────
+        // 设计要点：
+        //   · 数据源直接用 Engine.duration（C++ 已是所有路 duration 的 max，
+        //     正好满足"以当前打开视频的最长时长为准"的需求；短视频先到末尾
+        //     不参与计算，只看最长那条的时间线）；进度用 Engine.position 取
+        //     主时钟位置，与现有"播放/暂停/快进/帧步"等控制天然同步。
+        //   · 仅当有视频且 duration>0 时显示；空状态/纯图片/未识别封装格式时
+        //     自动隐藏，不占视觉空间。
+        //   · 高度仅 3px，hover/拖拽期间涨到 5px，给用户即时反馈，不打扰画面对比。
+        //   · 点击 / 拖拽都通过 Engine.seek(s) 完成，与现有键盘 ←/→ 行为完全一致；
+        //     拖拽期间用本地 _dragValue 做"手不松不重置"的视觉锁定，避免抖动。
+        //   · 不破坏循环播放、单路 OSD、hover 控制条等任何已有功能（这条只 read
+        //     Engine.duration / position + 写 Engine.seek，无副作用）。
+        Item {
+            id: globalProgressBar
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            // 默认 3px，hover/拖拽时涨到 5px
+            height: (progressHover.hovered || progressDrag.active) ? 5 : 3
+            visible: Engine.fileCount > 0 && Engine.duration > 0
+            z: 10
+            Behavior on height { NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
+
+            // 拖拽时的"手不松不重置"位置（秒）；-1 表示未拖拽，使用 Engine.position
+            property real _dragValue: -1
+            // 当前用于绘制的位置（秒）
+            readonly property real _curPos: _dragValue >= 0 ? _dragValue : Engine.position
+            readonly property real _ratio: Engine.duration > 0
+                ? Math.max(0, Math.min(1, _curPos / Engine.duration))
+                : 0
+
+            // 底色（未播放）
+            Rectangle {
+                anchors.fill: parent
+                color: "#2a2a30"
+            }
+            // 已播放部分
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: parent.width * parent._ratio
+                color: "#0a64f0"
+            }
+
+            HoverHandler { id: progressHover }
+            // DragHandler 仅用来取 active 状态（让条变高），实际的鼠标位置 → seek
+            // 走 MouseArea，避免 DragHandler 的 axis 约束与"瞬时点击"语义冲突。
+            DragHandler {
+                id: progressDrag
+                target: null
+                enabled: false  // 仅占位，真正交互在 MouseArea 中
+            }
+            MouseArea {
+                id: progressMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                property bool _pressing: false
+                onPressed: function(mouse) {
+                    if (Engine.duration <= 0) return
+                    _pressing = true
+                    var r = Math.max(0, Math.min(1, mouse.x / width))
+                    globalProgressBar._dragValue = r * Engine.duration
+                    Engine.seek(globalProgressBar._dragValue)
+                }
+                onPositionChanged: function(mouse) {
+                    if (!_pressing || Engine.duration <= 0) return
+                    var r = Math.max(0, Math.min(1, mouse.x / width))
+                    globalProgressBar._dragValue = r * Engine.duration
+                    Engine.seek(globalProgressBar._dragValue)
+                }
+                onReleased: {
+                    _pressing = false
+                    globalProgressBar._dragValue = -1
+                }
+                onCanceled: {
+                    _pressing = false
+                    globalProgressBar._dragValue = -1
+                }
+            }
+
+            // 悬停时显示当前时刻 / 总时长 tooltip
+            ToolTip.visible: progressHover.hovered || progressMouse._pressing
+            ToolTip.delay: 200
+            ToolTip.text: {
+                function fmt(t) {
+                    if (!isFinite(t) || t < 0) t = 0
+                    var s = Math.floor(t)
+                    var m = Math.floor(s / 60)
+                    var sec = s % 60
+                    var h = Math.floor(m / 60)
+                    m = m % 60
+                    function pad(n) { return n < 10 ? "0" + n : "" + n }
+                    return h > 0 ? (h + ":" + pad(m) + ":" + pad(sec))
+                                 : (m + ":" + pad(sec))
+                }
+                return fmt(_curPos) + " / " + fmt(Engine.duration)
+            }
+        }
+
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: 8
