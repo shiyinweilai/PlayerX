@@ -3,6 +3,7 @@
  */
 #include "FsUtils.h"
 
+#include <QtGlobal>        // 提供 Q_OS_MACOS / Q_OS_WIN 等平台宏（下面 #if 用到）
 #include <QCollator>
 #include <QDesktopServices>
 #include <QDir>
@@ -15,6 +16,24 @@
 #include <QStringList>
 #include <QTextStream>
 #include <QUrl>
+
+// ── 多选文件夹：平台原生实现的前向声明 ───────────────────────────
+// 仅 macOS 走原生 NSOpenPanel（FsUtils_mac.mm），Windows / Linux 等其他平台
+// 统一使用 Qt 自绘 QFileDialog 兜底（见下文 fallback 实现）—— Windows 端
+// 此前尝试过的 IFileOpenDialog "文件模式 + 多选 + 目录校验" 方案在实测中
+// 表现不稳定（用户反馈一个文件夹都无法选中），暂回退到与 Linux 一致的
+// Qt 自绘方案。
+#if defined(Q_OS_MACOS)
+namespace rbqt {
+    QStringList pickMultipleFoldersNative(const QString& title,
+                                          const QString& startPath);
+}
+#else
+// 非 macOS 平台需要 QFileDialog 自绘头
+#  include <QFileDialog>
+#  include <QListView>
+#  include <QTreeView>
+#endif
 
 namespace rbqt {
 
@@ -233,6 +252,67 @@ bool FsUtils::revealInFileManager(const QString& path) const {
         QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
     }
     return true;
+#endif
+}
+
+// ── 多选文件夹对话框 ────────────────────────────────────────────
+//
+// 平台分发：
+//   · macOS   → FsUtils_mac.mm 里直接调 Cocoa NSOpenPanel
+//               （canChooseDirectories=YES + allowsMultipleSelection=YES）。
+//               UI 完全是用户熟悉的 Finder 原生面板。
+//   · Windows / 其他 → Qt 自绘 QFileDialog
+//               （DontUseNativeDialog + ExtendedSelection），需要 Qt6::Widgets。
+//               说明：Windows shell 的 IFileOpenDialog 在 PICKFOLDERS 模式下
+//               强制单选；尝试过"文件模式 + 多选 + OnFileOk 目录校验"绕道方案，
+//               但实测下用户无法正常选中目录，故回退到 Qt 自绘方案，与 Linux
+//               兜底实现合并为同一条代码路径，行为更稳定。
+//
+// 行为约定（与平台无关）：
+//   · 用户取消 / 没选任何项 → 返回空列表；
+//   · 仅返回真实存在的目录绝对路径；
+//   · title 为空使用默认 "选择文件夹（可多选）"；
+//   · startPath 为空 / 不存在 → HOME。
+QStringList FsUtils::pickMultipleFolders(const QString& title,
+                                          const QString& startPath) const {
+#if defined(Q_OS_MACOS)
+    // macOS 平台原生实现：UI 与 Finder 完全一致，零额外依赖。
+    return pickMultipleFoldersNative(title, startPath);
+#else
+    // ── Windows / Linux / 其他兜底：Qt 自绘 QFileDialog ──
+    QStringList result;
+
+    QString start = startPath;
+    if (start.isEmpty() || !QFileInfo(start).isDir()) {
+        start = QDir::homePath();
+    }
+
+    QFileDialog dlg(nullptr,
+                    title.isEmpty() ? QStringLiteral("选择文件夹（可多选）")
+                                    : title,
+                    start);
+    dlg.setOption(QFileDialog::DontUseNativeDialog, true);
+    dlg.setFileMode(QFileDialog::Directory);
+    dlg.setOption(QFileDialog::ShowDirsOnly, true);
+
+    if (auto* lv = dlg.findChild<QListView*>("listView")) {
+        lv->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    }
+    if (auto* tv = dlg.findChild<QTreeView*>()) {
+        tv->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    }
+
+    if (dlg.exec() != QDialog::Accepted) return result;
+
+    const QStringList sel = dlg.selectedFiles();
+    result.reserve(sel.size());
+    for (const QString& p : sel) {
+        if (p.isEmpty()) continue;
+        QFileInfo fi(p);
+        if (!fi.exists() || !fi.isDir()) continue;
+        result << fi.absoluteFilePath();
+    }
+    return result;
 #endif
 }
 

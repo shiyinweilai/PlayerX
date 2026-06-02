@@ -1222,6 +1222,84 @@ ApplicationWindow {
         dupConfirmDialog.open()
     }
 
+    // ─── 多选文件夹一步入口（C++ FsUtils.pickMultipleFolders 桥接） ─────
+    // 通过 Qt 自绘 QFileDialog（DontUseNativeDialog + ExtendedSelection）
+    // 在【单一对话框】里让用户 Ctrl/Cmd/Shift 多选目录，一次添加多路。
+    //
+    // 设计要点：
+    //   · 选中 N (≥1) 个目录 → 转成 file:// URL 列表喂给 addFoldersWithConfirm，
+    //     完整复用「重复确认 / 历史合并 / 持久化」逻辑；
+    //   · 用户取消 → 走 onCancel 回调（默认行为：emptyOrAdd，根据当前 lanes
+    //     是否为空决定退化策略——空态时打开旧的 firstFolderDlg 单选兜底；
+    //     已有 lanes 时退化为 addLane() 增加一个空行，让用户可以再点行内 📁）；
+    //   · 起始目录用 effectiveDefaultFolderUrl 解析出的本地路径，没设过则空串
+    //     由 C++ 侧回退到 HOME。
+    //
+    // fallbackOnCancel: "openSingle" / "addEmpty" / "none"
+    //   · "openSingle"  → 取消时弹出旧 firstFolderDlg 单选兜底（空态卡用）
+    //   · "addEmpty"    → 取消时调 addLane() 加空行（"➕ 新增一路"按钮用）
+    //   · "none"        → 取消时什么都不做
+    function _pickFoldersAndAddLanes(fallbackOnCancel) {
+        if (typeof Fs === "undefined" || !Fs
+            || typeof Fs.pickMultipleFolders !== "function") {
+            // C++ 侧没暴露多选接口（理论上不会发生，留作防御性兜底）
+            if (fallbackOnCancel === "openSingle") firstFolderDlg.open()
+            else if (fallbackOnCancel === "addEmpty") addLane()
+            return
+        }
+
+        // 起始目录：从 effectiveDefaultFolderUrl（QUrl）转成本地路径
+        var startPath = ""
+        try {
+            var u = effectiveDefaultFolderUrl
+            if (u && ("" + u).length > 0) {
+                startPath = Fs.urlToLocalFile(u)
+            }
+        } catch (e) { startPath = "" }
+
+        var paths = []
+        try {
+            paths = Fs.pickMultipleFolders("选择要导入的文件夹（可多选）", startPath) || []
+        } catch (e) { paths = [] }
+
+        if (!paths || paths.length === 0) {
+            // 用户取消或选空 → 按调用方指定的退化策略处理
+            if (fallbackOnCancel === "openSingle") firstFolderDlg.open()
+            else if (fallbackOnCancel === "addEmpty") addLane()
+            return
+        }
+
+        // 多路一次性追加；urlToFileUrls 在 C++ 侧统一处理 file:// 前缀。
+        var urls = []
+        try { urls = Fs.toFileUrls(paths) || [] } catch (e) { urls = [] }
+        if (!urls || urls.length === 0) {
+            if (fallbackOnCancel === "openSingle") firstFolderDlg.open()
+            else if (fallbackOnCancel === "addEmpty") addLane()
+            return
+        }
+        addFoldersWithConfirm(urls)
+
+        // 固化"全局上次导入目录" —— 关键：用【第一个选中目录的父目录】，
+        // 也就是用户当时所在的浏览目录。如果直接用选中目录本身（例如
+        // …/app_test/ours_hyzm0509_6w），下次打开会进到子层级里，与
+        // 用户预期不符（用户期望停留在 …/app_test 那一层继续浏览同级别目录）。
+        try {
+            var first = paths[0]
+            if (first && first.length > 0) {
+                // 取父目录：去掉末尾可能的 "/"，再砍到最后一个 "/"
+                var p = first
+                if (p.charAt(p.length - 1) === "/") p = p.substring(0, p.length - 1)
+                var slash = p.lastIndexOf("/")
+                var parent = (slash > 0) ? p.substring(0, slash) : p
+                if (parent && parent.length > 0) {
+                    var parentUrl = (parent.charAt(0) === "/") ? ("file://" + parent)
+                                                               : ("file:///" + parent)
+                    _saveLastImportFolder(parentUrl)
+                }
+            }
+        } catch (e) { /* ignore */ }
+    }
+
     // 增加一路（默认 keyword 用 _a / _b / _c …帮助快速配置）
     function addLane() {
         if (_rowsModel.count >= kMaxLanes) return
@@ -2269,8 +2347,10 @@ ApplicationWindow {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         // 未选任何路时，点「新增一路」不需要「先增空行再点 📁」两步，
-                        // 直接弹出文件夹选择对话框，选完后复用 addFoldersToHistory 一步到位。
-                        onClicked: firstFolderDlg.open()
+                        // 直接弹出【多选】文件夹对话框，选完后一次性追加多路，
+                        // 复用 addFoldersToHistory 的扫描 / 去重 / 持久化。
+                        // 用户取消时退化到旧的单选 firstFolderDlg，避免“点了但什么也没发生”。
+                        onClicked: _pickFoldersAndAddLanes("openSingle")
                     }
 
                     DropArea {
@@ -2306,7 +2386,9 @@ ApplicationWindow {
                         id: addLaneBtn
                         text: "➕ 新增一路"
                         enabled: _rowsModel.count < kMaxLanes
-                        onClicked: addLane()
+                        // 点击【多选】：弹出多选文件夹对话框，选中 N 个后一次性追加 N 路。
+                        // 取消时退化为原来的「加一条空行」语义，用户仍可在空行内点 📁 逐个选。
+                        onClicked: _pickFoldersAndAddLanes("addEmpty")
                         background: Rectangle {
                             color: !addLaneBtn.enabled ? "#1a1a1d"
                                   : addLaneBtn.down ? "#4a4a55"

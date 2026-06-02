@@ -76,6 +76,27 @@ public:
     // 若选中失败（例如 Linux 下 xdg-open 不支持），退化为打开父目录。
     // path 为目录则直接打开该目录。返回 true 表示已发起 reveal 请求。
     Q_INVOKABLE bool revealInFileManager(const QString& path) const;
+
+    // ── 多选文件夹对话框 ─────────────────────────────────────────
+    // 弹出一个【单一】对话框让用户【一次勾选多个文件夹】，返回选中的绝对路径列表。
+    //
+    // 平台分发：
+    //   · macOS   → 原生 NSOpenPanel（FsUtils_mac.mm）
+    //               canChooseDirectories=YES + canChooseFiles=NO
+    //               + allowsMultipleSelection=YES，UI 完全是 Finder 原生面板。
+    //   · Windows / 其他 → Qt 自绘 QFileDialog（DontUseNativeDialog +
+    //               ExtendedSelection），需要 Qt6::Widgets。
+    //               说明：Windows shell 的 IFileOpenDialog 在 PICKFOLDERS
+    //               模式下强制单选；曾尝试过"文件模式 + 多选 + OnFileOk
+    //               目录校验"绕道方案，但实测下用户反映无法正常选中目录，
+    //               故 Windows 与 Linux 一并回退到这条 Qt 自绘代码路径。
+    //
+    // 行为约定：
+    //   · 用户取消 / 未选中任何项 → 返回空列表；
+    //   · title 为空时使用默认 "选择文件夹（可多选）"；
+    //   · startPath 为空 / 路径不存在时回退到 HOME 目录。
+    Q_INVOKABLE QStringList pickMultipleFolders(const QString& title = QString(),
+                                                 const QString& startPath = QString()) const;
 };
 
 } // namespace rbqt

@@ -8,7 +8,19 @@
  * 用于事后排查问题（用户可在「设置」菜单里点「打开日志目录」直达）。
  */
 
-#include <QGuiApplication>
+// QtGlobal 必须先包含，才能让 Q_OS_MACOS / Q_OS_WIN 等平台宏被定义；
+// 否则下面的 #if defined(Q_OS_MACOS) 判断恒为假，会错走到 #else 分支
+// 去 include <QApplication>（mac/win 已不链接 QtWidgets，会报头文件找不到）。
+#include <QtGlobal>
+
+// macOS 走平台原生多选目录对话框（NSOpenPanel），不依赖 QtWidgets，
+// 因此用 QGuiApplication 即可，包体更小。
+// Windows / Linux 等其他平台走 Qt 自绘 QFileDialog 兜底，需要 QApplication（Widgets）。
+#if defined(Q_OS_MACOS)
+#  include <QGuiApplication>
+#else
+#  include <QApplication>
+#endif
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -133,7 +145,13 @@ static void installLogging() {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // 应用对象：macOS 走 QGuiApplication（不依赖 QtWidgets，包体更小），
+    // Windows / 其他平台走 QApplication（FsUtils 多选目录的 Qt 自绘兜底需要它）。
+#if defined(Q_OS_MACOS)
     QGuiApplication app(argc, argv);
+#else
+    QApplication app(argc, argv);
+#endif
     app.setApplicationName("PlayerX");
     app.setOrganizationName("PlayerX");
 

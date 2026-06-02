@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 # 应用版本号：单点维护处。会通过 APP_VERSION_STR 注入到 C++（Updater 用作
 # currentVersion）和 QML（关于对话框 / 更新弹窗显示）。
 # 发新版本时只改这一行，不要在源码里另写硬编码版本。
-project(PlayerX VERSION 3.0.8 LANGUAGES CXX C)
+project(PlayerX VERSION 3.0.9 LANGUAGES CXX C)
 
 # 在 macOS 上启用 Objective-C++（用于 ScreenProbe 直接调用 NSScreen / 注册
 # NSApplicationDidChangeScreenParametersNotification —— 绕开 Qt screen 子系统
@@ -40,7 +40,14 @@ foreach(_dep FFMPEG_INSTALL_DIR)
 endforeach()
 
 # Qt 路径：build.py 用 brew --prefix qt@6 / Qt 在线安装路径自动注入 CMAKE_PREFIX_PATH
+# 注：Widgets 仅在非 macOS 平台上才需要 —— 原生多选目录对话框在
+# macOS 用 NSOpenPanel（FsUtils_mac.mm），完全不依赖 QtWidgets。
+# Windows / Linux 等平台依赖 Qt 自绘 QFileDialog 作为多选目录对话框的实现，
+# 需要链入 Qt6::Widgets。
 find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network)
+if(NOT APPLE)
+    find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
+endif()
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -95,6 +102,9 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/qt/SliderCompareItem.cpp
     # 多组对比模式辅助工具（仅供 QML 配置面板使用，不触达播放内核）
     src/qt/FsUtils.cpp
+    # 平台原生多选文件夹对话框：仅 macOS 走 NSOpenPanel。
+    # Windows / Linux 走 FsUtils.cpp 内部的 Qt 自绘 QFileDialog 兜底实现。
+    $<$<PLATFORM_ID:Darwin>:src/qt/FsUtils_mac.mm>
     # 视频评分本地持久化（CSV，与播放内核解耦）
     src/qt/RatingStore.cpp
     # 文件夹参考图本地持久化（ini，与播放内核解耦）
@@ -174,6 +184,13 @@ target_link_libraries(PlayerX PRIVATE
     # FFmpeg 静态库
     avformat avcodec avfilter avutil swscale swresample
 )
+
+# 非 macOS 平台需要 Qt6::Widgets 作为 FsUtils::pickMultipleFolders 的
+# Qt 自绘 QFileDialog 实现（Windows / Linux）。macOS 走平台原生 NSOpenPanel，
+# 不需要 Widgets，包体可以减 5–7 MB。
+if(NOT APPLE)
+    target_link_libraries(PlayerX PRIVATE Qt6::Widgets)
+endif()
 
 if(APPLE)
     target_link_libraries(PlayerX PRIVATE
