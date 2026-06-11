@@ -38,6 +38,8 @@ RBVideoPlayer::~RBVideoPlayer() {
 bool RBVideoPlayer::rbOpen(const std::string& filePath) {
     // 注意：调用方（rbOpenFileForCell）已经先调用了 rbClose()，这里不再重复
     // 防御性再 flush 一次，确保帧队列绝对干净（无旧视频残帧）
+    // 严重警告：rbClose 会调 rbAbort（永久封住 push/pop），这里必须先 rbReset 解除才能后续重新起动
+    m_frameQueue->rbReset();
     m_frameQueue->rbFlush();
     rbReleaseCurrentFrame();
 
@@ -74,31 +76,47 @@ void RBVideoPlayer::rbClose() {
     // 先把状态设为非 Playing，避免 rbGetCurrentFrame 继续消费
     m_state.store(RBPlayerState::Idle);
 
-    // ── 严格按依赖关系倒序停止 ───────────────────────────────────────────
-    // 数据流：demuxer → pktQueue → decoder → frameQueue → renderer
-    // 必须先停"上游"，避免下游退出后上游还在生产旧数据进队列。
+    // ⚠️ 修复“播放中切下一组卡死”（2026-06-11）：
+    // 旧顺序是先 stopReading 再 rbFlush 再 stopDecoding。但解码线程可能
+    // 正阐 EOF flush 路径上在 frameQueue->rbPush 里 wait（队列满 8 帧，而
+    // m_state=Idle 后渲染线程不再 pop）。第一次 rbFlush 结束后会自动释放
+    // m_flushing 标志、队列被设空，解码线程被唤醒后可能拼进 “队列未满且不是
+    // flushing” 的窗口期，重新 push 后 EOF flush 还会出更多帧，再次 push
+    // 霔住。此时主线程走到 rbStopDecoding 的 join() → 永久卡死。
+    // 日志现象：RBE-CLOSEALL outer-scope dying.size=2 will free now 之后无 done，
+    // 播放中切下一组反复发生。
+    //
+    // 修复：在 join 任何工作线程之前，先 rbAbort frameQueue（sticky 状态，让后续
+    // 所有 rbPush 立即 free 帧 return）。这样解码线程不会再被决定性地阔在
+    // rbPush wait 里。下一次 rbOpen 会 rbReset 解除 abort。
 
-    // 1. 停止读线程（demuxer）：m_running=false + pktQueue.stop()
+    fprintf(stderr, "[RBVP-CLOSE] entry: state=Idle qsize=%d\n", m_frameQueue ? m_frameQueue->rbSize() : -1);
+
+    // 数据流：demuxer → pktQueue → decoder → frameQueue → renderer
+    // 顺序必须从上游到下游逐级“断气”，且下游要在 join 上游之前先唤醒。
+
+    // 1. 唤醒 frameQueue（永久）：避免解码线程阻塞在 rbPush
+    if (m_frameQueue) m_frameQueue->rbAbort();
+    fprintf(stderr, "[RBVP-CLOSE] frameQueue aborted\n");
+
+    // 2. 停读线程（demuxer）：m_running=false + pktQueue.stop()
     //    rbStopReading 内部会 join 读线程，并 empty pktQueue 清除残留旧包，
     //    防止新解码器接收到旧视频的 NALU 导致 PPS/POC 错误。
     m_demuxer->rbStopReading();
+    fprintf(stderr, "[RBVP-CLOSE] demuxer stopped\n");
 
-    // 2. flush frameQueue：唤醒可能阻塞在 rbPush 的解码线程
-    m_frameQueue->rbFlush();
-
-    // 3. 停止解码线程（此时 pktQueue 已空且 stopped，解码线程不会再产新帧）
+    // 3. 停解码线程（pktQueue 已空且 stopped，frameQueue 已 abort，
+    //    解码线程无论在哪个 wait 上都会被唤醒退出，join 不会卡死）
     m_decoder->rbStopDecoding();
+    fprintf(stderr, "[RBVP-CLOSE] decoder stopped\n");
 
-    // 4. 解码线程已退出，再做一次 frameQueue flush，
-    //    清掉解码线程退出前 push 进去的最后几帧（避免新视频复用时拿到旧帧）
-    m_frameQueue->rbFlush();
-
-    // 5. 清理资源（释放 codec/format context）
+    // 4. 清理资源
     rbReleaseCurrentFrame();
     m_decoder->rbClose();
     m_demuxer->rbClose();
+    fprintf(stderr, "[RBVP-CLOSE] codecs closed\n");
 
-    // 6. 重置所有时钟相关状态，避免新视频接续旧时间戳
+    // 5. 重置所有时钟相关状态，避免新视频接续旧时间戳
     m_filePath.clear();
     m_duration          = 0.0;
     m_currentTime.store(0.0);
@@ -107,8 +125,8 @@ void RBVideoPlayer::rbClose() {
     m_playStartPts.store(0.0);
     m_seekPending.store(false);
     m_displayFrameIndex = 0;
+    fprintf(stderr, "[RBVP-CLOSE] done\n");
 }
-
 void RBVideoPlayer::rbPlay() {
     auto s = m_state.load();
     if (s == RBPlayerState::Idle || s == RBPlayerState::Error) return;
