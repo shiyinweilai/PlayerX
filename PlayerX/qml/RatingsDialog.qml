@@ -279,10 +279,11 @@ Window {
         _slideFolders = slideFolders
 
         // ── 同步 _checkedFolders（仅针对普通打分文件夹）
+        // 修改：默认不勾选（之前是默认勾选），避免破坏其他功能
         var nextChecked = {}
         for (var ci = 0; ci < normalFolders.length; ++ci) {
             var ck = normalFolders[ci].key
-            nextChecked[ck] = (root._checkedFolders[ck] === false) ? false : true
+            nextChecked[ck] = (root._checkedFolders[ck] === true) ? true : false
         }
         _checkedFolders = nextChecked
 
