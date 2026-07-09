@@ -6701,6 +6701,11 @@ ApplicationWindow {
         setRatingAt: function(idx, score, dimKey) {
             try { root._writeRating(idx, score, dimKey) } catch (e) {}
         }
+        // 获取指定通道当前评分（用于弹窗打开时预填已有评分）
+        getCellRating: function(idx) {
+            if (idx < 0 || idx >= root.cellRatings.length) return null
+            return root.cellRatings[idx]
+        }
         // 多维评分模式注入
         isMultiDimMode: root.isMultiDimMode
         reviewDimensions: root.reviewDimensions

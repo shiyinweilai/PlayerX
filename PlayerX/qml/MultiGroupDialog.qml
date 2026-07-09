@@ -662,6 +662,9 @@ ApplicationWindow {
     property var  getCellLabel: null
     property var  onGoToRate: null
     property var  setRatingAt: null
+    // 获取指定通道当前评分（由 Main.qml 注入）：function(idx) -> number | object
+    // 多维模式返回 {key: stars, ...}，单维模式返回 number；未注入时返回 null
+    property var  getCellRating: null
     // 多维评分模式支持（由 Main.qml 注入）
     property bool isMultiDimMode: false
     property var  reviewDimensions: []
@@ -2710,9 +2713,38 @@ ApplicationWindow {
             }
             return true
         }
-        // 关闭时清空本地评分缓存与 toast，避免下次打开看到旧状态
+        // 打开时从主界面 cellRatings 预填已有评分；关闭时清空缓存
         onVisibleChanged: {
-            if (!visible) {
+            if (visible) {
+                // 预填：把主界面已有评分同步进弹窗，避免已评分的通道显示空星
+                var init = {}
+                var missing = dlg._pendingMissing || []
+                for (var i = 0; i < missing.length; ++i) {
+                    var chIdx = missing[i]
+                    if (chIdx < 0) continue
+                    if (typeof dlg.getCellRating === "function") {
+                        var existing = dlg.getCellRating(chIdx)
+                        if (existing !== null && existing !== undefined) {
+                            if (dlg.isMultiDimMode) {
+                                // 多维：复制对象，过滤掉 0 值（0 视为未评分）
+                                if (typeof existing === "object") {
+                                    var obj = {}
+                                    var dims = dlg.reviewDimensions
+                                    for (var d = 0; d < dims.length; ++d) {
+                                        var k = dims[d].key
+                                        obj[k] = (existing[k] > 0) ? existing[k] : 0
+                                    }
+                                    init[chIdx] = obj
+                                }
+                            } else {
+                                if (existing > 0) init[chIdx] = existing
+                            }
+                        }
+                    }
+                }
+                _localRatings = init
+                _toastText = ""
+            } else {
                 _localRatings = ({})
                 _toastText = ""
             }
