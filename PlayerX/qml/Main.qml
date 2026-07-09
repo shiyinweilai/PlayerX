@@ -50,6 +50,21 @@ ApplicationWindow {
         }
         // 初始化手机模式校准系数（按当前 Screen.width 查表，跟随系统显示档位变化）
         root._applyAutoPhoneScale()
+
+        // 加载多维度评分配置（qrc:/PlayerX/doc/dimensions.json）
+        var xhr = new XMLHttpRequest()
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return
+            if (xhr.status === 200 || xhr.status === 0) {
+                try {
+                    var obj = JSON.parse(xhr.responseText)
+                    if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0)
+                        root.reviewDimensions = obj.dimensions
+                } catch (e) {}
+            }
+        }
+        xhr.open("GET", "qrc:/PlayerX/doc/dimensions.json")
+        xhr.send()
     }
 
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
@@ -1455,7 +1470,34 @@ ApplicationWindow {
     readonly property int reviewMaxStars:
         (typeof Rating !== "undefined") ? Rating.maxStars : 5
 
-    // ── 质量比较 2（quality_slide）专用：滑动模式评分本地状态 ──
+    // ── 多维评分（multi_dim）专用 ──
+    // 是否处于多维评分模式
+    readonly property bool isMultiDimMode:
+        (typeof Rating !== "undefined") && Rating.currentMode === "multi_dim"
+    // 维度列表（写死4个维度，确保UI可见）
+    property var reviewDimensions: [
+        { key: "动作", label: "动作" },
+        { key: "物理", label: "物理" },
+        { key: "商品", label: "商品" },
+        { key: "总分", label: "总分" }
+    ]
+    // 切换到多维模式时，重新初始化 cellRatings 为对象数组；切出时恢复为数字数组
+    onIsMultiDimModeChanged: {
+        var n = Engine.fileCount
+        if (n <= 0) return
+        var arr = []
+        for (var i = 0; i < n; ++i) {
+            if (isMultiDimMode) {
+                var obj = {}
+                for (var d = 0; d < reviewDimensions.length; ++d)
+                    obj[reviewDimensions[d].key] = 0
+                arr.push(obj)
+            } else {
+                arr.push(0)
+            }
+        }
+        cellRatings = arr
+    }
     //   · 实时写入 ratings_quality_slide_slide.csv（与普通打分文件完全隔离）
     //   · 与普通 quality 评分（cellRatings）解耦，互不覆盖
     //   · 切到下一组后必须清空（_resetSlideRatings），下一组重新进入再评
@@ -2125,9 +2167,13 @@ ApplicationWindow {
         ratingToast.show()
     }
 
-    function ratingAt(idx) {
+    function ratingAt(idx, dimKey) {
         if (idx < 0 || idx >= cellRatings.length) return 0
         var v = cellRatings[idx]
+        if (typeof v === "object" && v !== null) {
+            // 多维模式：返回指定维度的分数
+            return (dimKey && v[dimKey]) ? v[dimKey] : 0
+        }
         return (typeof v === "number" && v >= 1 && v <= 5) ? v : 0
     }
     function setRatingAt(idx, score) {
@@ -2169,11 +2215,26 @@ ApplicationWindow {
             var arr = []
             for (var i = 0; i < n; ++i) {
                 var fp = Engine.filePathAt(i)
-                var v = -1
-                if (typeof Rating !== "undefined" && fp && fp.length > 0) {
-                    v = Rating.ratingFor(fp)
+                if (root.isMultiDimMode) {
+                    // 多维模式：每项初始化为对象，从 CSV 按 slide_type 回填各维度
+                    var obj = {}
+                    var dims = root.reviewDimensions
+                    for (var d = 0; d < dims.length; ++d) {
+                        var dimKey = dims[d].key
+                        var saved = -1
+                        if (typeof Rating !== "undefined" && fp && fp.length > 0) {
+                            saved = Rating.ratingFor(fp, "multi_" + dimKey)
+                        }
+                        obj[dimKey] = (typeof saved === "number" && saved >= 1 && saved <= 5) ? saved : 0
+                    }
+                    arr.push(obj)
+                } else {
+                    var v = -1
+                    if (typeof Rating !== "undefined" && fp && fp.length > 0) {
+                        v = Rating.ratingFor(fp)
+                    }
+                    arr.push((typeof v === "number" && v >= 1 && v <= 5) ? v : 0)
                 }
-                arr.push((typeof v === "number" && v >= 1 && v <= 5) ? v : 0)
             }
             root.cellRatings = arr
             // 切换文件 / 翻组 / 改宫格后，主动复位 selectedIdx，避免上一组的
@@ -4011,24 +4072,47 @@ ApplicationWindow {
     // 这里一律“强制覆盖写入”：不管以前是几星，按下 Shift+N 就是 N 星，
     // 避免“首次评分出现已清除评分”、“连按两下变 0 分”这些迷惑场景。
     // 超过当前模式 maxStars 的会被自动钉到上限（如主观模式 Shift+5 → 实际写 3）。
-    function _writeRating(idx, score) {
+    function _writeRating(idx, score, dimKey) {
         // 超出当前模式上限时仅 UI 层钉一下，避免 cellRatings 写出 "5" 但后端实际存为 3
-        // 造成“UI 与实际不一致”。RatingStore::recordRating 内部也会再截一次、双保险。
+        // 造成"UI 与实际不一致"。RatingStore::recordRating 内部也会再截一次、双保险。
         var cap = root.reviewMaxStars
         if (cap > 0 && score > cap) score = cap
         if (score < 0) score = 0
         var arr = root.cellRatings.slice()
-        while (arr.length <= idx) arr.push(0)
-        arr[idx] = score
-        root.cellRatings = arr
-        if (typeof Rating !== "undefined") {
-            var fp = Engine.filePathAt(idx)
-            if (fp && fp.length > 0) {
-                Rating.recordRating(fp, Engine.fileNameAt(idx), score, idx)
+        if (root.isMultiDimMode && dimKey) {
+            // 多维模式：写入对象的指定维度字段
+            while (arr.length <= idx) {
+                var emptyObj = {}
+                var dims = root.reviewDimensions
+                for (var d = 0; d < dims.length; ++d) emptyObj[dims[d].key] = 0
+                arr.push(emptyObj)
+            }
+            // 必须创建新对象才能触发QML属性变更通知
+            var oldObj = arr[idx]
+            var newObj = (typeof oldObj === "object" && oldObj !== null) ? Object.assign({}, oldObj) : {}
+            newObj[dimKey] = score
+            arr[idx] = newObj
+            root.cellRatings = arr
+            // 持久化：file_name 用原始文件名，slide_type 传 "multi_<维度>" 区分各维度
+            if (typeof Rating !== "undefined") {
+                var fp = Engine.filePathAt(idx)
+                if (fp && fp.length > 0) {
+                    Rating.recordRating(fp, Engine.fileNameAt(idx), score, idx, "multi_" + dimKey)
+                }
+            }
+        } else {
+            // 单维模式：原有逻辑
+            while (arr.length <= idx) arr.push(0)
+            arr[idx] = score
+            root.cellRatings = arr
+            if (typeof Rating !== "undefined") {
+                var fp2 = Engine.filePathAt(idx)
+                if (fp2 && fp2.length > 0) {
+                    Rating.recordRating(fp2, Engine.fileNameAt(idx), score, idx)
+                }
             }
         }
-    }
-    function _setRatingForActive(score) {
+    }    function _setRatingForActive(score) {
         var idx = root._resolveRatingTarget()
         if (idx < 0) {
             root._showRatingWarn("\u8bf7\u5148\u9009\u4e2d\u4e00\u4e2a\u901a\u9053\uff08\u5355\u51fb\u753b\u9762\u6216\u6309 [ / ]\uff09")
@@ -6571,15 +6655,31 @@ ApplicationWindow {
         unratedChecker: function() {
             var miss = []
             var n = Engine.fileCount
-            for (var i = 0; i < n; ++i) {
-                if (root.ratingAt(i) <= 0) miss.push(i)
-            }
-            // quality_slide：仅当 fileCount===2 时滑动对比才有意义；
-            // 多于 2 路的场景退化回普通 quality 校验，避免误拦。
-            // 每组需要 4 次打分：普通A、普通B、滑动A、滑动B。
-            if (root.isQualitySlideMode && Engine.fileCount === 2) {
-                if (root.slideRatingL <= 0) miss.push(-2)   // 滑动 L 未打分
-                if (root.slideRatingR <= 0) miss.push(-3)   // 滑动 R 未打分
+            if (root.isMultiDimMode) {
+                // 多维模式：每个通道的所有维度都 > 0 才算已评分
+                var dims = root.reviewDimensions
+                for (var i = 0; i < n; ++i) {
+                    var v = root.cellRatings[i]
+                    var allDone = true
+                    if (typeof v !== "object" || v === null) {
+                        allDone = false
+                    } else {
+                        for (var d = 0; d < dims.length; ++d) {
+                            if (!(v[dims[d].key] > 0)) { allDone = false; break }
+                        }
+                    }
+                    if (!allDone) miss.push(i)
+                }
+            } else {
+                for (var j = 0; j < n; ++j) {
+                    if (root.ratingAt(j) <= 0) miss.push(j)
+                }
+                // quality_slide：仅当 fileCount===2 时滑动对比才有意义；
+                // 多于 2 路的场景退化回普通 quality 校验，避免误拦。
+                if (root.isQualitySlideMode && Engine.fileCount === 2) {
+                    if (root.slideRatingL <= 0) miss.push(-2)
+                    if (root.slideRatingR <= 0) miss.push(-3)
+                }
             }
             return miss
         }
@@ -6598,9 +6698,12 @@ ApplicationWindow {
             try { root.requestActivate() } catch (e) {}
         }
         // 提醒弹窗内联评分写入：复用主窗 _writeRating，自动持久化 + Toast 反馈也走同一条路。
-        setRatingAt: function(idx, score) {
-            try { root._writeRating(idx, score) } catch (e) {}
+        setRatingAt: function(idx, score, dimKey) {
+            try { root._writeRating(idx, score, dimKey) } catch (e) {}
         }
+        // 多维评分模式注入
+        isMultiDimMode: root.isMultiDimMode
+        reviewDimensions: root.reviewDimensions
     }
 
     // dlg.reviewMode 现在是 readonly 并从 Rating.currentMode 直接派生，

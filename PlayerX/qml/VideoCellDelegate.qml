@@ -324,8 +324,8 @@ Rectangle {
         // 两行布局（ColumnLayout）：
         //   第 1 行：评分星条 + 操作按钮（⋯ ⤢ ✕）—— 用户高频交互的入口
         //   第 2 行：帧号 + 时间戳            —— 仅展示用的实时数据
-        // 两行整体右对齐（每行内部 anchors.right→parent.right），
-        // channelBar 宽度由两行 implicitWidth 的较大者决定。
+        //   第 3 行：多维评分星条（multi_dim 模式，每个维度一行，位于时间戳下方）
+        // 整体右对齐，channelBar 宽度由各行 implicitWidth 的较大者决定。
         ColumnLayout {
             id: channelCol
             anchors.fill: parent
@@ -341,11 +341,11 @@ Rectangle {
                 Layout.alignment: Qt.AlignRight
                 spacing: 6
 
-                // 评分星条：与 ⋯ ⤢ ✕ 同行，reviewMode 开启时常驻
+                // 评分星条：非 multi_dim 模式时显示
                 Row {
                     id: inlineStarRow
                     spacing: 2
-                    visible: viewRoot.reviewMode
+                    visible: viewRoot.reviewMode && !viewRoot.isMultiDimMode
                     Layout.alignment: Qt.AlignVCenter
                     property int hoverRating: 0
                     readonly property int currentRating: {
@@ -559,7 +559,74 @@ Rectangle {
                           : "—"
                 }
             }
-        }   // ← end of channelCol（ColumnLayout 两行布局）
+            // ────── 第 3 行：多维评分行（multi_dim 模式，时间戳下方）──────
+            Column {
+                id: multiDimBlock
+                visible: viewRoot.reviewMode && viewRoot.isMultiDimMode
+                spacing: 1
+                Layout.alignment: Qt.AlignRight
+
+                Repeater {
+                    model: viewRoot.reviewDimensions
+                    delegate: Row {
+                        id: dimRow
+                        spacing: 2
+                        layoutDirection: Qt.LeftToRight
+                        property string dimKey: modelData ? (modelData.key || "") : ""
+                        property int dimHover: 0
+
+                        Text {
+                            text: dimRow.dimKey
+                            color: "#9a9aa8"
+                            font.pixelSize: 10
+                            width: 28
+                            horizontalAlignment: Text.AlignRight
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Repeater {
+                            model: 5
+                            delegate: Item {
+                                id: dimStarItem
+                                width: 16; height: 16
+                                property int starIdx: index + 1
+                                property int curScore: {
+                                    var arr = viewRoot.cellRatings
+                                    var i = cell.playerIdx
+                                    if (!arr || i < 0 || i >= arr.length) return 0
+                                    var v = arr[i]
+                                    return (typeof v === "object" && v !== null) ? (v[dimRow.dimKey] || 0) : 0
+                                }
+                                property bool lit: dimRow.dimHover > 0
+                                    ? dimStarItem.starIdx <= dimRow.dimHover
+                                    : dimStarItem.starIdx <= dimStarItem.curScore
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: dimStarItem.lit ? "★" : "☆"
+                                    color: dimStarItem.lit ? "#f5c518" : "#bfc4ca"
+                                    font.pixelSize: 14
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    onEntered: dimRow.dimHover = dimStarItem.starIdx
+                                    onExited:  dimRow.dimHover = 0
+                                    onClicked: function(mouse) {
+                                        if (mouse.button === Qt.RightButton)
+                                            viewRoot._writeRating(cell.playerIdx, 0, dimRow.dimKey)
+                                        else
+                                            viewRoot._writeRating(cell.playerIdx, dimStarItem.starIdx, dimRow.dimKey)
+                                        dimRow.dimHover = 0
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }   // ← end of channelCol（ColumnLayout 三行布局）
     }
 
     // ─── 主交互层：左键选中/双击暂停 + 右键拖拽平移/单击信息面板 ──────────

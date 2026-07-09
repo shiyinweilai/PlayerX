@@ -662,6 +662,9 @@ ApplicationWindow {
     property var  getCellLabel: null
     property var  onGoToRate: null
     property var  setRatingAt: null
+    // 多维评分模式支持（由 Main.qml 注入）
+    property bool isMultiDimMode: false
+    property var  reviewDimensions: []
 
     // ─── 单路浏览模式的「N 宫格」状态 ───────────────────────────────
     // singleLaneMode = true 时，表示当前已启动且只有 1 路有效（来自单文件夹 / 添加文件）。
@@ -2667,7 +2670,7 @@ ApplicationWindow {
     Window {
         id: unratedDialog
         width: 560
-        height: 320
+        height: dlg.isMultiDimMode ? Math.min(600, 200 + (dlg._pendingMissing || []).length * (dlg.reviewDimensions.length * 26 + 16)) : 320
         flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
         color: "#161619"
         modality: Qt.ApplicationModal
@@ -2692,8 +2695,18 @@ ApplicationWindow {
             var arr = dlg._pendingMissing || []
             if (!arr.length) return true
             for (var i = 0; i < arr.length; ++i) {
-                var v = _localRatings[arr[i]]
-                if (!v || v <= 0) return false
+                var chIdx = arr[i]
+                var v = _localRatings[chIdx]
+                if (dlg.isMultiDimMode) {
+                    // 多维：需要每个维度都 > 0
+                    if (typeof v !== "object" || v === null) return false
+                    var dims = dlg.reviewDimensions
+                    for (var d = 0; d < dims.length; ++d) {
+                        if (!(v[dims[d].key] > 0)) return false
+                    }
+                } else {
+                    if (!v || v <= 0) return false
+                }
             }
             return true
         }
@@ -2721,7 +2734,18 @@ ApplicationWindow {
                         var done = 0
                         for (var i = 0; i < total; ++i) {
                             var v = unratedDialog._localRatings[dlg._pendingMissing[i]]
-                            if (v && v > 0) done++
+                            if (dlg.isMultiDimMode) {
+                                if (typeof v === "object" && v !== null) {
+                                    var dims = dlg.reviewDimensions
+                                    var allOk = true
+                                    for (var d = 0; d < dims.length; ++d) {
+                                        if (!(v[dims[d].key] > 0)) { allOk = false; break }
+                                    }
+                                    if (allOk) done++
+                                }
+                            } else {
+                                if (v && v > 0) done++
+                            }
                         }
                         if (done >= total) return "✅ 当前组全部评分完成"
                         return "🔔 当前组还有 " + (total - done) + " 个通道未评分"
@@ -2772,11 +2796,124 @@ ApplicationWindow {
                                 // 防止被内层 Repeater 的 modelData/index 遮蔽。
                                 property int chIdx: modelData
                                 Layout.fillWidth: true
-                                implicitHeight: 32
+                                // 多维模式：文件名行(24) + 每维度行(22) + 间距；单维：固定32
+                                implicitHeight: dlg.isMultiDimMode && chIdx >= 0
+                                    ? 24 + dlg.reviewDimensions.length * 22 + 8
+                                    : 32
                                 color: "transparent"
                                 radius: 3
 
+                                // 多维模式：文件名在上，各维度星星在下（ColumnLayout）
+                                ColumnLayout {
+                                    visible: dlg.isMultiDimMode
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    anchors.topMargin: 4
+                                    anchors.bottomMargin: 4
+                                    spacing: 2
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        color: "#cfcfd4"
+                                        font.pixelSize: 12
+                                        elide: Text.ElideMiddle
+                                        text: {
+                                            var idx = chIdx
+                                            var label = ""
+                                            if (typeof dlg.getCellLabel === "function") {
+                                                try { label = dlg.getCellLabel(idx) || "" } catch (e) {}
+                                            }
+                                            if (!label) label = "通道 " + (idx + 1)
+                                            return label
+                                        }
+                                    }
+
+                                    // sentinel 提示（chIdx < 0）
+                                    Label {
+                                        visible: chIdx < 0
+                                        text: chIdx === -2 ? "需在滑动模式打 L 分"
+                                            : chIdx === -3 ? "需在滑动模式打 R 分"
+                                            : ""
+                                        color: "#ffb86c"
+                                        font.pixelSize: 11
+                                        font.italic: true
+                                    }
+
+                                    // 多维星星：每个维度一行
+                                    Repeater {
+                                        model: chIdx >= 0 ? dlg.reviewDimensions : []
+                                        delegate: Row {
+                                            spacing: 4
+                                            property string dimKey: modelData ? (modelData.key || "") : ""
+                                            property int dimHover: -1
+                                            Text {
+                                                text: dimKey
+                                                color: "#9a9aa8"
+                                                font.pixelSize: 10
+                                                width: 28
+                                                horizontalAlignment: Text.AlignRight
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                            Repeater {
+                                                model: 5
+                                                delegate: Item {
+                                                    id: dimStarCell2
+                                                    width: 20; height: 20
+                                                    property int starOrder: index
+                                                    property int curScore: {
+                                                        var obj = unratedDialog._localRatings[chIdx]
+                                                        if (typeof obj === "object" && obj !== null)
+                                                            return obj[dimKey] || 0
+                                                        return 0
+                                                    }
+                                                    property bool lit: parent.parent.dimHover >= 0
+                                                        ? starOrder <= parent.parent.dimHover
+                                                        : starOrder < curScore
+                                                    Text {
+                                                        anchors.centerIn: parent
+                                                        text: dimStarCell2.lit ? "★" : "☆"
+                                                        color: dimStarCell2.lit ? "#ffd34d" : "#7a7a82"
+                                                        font.pixelSize: 14
+                                                    }
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        hoverEnabled: true
+                                                        cursorShape: Qt.PointingHandCursor
+                                                        onEntered: parent.parent.parent.dimHover = starOrder
+                                                        onExited:  parent.parent.parent.dimHover = -1
+                                                        onClicked: {
+                                                            var ch = chIdx
+                                                            var sc = starOrder + 1
+                                                            var dk = dimKey
+                                                            if (typeof dlg.setRatingAt === "function") {
+                                                                try { dlg.setRatingAt(ch, sc, dk) } catch (e) {}
+                                                            }
+                                                            var lr = unratedDialog._localRatings
+                                                            var nr = {}
+                                                            for (var k in lr) nr[k] = lr[k]
+                                                            var oldObj = (typeof nr[ch] === "object" && nr[ch] !== null) ? nr[ch] : {}
+                                                            var newObj = {}
+                                                            for (var ok in oldObj) newObj[ok] = oldObj[ok]
+                                                            newObj[dk] = sc
+                                                            nr[ch] = newObj
+                                                            unratedDialog._localRatings = nr
+                                                            var stars = ""
+                                                            for (var s = 0; s < sc; ++s) stars += "★"
+                                                            unratedDialog._toastText = "通道" + (ch+1) + " " + dk + "：" + stars
+                                                            _toastTimer.restart()
+                                                            parent.parent.parent.dimHover = -1
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 单维模式：文件名 + 星星横排（RowLayout）
                                 RowLayout {
+                                    visible: !dlg.isMultiDimMode
                                     anchors.fill: parent
                                     anchors.leftMargin: 8
                                     anchors.rightMargin: 8
@@ -2799,11 +2936,7 @@ ApplicationWindow {
                                         }
                                     }
 
-                                    // 星星：点击即评分；评分后驻留显示，便于回看分数。
-                    // 颗数随当前评分模式 maxStars（主观评分=5 / 质量比较=2）动态变化。
-                                    // quality_slide 模式专用 sentinel（chIdx < 0）：
-                                    //   -1 = 未进入滑动对比 / -2 = 滑动 L 待打分 / -3 = 滑动 R 待打分
-                                    // 这类 sentinel 不能内联评分，必须回主窗按 B 进入滑动模式手动打分。
+                                    // sentinel 提示（chIdx < 0）
                                     Label {
                                         visible: chIdx < 0
                                         text: chIdx === -1 ? "需进入滑动对比 (按 B)"
@@ -2814,30 +2947,26 @@ ApplicationWindow {
                                         font.pixelSize: 11
                                         font.italic: true
                                     }
+                                    // 单维星星
                                     Row {
                                         visible: chIdx >= 0
                                         spacing: 2
                                         Repeater {
                                             model: (chIdx >= 0 && typeof Rating !== "undefined" && Rating.maxStars > 0) ? Rating.maxStars : 0
                                             delegate: Rectangle {
-                                                // 同样把内层 index 显式抬出来，避免闭包陷阱
-                                                property int starOrder: index    // 0..4
-                                                // 当前通道已评分数（0 表示未评分）
+                                                property int starOrder: index
                                                 property int curScore: {
                                                     var v = unratedDialog._localRatings[chIdx]
                                                     return v ? v : 0
                                                 }
-                                                // 该位是否被点亮：悬停时按 hover 位预览，否则按已评分实心
                                                 property bool litFilled: starMA.containsMouse
-                                                                          ? false   // hover 预览见下方 hoverFilled
+                                                                          ? false
                                                                           : (starOrder < curScore)
-                                                property bool hoverFilled: starMA.containsMouse && (starOrder <= 0 || starMA.containsMouse)
                                                 width: 22; height: 22
                                                 color: starMA.containsMouse ? "#2c2c34" : "transparent"
                                                 radius: 3
                                                 Text {
                                                     anchors.centerIn: parent
-                                                    // 实心：已评分（驻留）或 hover 预览到当前位置
                                                     text: (starMA.containsMouse || litFilled) ? "★" : "☆"
                                                     color: {
                                                         if (starMA.containsMouse) return "#ffd34d"
@@ -2853,18 +2982,16 @@ ApplicationWindow {
                                                     hoverEnabled: true
                                                     cursorShape: Qt.PointingHandCursor
                                                     onClicked: {
-                                                        var ch = chIdx              // 来自外层 delegate（通道 idx）
-                                                        var sc = starOrder + 1      // 1~5（星星序号）
+                                                        var ch = chIdx
+                                                        var sc = starOrder + 1
                                                         if (typeof dlg.setRatingAt === "function") {
                                                             try { dlg.setRatingAt(ch, sc) } catch (e) {}
                                                         }
-                                                        // 评分后驻留：写入本地缓存，不再从列表移除
                                                         var lr = unratedDialog._localRatings
                                                         var nr = {}
                                                         for (var k in lr) nr[k] = lr[k]
                                                         nr[ch] = sc
                                                         unratedDialog._localRatings = nr
-                                                        // Toast 反馈
                                                         var stars = ""
                                                         for (var s = 0; s < sc; ++s) stars += "★"
                                                         unratedDialog._toastText = "通道 " + (ch + 1) + " 评分：" + stars

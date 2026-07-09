@@ -47,6 +47,8 @@ static const ModeDef kModeTable[] = {
     // 仅在 QML 层额外要求"必须进入滑动对比并对 L/R 各打分"才能切下一组。
     // CSV 文件名 ratings_quality_slide.csv，与 quality 隔离不冲突。
     {"quality_slide", "质量比较 2（含滑动对比）",     2},
+    // 多维评分：从 dimensions.json 加载维度列表，每个维度独立打分（五分制）。
+    {"multi_dim",     "多维评分",                   5},
 };
 static constexpr int kModeCount = sizeof(kModeTable) / sizeof(kModeTable[0]);
 
@@ -297,7 +299,8 @@ QVariantList RatingStore::getSlideRatings() const {
 bool RatingStore::recordRating(const QString& filePath,
                                const QString& fileName,
                                int stars,
-                               int channelIndex) {
+                               int channelIndex,
+                               const QString& slideType) {
     if (filePath.trimmed().isEmpty()) return false;
     // off 模式不写盘（避免用户切到 "关闭" 后误触快捷键还在记录）
     const QString modeNow = currentMode();
@@ -325,9 +328,13 @@ bool RatingStore::recordRating(const QString& filePath,
     row["file_size"]   = fileSizeOf(filePath);
     row["quick_hash"]  = quickHashOf(filePath);
     row["stars"]       = stars;
-    // quality_slide 模式下普通打分标记 slide_type=normal，便于与滑动打分区分
-    row["slide_type"]  = (modeNow == QStringLiteral("quality_slide"))
-                         ? QStringLiteral("normal") : QString();
+    // slide_type 优先级：调用方显式传入 > quality_slide 模式自动标记 > 空
+    if (!slideType.isEmpty()) {
+        row["slide_type"] = slideType;
+    } else {
+        row["slide_type"] = (modeNow == QStringLiteral("quality_slide"))
+                             ? QStringLiteral("normal") : QString();
+    }
 
     QList<QVariantMap> rows = readAll();
     bool replaced = false;
@@ -515,6 +522,26 @@ int RatingStore::ratingFor(const QString& filePath) const {
     for (const auto& r : rows) {
         if (r.value("file_path").toString() == filePath &&
             r.value("rater").toString() == rater) {
+            int v = r.value("stars").toInt();
+            if (v < 0) v = 0;
+            if (cap > 0 && v > cap) v = cap;
+            return v;
+        }
+    }
+    return -1;
+}
+
+int RatingStore::ratingFor(const QString& filePath, const QString& slideType) const {
+    if (filePath.trimmed().isEmpty()) return -1;
+    if (currentMode() == QStringLiteral("off")) return -1;
+    QString rater = currentUser();
+    if (rater.isEmpty()) rater = systemUserName();
+    const int cap = maxStars();
+    const QList<QVariantMap> rows = readAll();
+    for (const auto& r : rows) {
+        if (r.value("file_path").toString() == filePath &&
+            r.value("rater").toString() == rater &&
+            r.value("slide_type").toString() == slideType) {
             int v = r.value("stars").toInt();
             if (v < 0) v = 0;
             if (cap > 0 && v > cap) v = cap;

@@ -102,10 +102,13 @@ public slots:
     // 该名称仅影响 CSV/评分表这一层，不影响标题栏、文件列表弹窗等其他处的文件名显示。
     //
 // stars 会按当前模式的 maxStars 自动截断（quality 模式传 5 → 自动钉为 2）。
-    bool recordRating(const QString& filePath,
+    // slideType：可选，多维评分时传 "multi_动作" / "multi_物理" 等，
+    //            用于在 CSV 的 slide_type 列区分同一文件的不同维度评分。
+    Q_INVOKABLE bool recordRating(const QString& filePath,
                       const QString& fileName,
                       int stars,
-                      int channelIndex = -1);
+                      int channelIndex = -1,
+                      const QString& slideType = QString());
 
     // 记录一次滑动对比评分（quality_slide 模式专用）。
     // 滑动评分独立存储到 ratings_quality_slide_slide.csv，
@@ -125,7 +128,11 @@ public slots:
     //   · 未命中 / off 模式：返回 -1
     // 用途：QML 翻组 / 切宫格 / 重新打开文件后，根据新文件路径回填星级显示，
     //       避免上一组的 cellRatings[idx] 残留串到下一组。
-    int ratingFor(const QString& filePath) const;
+    Q_INVOKABLE int ratingFor(const QString& filePath) const;
+
+    // 多维评分专用重载：按 file_path + slide_type 精确查找。
+    // slideType 传 "multi_动作" / "multi_物理" 等；未命中返回 -1。
+    Q_INVOKABLE int ratingFor(const QString& filePath, const QString& slideType) const;
 
     // 返回所有评分行（每行一个 QVariantMap，键名同 CSV 列）。
     // 排序：updated_at 倒序（新→旧）。仅返回当前模式的数据。
