@@ -781,7 +781,11 @@ Rectangle {
 
             InfoRow {
                 label: "编解码"
-                value: (infoPanel.info.codec || "—").toUpperCase()
+                value: {
+                    var name = (infoPanel.info.codec || "—").toUpperCase()
+                    var tag  = infoPanel.info.codecTag || ""
+                    return tag ? name + " (" + tag + ")" : name
+                }
             }
             InfoRow {
                 label: "分辨率"

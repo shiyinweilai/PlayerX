@@ -779,6 +779,22 @@ std::string RBVideoPlayer::rbCodecName() const {
     return name ? name : "";
 }
 
+std::string RBVideoPlayer::rbCodecTag() const {
+    if (!m_demuxer) return "";
+    AVCodecParameters* par = m_demuxer->rbVideoCodecPar();
+    if (!par || par->codec_tag == 0) return "";
+    // codec_tag 是 little-endian fourcc，转成可读字符串
+    uint32_t tag = par->codec_tag;
+    char buf[AV_FOURCC_MAX_STRING_SIZE] = {};
+    av_fourcc_make_string(buf, tag);
+    // av_fourcc_make_string 可能输出 "0x..." 形式（非可打印字符），过滤掉
+    if (buf[0] == '0' && buf[1] == 'x') return "";
+    // 去掉尾部空格
+    std::string s(buf);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\0')) s.pop_back();
+    return s;
+}
+
 std::string RBVideoPlayer::rbPixelFormatName() const {
     // 像素格式有两个层级，需要分别报告：
     //   ① 码流声明格式（codecpar->format）—— 来自容器 SPS / extradata，

@@ -435,6 +435,7 @@ QVariantMap EngineBridge::videoInfoAt(int idx) const {
     rb::RBVideoPlayer* p = sp.get();
     if (!p) return info;
     info["codec"]      = QString::fromStdString(p->rbCodecName());
+    info["codecTag"]   = QString::fromStdString(p->rbCodecTag());
     info["decoder"]    = QString::fromStdString(p->rbDecoderName());
     info["width"]      = p->rbWidth();
     info["height"]     = p->rbHeight();

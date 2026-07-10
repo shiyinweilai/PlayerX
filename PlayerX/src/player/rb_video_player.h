@@ -100,6 +100,8 @@ public:
     double        rbFps()              const;
     // 编解码器名称（如 "h264" / "hevc" / "vp9"）
     std::string   rbCodecName()        const;
+    // 编解码器 fourcc tag（如 "hvc1" / "hev1" / "avc1"），无则返回空字符串
+    std::string   rbCodecTag()         const;
     // 像素格式名（如 "yuv420p" / "nv12"），来自实际解码器输出
     std::string   rbPixelFormatName()  const;
     // 色彩空间（如 "bt709" / "bt2020nc"）
