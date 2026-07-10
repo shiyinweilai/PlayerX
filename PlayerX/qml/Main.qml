@@ -68,6 +68,8 @@ ApplicationWindow {
                             if (obj.tag && typeof Rating !== "undefined") {
                                 Rating.uploadTag = obj.tag
                             }
+                            // 存储远程 tag，供上传时校验
+                            root._remoteTag = obj.tag || ""
                             return
                         }
                     } catch (e) {}
@@ -1512,6 +1514,8 @@ ApplicationWindow {
         (typeof Rating !== "undefined") && Rating.currentMode === "multi_dim"
     // 维度列表（启动时从服务器/本地文件动态加载，初始为空）
     property var reviewDimensions: []
+    // 远程激活配置的 tag（加载维度时同步写入，供上传时校验用）
+    property string _remoteTag: ""
 
     // ── 维度配置网络加载 ──────────────────────────────────────────────────
 
@@ -1559,6 +1563,8 @@ ApplicationWindow {
                         if (obj.tag && typeof Rating !== "undefined") {
                             Rating.uploadTag = obj.tag
                         }
+                        // 存储远程 tag，供上传时校验
+                        root._remoteTag = obj.tag || ""
                         // 2. 持久化到本地 Resources/dimensions.json（覆盖写）
                         var localPath = root._resourcesDir() + "/dimensions.json"
                         if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
@@ -6841,6 +6847,7 @@ ApplicationWindow {
         id: ratingsDialog
         visible: false
         transientParent: root
+        remoteTag: root._remoteTag
     }
 
     // 全局进度条已移除：多路场景下各路独立播放控制，全局进度条语义

@@ -681,15 +681,12 @@
             dimView.innerHTML = '<div class="dim-view-loading">暂无维度配置</div>';
             return;
         }
-        const typeHtml = obj.type
-            ? `<div class="dim-cards-task"><span class="dim-cards-task-label">评测类型</span><span class="dim-cards-task-text">${escHtml(obj.type)}</span></div>`
-            : '';
-        const taskHtml = obj.task
-            ? `<div class="dim-cards-task"><span class="dim-cards-task-label">评测任务</span><span class="dim-cards-task-text">${escHtml(obj.task)}</span></div>`
-            : '';
-        const scaleHtml = obj.scale
-            ? `<div class="dim-cards-scale"><span class="dim-cards-scale-icon">📏</span>评分量表：${escHtml(obj.scale)}</div>`
-            : '';
+        const metaItems = [];
+        if (obj.type)  metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
+        if (obj.task)  metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val">${escHtml(obj.task)}</span></span>`);
+        if (obj.scale) metaItems.push(`<span class="dim-meta-item dim-meta-muted"><span class="dim-meta-icon">📏</span>${escHtml(obj.scale)}</span>`);
+        if (obj.tag)   metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val">${escHtml(obj.tag)}</span></span>`);
+        const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';
 
         const cardsHtml = obj.dimensions.map((d, idx) => {
             const levelsHtml = Array.isArray(d.levels) && d.levels.length
@@ -718,7 +715,7 @@
             </div>`;
         }).join('');
 
-        dimView.innerHTML = typeHtml + taskHtml + scaleHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`;
+        dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`;
     }
 
     // ── 进入编辑模式 ──

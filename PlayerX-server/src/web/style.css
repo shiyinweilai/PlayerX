@@ -1359,39 +1359,48 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 }
 .dim-view-err { color: var(--danger, #ff453a); }
 
-/* 任务 & 量表说明 */
-.dim-cards-task {
+/* 元信息横排一行 */
+.dim-cards-meta {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
-    margin-bottom: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 16px;
 }
-.dim-cards-task-label {
+.dim-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    color: var(--text, #ecedf3);
+    white-space: nowrap;
+}
+.dim-meta-item.dim-meta-muted {
+    color: var(--muted, #86868b);
+}
+.dim-meta-label {
     flex-shrink: 0;
     font-size: 11px;
     font-weight: 600;
-    letter-spacing: .08em;
-    text-transform: uppercase;
+    letter-spacing: .06em;
     color: var(--primary, #0071e3);
     background: rgba(0, 113, 227, .12);
-    padding: 2px 8px;
+    padding: 1px 7px;
     border-radius: 20px;
 }
-.dim-cards-task-text {
-    font-size: 16px;
+.dim-meta-val {
+    font-size: 13px;
     font-weight: 600;
     color: var(--text, #ecedf3);
-    line-height: 1.4;
 }
-.dim-cards-scale {
-    font-size: 13px;
+.dim-meta-sep {
     color: var(--muted, #86868b);
-    margin-bottom: 24px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    font-size: 14px;
+    padding: 0 2px;
+    user-select: none;
 }
-.dim-cards-scale-icon { font-size: 14px; }
+.dim-meta-icon { font-size: 13px; }
+
 
 /* 行排列容器 */
 .dim-cards-grid {

@@ -105,6 +105,8 @@ Window {
     property string _lastUploadKind: "current"
     // 归档来源专属：上次上传所选的批次名；current 来源时无意义。
     property string _lastUploadArchiveBatch: ""
+    // 远程激活配置的 tag（由 Main.qml 注入），用于上传前校验
+    property string remoteTag: ""
 
     // 从 file_path 中提取所属目录（兼容 / 与 \）
     function _dirOf(fp) {
@@ -1734,6 +1736,14 @@ Window {
                     root._lastUploadKind = root._isArchiveView ? "archive" : "current"
                     root._lastUploadArchiveBatch = root._isArchiveView ? root._archiveBatch : ""
 
+                    // ── tag 与远程激活配置校验 ──────────────────────────────────
+                    // 远程有 tag 且本地填写的 tag 与远程不一致时，弹二次确认
+                    // 不阻止上传，用户确认后仍可继续
+                    if (root.remoteTag.length > 0 && tagText !== root.remoteTag) {
+                        tagMismatchDialog.open()
+                        return
+                    }
+
                     if (!Rating.uploadServerUrl || Rating.uploadServerUrl.length === 0) {
                         uploadConfigDialog.open()
                     } else if (root._isArchiveView) {
@@ -2875,6 +2885,165 @@ Window {
                 PillBtn {
                     text: qsTr("我知道了")
                     onClicked: incompleteUploadDialog.close()
+                }
+            }
+        }
+    }
+
+    // tag 与远程激活配置不一致时的二次确认弹窗
+    // 不阻止上传，用户可选择"仍然上传"或"取消修改 tag"
+    Dialog {
+        id: tagMismatchDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 480
+        padding: 0
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#ffb05c"
+            border.width: 1
+            radius: 10
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -6
+                z: -1
+                radius: parent.radius + 4
+                color: "#80000000"
+                opacity: 0.45
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 44
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                verticalAlignment: Text.AlignVCenter
+                text: qsTr("⚠ 备注 tag 与远程配置不一致")
+                color: "#ffd9a8"
+                font.pixelSize: 14
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#3a2a1a"
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 12
+
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                Layout.topMargin: 16
+                text: qsTr("你填写的备注 tag 与远程激活配置的 tag 不一致，可能导致数据归类错误。")
+                color: "#e8e3d8"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.4
+            }
+
+            // 对比展示
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                color: "#15151a"
+                border.color: "#2a2a30"
+                border.width: 1
+                radius: 6
+                implicitHeight: tagCompareCol.implicitHeight + 16
+
+                ColumnLayout {
+                    id: tagCompareCol
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 12
+                    spacing: 8
+
+                    RowLayout {
+                        spacing: 8
+                        Text {
+                            text: qsTr("你填写的 tag：")
+                            color: "#9aa0a6"
+                            font.pixelSize: 12
+                        }
+                        Text {
+                            text: tagField.text.trim() || qsTr("（空）")
+                            color: "#f5a623"
+                            font.pixelSize: 13
+                            font.bold: true
+                        }
+                    }
+                    RowLayout {
+                        spacing: 8
+                        Text {
+                            text: qsTr("远程配置 tag：")
+                            color: "#9aa0a6"
+                            font.pixelSize: 12
+                        }
+                        Text {
+                            text: root.remoteTag || qsTr("（空）")
+                            color: "#5fd17a"
+                            font.pixelSize: 13
+                            font.bold: true
+                        }
+                    }
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                text: qsTr("确认要用当前 tag 继续上传吗？")
+                color: "#c8c8cc"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+
+            // 按钮行
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                Layout.topMargin: 4
+                Layout.bottomMargin: 16
+                spacing: 10
+                Item { Layout.fillWidth: true }
+                PillBtn {
+                    text: qsTr("取消，去修改 tag")
+                    onClicked: tagMismatchDialog.close()
+                }
+                PillBtn {
+                    text: qsTr("仍然上传")
+                    danger: true
+                    onClicked: {
+                        tagMismatchDialog.close()
+                        // 直接走上传，跳过 tag 校验
+                        if (!Rating.uploadServerUrl || Rating.uploadServerUrl.length === 0) {
+                            uploadConfigDialog.open()
+                        } else if (root._isArchiveView) {
+                            Rating.uploadArchiveBatchToCloud(
+                                Rating.currentMode,
+                                root._archiveBatch,
+                                false, root._lastUploadFolders)
+                        } else {
+                            Rating.uploadToCloud(false, root._lastUploadFolders)
+                        }
+                    }
                 }
             }
         }
