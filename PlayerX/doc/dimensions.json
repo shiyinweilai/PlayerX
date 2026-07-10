@@ -1,5 +1,6 @@
 {
   "type": "多维评分",
+  "tag": "电商人物交互",
   "task": "电商人物-商品交互视频 主观评测",
   "scale": "1-5 Likert 整数",
   "dimensions": [

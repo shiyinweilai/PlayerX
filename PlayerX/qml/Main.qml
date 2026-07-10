@@ -64,6 +64,10 @@ ApplicationWindow {
                         var obj = JSON.parse(xhr2.responseText)
                         if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
                             root.reviewDimensions = obj.dimensions
+                            // 同步远程配置的 tag 到备注 tag 输入框（用户可手动覆盖）
+                            if (obj.tag && typeof Rating !== "undefined") {
+                                Rating.uploadTag = obj.tag
+                            }
                             return
                         }
                     } catch (e) {}
@@ -1551,6 +1555,10 @@ ApplicationWindow {
                     if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
                         // 1. 热重载维度
                         root.reviewDimensions = obj.dimensions
+                        // 1b. 同步远程配置的 tag 到备注 tag 输入框（用户可手动覆盖）
+                        if (obj.tag && typeof Rating !== "undefined") {
+                            Rating.uploadTag = obj.tag
+                        }
                         // 2. 持久化到本地 Resources/dimensions.json（覆盖写）
                         var localPath = root._resourcesDir() + "/dimensions.json"
                         if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
