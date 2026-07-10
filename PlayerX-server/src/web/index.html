@@ -65,20 +65,28 @@
         <div class="dim-page-title">📐 评分规则</div>
         <div class="dim-page-actions">
             <!-- 管理员登录后显示编辑/保存按钮 -->
-            <button class="ghost-btn" id="dimEditBtn" hidden>✏️ 编辑配置</button>
-            <button class="ghost-btn" id="dimFormatBtn" hidden title="格式化 JSON">格式化</button>
-            <button class="primary-btn" id="dimSaveBtn" hidden>保存</button>
-            <button class="ghost-btn" id="dimCancelEditBtn" hidden>取消编辑</button>
+            <button class="ghost-btn" id="dimEditBtn" style="display:none">✏️ 编辑配置</button>
+            <button class="ghost-btn" id="dimFormatBtn" style="display:none" title="格式化 JSON">格式化</button>
+            <button class="primary-btn" id="dimSaveBtn" style="display:none">保存</button>
+            <button class="ghost-btn" id="dimCancelEditBtn" style="display:none">取消编辑</button>
             <button class="ghost-btn" id="dimPageCloseBtn" title="返回主列表">✕ 关闭</button>
         </div>
     </div>
+
+    <!-- 拖拽上传区（管理员登录后可见；非管理员也可拖入做本地预览） -->
+    <div class="dim-drop-zone" id="dimDropZone">
+        <span class="dim-drop-icon">📂</span>
+        <span class="dim-drop-text">拖拽 <code>.json</code> 配置文件到此处</span>
+        <span class="dim-drop-sub" id="dimDropSub">管理员登录后可保存到服务器；未登录时仅本地预览</span>
+    </div>
+
     <!-- 非登录：卡片展示 -->
     <div class="dim-view" id="dimView">
         <div class="dim-view-loading" id="dimViewLoading">加载中…</div>
     </div>
     <!-- 登录后编辑：JSON 编辑器 -->
-    <div class="dim-editor-section" id="dimEditorSection" hidden>
-        <div class="login-err" id="dimErr" hidden></div>
+    <div class="dim-editor-section" id="dimEditorSection" style="display:none">
+        <div class="login-err" id="dimErr" style="display:none"></div>
         <textarea id="dimEditor" spellcheck="false" autocomplete="off" placeholder="加载中…"></textarea>
     </div>
 </section>

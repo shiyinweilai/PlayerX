@@ -558,6 +558,94 @@
         });
     }
 
+    // ── 拖拽上传 JSON 配置 ──
+    const dimDropZone = $('dimDropZone');
+    const dimDropSub  = $('dimDropSub');
+
+    function handleDroppedJson(text) {
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+        } catch (e) {
+            showToast('❌ JSON 解析失败：' + e.message, 'err');
+            return;
+        }
+        if (!parsed.dimensions || !Array.isArray(parsed.dimensions) || parsed.dimensions.length === 0) {
+            showToast('❌ 缺少 dimensions 数组或为空', 'err');
+            return;
+        }
+        // 更新缓存并渲染预览（无论是否登录都先展示卡片）
+        dimRawData = JSON.stringify(parsed, null, 2);
+        // 若当前在编辑模式，先退出
+        if (dimEditing) exitDimEdit();
+        renderDimCards(parsed);
+        if (isLoggedIn()) {
+            showToast(`📂 已加载 ${parsed.dimensions.length} 个维度，点击「编辑配置」可修改后保存`, 'ok');
+        } else {
+            showToast(`👁 本地预览：${parsed.dimensions.length} 个维度（未登录，不会保存到服务器）`, 'ok');
+        }
+    }
+
+    if (dimDropZone) {
+        // 更新提示文字
+        function updateDropSub() {
+            if (dimDropSub) {
+                dimDropSub.textContent = isLoggedIn()
+                    ? '拖入后自动预览，点击「编辑配置」→「保存」写入服务器'
+                    : '未登录时仅本地预览，不会保存到服务器';
+            }
+        }
+
+        dimDropZone.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dimDropZone.classList.add('drag-over');
+        });
+        dimDropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dimDropZone.classList.add('drag-over');
+        });
+        dimDropZone.addEventListener('dragleave', (e) => {
+            if (!dimDropZone.contains(e.relatedTarget)) {
+                dimDropZone.classList.remove('drag-over');
+            }
+        });
+        dimDropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dimDropZone.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (!file) return;
+            if (!file.name.endsWith('.json') && file.type !== 'application/json') {
+                showToast('❌ 请拖入 .json 文件', 'err');
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = (ev) => handleDroppedJson(ev.target.result);
+            reader.onerror = () => showToast('❌ 文件读取失败', 'err');
+            reader.readAsText(file, 'utf-8');
+        });
+
+        // 点击也可以选择文件
+        dimDropZone.addEventListener('click', () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,application/json';
+            input.onchange = () => {
+                const file = input.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => handleDroppedJson(ev.target.result);
+                reader.onerror = () => showToast('❌ 文件读取失败', 'err');
+                reader.readAsText(file, 'utf-8');
+            };
+            input.click();
+        });
+
+        // 每次打开维度页时更新提示
+        const _origShowDimPage = showDimPage;
+        // 在 showDimPage 调用后更新提示
+        dimPageBtn && dimPageBtn.addEventListener('click', updateDropSub);
+    }
+
     // 用拦截器在写操作前提示登录：未登录时点击锁定按钮就直接弹登录窗
     function guardWrite(actionFn, btn) {
         if (auth.enabled && !isLoggedIn()) {

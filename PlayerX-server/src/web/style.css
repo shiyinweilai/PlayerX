@@ -1121,11 +1121,48 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     gap: 8px;
 }
 
+/* 拖拽上传区 */
+.dim-drop-zone {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 32px 0;
+    padding: 12px 20px;
+    border: 1.5px dashed var(--border, #2a2b33);
+    border-radius: 10px;
+    background: var(--bg-elev-1, #16171c);
+    color: var(--muted, #86868b);
+    font-size: 14px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+    user-select: none;
+}
+.dim-drop-zone.drag-over {
+    border-color: var(--primary, #0071e3);
+    background: rgba(0, 113, 227, .08);
+    color: var(--text, #ecedf3);
+}
+.dim-drop-icon { font-size: 18px; flex-shrink: 0; }
+.dim-drop-text { flex-shrink: 0; }
+.dim-drop-text code {
+    background: rgba(255,255,255,.08);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 13px;
+}
+.dim-drop-sub {
+    font-size: 12px;
+    color: var(--muted, #86868b);
+    margin-left: auto;
+    text-align: right;
+}
+
 /* 卡片视图容器 */
 .dim-view {
     flex: 1;
     overflow-y: auto;
-    padding: 28px 32px 40px;
+    padding: 20px 32px 40px;
 }
 .dim-view-loading {
     text-align: center;
