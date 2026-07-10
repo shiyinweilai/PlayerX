@@ -64,6 +64,10 @@ Window {
     // archive：浏览某个归档批次（只读账本，仅支持导出 / 行级删除 / 删整批）
     // 切换 Tab 时会重置 _checkedFolders、清空选择，避免跨 Tab 误操作。
     property string _viewMode: "current"
+    // 弹窗内独立的「当前查看模式」，与全局 Rating.currentMode 解耦：
+    // 切换弹窗 tab 只改本属性，不修改全局状态，避免触发主界面 cellRatings 重建。
+    // 打开弹窗时从 Rating.currentMode 初始化；外部模式切换时也同步更新。
+    property string _selectedMode: (typeof Rating !== "undefined") ? Rating.currentMode : "subjective"
     // 归档 Tab 当前选中的批次名（首次打开自动取最新一批）
     property string _archiveBatch: ""
     // 归档 Tab 缓存的批次列表（[{name, count, latest, raters, modifiedAt, path}]）
@@ -261,7 +265,7 @@ Window {
     }
 
     function _rebuildGroups() {
-        var isQS = (typeof Rating !== "undefined") && Rating.currentMode === "quality_slide"
+        var isQS = root._selectedMode === "quality_slide"
         var normalRows, slideRows
         if (isQS) {
             normalRows = []
@@ -323,7 +327,7 @@ Window {
     // 根据当前展开状态，把 _folders（+ quality_slide 模式下的 _slideFolders）展平为 ListView 数据源
     function _rebuildVisibleRows() {
         var out = []
-        var isQS = (typeof Rating !== "undefined") && Rating.currentMode === "quality_slide"
+        var isQS = root._selectedMode === "quality_slide"
 
         // 普通打分分组
         if (isQS && (_folders.length > 0 || _slideFolders.length > 0)) {
@@ -458,7 +462,7 @@ Window {
         }
         _checkList(_folders)
         // quality_slide 模式：滑动打分文件夹也参与完整性校验
-        if ((typeof Rating !== "undefined") && Rating.currentMode === "quality_slide") {
+        if ((typeof Rating !== "undefined") && root._selectedMode === "quality_slide") {
             _checkList(_slideFolders)
         }
         return out
@@ -472,14 +476,14 @@ Window {
             if (!root._archiveBatch || root._archiveBatches.length === 0) {
                 raw = []
             } else if (typeof Rating !== "undefined") {
-                raw = Rating.loadArchiveBatch(Rating.currentMode, root._archiveBatch)
+                raw = Rating.loadArchiveBatch(root._selectedMode, root._archiveBatch)
             } else {
                 raw = []
             }
         } else {
             raw = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
             // quality_slide 模式：追加滑动打分数据，打 _source 标记以便分组显示
-            if ((typeof Rating !== "undefined") && Rating.currentMode === "quality_slide") {
+            if ((typeof Rating !== "undefined") && root._selectedMode === "quality_slide") {
                 var slideRaw = Rating.getSlideRatings() || []
                 // 普通打分标记
                 for (var ni = 0; ni < raw.length; ++ni) {
@@ -504,7 +508,7 @@ Window {
     // false 时若当前选中失效则自动落到第一项。
     function _refreshArchiveList(keepSelection) {
         if (typeof Rating === "undefined") { root._archiveBatches = []; root._archiveBatch = ""; return }
-        var list = Rating.listArchiveBatches(Rating.currentMode) || []
+        var list = Rating.listArchiveBatches(root._selectedMode) || []
         root._archiveBatches = list
         // 校验当前选中是否还在
         var stillThere = false
@@ -537,6 +541,8 @@ Window {
     onVisibleChanged: {
         if (visible) {
             _userBuffer = (typeof Rating !== "undefined") ? Rating.currentUser : ""
+            // 每次打开时从全局同步查看模式，避免上次关闭后全局模式已变
+            if (typeof Rating !== "undefined") _selectedMode = Rating.currentMode
             _refresh()
         }
     }
@@ -545,8 +551,11 @@ Window {
         target: (typeof Rating !== "undefined") ? Rating : null
         ignoreUnknownSignals: true
         function onChanged() { root._refresh() }
-        // 模式切换：重读该模式下的数据 + 重建表格（_refresh 内部会调 _rebuildGroups）
-        function onCurrentModeChanged() { root._refresh() }
+        // 外部模式切换时同步弹窗的 _selectedMode，并刷新数据
+        function onCurrentModeChanged() {
+            root._selectedMode = Rating.currentMode
+            root._refresh()
+        }
     }
 
     // ── 总体布局：上(配置区) / 中(表格) / 下(操作栏) ────────────
@@ -575,7 +584,7 @@ Window {
                     model: (typeof Rating !== "undefined") ? Rating.modeList : []
                     delegate: Rectangle {
                         property var modeData: modelData
-                        property bool selected: (typeof Rating !== "undefined") && Rating.currentMode === modeData.id
+                        property bool selected: root._selectedMode === modeData.id
                         radius: 14
                         height: 26
                         // 实际宽度由内容决定（使用 implicit）
@@ -603,8 +612,9 @@ Window {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                if (typeof Rating !== "undefined" && Rating.currentMode !== modeData.id) {
-                                    Rating.currentMode = modeData.id
+                                if (root._selectedMode !== modeData.id) {
+                                    root._selectedMode = modeData.id
+                                    root._refresh()
                                 }
                             }
                         }
@@ -1748,7 +1758,7 @@ Window {
                         uploadConfigDialog.open()
                     } else if (root._isArchiveView) {
                         Rating.uploadArchiveBatchToCloud(
-                            Rating.currentMode,
+                            root._selectedMode,
                             root._archiveBatch,
                             false, picked)
                     } else {
@@ -1794,7 +1804,7 @@ Window {
                 onClicked: {
                     // 给输入框填默认批次名（<mode>_yyyyMMdd_HHmmss）
                     if (typeof Rating !== "undefined") {
-                        confirmArchiveDialog._batchName = Rating.defaultArchiveBatchName(Rating.currentMode)
+                        confirmArchiveDialog._batchName = Rating.defaultArchiveBatchName(root._selectedMode)
                     } else {
                         confirmArchiveDialog._batchName = ""
                     }
@@ -2130,7 +2140,7 @@ Window {
                         if (g.path && g.path.length > 0) fpList.push(g.path)
                     }
                 }
-                var ok = Rating.removeArchiveRows(Rating.currentMode, root._archiveBatch, fpList)
+                var ok = Rating.removeArchiveRows(root._selectedMode, root._archiveBatch, fpList)
                 if (ok) {
                     actionToast.show(true, qsTr("已从归档批次中删除 %1 个文件夹的记录").arg(picked.length))
                     root._checkedFolders = ({})
@@ -2257,7 +2267,7 @@ Window {
                     text: qsTr("将存放在：%1/archive/%2/<批次名>/ratings.csv")
                           .arg(((typeof Rating !== "undefined") ? Rating.dataFilePath : "")
                                .replace(/\/[^\/]*$/, ""))
-                          .arg((typeof Rating !== "undefined") ? Rating.currentMode : "")
+                          .arg(root._selectedMode)
                     color: "#6a6a72"
                     font.pixelSize: 10
                     wrapMode: Text.Wrap
@@ -2400,7 +2410,7 @@ Window {
         onAccepted: {
             if (typeof Rating === "undefined" || !root._archiveBatch) return
             var name = root._archiveBatch
-            var ok = Rating.deleteArchiveBatch(Rating.currentMode, name)
+            var ok = Rating.deleteArchiveBatch(root._selectedMode, name)
             if (ok) {
                 actionToast.show(true, qsTr("已删除归档批次「%1」").arg(name))
                 root._archiveBatch = ""
@@ -2438,7 +2448,7 @@ Window {
             var fp = selectedFile.toString().replace(/^file:\/\//, "")
             // Windows 下 selectedFile 可能形如 file:///C:/xxx，需要再剥一次开头的 /
             if (fp.length > 2 && fp.charAt(0) === "/" && fp.charAt(2) === ":") fp = fp.substring(1)
-            var ok = Rating.exportArchiveBatch(Rating.currentMode, root._archiveBatch, fp)
+            var ok = Rating.exportArchiveBatch(root._selectedMode, root._archiveBatch, fp)
             if (ok) {
                 actionToast.show(true, qsTr("已导出到 %1").arg(fp))
             } else {
@@ -3037,7 +3047,7 @@ Window {
                             uploadConfigDialog.open()
                         } else if (root._isArchiveView) {
                             Rating.uploadArchiveBatchToCloud(
-                                Rating.currentMode,
+                                root._selectedMode,
                                 root._archiveBatch,
                                 false, root._lastUploadFolders)
                         } else {
@@ -3504,7 +3514,7 @@ Window {
                                 && root._lastUploadArchiveBatch
                                 && root._lastUploadArchiveBatch.length > 0) {
                             Rating.uploadArchiveBatchToCloud(
-                                Rating.currentMode,
+                                root._selectedMode,
                                 root._lastUploadArchiveBatch,
                                 true,
                                 root._lastUploadFolders || [])
