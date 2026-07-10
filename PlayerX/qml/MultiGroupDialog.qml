@@ -2505,14 +2505,16 @@ ApplicationWindow {
                     radius: 4
                 }
                 contentItem: Text {
+                    id: configBtnText
                     text: configBtn.text
                     color: reviewMode ? "#0fa085" : "#e8e8ec"
                     font.pixelSize: 12
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
                 }
                 implicitHeight: 30
-                implicitWidth: reviewMode ? 140 : 90
+                implicitWidth: Math.min(Math.max(configBtnText.implicitWidth + 20, 90), 220)
             }
 
             Label {

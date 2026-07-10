@@ -800,9 +800,10 @@
 
         const cardsHtml = obj.dimensions.map((d, idx) => {
             const levelsHtml = Array.isArray(d.levels) && d.levels.length
-                ? d.levels.slice().map(lv => {
+            ? d.levels.slice().map(lv => {
                     const score = lv.score != null ? lv.score : '';
-                    const stars = '★'.repeat(Math.max(0, +score || 0)) + '☆'.repeat(Math.max(0, 5 - (+score || 0)));
+                    const totalStars = d.levels.length;
+                    const stars = '★'.repeat(Math.max(0, +score || 0)) + '☆'.repeat(Math.max(0, totalStars - (+score || 0)));
                     return `<div class="dim-level">
                         <div class="dim-level-score">
                             <span class="dim-level-num">${escHtml(String(score))}</span>
