@@ -9,9 +9,14 @@
  *   - 管理员密码：环境变量 PLAYERX_ADMIN_PASSWORD，默认 'playerx168'
  *   - 登录接口：POST /api/admin/login  body: { password }  → 返回 { ok, token }
  *   - 鉴权：客户端请求头 X-Admin-Token 携带返回的 token
- *   - token 存内存（重启失效，无需持久化），登出从 Set 中移除
+ *   - token 持久化到磁盘（tokens.json），重启后仍然有效，登出时从文件中移除
  */
 const crypto = require('crypto');
+const fs     = require('fs');
+const path   = require('path');
+
+// token 持久化文件路径（与 server.js 同级目录）
+const TOKENS_FILE = path.join(__dirname, '../../tokens.json');
 
 function resolveAdminPassword() {
     const raw = process.env.PLAYERX_ADMIN_PASSWORD;
@@ -19,7 +24,27 @@ function resolveAdminPassword() {
     return String(raw); // 允许显式空字符串 = 关闭鉴权
 }
 
-const _validTokens = new Set();
+// ── token 持久化读写 ──────────────────────────────────────────
+function _loadTokens() {
+    try {
+        const data = fs.readFileSync(TOKENS_FILE, 'utf8');
+        const arr = JSON.parse(data);
+        return new Set(Array.isArray(arr) ? arr : []);
+    } catch (_) {
+        return new Set();
+    }
+}
+
+function _saveTokens(set) {
+    try {
+        fs.writeFileSync(TOKENS_FILE, JSON.stringify([...set]), 'utf8');
+    } catch (e) {
+        console.warn('[auth] 写 tokens.json 失败:', e.message);
+    }
+}
+
+// 启动时从磁盘加载
+const _validTokens = _loadTokens();
 
 function _genToken() {
     return crypto.randomBytes(24).toString('hex');
@@ -38,13 +63,17 @@ function handleAdminLogin(req, res) {
     }
     const token = _genToken();
     _validTokens.add(token);
+    _saveTokens(_validTokens);
     res.json({ ok: true, token });
 }
 
 // 登出处理：作废 token
 function handleAdminLogout(req, res) {
     const got = req.header('X-Admin-Token') || '';
-    if (got) _validTokens.delete(got);
+    if (got) {
+        _validTokens.delete(got);
+        _saveTokens(_validTokens);
+    }
     res.json({ ok: true });
 }
 

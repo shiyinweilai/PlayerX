@@ -52,10 +52,9 @@ ApplicationWindow {
         root._applyAutoPhoneScale()
 
         // 加载多维度评分配置
-        // 优先从 App bundle Resources 目录读取（file:// 路径），修改 JSON 无需重新编译。
+        // 优先从后端服务器拉取激活配置（保证与后端同步），失败则 fallback 到本地文件。
         // macOS: PlayerX.app/Contents/Resources/dimensions.json
         // 其他:  可执行文件同级目录 dimensions.json
-        // 若外部文件不存在，则 fallback 到 hardcode 的 reviewDimensions 默认值。
         function _loadDimensions(url, fallbackUrl) {
             var xhr2 = new XMLHttpRequest()
             xhr2.onreadystatechange = function() {
@@ -75,25 +74,29 @@ ApplicationWindow {
             xhr2.open("GET", url)
             xhr2.send()
         }
-        // 构建 bundle Resources 路径：Qt.resolvedUrl 相对于 Main.qml 所在目录
-        // Main.qml 在 qrc:/qt/qml/PlayerX/qml/Main.qml，
-        // bundle Resources 对应 file:// 绝对路径需通过 Qt.application.arguments 或
-        // 标准做法：用 StandardPaths 获取 AppDataLocation，但最简单的是：
-        // macOS bundle 下 Qt.resolvedUrl("../../../Resources/dimensions.json")
-        // 相对于 qrc 路径无效，改用 Qt.application.arguments[0] 推导 bundle 路径
+        // 构建 bundle Resources 路径作为 fallback
         var exePath = Qt.application.arguments[0]  // 如 .../PlayerX.app/Contents/MacOS/PlayerX
         var resourcesUrl = ""
         if (Qt.platform.os === "osx") {
-            // 从可执行路径推导 Contents/Resources 目录
             var macosDir = exePath.substring(0, exePath.lastIndexOf("/"))  // .../Contents/MacOS
             var contentsDir = macosDir.substring(0, macosDir.lastIndexOf("/"))  // .../Contents
             resourcesUrl = "file://" + contentsDir + "/Resources/dimensions.json"
         } else {
-            // Windows/Linux：可执行文件同级目录
             var binDir = exePath.substring(0, exePath.lastIndexOf("/"))
             resourcesUrl = "file://" + binDir + "/dimensions.json"
         }
-        _loadDimensions(resourcesUrl, null)
+        // 优先从服务器拉取激活配置（使用用户配置的 uploadServerUrl），失败再读本地文件
+        var dimUrl = ""
+        if (typeof Rating !== "undefined" && Rating.uploadServerUrl) {
+            var _base = Rating.uploadServerUrl.trim()
+            var _m = _base.match(/^(https?:\/\/[^/]+)/)
+            dimUrl = _m ? _m[1] + "/api/dimensions" : ""
+        }
+        if (dimUrl.length > 0) {
+            _loadDimensions(dimUrl, resourcesUrl)
+        } else {
+            _loadDimensions(resourcesUrl, null)
+        }
     }
 
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
@@ -1503,13 +1506,8 @@ ApplicationWindow {
     // 是否处于多维评分模式
     readonly property bool isMultiDimMode:
         (typeof Rating !== "undefined") && Rating.currentMode === "multi_dim"
-    // 维度列表（写死4个维度，确保UI可见）
-    property var reviewDimensions: [
-        { key: "动作", label: "动作" },
-        { key: "物理", label: "物理" },
-        { key: "商品", label: "商品" },
-        { key: "总分", label: "总分" }
-    ]
+    // 维度列表（启动时从服务器/本地文件动态加载，初始为空）
+    property var reviewDimensions: []
 
     // ── 维度配置网络加载 ──────────────────────────────────────────────────
 
@@ -1526,10 +1524,27 @@ ApplicationWindow {
     }
 
     // 从任意 URL（file:// 或 https://）加载维度配置并热重载，无需重启
-    function loadDimensionsFromUrl(url) {
+    // callback(ok: bool) 在请求完成后调用（成功或失败均调用，ok 表示是否成功更新了维度）
+    function loadDimensionsFromUrl(url, callback) {
         var xhr = new XMLHttpRequest()
+        var _done = false
+        // 5秒超时兜底：防止网络不通时 callback 永远不触发导致评分面板空白
+        var _timer = Qt.createQmlObject('import QtQuick 2.0; Timer { interval: 5000; repeat: false }', root)
+        _timer.triggered.connect(function() {
+            if (!_done) {
+                _done = true
+                console.warn("[DimLoad] 请求超时（5s），使用本地缓存维度")
+                xhr.abort()
+                if (typeof callback === "function") callback(false)
+            }
+            _timer.destroy()
+        })
+        _timer.start()
         xhr.onreadystatechange = function() {
             if (xhr.readyState !== XMLHttpRequest.DONE) return
+            if (_done) return  // 已超时，忽略
+            _done = true
+            _timer.stop()
             if (xhr.status === 200 || xhr.status === 0) {
                 try {
                     var obj = JSON.parse(xhr.responseText)
@@ -1538,23 +1553,32 @@ ApplicationWindow {
                         root.reviewDimensions = obj.dimensions
                         // 2. 持久化到本地 Resources/dimensions.json（覆盖写）
                         var localPath = root._resourcesDir() + "/dimensions.json"
-                        var fw = new XMLHttpRequest()
-                        // Qt 不支持 XHR 写文件，改用 Qt.createQmlObject 动态写
-                        // 实际写文件通过 EngineBridge 暴露的 writeTextFile 接口
                         if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
                             EngineBridge.writeTextFile(localPath, xhr.responseText)
                         }
+                        if (typeof callback === "function") callback(true)
                         return
                     }
                 } catch (e) {
                     console.warn("[DimLoad] JSON 解析失败：", e)
-                    return
                 }
+            } else {
+                console.warn("[DimLoad] 加载失败（HTTP", xhr.status, "）")
             }
-            console.warn("[DimLoad] 加载失败（HTTP", xhr.status, "）")
+            // 加载失败：仍调用 callback，让启动流程继续（用本地缓存维度）
+            if (typeof callback === "function") callback(false)
         }
         xhr.open("GET", url)
         xhr.send()
+    }
+
+    // 从 Rating.uploadServerUrl 推导维度 API 地址（去掉路径，拼上 /api/dimensions）
+    function _dimApiUrl() {
+        var base = (typeof Rating !== "undefined" && Rating.uploadServerUrl) ? Rating.uploadServerUrl.trim() : ""
+        if (base.length === 0) return ""
+        // 取 origin 部分：http://host:port
+        var m = base.match(/^(https?:\/\/[^/]+)/)
+        return m ? m[1] + "/api/dimensions" : ""
     }
 
     // 切换到多维模式时，重新初始化 cellRatings 为对象数组；切出时恢复为数字数组
@@ -6787,9 +6811,16 @@ ApplicationWindow {
         // 多维评分模式注入
         isMultiDimMode: root.isMultiDimMode
         reviewDimensions: root.reviewDimensions
-        // 点击「启动对比」时，如果是多维模式，静默从网络加载最新维度配置
-        onDimLoadNeeded: function() {
-root.loadDimensionsFromUrl("http://21.6.120.217:8765/api/dimensions")
+        // 点击「启动对比」时，如果是多维模式，先从网络加载最新维度配置，完成后再启动
+        onDimLoadNeeded: function(callback) {
+            var url = root._dimApiUrl()
+            if (url.length > 0) {
+                root.loadDimensionsFromUrl(url, callback)
+            } else {
+                // 未配置服务器地址，直接用本地缓存维度启动
+                console.warn("[DimLoad] 未配置服务器地址，跳过远程加载")
+                if (typeof callback === "function") callback(false)
+            }
         }
     }
 

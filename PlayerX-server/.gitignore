@@ -5,3 +5,4 @@ archives/
 .DS_Store
 package-lock.json
 config.json
+tokens.json

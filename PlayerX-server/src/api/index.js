@@ -76,7 +76,15 @@ function mountApi(app) {
     app.get('/api/settings/upload-token', auth.requireAdmin, settings.handleGet);
     app.put('/api/settings/upload-token', auth.requireAdmin, jsonParser, settings.handlePut);
 
-    // 维度配置（GET 公开，PUT 需管理员）
+    // 多配置文件管理（GET 公开，写操作需管理员）
+    app.get('/api/configs',              dimensions.handleList);
+    app.get('/api/configs/:name',        dimensions.handleGetOne);
+    app.put('/api/configs/:name',        auth.requireAdmin, jsonParser, dimensions.handlePutOne);
+    app.delete('/api/configs/:name',     auth.requireAdmin, dimensions.handleDeleteOne);
+    // 激活配置（GET 公开，PUT 需管理员）
+    app.get('/api/active-config',        dimensions.handleGetActive);
+    app.put('/api/active-config',        auth.requireAdmin, jsonParser, dimensions.handleSetActive);
+    // 兼容旧接口（GET 公开返回激活配置，PUT 需管理员）
     app.get('/api/dimensions', dimensions.handleGet);
     app.put('/api/dimensions', auth.requireAdmin, jsonParser, dimensions.handlePut);
 

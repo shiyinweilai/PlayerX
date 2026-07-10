@@ -157,11 +157,17 @@
         if (tokenSettingsBtn) {
             tokenSettingsBtn.hidden = !(auth.enabled && logged);
         }
-        // 维度页面的「编辑配置」按钮仅在管理员登录后可见
+        // 维度页面的「编辑配置」「＋新建」按钮仅在管理员登录后可见
         const dimEditBtnEl = $('dimEditBtn');
         if (dimEditBtnEl) {
             dimEditBtnEl.style.display = (auth.enabled && logged) ? '' : 'none';
         }
+        const dimAddBtnEl = $('dimAddBtn');
+        if (dimAddBtnEl) {
+            dimAddBtnEl.style.display = (auth.enabled && logged) ? '' : 'none';
+        }
+        // 如果维度页面已打开，刷新侧边栏（更新删除按钮可见性）
+        if (dimPageOpen && typeof loadConfigList === 'function') loadConfigList();
         // 主列表的批量按钮：未登录时统一锁死并提示
         const lockTip = '需要管理员登录后才能操作';
         const setLock = (btn, locked) => {
@@ -354,12 +360,11 @@
         if (e.target === tokenMask) closeTokenDialog();
     });
 
-    // ────────── 维度规则独立页面 ──────────
+    // ────────── 维度规则独立页面（多配置文件管理）──────────
     const dimPageBtn        = $('dimPageBtn');
     const dimPage           = $('dimPage');
     const dimPageCloseBtn   = $('dimPageCloseBtn');
     const dimView           = $('dimView');
-    const dimViewLoading    = $('dimViewLoading');
     const dimEditorSection  = $('dimEditorSection');
     const dimEditor         = $('dimEditor');
     const dimErr            = $('dimErr');
@@ -367,6 +372,8 @@
     const dimFormatBtn      = $('dimFormatBtn');
     const dimSaveBtn        = $('dimSaveBtn');
     const dimCancelEditBtn  = $('dimCancelEditBtn');
+    const dimSidebarList    = $('dimSidebarList');
+    const dimAddBtn         = $('dimAddBtn');
 
     // 主内容区（模式Tab/卡片/工具栏/表格）
     const mainContent = [
@@ -375,15 +382,18 @@
         document.querySelector('.footer'),
     ];
 
-    let dimPageOpen = false;
-    let dimEditing  = false;
-    let dimRawData  = null; // 最后一次加载的原始 JSON 字符串
+    let dimPageOpen    = false;
+    let dimEditing     = false;
+    let dimRawData     = null;   // 当前选中配置的原始 JSON 字符串
+    let dimCurrentName = null;   // 当前选中的配置文件名（不含 .json）
+    let dimActiveName  = null;   // 当前激活的配置文件名（不含 .json）
 
+    // ── 页面开关 ──
     function showDimPage() {
         dimPageOpen = true;
         dimPage.hidden = false;
         mainContent.forEach(el => { if (el) el.style.display = 'none'; });
-        loadDimView();
+        loadConfigList();
     }
 
     function hideDimPage() {
@@ -393,14 +403,211 @@
         exitDimEdit();
     }
 
-    // 加载并渲染维度数据（卡片视图）
-    async function loadDimView() {
-        // 确保 dimView 可见、编辑器隐藏（用 style 而非 hidden，避免 CSS display 覆盖）
-        dimView.style.display = '';
-        dimView.innerHTML = '<div class="dim-view-loading">加载中…</div>';
-        dimEditorSection.style.display = 'none';
+    // ── 左侧：加载配置列表 ──
+    async function loadConfigList() {
+        dimSidebarList.innerHTML = '<div class="dim-sidebar-loading">加载中…</div>';
         try {
-            const r = await fetch('/api/dimensions?_=' + Date.now());
+            const r = await fetch('/api/configs?_=' + Date.now());
+            const j = await r.json();
+            if (!r.ok || !j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+            dimActiveName = j.activeName || null;
+            renderSidebarList(j.configs || []);
+            // 自动选中激活配置，否则选第一个
+            const configs = j.configs || [];
+            if (configs.length > 0) {
+                const toSelect = (dimActiveName && configs.find(c => c.name === dimActiveName))
+                    ? dimActiveName
+                    : configs[0].name;
+                selectConfig(toSelect);
+            } else {
+                dimView.innerHTML = '<div class="dim-view-loading">暂无配置，请拖入 .json 文件或点击「＋」新建</div>';
+            }
+        } catch (e) {
+            dimSidebarList.innerHTML = `<div class="dim-sidebar-loading dim-sidebar-err">⚠️ ${escHtml(e.message)}</div>`;
+        }
+    }
+
+    function renderSidebarList(configs) {
+        if (!configs.length) {
+            dimSidebarList.innerHTML = '<div class="dim-sidebar-loading">暂无配置</div>';
+            return;
+        }
+        dimSidebarList.innerHTML = configs.map(c => {
+            const isActive = c.name === dimActiveName;
+            return `
+            <div class="dim-sidebar-item ${c.name === dimCurrentName ? 'is-active' : ''}" data-name="${escHtml(c.name)}">
+                <div class="dim-sidebar-item-main">
+                    <span class="dim-sidebar-item-type" title="双击重命名">${escHtml(c.type || c.name)}</span>
+                    ${isActive ? `<span class="dim-active-badge" title="播放器将拉取此配置">📌 已激活</span>` : ''}
+                    ${c.task ? `<span class="dim-sidebar-item-task">${escHtml(c.task)}</span>` : ''}
+                </div>
+                <div class="dim-sidebar-item-actions">
+                    ${isLoggedIn() && !isActive ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="设为播放器拉取的配置">📌 激活</button>` : ''}
+                    ${isLoggedIn() ? `<button class="dim-sidebar-del ghost-btn" data-name="${escHtml(c.name)}" title="删除此配置">🗑</button>` : ''}
+                </div>
+            </div>
+        `}).join('');
+
+        // 点击选中
+        dimSidebarList.querySelectorAll('.dim-sidebar-item').forEach(el => {
+            el.addEventListener('click', (e) => {
+                if (e.target.closest('.dim-sidebar-del')) return;
+                if (e.target.closest('.dim-activate-btn')) return;
+                if (e.target.closest('.dim-sidebar-rename-input')) return;
+                selectConfig(el.dataset.name);
+            });
+        });
+
+        // 双击重命名（仅管理员）
+        if (isLoggedIn()) {
+            dimSidebarList.querySelectorAll('.dim-sidebar-item-type').forEach(span => {
+                span.addEventListener('dblclick', (e) => {
+                    e.stopPropagation();
+                    const item = span.closest('.dim-sidebar-item');
+                    if (!item) return;
+                    startRenameConfig(item, span);
+                });
+            });
+        }
+
+        // 激活按钮
+        dimSidebarList.querySelectorAll('.dim-activate-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                activateConfig(btn.dataset.name);
+            });
+        });
+
+        // 删除按钮
+        dimSidebarList.querySelectorAll('.dim-sidebar-del').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteConfig(btn.dataset.name);
+            });
+        });
+    }
+
+    // ── 激活配置（设为播放器拉取的配置） ──
+    async function activateConfig(name) {
+        try {
+            const r = await adminFetch('/api/active-config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            if (r.status === 401) return;
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '激活失败'), 'err'); return; }
+            dimActiveName = name;
+            showToast(`✅ 已激活「${name}」，播放器启动对比时将拉取此配置`, 'ok');
+            // 刷新侧边栏显示（不重新请求列表，直接重渲染）
+            const items = dimSidebarList.querySelectorAll('.dim-sidebar-item');
+            items.forEach(el => {
+                const isActive = el.dataset.name === name;
+                // 更新 badge
+                const main = el.querySelector('.dim-sidebar-item-main');
+                if (main) {
+                    let badge = main.querySelector('.dim-active-badge');
+                    if (isActive && !badge) {
+                        badge = document.createElement('span');
+                        badge.className = 'dim-active-badge';
+                        badge.title = '播放器将拉取此配置';
+                        badge.textContent = '📌 已激活';
+                        main.appendChild(badge);
+                    } else if (!isActive && badge) {
+                        badge.remove();
+                    }
+                }
+                // 更新激活按钮
+                const actionsDiv = el.querySelector('.dim-sidebar-item-actions');
+                if (actionsDiv) {
+                    let activateBtn = actionsDiv.querySelector('.dim-activate-btn');
+                    if (isActive && activateBtn) {
+                        activateBtn.remove();
+                    } else if (!isActive && !activateBtn && isLoggedIn()) {
+                        activateBtn = document.createElement('button');
+                        activateBtn.className = 'dim-activate-btn ghost-btn';
+                        activateBtn.dataset.name = el.dataset.name;
+                        activateBtn.title = '设为播放器拉取的配置';
+                        activateBtn.textContent = '📌 激活';
+                        activateBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            activateConfig(activateBtn.dataset.name);
+                        });
+                        actionsDiv.insertBefore(activateBtn, actionsDiv.firstChild);
+                    }
+                }
+            });
+        } catch (e) {
+            showToast('❌ 网络错误：' + e.message, 'err');
+        }
+    }
+
+    // ── 内联重命名 ──
+    function startRenameConfig(itemEl, spanEl) {
+        if (itemEl.querySelector('.dim-sidebar-rename-input')) return; // 已在编辑中
+        const oldName = itemEl.dataset.name;
+        const oldText = spanEl.textContent;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'dim-sidebar-rename-input';
+        input.value = oldText;
+        spanEl.replaceWith(input);
+        input.focus();
+        input.select();
+
+        async function commitRename() {
+            const newName = input.value.trim();
+            input.replaceWith(spanEl); // 先还原 span
+            if (!newName || newName === oldText) return;
+            // 读取当前配置内容，更新 type 字段，然后用新名保存，再删旧名
+            try {
+                const r = await fetch(`/api/configs/${encodeURIComponent(oldName)}?_=` + Date.now());
+                const text = await r.text();
+                let parsed;
+                try { parsed = JSON.parse(text); } catch (_) { parsed = {}; }
+                parsed.type = newName;
+                const newFileName = newName.replace(/\s+/g, '_');
+                // 保存新文件
+                const saveR = await adminFetch(`/api/configs/${encodeURIComponent(newFileName)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(parsed, null, 2),
+                });
+                if (saveR.status === 401) return;
+                const saveJ = await saveR.json().catch(() => ({}));
+                if (!saveR.ok || !saveJ.ok) { showToast('❌ 重命名失败：' + (saveJ.error || ''), 'err'); return; }
+                // 删除旧文件（如果名字变了）
+                if (newFileName !== oldName) {
+                    await adminFetch(`/api/configs/${encodeURIComponent(oldName)}`, { method: 'DELETE' });
+                    if (dimCurrentName === oldName) dimCurrentName = newFileName;
+                }
+                showToast(`✅ 已重命名为「${newName}」`, 'ok');
+                loadConfigList();
+            } catch (e) {
+                showToast('❌ 重命名失败：' + e.message, 'err');
+            }
+        }
+
+        input.addEventListener('blur', commitRename);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') { input.replaceWith(spanEl); }
+        });
+    }
+
+    // ── 选中某个配置，加载并展示 ──
+    async function selectConfig(name) {
+        dimCurrentName = name;
+        // 高亮侧边栏
+        dimSidebarList.querySelectorAll('.dim-sidebar-item').forEach(el => {
+            el.classList.toggle('is-active', el.dataset.name === name);
+        });
+        exitDimEdit();
+        dimView.innerHTML = '<div class="dim-view-loading">加载中…</div>';
+        dimView.style.display = '';
+        try {
+            const r = await fetch(`/api/configs/${encodeURIComponent(name)}?_=` + Date.now());
             const text = await r.text();
             if (!r.ok) {
                 let msg = 'HTTP ' + r.status;
@@ -408,19 +615,75 @@
                 throw new Error(msg);
             }
             dimRawData = text;
-            const obj = JSON.parse(text);
-            renderDimCards(obj);
+            renderDimCards(JSON.parse(text));
         } catch (e) {
             dimView.innerHTML = `<div class="dim-view-loading dim-view-err">⚠️ 加载失败：${escHtml(e.message)}</div>`;
         }
     }
 
-    // 非登录态：精美卡片展示
+    // ── 删除配置 ──
+    async function deleteConfig(name) {
+        if (!confirm(`确定删除配置「${name}」？此操作不可恢复。`)) return;
+        try {
+            const r = await adminFetch(`/api/configs/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            if (r.status === 401) return;
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '删除失败'), 'err'); return; }
+            showToast('✅ ' + j.message, 'ok');
+            if (dimCurrentName === name) {
+                dimCurrentName = null;
+                dimRawData = null;
+                dimView.innerHTML = '<div class="dim-view-loading">请从左侧选择配置</div>';
+            }
+            loadConfigList();
+        } catch (e) {
+            showToast('❌ 网络错误：' + e.message, 'err');
+        }
+    }
+
+    // ── 新建配置（直接进编辑器，不弹 prompt） ──
+    function promptNewConfig() {
+        // 用时间戳生成临时文件名，保存时会根据 type 字段自动更新
+        const tmpName = 'new_' + Date.now();
+        const template = JSON.stringify({
+            type: '新配置',
+            task: '',
+            scale: '1-5 Likert 整数',
+            dimensions: [
+                { key: '维度1', definition: '请填写维度说明', levels: [
+                    { score: 5, label: '优秀', description: '' },
+                    { score: 4, label: '良好', description: '' },
+                    { score: 3, label: '一般', description: '' },
+                    { score: 2, label: '较差', description: '' },
+                    { score: 1, label: '很差', description: '' }
+                ]}
+            ]
+        }, null, 2);
+        dimCurrentName = tmpName;
+        dimRawData = template;
+        // 清除侧边栏高亮（新建尚未保存）
+        dimSidebarList.querySelectorAll('.dim-sidebar-item').forEach(el => el.classList.remove('is-active'));
+        // 直接进入编辑模式
+        dimView.style.display = 'none';
+        dimEditorSection.style.display = 'flex';
+        dimEditBtn.style.display = 'none';
+        dimFormatBtn.style.display = '';
+        dimSaveBtn.style.display = '';
+        dimCancelEditBtn.style.display = '';
+        dimErr.style.display = 'none';
+        dimEditor.value = template;
+        setTimeout(() => dimEditor.focus(), 30);
+    }
+
+    // ── 卡片渲染 ──
     function renderDimCards(obj) {
         if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
             dimView.innerHTML = '<div class="dim-view-loading">暂无维度配置</div>';
             return;
         }
+        const typeHtml = obj.type
+            ? `<div class="dim-cards-task"><span class="dim-cards-task-label">评测类型</span><span class="dim-cards-task-text">${escHtml(obj.type)}</span></div>`
+            : '';
         const taskHtml = obj.task
             ? `<div class="dim-cards-task"><span class="dim-cards-task-label">评测任务</span><span class="dim-cards-task-text">${escHtml(obj.task)}</span></div>`
             : '';
@@ -455,10 +718,10 @@
             </div>`;
         }).join('');
 
-        dimView.innerHTML = taskHtml + scaleHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`;
+        dimView.innerHTML = typeHtml + taskHtml + scaleHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`;
     }
 
-    // 进入编辑模式（管理员）
+    // ── 进入编辑模式 ──
     function enterDimEdit() {
         dimEditing = true;
         dimEditorSection.style.display = 'flex';
@@ -469,7 +732,6 @@
         dimCancelEditBtn.style.display = '';
         dimErr.style.display = 'none';
         dimErr.textContent = '';
-        // 填入当前数据
         try {
             const obj = JSON.parse(dimRawData || '{}');
             dimEditor.value = JSON.stringify(obj, null, 2);
@@ -490,40 +752,36 @@
         dimErr.style.display = 'none';
     }
 
+    // ── 保存配置 ──
     async function saveDimensions() {
         const raw = (dimEditor.value || '').trim();
         if (!raw) { dimErr.textContent = '内容不能为空'; dimErr.style.display = ''; return; }
         let parsed;
-        try {
-            parsed = JSON.parse(raw);
-        } catch (e) {
-            dimErr.textContent = 'JSON 格式错误：' + e.message;
-            dimErr.style.display = '';
-            return;
-        }
+        try { parsed = JSON.parse(raw); }
+        catch (e) { dimErr.textContent = 'JSON 格式错误：' + e.message; dimErr.style.display = ''; return; }
         if (!parsed.dimensions || !Array.isArray(parsed.dimensions) || parsed.dimensions.length === 0) {
             dimErr.textContent = '缺少 dimensions 数组或为空';
             dimErr.style.display = '';
             return;
         }
+        // 文件名：优先用当前选中，否则用 type 字段
+        const saveName = dimCurrentName || (parsed.type ? parsed.type.replace(/\s+/g, '_') : 'new_config');
         dimSaveBtn.disabled = true;
         try {
-            const r = await adminFetch('/api/dimensions', {
+            const r = await adminFetch(`/api/configs/${encodeURIComponent(saveName)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: raw,
             });
             if (r.status === 401) return;
             const j = await r.json().catch(() => ({}));
-            if (!r.ok || !j.ok) {
-                dimErr.textContent = j.error || '保存失败';
-                dimErr.style.display = '';
-                return;
-            }
+            if (!r.ok || !j.ok) { dimErr.textContent = j.error || '保存失败'; dimErr.style.display = ''; return; }
             dimRawData = raw;
+            dimCurrentName = saveName;
             exitDimEdit();
             renderDimCards(parsed);
-            showToast(`✅ ${j.message || '维度配置已保存'}`, 'ok');
+            showToast(`✅ ${j.message || '已保存'}`, 'ok');
+            loadConfigList(); // 刷新侧边栏
         } catch (e) {
             dimErr.textContent = '网络错误：' + e.message;
             dimErr.style.display = '';
@@ -532,16 +790,17 @@
         }
     }
 
-    if (dimPageBtn)      dimPageBtn.addEventListener('click', showDimPage);
-    if (dimPageCloseBtn) dimPageCloseBtn.addEventListener('click', hideDimPage);
-    if (dimEditBtn)      dimEditBtn.addEventListener('click', enterDimEdit);
-    if (dimCancelEditBtn)dimCancelEditBtn.addEventListener('click', exitDimEdit);
-    if (dimSaveBtn)      dimSaveBtn.addEventListener('click', saveDimensions);
+    // ── 事件绑定 ──
+    if (dimPageBtn)       dimPageBtn.addEventListener('click', showDimPage);
+    if (dimPageCloseBtn)  dimPageCloseBtn.addEventListener('click', hideDimPage);
+    if (dimEditBtn)       dimEditBtn.addEventListener('click', enterDimEdit);
+    if (dimCancelEditBtn) dimCancelEditBtn.addEventListener('click', exitDimEdit);
+    if (dimSaveBtn)       dimSaveBtn.addEventListener('click', saveDimensions);
+    if (dimAddBtn)        dimAddBtn.addEventListener('click', promptNewConfig);
     if (dimFormatBtn) {
         dimFormatBtn.addEventListener('click', () => {
             try {
-                const obj = JSON.parse(dimEditor.value);
-                dimEditor.value = JSON.stringify(obj, null, 2);
+                dimEditor.value = JSON.stringify(JSON.parse(dimEditor.value), null, 2);
                 dimErr.style.display = 'none';
             } catch (e) {
                 dimErr.textContent = 'JSON 格式错误：' + e.message;
@@ -558,93 +817,104 @@
         });
     }
 
-    // ── 拖拽上传 JSON 配置 ──
+    // ── 拖拽上传 JSON（整个左侧区域 + 底部拖拽区，拖入=新增配置） ──
     const dimDropZone = $('dimDropZone');
     const dimDropSub  = $('dimDropSub');
+    const dimSidebar  = $('dimSidebar');
 
-    function handleDroppedJson(text) {
+    async function handleDroppedJson(text) {
         let parsed;
-        try {
-            parsed = JSON.parse(text);
-        } catch (e) {
-            showToast('❌ JSON 解析失败：' + e.message, 'err');
-            return;
-        }
+        try { parsed = JSON.parse(text); }
+        catch (e) { showToast('❌ JSON 解析失败：' + e.message, 'err'); return; }
         if (!parsed.dimensions || !Array.isArray(parsed.dimensions) || parsed.dimensions.length === 0) {
             showToast('❌ 缺少 dimensions 数组或为空', 'err');
             return;
         }
-        // 更新缓存并渲染预览（无论是否登录都先展示卡片）
-        dimRawData = JSON.stringify(parsed, null, 2);
-        // 若当前在编辑模式，先退出
+        const rawText = JSON.stringify(parsed, null, 2);
+        // 用 type 字段推断文件名；没有 type 则用时间戳
+        const newName = parsed.type
+            ? parsed.type.replace(/\s+/g, '_')
+            : 'import_' + Date.now();
+        dimCurrentName = newName;
+        dimRawData = rawText;
         if (dimEditing) exitDimEdit();
         renderDimCards(parsed);
+
         if (isLoggedIn()) {
-            showToast(`📂 已加载 ${parsed.dimensions.length} 个维度，点击「编辑配置」可修改后保存`, 'ok');
+            // 管理员：直接保存到服务器，刷新左侧列表
+            try {
+                const r = await adminFetch(`/api/configs/${encodeURIComponent(newName)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: rawText,
+                });
+                if (r.status === 401) return;
+                const j = await r.json().catch(() => ({}));
+                if (!r.ok || !j.ok) {
+                    showToast('❌ 保存失败：' + (j.error || '未知错误'), 'err');
+                    return;
+                }
+                showToast(`✅ 已导入并保存「${parsed.type || newName}」，共 ${parsed.dimensions.length} 个维度`, 'ok');
+                loadConfigList(); // 刷新左侧列表，显示新文件名
+            } catch (e) {
+                showToast('❌ 网络错误：' + e.message, 'err');
+            }
         } else {
+            // 未登录：仅本地预览
+            dimSidebarList.querySelectorAll('.dim-sidebar-item').forEach(el => el.classList.remove('is-active'));
             showToast(`👁 本地预览：${parsed.dimensions.length} 个维度（未登录，不会保存到服务器）`, 'ok');
         }
     }
 
-    if (dimDropZone) {
-        // 更新提示文字
-        function updateDropSub() {
-            if (dimDropSub) {
-                dimDropSub.textContent = isLoggedIn()
-                    ? '拖入后自动预览，点击「编辑配置」→「保存」写入服务器'
-                    : '未登录时仅本地预览，不会保存到服务器';
-            }
+    function readJsonFile(file) {
+        if (!file) return;
+        if (!file.name.endsWith('.json') && file.type !== 'application/json') {
+            showToast('❌ 请拖入 .json 文件', 'err');
+            return;
         }
+        const reader = new FileReader();
+        reader.onload = (ev) => handleDroppedJson(ev.target.result);
+        reader.onerror = () => showToast('❌ 文件读取失败', 'err');
+        reader.readAsText(file, 'utf-8');
+    }
 
-        dimDropZone.addEventListener('dragenter', (e) => {
-            e.preventDefault();
-            dimDropZone.classList.add('drag-over');
-        });
-        dimDropZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dimDropZone.classList.add('drag-over');
-        });
-        dimDropZone.addEventListener('dragleave', (e) => {
-            if (!dimDropZone.contains(e.relatedTarget)) {
-                dimDropZone.classList.remove('drag-over');
+    // 顶部上传按钮（点击选择文件）
+    const dimUploadInput = $('dimUploadInput');
+    if (dimUploadInput) {
+        dimUploadInput.addEventListener('change', () => {
+            if (dimUploadInput.files[0]) {
+                readJsonFile(dimUploadInput.files[0]);
+                dimUploadInput.value = ''; // 允许重复选同一文件
             }
         });
-        dimDropZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dimDropZone.classList.remove('drag-over');
-            const file = e.dataTransfer.files[0];
-            if (!file) return;
-            if (!file.name.endsWith('.json') && file.type !== 'application/json') {
-                showToast('❌ 请拖入 .json 文件', 'err');
-                return;
-            }
-            const reader = new FileReader();
-            reader.onload = (ev) => handleDroppedJson(ev.target.result);
-            reader.onerror = () => showToast('❌ 文件读取失败', 'err');
-            reader.readAsText(file, 'utf-8');
-        });
+    }
 
-        // 点击也可以选择文件
+    // 整个评分规则页面响应拖拽（左侧+右侧大区域均可）
+    if (dimPage) {
+        dimPage.addEventListener('dragenter', (e) => { e.preventDefault(); dimPage.classList.add('drag-over'); });
+        dimPage.addEventListener('dragover',  (e) => { e.preventDefault(); dimPage.classList.add('drag-over'); });
+        dimPage.addEventListener('dragleave', (e) => {
+            if (!dimPage.contains(e.relatedTarget)) dimPage.classList.remove('drag-over');
+        });
+        dimPage.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dimPage.classList.remove('drag-over');
+            readJsonFile(e.dataTransfer.files[0]);
+        });
+    }
+
+    // 底部拖拽区点击 = 文件选择器
+    if (dimDropZone) {
         dimDropZone.addEventListener('click', () => {
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = '.json,application/json';
-            input.onchange = () => {
-                const file = input.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => handleDroppedJson(ev.target.result);
-                reader.onerror = () => showToast('❌ 文件读取失败', 'err');
-                reader.readAsText(file, 'utf-8');
-            };
+            input.onchange = () => readJsonFile(input.files[0]);
             input.click();
         });
-
-        // 每次打开维度页时更新提示
-        const _origShowDimPage = showDimPage;
-        // 在 showDimPage 调用后更新提示
-        dimPageBtn && dimPageBtn.addEventListener('click', updateDropSub);
     }
+
+
 
     // 用拦截器在写操作前提示登录：未登录时点击锁定按钮就直接弹登录窗
     function guardWrite(actionFn, btn) {

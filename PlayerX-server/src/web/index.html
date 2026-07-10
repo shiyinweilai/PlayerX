@@ -64,6 +64,11 @@
     <div class="dim-page-head">
         <div class="dim-page-title">📐 评分规则</div>
         <div class="dim-page-actions">
+            <!-- 拖拽上传提示（所有人可见） -->
+            <label class="dim-upload-hint" id="dimUploadHint" title="拖拽 .json 文件到页面任意位置，或点击此处选择文件">
+                <input type="file" accept=".json,application/json" id="dimUploadInput" style="display:none">
+                <span>📂 拖拽或上传 .json</span>
+            </label>
             <!-- 管理员登录后显示编辑/保存按钮 -->
             <button class="ghost-btn" id="dimEditBtn" style="display:none">✏️ 编辑配置</button>
             <button class="ghost-btn" id="dimFormatBtn" style="display:none" title="格式化 JSON">格式化</button>
@@ -73,21 +78,36 @@
         </div>
     </div>
 
-    <!-- 拖拽上传区（管理员登录后可见；非管理员也可拖入做本地预览） -->
-    <div class="dim-drop-zone" id="dimDropZone">
-        <span class="dim-drop-icon">📂</span>
-        <span class="dim-drop-text">拖拽 <code>.json</code> 配置文件到此处</span>
-        <span class="dim-drop-sub" id="dimDropSub">管理员登录后可保存到服务器；未登录时仅本地预览</span>
-    </div>
+    <div class="dim-body">
+        <!-- 左侧：配置文件列表 -->
+        <div class="dim-sidebar" id="dimSidebar">
+            <div class="dim-sidebar-head">
+                <span class="dim-sidebar-title">配置列表</span>
+                <button class="dim-sidebar-add ghost-btn" id="dimAddBtn" style="display:none" title="新建配置">＋</button>
+            </div>
+            <div class="dim-sidebar-list" id="dimSidebarList">
+                <div class="dim-sidebar-loading">加载中…</div>
+            </div>
+            <!-- 拖拽上传区 -->
+            <div class="dim-drop-zone" id="dimDropZone">
+                <span class="dim-drop-icon">📂</span>
+                <span class="dim-drop-text">拖拽 <code>.json</code> 到此处</span>
+                <span class="dim-drop-sub" id="dimDropSub">拖入后自动预览</span>
+            </div>
+        </div>
 
-    <!-- 非登录：卡片展示 -->
-    <div class="dim-view" id="dimView">
-        <div class="dim-view-loading" id="dimViewLoading">加载中…</div>
-    </div>
-    <!-- 登录后编辑：JSON 编辑器 -->
-    <div class="dim-editor-section" id="dimEditorSection" style="display:none">
-        <div class="login-err" id="dimErr" style="display:none"></div>
-        <textarea id="dimEditor" spellcheck="false" autocomplete="off" placeholder="加载中…"></textarea>
+        <!-- 右侧：内容区 -->
+        <div class="dim-content">
+            <!-- 卡片展示 -->
+            <div class="dim-view" id="dimView">
+                <div class="dim-view-loading">请从左侧选择配置</div>
+            </div>
+            <!-- JSON 编辑器 -->
+            <div class="dim-editor-section" id="dimEditorSection" style="display:none">
+                <div class="login-err" id="dimErr" style="display:none"></div>
+                <textarea id="dimEditor" spellcheck="false" autocomplete="off" placeholder="加载中…"></textarea>
+            </div>
+        </div>
     </div>
 </section>
 

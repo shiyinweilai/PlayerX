@@ -2526,12 +2526,16 @@ ApplicationWindow {
                 }
                 enabled: canStart
                 onClicked: {
-                    // 多维模式：先静默加载最新维度配置，再启动
-                    if (dlg.isMultiDimMode && typeof dlg.onDimLoadNeeded === "function")
-                        dlg.onDimLoadNeeded()
-                    // 先走「接着评分 / 重置」检查；无进度则直接启动并关 dlg。
-                    // 有进度时弹窗，弹窗按钮内部已自行处理 start() + dlg.close()。
-                    _startWithResumeCheck()
+                    // 多维模式：先等待最新维度配置加载完成，再启动（保证面板用新维度渲染）
+                    if (dlg.isMultiDimMode && typeof dlg.onDimLoadNeeded === "function") {
+                        dlg.onDimLoadNeeded(function() {
+                            _startWithResumeCheck()
+                        })
+                    } else {
+                        // 先走「接着评分 / 重置」检查；无进度则直接启动并关 dlg。
+                        // 有进度时弹窗，弹窗按钮内部已自行处理 start() + dlg.close()。
+                        _startWithResumeCheck()
+                    }
                 }
                 background: Rectangle {
                     color: !startBtn.enabled ? "#1a1a1d"
