@@ -400,10 +400,11 @@
     function modeLabel(mode) { return MODE_LABELS[mode] || mode; }
 
     // ── 页面开关 ──
-    function showDimPage() {
+    function showDimPage(skipHashUpdate) {
         dimPageOpen = true;
         dimPage.hidden = false;
         mainContent.forEach(el => { if (el) el.style.display = 'none'; });
+        if (!skipHashUpdate) history.replaceState(null, '', '#rules');
         loadConfigList();
     }
 
@@ -412,6 +413,7 @@
         dimPage.hidden = true;
         mainContent.forEach(el => { if (el) el.style.display = ''; });
         exitDimEdit();
+        history.replaceState(null, '', location.pathname + location.search);
     }
 
     // ── 左侧：加载配置列表 ──
@@ -426,9 +428,16 @@
             // 自动选中第一个有激活绑定的配置，否则选第一个
             const configs = j.configs || [];
             if (configs.length > 0) {
-                const activeNames = Object.values(dimActiveBindings);
-                const firstActive = configs.find(c => activeNames.includes(c.name));
-                selectConfig(firstActive ? firstActive.name : configs[0].name);
+                // 优先从 URL hash 恢复选中配置（支持分享直达链接）
+                const hashConfig = _getHashConfig();
+                const hashMatch = hashConfig && configs.find(c => c.name === hashConfig);
+                if (hashMatch) {
+                    selectConfig(hashMatch.name);
+                } else {
+                    const activeNames = Object.values(dimActiveBindings);
+                    const firstActive = configs.find(c => activeNames.includes(c.name));
+                    selectConfig(firstActive ? firstActive.name : configs[0].name);
+                }
             } else {
                 dimView.innerHTML = '<div class="dim-view-loading">暂无配置，请拖入 .json 文件或点击「＋」新建</div>';
             }
@@ -700,6 +709,8 @@
         exitDimEdit();
         dimView.innerHTML = '<div class="dim-view-loading">加载中…</div>';
         dimView.style.display = '';
+        // 更新 URL hash，方便分享直达链接
+        if (dimPageOpen) history.replaceState(null, '', '#rules/' + encodeURIComponent(name));
         try {
             const r = await fetch(`/api/configs/${encodeURIComponent(name)}?_=` + Date.now());
             const text = await r.text();
@@ -2088,6 +2099,19 @@
         document.addEventListener('mouseup', onUp);
     }
 
+    // ── Hash 工具函数 ──
+    // 解析 #rules 或 #rules/<configName>，返回 { isRules, configName }
+    function _parseHash() {
+        const h = decodeURIComponent(location.hash || '');
+        if (h === '#rules') return { isRules: true, configName: null };
+        const m = h.match(/^#rules\/(.+)$/);
+        if (m) return { isRules: true, configName: m[1] };
+        return { isRules: false, configName: null };
+    }
+    function _getHashConfig() {
+        return _parseHash().configName;
+    }
+
     // ────────── 启动 ──────────
     (async function init() {
         await fetchStatus();
@@ -2096,5 +2120,7 @@
         updateAuthUi();          // 列表渲染后再刷一次（同步行内删除按钮的锁定态）
         // 表头是静态的，初始化一次即可；列宽的持久化由 localStorage 维护
         initColumnResizing(document.getElementById('filesTable'));
+        // 检测 URL hash，支持直达链接：#rules 或 #rules/<configName>
+        if (_parseHash().isRules) showDimPage(true);
     })();
 })();
