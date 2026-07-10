@@ -386,7 +386,18 @@
     let dimEditing     = false;
     let dimRawData     = null;   // 当前选中配置的原始 JSON 字符串
     let dimCurrentName = null;   // 当前选中的配置文件名（不含 .json）
-    let dimActiveName  = null;   // 当前激活的配置文件名（不含 .json）
+    let dimActiveBindings = {};  // { mode -> configName } 所有模式的绑定关系
+
+    // 模式 id -> 显示标签
+    const MODE_LABELS = {
+        multi_dim:     '多维评分',
+        subjective:    '主观评分',
+        quality:       '质量比较',
+        quality_slide: '质量比较2',
+    };
+    const MODE_ORDER = ['multi_dim', 'subjective', 'quality', 'quality_slide'];
+
+    function modeLabel(mode) { return MODE_LABELS[mode] || mode; }
 
     // ── 页面开关 ──
     function showDimPage() {
@@ -410,15 +421,14 @@
             const r = await fetch('/api/configs?_=' + Date.now());
             const j = await r.json();
             if (!r.ok || !j.ok) throw new Error(j.error || 'HTTP ' + r.status);
-            dimActiveName = j.activeName || null;
+            dimActiveBindings = j.bindings || {};
             renderSidebarList(j.configs || []);
-            // 自动选中激活配置，否则选第一个
+            // 自动选中第一个有激活绑定的配置，否则选第一个
             const configs = j.configs || [];
             if (configs.length > 0) {
-                const toSelect = (dimActiveName && configs.find(c => c.name === dimActiveName))
-                    ? dimActiveName
-                    : configs[0].name;
-                selectConfig(toSelect);
+                const activeNames = Object.values(dimActiveBindings);
+                const firstActive = configs.find(c => activeNames.includes(c.name));
+                selectConfig(firstActive ? firstActive.name : configs[0].name);
             } else {
                 dimView.innerHTML = '<div class="dim-view-loading">暂无配置，请拖入 .json 文件或点击「＋」新建</div>';
             }
@@ -433,17 +443,21 @@
             return;
         }
         dimSidebarList.innerHTML = configs.map(c => {
-            const isActive = c.name === dimActiveName;
+            // 该配置绑定了哪些模式
+            const activeModes = MODE_ORDER.filter(m => dimActiveBindings[m] === c.name);
+            const badgesHtml = activeModes.map(m =>
+                `<span class="dim-active-badge" data-mode="${m}" title="已绑定到模式：${modeLabel(m)}">${modeLabel(m)}</span>`
+            ).join('');
             return `
             <div class="dim-sidebar-item ${c.name === dimCurrentName ? 'is-active' : ''}" data-name="${escHtml(c.name)}">
                 <div class="dim-sidebar-item-main">
                     <span class="dim-sidebar-item-type" title="双击重命名">${escHtml(c.type || c.name)}</span>
-                    ${isActive ? `<span class="dim-active-badge" title="播放器将拉取此配置">📌 已激活</span>` : ''}
+                    ${badgesHtml}
                 </div>
                 <div class="dim-sidebar-item-row2">
                     <span class="dim-sidebar-item-task">${c.task ? escHtml(c.task) : ''}</span>
                     <div class="dim-sidebar-item-actions">
-                        ${isLoggedIn() && !isActive ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="设为播放器拉取的配置">📌 激活</button>` : ''}
+                        ${isLoggedIn() ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="绑定/解绑模式">📌 绑定</button>` : ''}
                         ${isLoggedIn() ? `<button class="dim-copy-btn ghost-btn" data-name="${escHtml(c.name)}" title="复制一份此配置">复制</button>` : ''}
                         ${isLoggedIn() ? `<button class="dim-sidebar-del ghost-btn" data-name="${escHtml(c.name)}" title="删除此配置">🗑</button>` : ''}
                     </div>
@@ -474,11 +488,11 @@
             });
         }
 
-        // 激活按钮
+        // 绑定按钮 → 弹出模式选择下拉
         dimSidebarList.querySelectorAll('.dim-activate-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                activateConfig(btn.dataset.name);
+                showBindModePopup(btn, btn.dataset.name);
             });
         });
 
@@ -497,6 +511,103 @@
                 deleteConfig(btn.dataset.name);
             });
         });
+    }
+
+    // ── 绑定模式下拉弹窗 ──
+    let _bindPopup = null;
+    function showBindModePopup(anchorBtn, configName) {
+        // 关闭已有弹窗
+        if (_bindPopup) { _bindPopup.remove(); _bindPopup = null; }
+        const popup = document.createElement('div');
+        popup.className = 'dim-bind-popup';
+        popup.innerHTML = MODE_ORDER.map(mode => {
+            const isBound = dimActiveBindings[mode] === configName;
+            const boundTo = dimActiveBindings[mode];
+            const otherBound = boundTo && boundTo !== configName;
+            return `<div class="dim-bind-item ${isBound ? 'is-bound' : ''}" data-mode="${mode}" data-name="${escHtml(configName)}">
+                <span class="dim-bind-check">${isBound ? '✓' : ''}</span>
+                <span class="dim-bind-label">${modeLabel(mode)}</span>
+                ${otherBound ? `<span class="dim-bind-other" title="当前绑定：${escHtml(boundTo)}">已绑定其他</span>` : ''}
+            </div>`;
+        }).join('');
+        document.body.appendChild(popup);
+        _bindPopup = popup;
+
+        // 定位到按钮下方
+        const rect = anchorBtn.getBoundingClientRect();
+        popup.style.position = 'fixed';
+        popup.style.zIndex = '9999';
+        // 先渲染再定位
+        requestAnimationFrame(() => {
+            const pw = popup.offsetWidth;
+            const ph = popup.offsetHeight;
+            let left = rect.left;
+            let top  = rect.bottom + 4;
+            if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+            if (top + ph > window.innerHeight - 8) top = rect.top - ph - 4;
+            popup.style.left = left + 'px';
+            popup.style.top  = top  + 'px';
+        });
+
+        // 点击模式项 → 绑定/解绑
+        popup.querySelectorAll('.dim-bind-item').forEach(item => {
+            item.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const mode = item.dataset.mode;
+                const name = item.dataset.name;
+                popup.remove(); _bindPopup = null;
+                await toggleBindMode(name, mode);
+            });
+        });
+
+        // 点击外部关闭
+        setTimeout(() => {
+            document.addEventListener('click', function closePopup() {
+                if (_bindPopup) { _bindPopup.remove(); _bindPopup = null; }
+                document.removeEventListener('click', closePopup);
+            }, { once: true });
+        }, 0);
+    }
+
+    // ── 绑定/解绑配置到模式 ──
+    async function toggleBindMode(name, mode) {
+        try {
+            const r = await adminFetch('/api/active-config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, mode }),
+            });
+            if (r.status === 401) return;
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '操作失败'), 'err'); return; }
+            dimActiveBindings = j.bindings || {};
+            if (j.action === 'bound') {
+                showToast(`✅ 已将「${name}」绑定到「${modeLabel(mode)}」`, 'ok');
+            } else {
+                showToast(`✅ 已解绑「${name}」与「${modeLabel(mode)}」`, 'ok');
+            }
+            // 重新渲染侧边栏（不重新请求列表）
+            const items = dimSidebarList.querySelectorAll('.dim-sidebar-item');
+            items.forEach(el => {
+                const cName = el.dataset.name;
+                const main = el.querySelector('.dim-sidebar-item-main');
+                if (!main) return;
+                // 移除旧 badges
+                main.querySelectorAll('.dim-active-badge').forEach(b => b.remove());
+                // 重新生成 badges
+                const activeModes = MODE_ORDER.filter(m => dimActiveBindings[m] === cName);
+                activeModes.forEach(m => {
+                    const badge = document.createElement('span');
+                    badge.className = 'dim-active-badge';
+                    badge.dataset.mode = m;
+                    badge.title = `已绑定到模式：${modeLabel(m)}`;
+                    badge.textContent = modeLabel(m);
+                    main.appendChild(badge);
+                });
+            });
+        } catch (e) {
+            showToast('❌ 网络错误：' + e.message, 'err');
+        }
     }
 
     // ── 复制配置 ──
@@ -527,63 +638,6 @@
         }
     }
 
-    // ── 激活配置（设为播放器拉取的配置） ──
-    async function activateConfig(name) {
-        try {
-            const r = await adminFetch('/api/active-config', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name }),
-            });
-            if (r.status === 401) return;
-            const j = await r.json().catch(() => ({}));
-            if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '激活失败'), 'err'); return; }
-            dimActiveName = name;
-            showToast(`✅ 已激活「${name}」，播放器启动对比时将拉取此配置`, 'ok');
-            // 刷新侧边栏显示（不重新请求列表，直接重渲染）
-            const items = dimSidebarList.querySelectorAll('.dim-sidebar-item');
-            items.forEach(el => {
-                const isActive = el.dataset.name === name;
-                // 更新 badge
-                const main = el.querySelector('.dim-sidebar-item-main');
-                if (main) {
-                    let badge = main.querySelector('.dim-active-badge');
-                    if (isActive && !badge) {
-                        badge = document.createElement('span');
-                        badge.className = 'dim-active-badge';
-                        badge.title = '播放器将拉取此配置';
-                        badge.textContent = '📌 已激活';
-                        main.appendChild(badge);
-                    } else if (!isActive && badge) {
-                        badge.remove();
-                    }
-                }
-                // 更新激活按钮
-                const actionsDiv = el.querySelector('.dim-sidebar-item-actions');
-                if (actionsDiv) {
-                    let activateBtn = actionsDiv.querySelector('.dim-activate-btn');
-                    if (isActive && activateBtn) {
-                        activateBtn.remove();
-                    } else if (!isActive && !activateBtn && isLoggedIn()) {
-                        activateBtn = document.createElement('button');
-                        activateBtn.className = 'dim-activate-btn ghost-btn';
-                        activateBtn.dataset.name = el.dataset.name;
-                        activateBtn.title = '设为播放器拉取的配置';
-                        activateBtn.textContent = '📌 激活';
-                        activateBtn.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            activateConfig(activateBtn.dataset.name);
-                        });
-                        actionsDiv.insertBefore(activateBtn, actionsDiv.firstChild);
-                    }
-                }
-            });
-        } catch (e) {
-            showToast('❌ 网络错误：' + e.message, 'err');
-        }
-    }
-
-    // ── 内联重命名 ──
     function startRenameConfig(itemEl, spanEl) {
         if (itemEl.querySelector('.dim-sidebar-rename-input')) return; // 已在编辑中
         const oldName = itemEl.dataset.name;

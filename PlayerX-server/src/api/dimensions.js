@@ -10,11 +10,16 @@
  *   PUT  /api/configs/:name        → 新建/更新指定配置（管理员）
  *   DELETE /api/configs/:name      → 删除指定配置（管理员）
  *
- *   GET  /api/active-config        → 返回当前激活的配置名（公开）
- *   PUT  /api/active-config        → 设置激活配置（管理员）
+ *   GET  /api/active-config        → 返回当前所有模式绑定 { bindings: { mode: configName } }（公开）
+ *   PUT  /api/active-config        → 绑定/解绑：{ name, mode } 将配置绑定到模式；同 mode 再传则解绑（管理员）
  *
  *   GET  /api/dimensions           → 返回激活配置内容（公开，供播放器拉取）
+ *                                    ?mode=xxx 按模式返回对应激活配置；无参数兼容旧行为（multi_dim）
  *   PUT  /api/dimensions           → 兼容旧客户端，写入 multi_dim.json（管理员）
+ *
+ * 激活存储格式（configs/_active.json）：
+ *   { "bindings": { "multi_dim": "配置名", "subjective": "配置名2", ... } }
+ *   兼容旧格式：{ "name": "配置名" } → 自动迁移为 { "bindings": { "multi_dim": "配置名" } }
  */
 const fs   = require('fs');
 const path = require('path');
@@ -28,21 +33,31 @@ const LEGACY_DIM_FILE = path.join(__dirname, '../../dimensions.json');
 // 激活配置记录文件（存在 configs/ 目录下）
 const ACTIVE_CONFIG_FILE = path.join(__dirname, '../../configs/_active.json');
 
-/** 读取当前激活的配置名（不含 .json），不存在则返回 null */
-function getActiveConfigName() {
+/** 读取所有模式绑定 { mode -> configName }，不存在则返回 {} */
+function getActiveBindings() {
     try {
         if (fs.existsSync(ACTIVE_CONFIG_FILE)) {
             const obj = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8'));
-            return obj.name || null;
+            // 兼容旧格式 { name: '...' } → 自动迁移为 multi_dim 绑定
+            if (obj.name && !obj.bindings) {
+                return { multi_dim: obj.name };
+            }
+            return obj.bindings || {};
         }
     } catch (_) {}
-    return null;
+    return {};
 }
 
-/** 写入激活配置名 */
-function setActiveConfigName(name) {
+/** 写入所有模式绑定 */
+function setActiveBindings(bindings) {
     ensureConfigsDir();
-    fs.writeFileSync(ACTIVE_CONFIG_FILE, JSON.stringify({ name }, null, 2), 'utf8');
+    fs.writeFileSync(ACTIVE_CONFIG_FILE, JSON.stringify({ bindings }, null, 2), 'utf8');
+}
+
+/** 兼容旧接口：获取 multi_dim 模式绑定的配置名（不含 .json），不存在则返回 null */
+function getActiveConfigName() {
+    const b = getActiveBindings();
+    return b['multi_dim'] || null;
 }
 
 /** 确保 configs 目录存在，并迁移旧 dimensions.json */
@@ -88,56 +103,79 @@ function handleList(_req, res) {
     setCors(res);
     ensureConfigsDir();
     try {
-        const activeName = getActiveConfigName();
+        const bindings = getActiveBindings(); // { mode -> configName }
+        // 反转：configName -> [mode, ...]
+        const configModes = {};
+        for (const [mode, name] of Object.entries(bindings)) {
+            if (!configModes[name]) configModes[name] = [];
+            configModes[name].push(mode);
+        }
         const files = fs.readdirSync(CONFIGS_DIR)
             .filter(f => f.endsWith('.json') && f !== '_active.json')
             .map(f => {
                 const name = f.replace(/\.json$/, '');
-                let meta = { name, type: '', task: '', active: name === activeName };
+                let meta = { name, type: '', task: '', activeForModes: configModes[name] || [] };
                 try {
                     const obj = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, f), 'utf8'));
                     meta.type = obj.type || '';
                     meta.task = obj.task || '';
+                    meta.tag  = obj.tag  || '';
                 } catch (_) {}
                 return meta;
             });
-        res.json({ ok: true, configs: files, activeName: activeName || null });
+        res.json({ ok: true, configs: files, bindings });
     } catch (e) {
         res.status(500).json({ ok: false, error: e.message });
     }
 }
 
 // ─────────────────────────────────────────────────────────────
-// GET /api/active-config — 返回当前激活的配置名
+// GET /api/active-config — 返回所有模式绑定
 // ─────────────────────────────────────────────────────────────
 function handleGetActive(_req, res) {
     setCors(res);
     ensureConfigsDir();
-    const name = getActiveConfigName();
-    if (!name) return res.json({ ok: true, activeName: null });
-    const file = path.join(CONFIGS_DIR, name + '.json');
-    if (!fs.existsSync(file)) {
-        // 激活的文件已被删除，清除激活记录
-        try { fs.unlinkSync(ACTIVE_CONFIG_FILE); } catch (_) {}
-        return res.json({ ok: true, activeName: null });
+    const bindings = getActiveBindings();
+    // 清理已被删除的配置
+    let changed = false;
+    for (const [mode, name] of Object.entries(bindings)) {
+        const file = path.join(CONFIGS_DIR, name + '.json');
+        if (!fs.existsSync(file)) {
+            delete bindings[mode];
+            changed = true;
+        }
     }
-    res.json({ ok: true, activeName: name });
+    if (changed) setActiveBindings(bindings);
+    res.json({ ok: true, bindings });
 }
 
 // ─────────────────────────────────────────────────────────────
-// PUT /api/active-config — 设置激活配置（管理员）
+// PUT /api/active-config — 绑定/解绑配置到模式（管理员）
+// body: { name, mode }  将配置 name 绑定到 mode
+//       若该 mode 已绑定同一配置，则解绑（toggle）
 // ─────────────────────────────────────────────────────────────
 function handleSetActive(req, res) {
     ensureConfigsDir();
-    const { name } = req.body || {};
+    const { name, mode } = req.body || {};
     if (!name) return res.status(400).json({ ok: false, error: '缺少 name 字段' });
+    if (!mode) return res.status(400).json({ ok: false, error: '缺少 mode 字段' });
     const safed = safeName(name);
     if (!safed) return res.status(400).json({ ok: false, error: '非法配置名' });
     const file = path.join(CONFIGS_DIR, safed + '.json');
     if (!fs.existsSync(file)) return res.status(404).json({ ok: false, error: '配置不存在' });
     try {
-        setActiveConfigName(safed);
-        res.json({ ok: true, message: `已激活配置「${safed}」`, activeName: safed });
+        const bindings = getActiveBindings();
+        if (bindings[mode] === safed) {
+            // 已绑定同一配置 → 解绑
+            delete bindings[mode];
+            setActiveBindings(bindings);
+            res.json({ ok: true, action: 'unbound', message: `已解绑「${safed}」与模式「${mode}」`, bindings });
+        } else {
+            // 绑定（覆盖该 mode 原有绑定）
+            bindings[mode] = safed;
+            setActiveBindings(bindings);
+            res.json({ ok: true, action: 'bound', message: `已将「${safed}」绑定到模式「${mode}」`, bindings });
+        }
     } catch (e) {
         res.status(500).json({ ok: false, error: '设置失败：' + e.message });
     }
@@ -222,13 +260,23 @@ function handleDeleteOne(req, res) {
 
 // ─────────────────────────────────────────────────────────────
 // 兼容旧接口：GET /api/dimensions → 返回激活配置内容（供播放器拉取）
+// ?mode=xxx 按模式返回对应激活配置；无参数时兼容旧行为（multi_dim）
 // ─────────────────────────────────────────────────────────────
-function handleGet(_req, res) {
+function handleGet(req, res) {
     setCors(res);
     ensureConfigsDir();
 
-    // 优先返回激活配置
-    const activeName = getActiveConfigName();
+    const bindings = getActiveBindings();
+    // 按 mode 参数查找绑定的配置名
+    const mode = req.query && req.query.mode;
+    let activeName = null;
+    if (mode && bindings[mode]) {
+        activeName = bindings[mode];
+    } else if (!mode) {
+        // 无 mode 参数：兼容旧行为，优先 multi_dim，其次任意一个绑定
+        activeName = bindings['multi_dim'] || Object.values(bindings)[0] || null;
+    }
+
     if (activeName) {
         const activeFile = path.join(CONFIGS_DIR, activeName + '.json');
         if (fs.existsSync(activeFile)) {
@@ -254,7 +302,8 @@ function handleGet(_req, res) {
         }
     }
 
-    return res.status(404).json({ ok: false, error: '尚未激活任何配置，请在管理面板中设置激活配置' });
+    const modeDesc = mode ? `模式「${mode}」` : '任何模式';
+    return res.status(404).json({ ok: false, error: `${modeDesc}尚未绑定激活配置，请在管理面板中设置` });
 }
 
 // ─────────────────────────────────────────────────────────────

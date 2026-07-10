@@ -111,16 +111,22 @@
     </div>
 </section>
 
-<!-- ────────── 模式 Tab（全部 / 主观评分 / 质量比较） ────────── -->
+<!-- ────────── 模式 Tab（全部 / 多维评分 / 主观评分 / 质量比较 / 质量比较2） ────────── -->
 <section class="mode-tabs" id="modeTabs" role="tablist" aria-label="评分模式分桶">
-    <button class="mode-tab is-active" role="tab" data-mode=""          aria-selected="true">
+    <button class="mode-tab is-active" role="tab" data-mode=""             aria-selected="true">
         全部 <span class="mode-tab-count" data-mode-count="__total__">0</span>
     </button>
-    <button class="mode-tab"          role="tab" data-mode="subjective" aria-selected="false">
+    <button class="mode-tab"           role="tab" data-mode="multi_dim"    aria-selected="false">
+        多维评分<span class="mode-tab-count" data-mode-count="multi_dim">0</span>
+    </button>
+    <button class="mode-tab"           role="tab" data-mode="subjective"   aria-selected="false">
         主观评分<span class="mode-tab-count" data-mode-count="subjective">0</span>
     </button>
-    <button class="mode-tab"          role="tab" data-mode="quality"    aria-selected="false">
-                    质量比较<span class="mode-tab-count" data-mode-count="quality">0</span>
+    <button class="mode-tab"           role="tab" data-mode="quality"      aria-selected="false">
+        质量比较<span class="mode-tab-count" data-mode-count="quality">0</span>
+    </button>
+    <button class="mode-tab"           role="tab" data-mode="quality_slide" aria-selected="false">
+        质量比较2<span class="mode-tab-count" data-mode-count="quality_slide">0</span>
     </button>
 </section>
 

@@ -1,3 +1,8 @@
 {
-  "name": "多维评分"
+  "bindings": {
+    "multi_dim": "多维评分",
+    "quality": "测试",
+    "subjective": "多维评分",
+    "quality_slide": "测试"
+  }
 }

@@ -63,7 +63,12 @@ ApplicationWindow {
                     try {
                         var obj = JSON.parse(xhr2.responseText)
                         if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
-                            root.reviewDimensions = obj.dimensions
+                            // 预注入 starCount，避免 Repeater delegate 依赖深层 levels.length 动态计算
+                            var _dims0 = obj.dimensions.map(function(d) {
+                                var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
+                                return Object.assign({}, d, { starCount: sc })
+                            })
+                            root.reviewDimensions = _dims0
                             // 同步远程配置的 tag 到备注 tag 输入框（用户可手动覆盖）
                             if (obj.tag && typeof Rating !== "undefined") {
                                 Rating.uploadTag = obj.tag
@@ -96,7 +101,11 @@ ApplicationWindow {
         if (typeof Rating !== "undefined" && Rating.uploadServerUrl) {
             var _base = Rating.uploadServerUrl.trim()
             var _m = _base.match(/^(https?:\/\/[^/]+)/)
-            dimUrl = _m ? _m[1] + "/api/dimensions" : ""
+            if (_m) {
+                // 带上当前评分模式，让服务端返回对应模式绑定的配置
+                var _mode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                dimUrl = _m[1] + "/api/dimensions" + (_mode ? ("?mode=" + encodeURIComponent(_mode)) : "")
+            }
         }
         if (dimUrl.length > 0) {
             _loadDimensions(dimUrl, resourcesUrl)
@@ -1557,8 +1566,12 @@ ApplicationWindow {
                 try {
                     var obj = JSON.parse(xhr.responseText)
                     if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
-                        // 1. 热重载维度
-                        root.reviewDimensions = obj.dimensions
+                        // 1. 热重载维度（预注入 starCount，避免 Repeater delegate 依赖深层 levels.length 动态计算）
+                        var _dims1 = obj.dimensions.map(function(d) {
+                            var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
+                            return Object.assign({}, d, { starCount: sc })
+                        })
+                        root.reviewDimensions = _dims1
                         // 1b. 同步远程配置的 tag 到备注 tag 输入框（用户可手动覆盖）
                         if (obj.tag && typeof Rating !== "undefined") {
                             Rating.uploadTag = obj.tag
@@ -1595,15 +1608,15 @@ ApplicationWindow {
         return m ? m[1] + "/api/dimensions" : ""
     }
 
-    // 切换到多维模式时，重新初始化 cellRatings 为对象数组；切出时恢复为数字数组
-    onIsMultiDimModeChanged: {
-        // 切换模式时仅重新初始化 cellRatings，维度配置在点击「启动对比」时加载
-
+    // 切换到多维模式或维度配置变化时，重新初始化 cellRatings
+    // 有维度配置（不限于 multi_dim）时初始化为对象数组；无维度时恢复为数字数组
+    function _rebuildCellRatingsForDims() {
         var n = Engine.fileCount
         if (n <= 0) return
+        var hasDims = reviewDimensions && reviewDimensions.length > 0
         var arr = []
         for (var i = 0; i < n; ++i) {
-            if (isMultiDimMode) {
+            if (hasDims) {
                 var obj = {}
                 for (var d = 0; d < reviewDimensions.length; ++d)
                     obj[reviewDimensions[d].key] = 0
@@ -1613,6 +1626,14 @@ ApplicationWindow {
             }
         }
         cellRatings = arr
+    }
+    onIsMultiDimModeChanged: {
+        // 切换模式时仅重新初始化 cellRatings，维度配置在点击「启动对比」时加载
+        _rebuildCellRatingsForDims()
+    }
+    onReviewDimensionsChanged: {
+        // 维度配置更新时（启动对比加载远程配置后），重建 cellRatings 结构
+        _rebuildCellRatingsForDims()
     }
     //   · 实时写入 ratings_quality_slide_slide.csv（与普通打分文件完全隔离）
     //   · 与普通 quality 评分（cellRatings）解耦，互不覆盖
@@ -2329,12 +2350,13 @@ ApplicationWindow {
         function onFilesChanged() {
             var n = Engine.fileCount
             var arr = []
+            var dims = root.reviewDimensions
+            var hasDims = dims && dims.length > 0
             for (var i = 0; i < n; ++i) {
                 var fp = Engine.filePathAt(i)
-                if (root.isMultiDimMode) {
-                    // 多维模式：每项初始化为对象，从 CSV 按 slide_type 回填各维度
+                if (hasDims) {
+                    // 有维度配置时（不限于 multi_dim 模式）：每项初始化为对象，从 CSV 按 slide_type 回填各维度
                     var obj = {}
-                    var dims = root.reviewDimensions
                     for (var d = 0; d < dims.length; ++d) {
                         var dimKey = dims[d].key
                         var saved = -1
@@ -4191,11 +4213,25 @@ ApplicationWindow {
     function _writeRating(idx, score, dimKey) {
         // 超出当前模式上限时仅 UI 层钉一下，避免 cellRatings 写出 "5" 但后端实际存为 3
         // 造成"UI 与实际不一致"。RatingStore::recordRating 内部也会再截一次、双保险。
+        // 有维度配置时，上限从该维度的 levels.length 取（每个维度可独立配置星数）；
+        // 无维度时才用 Rating.maxStars（C++ 层按模式设定的全局上限）。
         var cap = root.reviewMaxStars
+        if (dimKey && root.reviewDimensions && root.reviewDimensions.length > 0) {
+            // 找到对应维度，取其 levels 数组长度作为上限
+            for (var di = 0; di < root.reviewDimensions.length; ++di) {
+                var dim = root.reviewDimensions[di]
+                if (dim && dim.key === dimKey && dim.levels && dim.levels.length > 0) {
+                    cap = dim.levels.length
+                    break
+                }
+            }
+        }
         if (cap > 0 && score > cap) score = cap
         if (score < 0) score = 0
         var arr = root.cellRatings.slice()
-        if (root.isMultiDimMode && dimKey) {
+        // 有维度配置时（不限于 multi_dim 模式），走多维写入路径
+        var hasDims = root.reviewDimensions && root.reviewDimensions.length > 0
+        if (hasDims && dimKey) {
             // 多维模式：写入对象的指定维度字段
             while (arr.length <= idx) {
                 var emptyObj = {}
@@ -6771,9 +6807,10 @@ ApplicationWindow {
         unratedChecker: function() {
             var miss = []
             var n = Engine.fileCount
-            if (root.isMultiDimMode) {
-                // 多维模式：每个通道的所有维度都 > 0 才算已评分
-                var dims = root.reviewDimensions
+            var dims = root.reviewDimensions
+            var hasDims = dims && dims.length > 0
+            if (hasDims) {
+                // 有维度配置时（不限于 multi_dim 模式）：每个通道的所有维度都 > 0 才算已评分
                 for (var i = 0; i < n; ++i) {
                     var v = root.cellRatings[i]
                     var allDone = true
@@ -6825,10 +6862,11 @@ ApplicationWindow {
         // 多维评分模式注入
         isMultiDimMode: root.isMultiDimMode
         reviewDimensions: root.reviewDimensions
-        // 点击「启动对比」时，如果是多维模式，先从网络加载最新维度配置，完成后再启动
-        onDimLoadNeeded: function(callback) {
-            var url = root._dimApiUrl()
-            if (url.length > 0) {
+        // 点击「启动对比」时，先从网络加载当前模式对应的激活配置，完成后再启动
+        onDimLoadNeeded: function(mode, callback) {
+            var base = root._dimApiUrl()
+            if (base.length > 0) {
+                var url = base + (mode ? ("?mode=" + encodeURIComponent(mode)) : "")
                 root.loadDimensionsFromUrl(url, callback)
             } else {
                 // 未配置服务器地址，直接用本地缓存维度启动

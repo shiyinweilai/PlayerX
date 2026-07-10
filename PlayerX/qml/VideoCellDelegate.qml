@@ -341,11 +341,11 @@ Rectangle {
                 Layout.alignment: Qt.AlignRight
                 spacing: 6
 
-                // 评分星条：非 multi_dim 模式时显示
+                // 评分星条：非 multi_dim 模式且无维度配置时显示（有维度时走 multiDimBlock）
                 Row {
                     id: inlineStarRow
                     spacing: 2
-                    visible: viewRoot.reviewMode && !viewRoot.isMultiDimMode
+                    visible: viewRoot.reviewMode && !viewRoot.isMultiDimMode && viewRoot.reviewDimensions.length === 0
                     Layout.alignment: Qt.AlignVCenter
                     property int hoverRating: 0
                     readonly property int currentRating: {
@@ -559,20 +559,23 @@ Rectangle {
                           : "—"
                 }
             }
-            // ────── 第 3 行：多维评分行（multi_dim 模式，时间戳下方）──────
+            // ────── 第 3 行：多维评分行（multi_dim 模式，或其他模式有维度配置时）──────
             Column {
                 id: multiDimBlock
-                visible: viewRoot.reviewMode && viewRoot.isMultiDimMode
+                visible: viewRoot.reviewMode && (viewRoot.isMultiDimMode || viewRoot.reviewDimensions.length > 0)
                 spacing: 1
                 Layout.alignment: Qt.AlignRight
 
                 Repeater {
-                    model: viewRoot.reviewDimensions
+                    id: dimRepeater
+                    model: viewRoot.reviewDimensions.length
                     delegate: Row {
                         id: dimRow
                         spacing: 2
                         layoutDirection: Qt.LeftToRight
-                        property string dimKey: modelData ? (modelData.key || "") : ""
+                        // 通过 index 直接访问 reviewDimensions，确保 reviewDimensions 整体替换时响应式更新
+                        readonly property var dimData: viewRoot.reviewDimensions[index] || null
+                        property string dimKey: dimData ? (dimData.key || "") : ""
                         property int dimHover: 0
 
                         Text {
@@ -585,7 +588,13 @@ Rectangle {
                         }
 
                         Repeater {
-                            model: 5
+                            // 通过 index 读取 reviewDimensions，确保 starCount 响应式更新
+                            model: {
+                                var d = viewRoot.reviewDimensions[index]
+                                if (!d) return 5
+                                if (d.starCount > 0) return d.starCount
+                                return (d.levels && d.levels.length > 0) ? d.levels.length : 5
+                            }
                             delegate: Item {
                                 id: dimStarItem
                                 width: 16; height: 16

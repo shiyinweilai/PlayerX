@@ -668,6 +668,8 @@ ApplicationWindow {
     // 多维评分模式支持（由 Main.qml 注入）
     property bool isMultiDimMode: false
     property var  reviewDimensions: []
+    // 有维度配置时（不限于 multi_dim 模式）走多维布局
+    readonly property bool hasDims: reviewDimensions && reviewDimensions.length > 0
     // 启动对比时，如果是多维模式，Main.qml 注入此回调以静默加载最新维度配置
     property var  onDimLoadNeeded: null
 
@@ -2527,8 +2529,11 @@ ApplicationWindow {
                 enabled: canStart
                 onClicked: {
                     // 多维模式：先等待最新维度配置加载完成，再启动（保证面板用新维度渲染）
-                    if (dlg.isMultiDimMode && typeof dlg.onDimLoadNeeded === "function") {
-                        dlg.onDimLoadNeeded(function() {
+                    // 所有评分模式：先从服务器加载当前模式对应的激活配置，完成后再启动
+                    // 非评分模式（off）或未配置服务器时直接启动
+                    var curMode = (typeof Rating !== "undefined") ? (Rating.currentMode || "off") : "off"
+                    if (curMode !== "off" && typeof dlg.onDimLoadNeeded === "function") {
+                        dlg.onDimLoadNeeded(curMode, function() {
                             _startWithResumeCheck()
                         })
                     } else {
@@ -2682,7 +2687,7 @@ ApplicationWindow {
     Window {
         id: unratedDialog
         width: 560
-        height: dlg.isMultiDimMode ? Math.min(600, 200 + (dlg._pendingMissing || []).length * (dlg.reviewDimensions.length * 26 + 16)) : 320
+        height: dlg.hasDims ? Math.min(600, 200 + (dlg._pendingMissing || []).length * (dlg.reviewDimensions.length * 26 + 16)) : 320
         flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
         color: "#161619"
         modality: Qt.ApplicationModal
@@ -2709,8 +2714,8 @@ ApplicationWindow {
             for (var i = 0; i < arr.length; ++i) {
                 var chIdx = arr[i]
                 var v = _localRatings[chIdx]
-                if (dlg.isMultiDimMode) {
-                    // 多维：需要每个维度都 > 0
+                if (dlg.hasDims) {
+                    // 有维度：需要每个维度都 > 0
                     if (typeof v !== "object" || v === null) return false
                     var dims = dlg.reviewDimensions
                     for (var d = 0; d < dims.length; ++d) {
@@ -2734,8 +2739,8 @@ ApplicationWindow {
                     if (typeof dlg.getCellRating === "function") {
                         var existing = dlg.getCellRating(chIdx)
                         if (existing !== null && existing !== undefined) {
-                            if (dlg.isMultiDimMode) {
-                                // 多维：复制对象，过滤掉 0 值（0 视为未评分）
+                        if (dlg.hasDims) {
+                                // 有维度：复制对象，过滤掉 0 值（0 视为未评分）
                                 if (typeof existing === "object") {
                                     var obj = {}
                                     var dims = dlg.reviewDimensions
@@ -2775,7 +2780,7 @@ ApplicationWindow {
                         var done = 0
                         for (var i = 0; i < total; ++i) {
                             var v = unratedDialog._localRatings[dlg._pendingMissing[i]]
-                            if (dlg.isMultiDimMode) {
+                            if (dlg.hasDims) {
                                 if (typeof v === "object" && v !== null) {
                                     var dims = dlg.reviewDimensions
                                     var allOk = true
@@ -2838,15 +2843,15 @@ ApplicationWindow {
                                 property int chIdx: modelData
                                 Layout.fillWidth: true
                                 // 多维模式：文件名行(24) + 每维度行(22) + 间距；单维：固定32
-                                implicitHeight: dlg.isMultiDimMode && chIdx >= 0
+                                implicitHeight: dlg.hasDims && chIdx >= 0
                                     ? 24 + dlg.reviewDimensions.length * 22 + 8
                                     : 32
                                 color: "transparent"
                                 radius: 3
 
-                                // 多维模式：文件名在上，各维度星星在下（ColumnLayout）
+                                // 有维度时：文件名在上，各维度星星在下（ColumnLayout）
                                 ColumnLayout {
-                                    visible: dlg.isMultiDimMode
+                                    visible: dlg.hasDims
                                     anchors.fill: parent
                                     anchors.leftMargin: 8
                                     anchors.rightMargin: 8
@@ -2883,10 +2888,13 @@ ApplicationWindow {
 
                                     // 多维星星：每个维度一行
                                     Repeater {
-                                        model: chIdx >= 0 ? dlg.reviewDimensions : []
+                                        id: dimRepeaterDlg
+                                        model: chIdx >= 0 ? dlg.reviewDimensions.length : 0
                                         delegate: Row {
                                             spacing: 4
-                                            property string dimKey: modelData ? (modelData.key || "") : ""
+                                            // 通过 index 直接访问 reviewDimensions，确保整体替换时响应式更新
+                                            readonly property var dimData: dlg.reviewDimensions[index] || null
+                                            property string dimKey: dimData ? (dimData.key || "") : ""
                                             property int dimHover: -1
                                             Text {
                                                 text: dimKey
@@ -2897,7 +2905,13 @@ ApplicationWindow {
                                                 anchors.verticalCenter: parent.verticalCenter
                                             }
                                             Repeater {
-                                                model: 5
+                                                // 通过 index 读取 reviewDimensions，确保 starCount 响应式更新
+                                                model: {
+                                                    var d = dlg.reviewDimensions[index]
+                                                    if (!d) return 5
+                                                    if (d.starCount > 0) return d.starCount
+                                                    return (d.levels && d.levels.length > 0) ? d.levels.length : 5
+                                                }
                                                 delegate: Item {
                                                     id: dimStarCell2
                                                     width: 20; height: 20
@@ -2952,9 +2966,9 @@ ApplicationWindow {
                                     }
                                 }
 
-                                // 单维模式：文件名 + 星星横排（RowLayout）
+                                // 无维度时：文件名 + 星星横排（RowLayout）
                                 RowLayout {
-                                    visible: !dlg.isMultiDimMode
+                                    visible: !dlg.hasDims
                                     anchors.fill: parent
                                     anchors.leftMargin: 8
                                     anchors.rightMargin: 8

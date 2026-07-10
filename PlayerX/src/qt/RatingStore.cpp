@@ -307,7 +307,10 @@ bool RatingStore::recordRating(const QString& filePath,
     if (modeNow == QStringLiteral("off")) return false;
     const int cap = maxStars();
     if (stars < 0) stars = 0;
-    if (cap > 0 && stars > cap) stars = cap;  // 自动截断到当前模式上限
+    // 多维评分（slideType 以 "multi_" 开头）时，每个维度的上限由 levels.length 决定，
+    // 不受当前模式 maxStars 限制，跳过截断。
+    const bool isMultiDim = slideType.startsWith(QStringLiteral("multi_"));
+    if (!isMultiDim && cap > 0 && stars > cap) stars = cap;  // 自动截断到当前模式上限
 
     QString rater = currentUser();
     if (rater.isEmpty()) rater = systemUserName();
@@ -524,7 +527,9 @@ int RatingStore::ratingFor(const QString& filePath) const {
             r.value("rater").toString() == rater) {
             int v = r.value("stars").toInt();
             if (v < 0) v = 0;
-            if (cap > 0 && v > cap) v = cap;
+            // 多维评分记录不受 maxStars 截断（维度星数由 levels.length 决定）
+            const bool isMultiDim = r.value("slide_type").toString().startsWith(QStringLiteral("multi_"));
+            if (!isMultiDim && cap > 0 && v > cap) v = cap;
             return v;
         }
     }
@@ -544,7 +549,9 @@ int RatingStore::ratingFor(const QString& filePath, const QString& slideType) co
             r.value("slide_type").toString() == slideType) {
             int v = r.value("stars").toInt();
             if (v < 0) v = 0;
-            if (cap > 0 && v > cap) v = cap;
+            // 多维评分记录不受 maxStars 截断（维度星数由 levels.length 决定）
+            const bool isMultiDim = slideType.startsWith(QStringLiteral("multi_"));
+            if (!isMultiDim && cap > 0 && v > cap) v = cap;
             return v;
         }
     }
