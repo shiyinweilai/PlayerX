@@ -668,6 +668,8 @@ ApplicationWindow {
     // 多维评分模式支持（由 Main.qml 注入）
     property bool isMultiDimMode: false
     property var  reviewDimensions: []
+    // 启动对比时，如果是多维模式，Main.qml 注入此回调以静默加载最新维度配置
+    property var  onDimLoadNeeded: null
 
     // ─── 单路浏览模式的「N 宫格」状态 ───────────────────────────────
     // singleLaneMode = true 时，表示当前已启动且只有 1 路有效（来自单文件夹 / 添加文件）。
@@ -2524,6 +2526,9 @@ ApplicationWindow {
                 }
                 enabled: canStart
                 onClicked: {
+                    // 多维模式：先静默加载最新维度配置，再启动
+                    if (dlg.isMultiDimMode && typeof dlg.onDimLoadNeeded === "function")
+                        dlg.onDimLoadNeeded()
                     // 先走「接着评分 / 重置」检查；无进度则直接启动并关 dlg。
                     // 有进度时弹窗，弹窗按钮内部已自行处理 start() + dlg.close()。
                     _startWithResumeCheck()

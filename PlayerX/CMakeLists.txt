@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 # 应用版本号：单点维护处。会通过 APP_VERSION_STR 注入到 C++（Updater 用作
 # currentVersion）和 QML（关于对话框 / 更新弹窗显示）。
 # 发新版本时只改这一行，不要在源码里另写硬编码版本。
-project(PlayerX VERSION 3.0.11 LANGUAGES CXX C)
+project(PlayerX VERSION 3.1.0 LANGUAGES CXX C)
 
 # 在 macOS 上启用 Objective-C++（用于 ScreenProbe 直接调用 NSScreen / 注册
 # NSApplicationDidChangeScreenParametersNotification —— 绕开 Qt screen 子系统
@@ -233,8 +233,39 @@ if(APPLE AND EXISTS "${APP_ICON_ICNS}")
     )
 endif()
 
+# ─── dimensions.json 动态配置文件（不打进 qrc，运行时从 Resources 目录读取）──
+# 构建时：把 doc/dimensions.json 复制到 .app/Contents/Resources/（macOS bundle）
+# 或 bin/ 目录（非 bundle 平台），使 App 运行时可直接读取，修改文件无需重新编译。
+if(APPLE)
+    # macOS bundle：复制到 PlayerX.app/Contents/Resources/dimensions.json
+    add_custom_command(TARGET PlayerX POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/doc/dimensions.json"
+            "$<TARGET_BUNDLE_DIR:PlayerX>/Contents/Resources/dimensions.json"
+        COMMENT "Copying dimensions.json to app bundle Resources"
+    )
+else()
+    # 非 bundle 平台：复制到可执行文件同级目录
+    add_custom_command(TARGET PlayerX POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/doc/dimensions.json"
+            "$<TARGET_FILE_DIR:PlayerX>/dimensions.json"
+        COMMENT "Copying dimensions.json next to executable"
+    )
+endif()
+
 # ─── 安装 ─────────────────────────────────────────────────────────────────────
 install(TARGETS PlayerX
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION bin
 )
+# 安装时同步带上 dimensions.json
+if(APPLE)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/doc/dimensions.json"
+        DESTINATION "PlayerX.app/Contents/Resources"
+    )
+else()
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/doc/dimensions.json"
+        DESTINATION bin
+    )
+endif()

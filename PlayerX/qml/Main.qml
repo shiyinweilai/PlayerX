@@ -51,20 +51,49 @@ ApplicationWindow {
         // 初始化手机模式校准系数（按当前 Screen.width 查表，跟随系统显示档位变化）
         root._applyAutoPhoneScale()
 
-        // 加载多维度评分配置（qrc:/PlayerX/doc/dimensions.json）
-        var xhr = new XMLHttpRequest()
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState !== XMLHttpRequest.DONE) return
-            if (xhr.status === 200 || xhr.status === 0) {
-                try {
-                    var obj = JSON.parse(xhr.responseText)
-                    if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0)
-                        root.reviewDimensions = obj.dimensions
-                } catch (e) {}
+        // 加载多维度评分配置
+        // 优先从 App bundle Resources 目录读取（file:// 路径），修改 JSON 无需重新编译。
+        // macOS: PlayerX.app/Contents/Resources/dimensions.json
+        // 其他:  可执行文件同级目录 dimensions.json
+        // 若外部文件不存在，则 fallback 到 hardcode 的 reviewDimensions 默认值。
+        function _loadDimensions(url, fallbackUrl) {
+            var xhr2 = new XMLHttpRequest()
+            xhr2.onreadystatechange = function() {
+                if (xhr2.readyState !== XMLHttpRequest.DONE) return
+                if (xhr2.status === 200 || xhr2.status === 0) {
+                    try {
+                        var obj = JSON.parse(xhr2.responseText)
+                        if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
+                            root.reviewDimensions = obj.dimensions
+                            return
+                        }
+                    } catch (e) {}
+                }
+                // 加载失败且还有 fallback，尝试 fallback
+                if (fallbackUrl) _loadDimensions(fallbackUrl, null)
             }
+            xhr2.open("GET", url)
+            xhr2.send()
         }
-        xhr.open("GET", "qrc:/PlayerX/doc/dimensions.json")
-        xhr.send()
+        // 构建 bundle Resources 路径：Qt.resolvedUrl 相对于 Main.qml 所在目录
+        // Main.qml 在 qrc:/qt/qml/PlayerX/qml/Main.qml，
+        // bundle Resources 对应 file:// 绝对路径需通过 Qt.application.arguments 或
+        // 标准做法：用 StandardPaths 获取 AppDataLocation，但最简单的是：
+        // macOS bundle 下 Qt.resolvedUrl("../../../Resources/dimensions.json")
+        // 相对于 qrc 路径无效，改用 Qt.application.arguments[0] 推导 bundle 路径
+        var exePath = Qt.application.arguments[0]  // 如 .../PlayerX.app/Contents/MacOS/PlayerX
+        var resourcesUrl = ""
+        if (Qt.platform.os === "osx") {
+            // 从可执行路径推导 Contents/Resources 目录
+            var macosDir = exePath.substring(0, exePath.lastIndexOf("/"))  // .../Contents/MacOS
+            var contentsDir = macosDir.substring(0, macosDir.lastIndexOf("/"))  // .../Contents
+            resourcesUrl = "file://" + contentsDir + "/Resources/dimensions.json"
+        } else {
+            // Windows/Linux：可执行文件同级目录
+            var binDir = exePath.substring(0, exePath.lastIndexOf("/"))
+            resourcesUrl = "file://" + binDir + "/dimensions.json"
+        }
+        _loadDimensions(resourcesUrl, null)
     }
 
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
@@ -1481,8 +1510,57 @@ ApplicationWindow {
         { key: "商品", label: "商品" },
         { key: "总分", label: "总分" }
     ]
+
+    // ── 维度配置网络加载 ──────────────────────────────────────────────────
+
+    // 推导本地 Resources 目录路径（与 Component.onCompleted 逻辑一致）
+    function _resourcesDir() {
+        var exe = Qt.application.arguments[0]
+        if (Qt.platform.os === "osx") {
+            var macosDir   = exe.substring(0, exe.lastIndexOf("/"))
+            var contentsDir = macosDir.substring(0, macosDir.lastIndexOf("/"))
+            return contentsDir + "/Resources"
+        } else {
+            return exe.substring(0, exe.lastIndexOf("/"))
+        }
+    }
+
+    // 从任意 URL（file:// 或 https://）加载维度配置并热重载，无需重启
+    function loadDimensionsFromUrl(url) {
+        var xhr = new XMLHttpRequest()
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return
+            if (xhr.status === 200 || xhr.status === 0) {
+                try {
+                    var obj = JSON.parse(xhr.responseText)
+                    if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
+                        // 1. 热重载维度
+                        root.reviewDimensions = obj.dimensions
+                        // 2. 持久化到本地 Resources/dimensions.json（覆盖写）
+                        var localPath = root._resourcesDir() + "/dimensions.json"
+                        var fw = new XMLHttpRequest()
+                        // Qt 不支持 XHR 写文件，改用 Qt.createQmlObject 动态写
+                        // 实际写文件通过 EngineBridge 暴露的 writeTextFile 接口
+                        if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                            EngineBridge.writeTextFile(localPath, xhr.responseText)
+                        }
+                        return
+                    }
+                } catch (e) {
+                    console.warn("[DimLoad] JSON 解析失败：", e)
+                    return
+                }
+            }
+            console.warn("[DimLoad] 加载失败（HTTP", xhr.status, "）")
+        }
+        xhr.open("GET", url)
+        xhr.send()
+    }
+
     // 切换到多维模式时，重新初始化 cellRatings 为对象数组；切出时恢复为数字数组
     onIsMultiDimModeChanged: {
+        // 切换模式时仅重新初始化 cellRatings，维度配置在点击「启动对比」时加载
+
         var n = Engine.fileCount
         if (n <= 0) return
         var arr = []
@@ -6709,6 +6787,10 @@ ApplicationWindow {
         // 多维评分模式注入
         isMultiDimMode: root.isMultiDimMode
         reviewDimensions: root.reviewDimensions
+        // 点击「启动对比」时，如果是多维模式，静默从网络加载最新维度配置
+        onDimLoadNeeded: function() {
+            root.loadDimensionsFromUrl("https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/dimensions.json")
+        }
     }
 
     // dlg.reviewMode 现在是 readonly 并从 Rating.currentMode 直接派生，

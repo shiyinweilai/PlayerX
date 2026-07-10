@@ -6,7 +6,10 @@
 #include "../player/rb_player_engine.h"
 #include "../player/rb_video_player.h"
 
+#include <QFile>
+#include <QDir>
 #include <QFileInfo>
+#include <QTextStream>
 #include <QUrl>
 #include <QVariantMap>
 #include <algorithm>
@@ -524,6 +527,20 @@ void EngineBridge::onTick() {
 
     // 通知 VideoFrameProvider 重绘
     emit requestRepaint();
+}
+
+bool EngineBridge::writeTextFile(const QString& path, const QString& content)
+{
+    QFile f(path);
+    // 确保父目录存在
+    QFileInfo fi(path);
+    QDir().mkpath(fi.absolutePath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate))
+        return false;
+    QTextStream out(&f);
+    out.setEncoding(QStringConverter::Utf8);
+    out << content;
+    return true;
 }
 
 } // namespace rbqt

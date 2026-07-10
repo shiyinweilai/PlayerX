@@ -165,6 +165,10 @@ public slots:
     //   frameNum(int), frameType(string), pts(double)
     Q_INVOKABLE QVariantMap videoInfoAt(int idx) const;
 
+    // 写文本文件（供 QML 侧持久化配置文件，如 dimensions.json）
+    // path 为绝对路径；返回 true 表示写入成功。
+    Q_INVOKABLE bool writeTextFile(const QString& path, const QString& content);
+
 signals:
     void fileCountChanged();
     void filesChanged();
