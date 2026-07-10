@@ -752,6 +752,40 @@ ApplicationWindow {
     property int stateBumper: 0
     function _bumpState() { stateBumper = stateBumper + 1 }
 
+    // 所有组的所有通道是否都已评分（供主窗控制栏显示"评分数据"快捷按钮）
+    readonly property bool allGroupsRated: {
+        var _ = stateBumper  // 触发响应式更新
+        if (!active || !reviewMode) return false
+        if (typeof Rating === "undefined") return false
+        var n = Math.min(_rowsModel.count, _laneRuntime.length)
+        if (n === 0) return false
+        var totalGroups = groupCount()
+        if (totalGroups <= 0) return false
+        // 遍历所有通道，检查每个通道的每个文件（每组）是否都有评分
+        for (var li = 0; li < n; ++li) {
+            var lane = _rowsModel.get(li)
+            if (!lane || !lane.selected) continue
+            var rt = _laneRuntime[li]
+            if (!rt || !rt.visibleFiles) return false
+            for (var fi = 0; fi < rt.visibleFiles.length; ++fi) {
+                var fp = rt.visibleFiles[fi]
+                if (!fp) return false
+                if (hasDims) {
+                    // 有维度：每个维度都需要有评分
+                    for (var di = 0; di < reviewDimensions.length; ++di) {
+                        var dimKey = reviewDimensions[di].key
+                        var score = Rating.ratingFor(fp, "multi_" + dimKey)
+                        if (!(score > 0)) return false
+                    }
+                } else {
+                    var s = Rating.ratingFor(fp)
+                    if (!(s > 0)) return false
+                }
+            }
+        }
+        return true
+    }
+
     // ─── 数据模型：每路一个 ListModel 元素 ──────────────────────────
     ListModel {
         id: _rowsModel

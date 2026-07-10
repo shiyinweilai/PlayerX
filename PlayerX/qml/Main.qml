@@ -2335,6 +2335,8 @@ ApplicationWindow {
                 Rating.recordRating(fp, fn, arr[idx], idx)
             }
         }
+        // 评分变更后 bump，让 allGroupsRated 响应式重算
+        multiGroupDialog._bumpState()
     }
     Connections {
         target: Engine
@@ -3471,6 +3473,23 @@ ApplicationWindow {
                 visible: Engine.fileCount > 0
             }
 
+            // ── 评分完成快捷入口：所有组评分完成后浮现，点击打开评分数据面板 ──
+            FlatButton {
+                id: allRatedShortcutBtn
+                text: "📤 评分数据"
+                visible: root.reviewMode && multiGroupDialog.active && multiGroupDialog.allGroupsRated
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                font.pixelSize: 12
+                textColor: "#4fc3f7"
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("所有评分已完成，点击查看 / 导出评分数据")
+                onClicked: ratingsDialog.open()
+
+                Behavior on opacity { NumberAnimation { duration: 300 } }
+                opacity: visible ? 1.0 : 0.0
+            }
+
             // ── 关闭全部视频（一次性清空所有路）──
             // 设计：
             //   · 只在 fileCount > 0 时显示，与单路 ✕ 一致；
@@ -4260,11 +4279,14 @@ ApplicationWindow {
             if (typeof Rating !== "undefined") {
                 var fp2 = Engine.filePathAt(idx)
                 if (fp2 && fp2.length > 0) {
-                    Rating.recordRating(fp2, Engine.fileNameAt(idx), score, idx)
+            Rating.recordRating(fp2, Engine.fileNameAt(idx), score, idx)
                 }
             }
         }
-    }    function _setRatingForActive(score) {
+        // 评分变更后 bump，让 allGroupsRated 响应式重算
+        multiGroupDialog._bumpState()
+    }
+    function _setRatingForActive(score) {
         var idx = root._resolveRatingTarget()
         if (idx < 0) {
             root._showRatingWarn("\u8bf7\u5148\u9009\u4e2d\u4e00\u4e2a\u901a\u9053\uff08\u5355\u51fb\u753b\u9762\u6216\u6309 [ / ]\uff09")
