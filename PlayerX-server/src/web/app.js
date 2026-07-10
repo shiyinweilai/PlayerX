@@ -439,11 +439,14 @@
                 <div class="dim-sidebar-item-main">
                     <span class="dim-sidebar-item-type" title="双击重命名">${escHtml(c.type || c.name)}</span>
                     ${isActive ? `<span class="dim-active-badge" title="播放器将拉取此配置">📌 已激活</span>` : ''}
-                    ${c.task ? `<span class="dim-sidebar-item-task">${escHtml(c.task)}</span>` : ''}
                 </div>
-                <div class="dim-sidebar-item-actions">
-                    ${isLoggedIn() && !isActive ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="设为播放器拉取的配置">📌 激活</button>` : ''}
-                    ${isLoggedIn() ? `<button class="dim-sidebar-del ghost-btn" data-name="${escHtml(c.name)}" title="删除此配置">🗑</button>` : ''}
+                <div class="dim-sidebar-item-row2">
+                    <span class="dim-sidebar-item-task">${c.task ? escHtml(c.task) : ''}</span>
+                    <div class="dim-sidebar-item-actions">
+                        ${isLoggedIn() && !isActive ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="设为播放器拉取的配置">📌 激活</button>` : ''}
+                        ${isLoggedIn() ? `<button class="dim-copy-btn ghost-btn" data-name="${escHtml(c.name)}" title="复制一份此配置">复制</button>` : ''}
+                        ${isLoggedIn() ? `<button class="dim-sidebar-del ghost-btn" data-name="${escHtml(c.name)}" title="删除此配置">🗑</button>` : ''}
+                    </div>
                 </div>
             </div>
         `}).join('');
@@ -453,6 +456,7 @@
             el.addEventListener('click', (e) => {
                 if (e.target.closest('.dim-sidebar-del')) return;
                 if (e.target.closest('.dim-activate-btn')) return;
+                if (e.target.closest('.dim-copy-btn')) return;
                 if (e.target.closest('.dim-sidebar-rename-input')) return;
                 selectConfig(el.dataset.name);
             });
@@ -478,6 +482,14 @@
             });
         });
 
+        // 复制按钮
+        dimSidebarList.querySelectorAll('.dim-copy-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                copyConfig(btn.dataset.name);
+            });
+        });
+
         // 删除按钮
         dimSidebarList.querySelectorAll('.dim-sidebar-del').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -485,6 +497,34 @@
                 deleteConfig(btn.dataset.name);
             });
         });
+    }
+
+    // ── 复制配置 ──
+    async function copyConfig(name) {
+        try {
+            const r = await fetch(`/api/configs/${encodeURIComponent(name)}?_=` + Date.now());
+            const text = await r.text();
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            let obj;
+            try { obj = JSON.parse(text); } catch (e) { throw new Error('JSON 解析失败'); }
+            // 生成新名称：原名 + _copy（若已存在则加时间戳）
+            const newName = name + '_copy_' + Date.now();
+            obj.type = (obj.type || name) + ' (副本)';
+            const newRaw = JSON.stringify(obj, null, 2);
+            const saveR = await adminFetch(`/api/configs/${encodeURIComponent(newName)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: newRaw,
+            });
+            if (saveR.status === 401) return;
+            const j = await saveR.json().catch(() => ({}));
+            if (!saveR.ok || !j.ok) { showToast('❌ ' + (j.error || '复制失败'), 'err'); return; }
+            showToast(`✅ 已复制为「${newName}」`, 'ok');
+            await loadConfigList();
+            selectConfig(newName);
+        } catch (e) {
+            showToast('❌ 复制失败：' + e.message, 'err');
+        }
     }
 
     // ── 激活配置（设为播放器拉取的配置） ──
@@ -683,10 +723,15 @@
         }
         const metaItems = [];
         if (obj.type)  metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
-        if (obj.task)  metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val">${escHtml(obj.task)}</span></span>`);
+        // 评测任务：可内联编辑
+        metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val dim-meta-editable" data-field="task" title="点击编辑">${escHtml(obj.task || '（未填写，点击添加）')}</span></span>`);
         if (obj.scale) metaItems.push(`<span class="dim-meta-item dim-meta-muted"><span class="dim-meta-icon">📏</span>${escHtml(obj.scale)}</span>`);
-        if (obj.tag)   metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val">${escHtml(obj.tag)}</span></span>`);
+        // 备注 tag：可内联编辑
+        metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val dim-meta-editable" data-field="tag" title="点击编辑">${escHtml(obj.tag || '（未填写，点击添加）')}</span></span>`);
         const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';
+
+        // 渲染后绑定内联编辑事件（延迟到 innerHTML 写入后）
+        setTimeout(() => bindMetaInlineEdit(), 0);
 
         const cardsHtml = obj.dimensions.map((d, idx) => {
             const levelsHtml = Array.isArray(d.levels) && d.levels.length
@@ -716,6 +761,68 @@
         }).join('');
 
         dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`;
+    }
+
+    // ── 顶部 meta 行内联编辑（task / tag 字段） ──
+    function bindMetaInlineEdit() {
+        if (!isLoggedIn()) return;
+        dimView.querySelectorAll('.dim-meta-editable').forEach(span => {
+            span.addEventListener('click', () => startMetaEdit(span));
+        });
+    }
+
+    function startMetaEdit(span) {
+        if (span.querySelector('input')) return; // 已在编辑中
+        const field = span.dataset.field;
+        const currentVal = (() => {
+            try { return JSON.parse(dimRawData || '{}')[field] || ''; } catch (_) { return ''; }
+        })();
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'dim-meta-inline-input';
+        input.value = currentVal;
+        input.placeholder = field === 'tag' ? '例如 test1 / 终评' : '请输入评测任务名称';
+        span.innerHTML = '';
+        span.appendChild(input);
+        input.focus();
+        input.select();
+
+        async function commit() {
+            const newVal = input.value.trim();
+            // 还原显示
+            span.innerHTML = escHtml(newVal || (field === 'tag' ? '（未填写，点击添加）' : '（未填写，点击添加）'));
+            if (!dimRawData) return;
+            let obj;
+            try { obj = JSON.parse(dimRawData); } catch (_) { return; }
+            if (obj[field] === newVal) return; // 无变化
+            obj[field] = newVal;
+            const newRaw = JSON.stringify(obj, null, 2);
+            try {
+                const r = await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: newRaw,
+                });
+                if (r.status === 401) return;
+                const j = await r.json().catch(() => ({}));
+                if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '保存失败'), 'err'); return; }
+                dimRawData = newRaw;
+                showToast(`✅ 已更新${field === 'tag' ? '备注 tag' : '评测任务'}`, 'ok');
+                loadConfigList(); // 刷新侧边栏（任务名可能显示在侧边栏）
+            } catch (e) {
+                showToast('❌ 网络错误：' + e.message, 'err');
+            }
+        }
+
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') {
+                // 取消：还原原始值
+                span.innerHTML = escHtml(currentVal || '（未填写，点击添加）');
+                input.removeEventListener('blur', commit);
+            }
+        });
     }
 
     // ── 进入编辑模式 ──
