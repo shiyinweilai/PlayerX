@@ -153,9 +153,14 @@
                 }
             }
         }
-        // “上传 Token ”按钮仅在管理员登录后可见
+        // "上传 Token "按钮仅在管理员登录后可见
         if (tokenSettingsBtn) {
             tokenSettingsBtn.hidden = !(auth.enabled && logged);
+        }
+        // 维度页面的「编辑配置」按钮仅在管理员登录后可见
+        const dimEditBtnEl = $('dimEditBtn');
+        if (dimEditBtnEl) {
+            dimEditBtnEl.style.display = (auth.enabled && logged) ? '' : 'none';
         }
         // 主列表的批量按钮：未登录时统一锁死并提示
         const lockTip = '需要管理员登录后才能操作';
@@ -348,6 +353,210 @@
     if (tokenMask) tokenMask.addEventListener('click', (e) => {
         if (e.target === tokenMask) closeTokenDialog();
     });
+
+    // ────────── 维度规则独立页面 ──────────
+    const dimPageBtn        = $('dimPageBtn');
+    const dimPage           = $('dimPage');
+    const dimPageCloseBtn   = $('dimPageCloseBtn');
+    const dimView           = $('dimView');
+    const dimViewLoading    = $('dimViewLoading');
+    const dimEditorSection  = $('dimEditorSection');
+    const dimEditor         = $('dimEditor');
+    const dimErr            = $('dimErr');
+    const dimEditBtn        = $('dimEditBtn');
+    const dimFormatBtn      = $('dimFormatBtn');
+    const dimSaveBtn        = $('dimSaveBtn');
+    const dimCancelEditBtn  = $('dimCancelEditBtn');
+
+    // 主内容区（模式Tab/卡片/工具栏/表格）
+    const mainContent = [
+        $('modeTabs'), document.querySelector('.cards'),
+        document.querySelector('.toolbar'), document.querySelector('.table-wrap'),
+        document.querySelector('.footer'),
+    ];
+
+    let dimPageOpen = false;
+    let dimEditing  = false;
+    let dimRawData  = null; // 最后一次加载的原始 JSON 字符串
+
+    function showDimPage() {
+        dimPageOpen = true;
+        dimPage.hidden = false;
+        mainContent.forEach(el => { if (el) el.style.display = 'none'; });
+        loadDimView();
+    }
+
+    function hideDimPage() {
+        dimPageOpen = false;
+        dimPage.hidden = true;
+        mainContent.forEach(el => { if (el) el.style.display = ''; });
+        exitDimEdit();
+    }
+
+    // 加载并渲染维度数据（卡片视图）
+    async function loadDimView() {
+        // 确保 dimView 可见、编辑器隐藏（用 style 而非 hidden，避免 CSS display 覆盖）
+        dimView.style.display = '';
+        dimView.innerHTML = '<div class="dim-view-loading">加载中…</div>';
+        dimEditorSection.style.display = 'none';
+        try {
+            const r = await fetch('/api/dimensions?_=' + Date.now());
+            const text = await r.text();
+            if (!r.ok) {
+                let msg = 'HTTP ' + r.status;
+                try { msg = JSON.parse(text).error || msg; } catch (_) {}
+                throw new Error(msg);
+            }
+            dimRawData = text;
+            const obj = JSON.parse(text);
+            renderDimCards(obj);
+        } catch (e) {
+            dimView.innerHTML = `<div class="dim-view-loading dim-view-err">⚠️ 加载失败：${escHtml(e.message)}</div>`;
+        }
+    }
+
+    // 非登录态：精美卡片展示
+    function renderDimCards(obj) {
+        if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
+            dimView.innerHTML = '<div class="dim-view-loading">暂无维度配置</div>';
+            return;
+        }
+        const taskHtml = obj.task
+            ? `<div class="dim-cards-task"><span class="dim-cards-task-label">评测任务</span><span class="dim-cards-task-text">${escHtml(obj.task)}</span></div>`
+            : '';
+        const scaleHtml = obj.scale
+            ? `<div class="dim-cards-scale"><span class="dim-cards-scale-icon">📏</span>评分量表：${escHtml(obj.scale)}</div>`
+            : '';
+
+        const cardsHtml = obj.dimensions.map((d, idx) => {
+            const levelsHtml = Array.isArray(d.levels) && d.levels.length
+                ? d.levels.slice().map(lv => {
+                    const score = lv.score != null ? lv.score : '';
+                    const stars = '★'.repeat(Math.max(0, +score || 0)) + '☆'.repeat(Math.max(0, 5 - (+score || 0)));
+                    return `<div class="dim-level">
+                        <div class="dim-level-score">
+                            <span class="dim-level-num">${escHtml(String(score))}</span>
+                            <span class="dim-level-stars">${stars}</span>
+                            <span class="dim-level-label">${escHtml(lv.label || '')}</span>
+                        </div>
+                        <div class="dim-level-desc">${escHtml(lv.description || '')}</div>
+                    </div>`;
+                }).join('')
+                : '';
+            return `<div class="dim-card">
+                <div class="dim-card-left">
+                    <div class="dim-card-header">
+                        <span class="dim-card-index">${idx + 1}</span>
+                        <span class="dim-card-key">${escHtml(d.key || '')}</span>
+                    </div>
+                    ${d.definition ? `<div class="dim-card-def">${escHtml(d.definition)}</div>` : ''}
+                </div>
+                ${levelsHtml ? `<div class="dim-card-levels">${levelsHtml}</div>` : ''}
+            </div>`;
+        }).join('');
+
+        dimView.innerHTML = taskHtml + scaleHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`;
+    }
+
+    // 进入编辑模式（管理员）
+    function enterDimEdit() {
+        dimEditing = true;
+        dimEditorSection.style.display = 'flex';
+        dimView.style.display = 'none';
+        dimEditBtn.style.display = 'none';
+        dimFormatBtn.style.display = '';
+        dimSaveBtn.style.display = '';
+        dimCancelEditBtn.style.display = '';
+        dimErr.style.display = 'none';
+        dimErr.textContent = '';
+        // 填入当前数据
+        try {
+            const obj = JSON.parse(dimRawData || '{}');
+            dimEditor.value = JSON.stringify(obj, null, 2);
+        } catch (_) {
+            dimEditor.value = dimRawData || '';
+        }
+        setTimeout(() => dimEditor.focus(), 30);
+    }
+
+    function exitDimEdit() {
+        dimEditing = false;
+        dimEditorSection.style.display = 'none';
+        dimView.style.display = '';
+        dimEditBtn.style.display = isLoggedIn() ? '' : 'none';
+        dimFormatBtn.style.display = 'none';
+        dimSaveBtn.style.display = 'none';
+        dimCancelEditBtn.style.display = 'none';
+        dimErr.style.display = 'none';
+    }
+
+    async function saveDimensions() {
+        const raw = (dimEditor.value || '').trim();
+        if (!raw) { dimErr.textContent = '内容不能为空'; dimErr.style.display = ''; return; }
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (e) {
+            dimErr.textContent = 'JSON 格式错误：' + e.message;
+            dimErr.style.display = '';
+            return;
+        }
+        if (!parsed.dimensions || !Array.isArray(parsed.dimensions) || parsed.dimensions.length === 0) {
+            dimErr.textContent = '缺少 dimensions 数组或为空';
+            dimErr.style.display = '';
+            return;
+        }
+        dimSaveBtn.disabled = true;
+        try {
+            const r = await adminFetch('/api/dimensions', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: raw,
+            });
+            if (r.status === 401) return;
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) {
+                dimErr.textContent = j.error || '保存失败';
+                dimErr.style.display = '';
+                return;
+            }
+            dimRawData = raw;
+            exitDimEdit();
+            renderDimCards(parsed);
+            showToast(`✅ ${j.message || '维度配置已保存'}`, 'ok');
+        } catch (e) {
+            dimErr.textContent = '网络错误：' + e.message;
+            dimErr.style.display = '';
+        } finally {
+            dimSaveBtn.disabled = false;
+        }
+    }
+
+    if (dimPageBtn)      dimPageBtn.addEventListener('click', showDimPage);
+    if (dimPageCloseBtn) dimPageCloseBtn.addEventListener('click', hideDimPage);
+    if (dimEditBtn)      dimEditBtn.addEventListener('click', enterDimEdit);
+    if (dimCancelEditBtn)dimCancelEditBtn.addEventListener('click', exitDimEdit);
+    if (dimSaveBtn)      dimSaveBtn.addEventListener('click', saveDimensions);
+    if (dimFormatBtn) {
+        dimFormatBtn.addEventListener('click', () => {
+            try {
+                const obj = JSON.parse(dimEditor.value);
+                dimEditor.value = JSON.stringify(obj, null, 2);
+                dimErr.style.display = 'none';
+            } catch (e) {
+                dimErr.textContent = 'JSON 格式错误：' + e.message;
+                dimErr.style.display = '';
+            }
+        });
+    }
+    if (dimEditor) {
+        dimEditor.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                saveDimensions();
+            }
+        });
+    }
 
     // 用拦截器在写操作前提示登录：未登录时点击锁定按钮就直接弹登录窗
     function guardWrite(actionFn, btn) {

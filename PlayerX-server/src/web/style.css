@@ -1086,3 +1086,238 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     border-color: var(--primary, #0071e3);
     background: #fff;
 }
+
+/* ────────── 维度规则独立页面 ────────── */
+.dim-page {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: var(--bg, #0f1014);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* 顶部标题栏 */
+.dim-page-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 28px;
+    height: 56px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border, #2a2b33);
+    background: var(--bg-elev-1, #16171c);
+}
+.dim-page-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text, #ecedf3);
+    letter-spacing: .01em;
+}
+.dim-page-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 卡片视图容器 */
+.dim-view {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 32px 40px;
+}
+.dim-view-loading {
+    text-align: center;
+    padding: 60px 0;
+    color: var(--muted, #86868b);
+    font-size: 15px;
+}
+.dim-view-err { color: var(--danger, #ff453a); }
+
+/* 任务 & 量表说明 */
+.dim-cards-task {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.dim-cards-task-label {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--primary, #0071e3);
+    background: rgba(0, 113, 227, .12);
+    padding: 2px 8px;
+    border-radius: 20px;
+}
+.dim-cards-task-text {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text, #ecedf3);
+    line-height: 1.4;
+}
+.dim-cards-scale {
+    font-size: 13px;
+    color: var(--muted, #86868b);
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.dim-cards-scale-icon { font-size: 14px; }
+
+/* 行排列容器 */
+.dim-cards-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* 单行维度卡片：左侧维度信息 + 右侧等级横向平铺 */
+.dim-card {
+    background: var(--bg-elev-1, #16171c);
+    border: 1px solid var(--border, #2a2b33);
+    border-radius: var(--radius-lg, 14px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+}
+
+/* 左侧：维度名 + 描述 */
+.dim-card-left {
+    width: 220px;
+    min-width: 180px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border, #2a2b33);
+    padding: 18px 20px;
+    gap: 8px;
+    justify-content: flex-start;
+}
+.dim-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.dim-card-index {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--primary, #0071e3);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.dim-card-key {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text, #ecedf3);
+}
+.dim-card-def {
+    font-size: 15px;
+    color: var(--muted, #86868b);
+    line-height: 1.6;
+}
+
+/* 右侧：等级横向平铺 */
+.dim-card-levels {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    overflow-x: auto;
+}
+.dim-level {
+    flex: 1;
+    min-width: 140px;
+    padding: 14px 16px;
+    border-right: 1px solid var(--border-soft, #1f2027);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: background .12s;
+}
+.dim-level:last-child { border-right: none; }
+.dim-level:hover { background: var(--bg-hover, #21222a); }
+.dim-level-score {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.dim-level-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: var(--bg-elev-2, #1c1d23);
+    border: 1px solid var(--border, #2a2b33);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text, #ecedf3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+.dim-level-stars {
+    font-size: 16px;
+    letter-spacing: 1px;
+    color: #f5a623;
+    flex-shrink: 0;
+}
+.dim-level-label {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text, #ecedf3);
+}
+.dim-level-desc {
+    font-size: 15px;
+    color: var(--muted, #86868b);
+    line-height: 1.6;
+}
+
+/* 编辑器区域（管理员登录后） */
+/* 注意：必须用 [hidden] 覆盖 display:flex，否则 HTML hidden 属性会被 CSS 覆盖 */
+[hidden] { display: none !important; }
+.dim-editor-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 28px 24px;
+    gap: 10px;
+    overflow: hidden;
+}
+#dimEditor {
+    flex: 1;
+    min-height: 0;
+    resize: none;
+    box-sizing: border-box;
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border, #2a2b33);
+    background: var(--bg-elev-1, #16171c);
+    color: var(--text, #ecedf3);
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    line-height: 1.65;
+    outline: none;
+    transition: border-color .15s;
+    tab-size: 2;
+}
+#dimEditor:focus {
+    border-color: var(--primary, #0071e3);
+}
+#dimErr {
+    font-size: 13px;
+    color: var(--danger, #ff453a);
+    padding: 6px 0;
+}

@@ -18,7 +18,8 @@ const status   = require('./status');
 const del      = require('./delete');
 const archive  = require('./archive');
 const auth     = require('./auth');
-const settings = require('./settings');
+const settings   = require('./settings');
+const dimensions = require('./dimensions');
 
 function mountApi(app) {
     // ── 公开接口 ─────────────────────────────────────────────
@@ -74,6 +75,10 @@ function mountApi(app) {
     // 上传 Token 设置（仅管理员可读写）
     app.get('/api/settings/upload-token', auth.requireAdmin, settings.handleGet);
     app.put('/api/settings/upload-token', auth.requireAdmin, jsonParser, settings.handlePut);
+
+    // 维度配置（GET 公开，PUT 需管理员）
+    app.get('/api/dimensions', dimensions.handleGet);
+    app.put('/api/dimensions', auth.requireAdmin, jsonParser, dimensions.handlePut);
 
     app.post('/api/archive',           auth.requireAdmin, jsonParser, archive.handleArchive);
     app.post('/api/files/bulk-delete', auth.requireAdmin, jsonParser, archive.handleBulkDelete);

@@ -6789,7 +6789,7 @@ ApplicationWindow {
         reviewDimensions: root.reviewDimensions
         // 点击「启动对比」时，如果是多维模式，静默从网络加载最新维度配置
         onDimLoadNeeded: function() {
-            root.loadDimensionsFromUrl("https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/dimensions.json")
+root.loadDimensionsFromUrl("http://21.6.120.217:8765/api/dimensions")
         }
     }
 
