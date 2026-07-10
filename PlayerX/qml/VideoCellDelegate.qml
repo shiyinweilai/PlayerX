@@ -577,7 +577,7 @@ Rectangle {
 
                         Text {
                             text: dimRow.dimKey
-                            color: "#9a9aa8"
+                            color: "#e8e8ec"
                             font.pixelSize: 10
                             width: 28
                             horizontalAlignment: Text.AlignRight
