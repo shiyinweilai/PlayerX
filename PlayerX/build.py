@@ -1103,7 +1103,7 @@ def write_latest_json(version: str, downloads: dict):
             with open(out_path, "r", encoding="utf-8") as f:
                 old = json.load(f)
             # 元字段一律以旧文件为准（你手工维护）
-            for k in ("minSupported", "author", "copyright", "notes", "mandatory"):
+            for k in ("minSupported", "author", "copyright", "notes", "mandatory", "clientConfig"):
                 if k in old:
                     base[k] = old[k]
             # downloads：仅在版本号一致时合并，避免旧 sha256 跟新包混用
