@@ -78,7 +78,7 @@ ApplicationWindow {
                             root._remoteTag = obj.tag || ""
                             // 建立本地指纹基线（用于后续差异检测）
                             var _mode0 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : "multi_dim"
-                            var _fp0 = root._localConfigFingerprint
+                            var _fp0 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
                             _fp0[_mode0] = root._configFingerprint(obj)
                             root._localConfigFingerprint = _fp0
                             return
@@ -1176,16 +1176,16 @@ ApplicationWindow {
     }
 
     // ─── 任务配置更新通知卡片 ─────────────────────────────────────────────
-    // 后台检测到远程配置有更新时浮现，用户点击后一键应用，不阻塞任何操作。
-    // 位置：右下角，updateToast 上方。
+    // 后台检测到远程配置有更新时浮现，用户点击后逐条应用，不阻塞任何操作。
+    // 位置：左下角，常驻按钮上方。
     Popup {
         id: taskUpdateCard
         visible: root._taskUpdateVisible
         modal: false
         focus: false
         closePolicy: Popup.NoAutoClose
-        x: root.width - width - 24
-        y: root.height - height - 36
+        x: 16
+        y: root.height - height - 56
         padding: 0
         implicitWidth: 280
 
@@ -1220,7 +1220,7 @@ ApplicationWindow {
                     Layout.alignment: Qt.AlignVCenter
                     Layout.fillWidth: true
                 }
-                // 关闭按钮
+                // 关闭按钮（只隐藏，不清空数据，可通过常驻按钮再次打开）
                 Text {
                     text: "✕"
                     color: "#888"
@@ -1230,10 +1230,7 @@ ApplicationWindow {
                         anchors.fill: parent
                         anchors.margins: -6
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            root._taskUpdateVisible = false
-                            root._pendingRemoteConfig = null
-                        }
+                        onClicked: root._taskUpdateVisible = false
                     }
                 }
                 Item { width: 8 }  // 右边距
@@ -1242,67 +1239,106 @@ ApplicationWindow {
             // 分隔线
             Rectangle { width: 280; height: 1; color: "#33ffffff" }
 
-            // 描述行
-            Text {
-                width: 280
-                leftPadding: 12
-                rightPadding: 12
-                topPadding: 8
-                bottomPadding: 4
-                text: {
-                    var cfg = root._pendingRemoteConfig
-                    if (!cfg) return "配置已更新，点击应用"
-                    if (!Array.isArray(cfg)) return "配置已更新，点击应用"
-                    return cfg.map(function(item) {
-                        var obj  = item.obj || {}
-                        var type = obj.type || ""
-                        var tag  = obj.tag  || ""
-                        var parts = []
-                        if (type.length > 0) parts.push("类型：" + type)
-                        if (tag.length  > 0) parts.push("tag：" + tag)
-                        if (parts.length === 0) parts.push(item.mode)
-                        return parts.join("  ·  ")
-                    }).join("\n")
-                }
-                color: "#aaaabc"
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
-            }
+            // 每个待更新配置一行：左边类型+tag，右边独立应用按钮
+            Repeater {
+                model: Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+                delegate: Item {
+                    width: 280
+                    height: 44
 
-            // 应用按钮
-            Rectangle {
-                width: 280
-                height: 36
-                color: "transparent"
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    anchors.bottomMargin: 8
-                    height: 28
-                    radius: 4
-                    color: applyBtnMouse.containsMouse ? "#0db092" : "#0fa085"
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "立即应用新配置"
-                        color: "#ffffff"
-                        font.pixelSize: 12
-                        font.bold: true
-                    }
-
-                    MouseArea {
-                        id: applyBtnMouse
+                    // 悬停背景
+                    Rectangle {
                         anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root._applyPendingRemoteConfig()
+                        anchors.leftMargin: 1
+                        anchors.rightMargin: 1
+                        color: rowHover.containsMouse ? "#14ffffff" : "transparent"
+                        radius: 3
+                    }
+                    HoverHandler { id: rowHover }
+
+                    // 左侧：类型 + tag
+                    Column {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.right: applyBtn.left
+                        anchors.rightMargin: 8
+                        spacing: 2
+
+                        Text {
+                            width: parent.width
+                            text: {
+                                var obj  = modelData.obj || {}
+                                var type = obj.type || ""
+                                var tag  = obj.tag  || ""
+                                if (type.length > 0 && tag.length > 0) return type + "  ·  " + tag
+                                if (type.length > 0) return type
+                                if (tag.length  > 0) return tag
+                                return modelData.mode
+                            }
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            width: parent.width
+                            text: {
+                                var ml = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList : []
+                                for (var i = 0; i < ml.length; i++) {
+                                    if (ml[i].id === modelData.mode) return ml[i].label
+                                }
+                                return modelData.mode
+                            }
+                            color: "#6a6a7c"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    // 右侧：应用按钮
+                    Rectangle {
+                        id: applyBtn
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 52
+                        height: 26
+                        radius: 4
+                        color: applyMouse.containsMouse ? "#0db092" : "#0fa085"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "应用"
+                            color: "#ffffff"
+                            font.pixelSize: 11
+                            font.bold: true
+                        }
+
+                        MouseArea {
+                            id: applyMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root._applyRemoteConfigItem(modelData)
+                        }
+                    }
+
+                    // 行分隔线（最后一行不显示）
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 12
+                        height: 1
+                        color: "#22ffffff"
+                        visible: index < (Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length - 1 : 0)
                     }
                 }
             }
+
+            // 底部间距
+            Item { width: 280; height: 6 }
         }
     }
 
@@ -1706,10 +1742,19 @@ ApplicationWindow {
 
                 function onAllDone() {
                     if (pending.length === 0) return
-                    // 有差异：暂存，弹通知
-                    root._pendingRemoteConfig = pending
+                    // 有差异：合并到已有列表（避免覆盖用户已部分应用的条目）
+                    var existing = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+                    var merged = existing.slice()
+                    pending.forEach(function(newItem) {
+                        var found = false
+                        for (var k = 0; k < merged.length; k++) {
+                            if (merged[k].mode === newItem.mode) { merged[k] = newItem; found = true; break }
+                        }
+                        if (!found) merged.push(newItem)
+                    })
+                    root._pendingRemoteConfig = merged
                     root._taskUpdateVisible = true
-                    console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新")
+                    console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新，当前待应用", merged.length, "个")
                 }
 
                 modes.forEach(function(mode) {
@@ -1728,17 +1773,19 @@ ApplicationWindow {
                         finished++
                         if (xhr1.status === 200 || xhr1.status === 0) {
                             try {
-                                var obj = JSON.parse(xhr1.responseText)
+                                var rawText = xhr1.responseText
+                                var obj = JSON.parse(rawText)
                                 if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
-                                    var remoteFp = root._configFingerprint(obj)
+                                    // 用原始响应字符串作为指纹，避免 JSON.stringify 字段顺序不稳定导致误判
+                                    var remoteFp = rawText
                                     var localFp  = root._localConfigFingerprint[mode] || ""
                                     if (localFp.length === 0) {
                                         // 首次检测该模式：建立基线，不弹通知
-                                        var fp2 = root._localConfigFingerprint
+                                        var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
                                         fp2[mode] = remoteFp
                                         root._localConfigFingerprint = fp2
                                     } else if (remoteFp !== localFp) {
-                                        pending.push({ mode: mode, obj: obj, configName: configName })
+                                        pending.push({ mode: mode, obj: obj, configName: configName, rawText: rawText })
                                     }
                                 }
                             } catch (e) {
@@ -1759,17 +1806,61 @@ ApplicationWindow {
     }
 
     // 用户点击通知卡片后，应用所有待更新的远程配置
+    // 应用单条远程配置，并自动切换到对应评分模式
+    function _applyRemoteConfigItem(item) {
+        if (!item || !item.obj) return
+        try {
+            var obj = item.obj
+
+            // 更新指纹基线（用原始响应字符串，与检测时保持一致；深拷贝后赋值确保 binding 触发）
+            var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+            fp2[item.mode] = item.rawText || root._configFingerprint(obj)
+            root._localConfigFingerprint = fp2
+
+            // 热更新播放器维度
+            var _dims = obj.dimensions.map(function(d) {
+                var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
+                return Object.assign({}, d, { starCount: sc })
+            })
+            root.reviewDimensions = _dims
+            if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
+            root._remoteTag = obj.tag || ""
+
+            // 自动切换到对应评分模式
+            if (typeof Rating !== "undefined" && item.mode && item.mode !== "off") {
+                Rating.currentMode = item.mode
+            }
+
+            // 持久化到本地缓存文件
+            var localPath = root._resourcesDir() + "/dimensions.json"
+            if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                EngineBridge.writeTextFile(localPath, JSON.stringify(obj))
+            }
+            console.log("[ConfigCheck] 已应用配置并切换模式，mode:", item.mode, "tag:", obj.tag)
+
+            // 从待更新列表中移除该条
+            var remaining = (root._pendingRemoteConfig || []).filter(function(x) {
+                return x.mode !== item.mode
+            })
+            root._pendingRemoteConfig = remaining.length > 0 ? remaining : null
+            if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
+        } catch (e) {
+            console.warn("[ConfigCheck] 应用单条配置失败：", e)
+        }
+    }
+
     function _applyPendingRemoteConfig() {
         var list = root._pendingRemoteConfig
         if (!list || !Array.isArray(list) || list.length === 0) return
         try {
             var currentMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
-            var fp2 = root._localConfigFingerprint
+            // 深拷贝后修改再赋值，确保 QML property var binding 触发更新
+            var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
 
             list.forEach(function(item) {
                 var obj = item.obj
-                // 更新指纹基线
-                fp2[item.mode] = root._configFingerprint(obj)
+                // 更新指纹基线（用 rawText 与检测时保持一致）
+                fp2[item.mode] = item.rawText || root._configFingerprint(obj)
                 // 只有当前播放器模式匹配时，才热更新播放器维度
                 if (item.mode === currentMode || list.length === 1) {
                     var _dims = obj.dimensions.map(function(d) {
@@ -2886,6 +2977,52 @@ ApplicationWindow {
 
             // 打开 / 多组对比 入口已统一收纳到顶部系统菜单栏【文件】。
             // 这里只保留一个 fillWidth 的 spacer，把后面的播放控制组推到工具栏右端。
+
+            // ── 任务配置更新常驻入口按钮（🔔）紧贴 📱 按钮左侧 ──────────
+            Button {
+                id: taskUpdateEntryBtn
+                visible: Array.isArray(root._pendingRemoteConfig) && root._pendingRemoteConfig.length > 0
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 28
+                Layout.alignment: Qt.AlignVCenter
+                hoverEnabled: true
+                onClicked: root._taskUpdateVisible = !root._taskUpdateVisible
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: "远程有 " + (Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length : 0) + " 个任务配置更新（点击查看）"
+                background: Rectangle {
+                    color: taskUpdateEntryBtn.down ? "#4a4a55"
+                          : taskUpdateEntryBtn.hovered ? "#33333a" : "#202024"
+                    border.color: "#e05050"
+                    border.width: 1
+                    radius: 5
+                }
+                contentItem: Item {
+                    Text {
+                        anchors.centerIn: parent
+                        text: "🔔"
+                        font.pixelSize: 14
+                    }
+                    // 红点角标
+                    Rectangle {
+                        anchors.top: parent.top
+                        anchors.right: parent.right
+                        anchors.topMargin: 1
+                        anchors.rightMargin: 1
+                        width: 13
+                        height: 13
+                        radius: 7
+                        color: "#e05050"
+                        Text {
+                            anchors.centerIn: parent
+                            text: Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length : 0
+                            color: "#ffffff"
+                            font.pixelSize: 8
+                            font.bold: true
+                        }
+                    }
+                }
+            }
 
             // ── 手机比例锁定按钮（📱）紧贴 🖼 按钮左侧 ─────────────────
             // 锁定后每路视频按选定宽高比 (= 宽÷高) 居中显示，模拟手机屏形状，
