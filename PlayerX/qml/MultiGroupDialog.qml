@@ -679,21 +679,31 @@ ApplicationWindow {
     property var localConfigFingerprint: null
 
     // 从 localConfigFingerprint 中查找当前模式绑定的 configName
+    // 优先从 __bindings__ 读取（最新绑定关系），避免指纹里残留旧 key 导致返回错误配置名
     function _boundConfigName() {
         var mode = (typeof Rating !== "undefined") ? Rating.currentMode : ""
         if (!mode || mode === "off") return ""
         var fp = localConfigFingerprint
         if (!fp) return ""
+        // 优先从 __bindings__ 读取：格式 JSON.stringify({ mode -> configName })
+        var bindingsStr = fp["__bindings__"] || ""
+        if (bindingsStr.length > 0) {
+            try {
+                var bindings = JSON.parse(bindingsStr)
+                if (bindings && bindings[mode]) return bindings[mode]
+            } catch(e) {}
+        }
+        // 兜底：遍历 key（格式 "mode:configName"），取最后一个匹配（最新写入）
+        var result = ""
         var keys = Object.keys(fp)
         for (var i = 0; i < keys.length; ++i) {
             var k = keys[i]
             if (k === "__bindings__") continue
-            // key 格式："mode:configName"
             var sep = k.indexOf(":")
             if (sep < 0) continue
-            if (k.substring(0, sep) === mode) return k.substring(sep + 1)
+            if (k.substring(0, sep) === mode) result = k.substring(sep + 1)
         }
-        return ""
+        return result
     }
 
     // 构造后端规则页面 URL：origin + /#rules/ + encodeURIComponent(configName)
