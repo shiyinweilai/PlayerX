@@ -672,6 +672,40 @@ ApplicationWindow {
     readonly property bool hasDims: reviewDimensions && reviewDimensions.length > 0
     // 启动对比时，如果是多维模式，Main.qml 注入此回调以静默加载最新维度配置
     property var  onDimLoadNeeded: null
+    // 后端服务器地址（用于构造「查看规则」跳转 URL）
+    property string uploadServerUrl: ""
+    // 本地配置指纹（格式：{ "mode:configName": fp, "__bindings__": fp }）
+    // 用于从当前模式反查绑定的 configName，构造规则页 URL
+    property var localConfigFingerprint: null
+
+    // 从 localConfigFingerprint 中查找当前模式绑定的 configName
+    function _boundConfigName() {
+        var mode = (typeof Rating !== "undefined") ? Rating.currentMode : ""
+        if (!mode || mode === "off") return ""
+        var fp = localConfigFingerprint
+        if (!fp) return ""
+        var keys = Object.keys(fp)
+        for (var i = 0; i < keys.length; ++i) {
+            var k = keys[i]
+            if (k === "__bindings__") continue
+            // key 格式："mode:configName"
+            var sep = k.indexOf(":")
+            if (sep < 0) continue
+            if (k.substring(0, sep) === mode) return k.substring(sep + 1)
+        }
+        return ""
+    }
+
+    // 构造后端规则页面 URL：origin + /#rules/ + encodeURIComponent(configName)
+    function _rulesPageUrl() {
+        var base = uploadServerUrl.trim()
+        if (base.length === 0) return ""
+        var configName = _boundConfigName()
+        if (configName.length === 0) return ""
+        var m = base.match(/^(https?:\/\/[^/]+)/)
+        var origin = m ? m[1] : base.replace(/\/$/, "")
+        return origin + "/#rules/" + encodeURIComponent(configName)
+    }
 
     // ─── 单路浏览模式的「N 宫格」状态 ───────────────────────────────
     // singleLaneMode = true 时，表示当前已启动且只有 1 路有效（来自单文件夹 / 添加文件）。
@@ -2515,6 +2549,34 @@ ApplicationWindow {
                 }
                 implicitHeight: 30
                 implicitWidth: Math.min(Math.max(configBtnText.implicitWidth + 20, 90), 220)
+            }
+
+            // 查看规则按钮：仅在已选中评分模式且后端有绑定配置时显示
+            Button {
+                id: viewRulesBtn
+                visible: reviewMode && _rulesPageUrl().length > 0
+                text: "查看规则 ↗"
+                onClicked: Qt.openUrlExternally(_rulesPageUrl())
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: _rulesPageUrl()
+                background: Rectangle {
+                    color: viewRulesBtn.down    ? "#0a4a8a"
+                          : viewRulesBtn.hovered ? "#1a5faa"
+                                                 : "#152a4a"
+                    border.color: "#2a6abf"
+                    border.width: 1
+                    radius: 4
+                }
+                contentItem: Text {
+                    text: viewRulesBtn.text
+                    color: "#7ab8f5"
+                    font.pixelSize: 12
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                implicitHeight: 30
+                implicitWidth: 90
             }
 
             Label {

@@ -162,6 +162,20 @@ void Updater::parseManifest(const QByteArray& body) {
         }
     }
 
+    // 解析客户端上传配置（clientConfig 字段，可选）
+    // 只要字段存在就更新，为空字段不覆盖（让 QML 侧决定是否应用）
+    const QJsonValue ccVal = obj.value(QStringLiteral("clientConfig"));
+    if (ccVal.isObject()) {
+        const QJsonObject cc = ccVal.toObject();
+        const QString newUploadUrl = cc.value(QStringLiteral("uploadUrl")).toString();
+        const QString newToken     = cc.value(QStringLiteral("token")).toString();
+        if (newUploadUrl != m_clientUploadUrl || newToken != m_clientToken) {
+            m_clientUploadUrl = newUploadUrl;
+            m_clientToken     = newToken;
+            emit clientConfigChanged();
+        }
+    }
+
     emit infoChanged();
 
     if (updateAvailable()) {

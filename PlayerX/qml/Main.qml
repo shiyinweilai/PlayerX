@@ -463,6 +463,19 @@ ApplicationWindow {
                 updateRetryTimer.restart()
             }
         }
+        // 远端 latest.json 下发了新的客户端上传配置 → 静默更新本地存储
+        function onClientConfigChanged() {
+            if (typeof Rating === "undefined") return
+            var newUrl   = Updater.clientUploadUrl
+            var newToken = Updater.clientToken
+            if (!newUrl || newUrl.trim().length === 0) return
+            // 只在有实际变化时才写入，避免无意义的持久化触发
+            if (newUrl.trim()   !== (Rating.uploadServerUrl || "").trim() ||
+                newToken.trim() !== (Rating.uploadToken     || "").trim()) {
+                Rating.uploadServerUrl = newUrl.trim()
+                Rating.uploadToken     = newToken.trim()
+            }
+        }
     }
 
     // 平台修饰键显示文本：mac 显示 ⌘，其它显示 Ctrl+。
@@ -7445,6 +7458,9 @@ ApplicationWindow {
                 if (typeof callback === "function") callback(false)
             }
         }
+        // 后端服务器地址 + 本地配置指纹：用于「查看规则」按钮构造跳转 URL
+        uploadServerUrl: (typeof Rating !== "undefined" && Rating.uploadServerUrl) ? Rating.uploadServerUrl : ""
+        localConfigFingerprint: root._localConfigFingerprint
     }
 
     // dlg.reviewMode 现在是 readonly 并从 Rating.currentMode 直接派生，

@@ -38,15 +38,21 @@ class Updater : public QObject {
     Q_PROPERTY(qreal   progress       READ progress       NOTIFY progressChanged)
     Q_PROPERTY(QString progressText   READ progressText   NOTIFY progressChanged)
     Q_PROPERTY(QString errorText      READ errorText      NOTIFY stateChanged)
-    Q_PROPERTY(QString manifestUrl    READ manifestUrl    WRITE setManifestUrl NOTIFY manifestUrlChanged)
+    Q_PROPERTY(QString manifestUrl      READ manifestUrl      WRITE setManifestUrl NOTIFY manifestUrlChanged)
+    // 远端清单里下发的客户端上传配置（为空表示清单未包含此字段，不覆盖本地）
+    Q_PROPERTY(QString clientUploadUrl  READ clientUploadUrl  NOTIFY clientConfigChanged)
+    Q_PROPERTY(QString clientToken      READ clientToken      NOTIFY clientConfigChanged)
 
 public:
     explicit Updater(QObject* parent = nullptr);
     ~Updater() override;
 
     // 远端 latest.json 的 URL（默认值在构造里给出，可被 QML 修改）
-    QString manifestUrl() const { return m_manifestUrl.toString(); }
+    QString manifestUrl()     const { return m_manifestUrl.toString(); }
     void    setManifestUrl(const QString& u);
+
+    QString clientUploadUrl() const { return m_clientUploadUrl; }
+    QString clientToken()     const { return m_clientToken; }
 
     QString currentVersion() const { return m_currentVersion; }
     QString latestVersion()  const { return m_latestVersion; }
@@ -75,6 +81,7 @@ signals:
     void progressChanged();      // 下载进度
     void readyToInstall();       // 下载完成、即将切到外部脚本/进程
     void checkFailed(QString reason);   // 检查阶段失败（QML 可选弹 toast）
+    void clientConfigChanged();          // 远端下发了新的客户端上传配置
 
 private slots:
     void onManifestFinished();
@@ -111,6 +118,10 @@ private:
     // 平台对应的下载条目
     QString m_pkgUrl;
     QString m_pkgSha256;
+
+    // 远端下发的客户端上传配置（为空表示清单未包含）
+    QString m_clientUploadUrl;
+    QString m_clientToken;
 
     // 状态机：idle / checking / available / downloading / verifying / ready / error
     QString m_state = QStringLiteral("idle");
