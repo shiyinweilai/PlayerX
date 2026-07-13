@@ -2751,8 +2751,32 @@ Window {
                 // 改用居中模态成功对话框 + 4s 自动关闭：既醒目，又不打断后续操作太久。
                 // 同时按钮闪一下做次要反馈。
                 uploadSuccessDialog._msg = message || qsTr("上传成功")
+                // 构造「查看结果」URL：取服务器 origin + /#results
+                var _srvBase = (typeof Rating !== "undefined" && Rating.uploadServerUrl) ? Rating.uploadServerUrl.trim() : ""
+                var _m = _srvBase.match(/^(https?:\/\/[^/]+)/)
+                uploadSuccessDialog._viewUrl = _m ? _m[1] + "/#results" : ""
+                // 填充本次上传的上下文信息，供弹窗展示
+                uploadSuccessDialog._rater = (typeof Rating !== "undefined") ? Rating.currentUser : ""
+                uploadSuccessDialog._tag   = (typeof Rating !== "undefined") ? Rating.uploadTag   : ""
+                // 转换为相对路径：用 ~ 替换 home 目录
+                var _rawPaths = root._lastUploadFolders
+                var _relPaths = []
+                for (var _pi = 0; _pi < _rawPaths.length; _pi++) {
+                    var _p = String(_rawPaths[_pi])
+                    // 尝试用 /Users/<name> 模式匹配 home，用 ~ 替换
+                    var _homeMatch = _p.match(/^(\/Users\/[^\/]+)(\/.*)?$/)
+                    if (_homeMatch) _p = "~" + (_homeMatch[2] || "")
+                    _relPaths.push(_p)
+                }
+                uploadSuccessDialog._folderPaths = _relPaths
+                // 从 modeList 中找到当前模式的 label
+                var _ml = (typeof Rating !== "undefined") ? Rating.modeList : []
+                var _mLabel = root._selectedMode
+                for (var _mi = 0; _mi < _ml.length; _mi++) {
+                    if (_ml[_mi].id === root._selectedMode) { _mLabel = _ml[_mi].label; break }
+                }
+                uploadSuccessDialog._modeName = _mLabel
                 uploadSuccessDialog.open()
-                uploadSuccessAutoClose.restart()
                 uploadBtn.flash = true
                 uploadFlashTimer.restart()
             } else {
@@ -3081,6 +3105,11 @@ Window {
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
         property string _msg: ""
+        property string _viewUrl: ""  // 上传成功后的「查看结果」跳转 URL
+        property string _rater: ""
+        property string _tag: ""
+        property string _modeName: ""
+        property var    _folderPaths: []   // 上传的文件夹绝对路径列表
 
         Overlay.modal: Rectangle { color: "#80000000" }
 
@@ -3101,75 +3130,136 @@ Window {
         }
 
         contentItem: ColumnLayout {
-            spacing: 12
-            anchors.margins: 20
-            // 用 Item 撑边距而不是给 ColumnLayout 设 margins（QML 不支持）
-            Item { Layout.preferredHeight: 4 }
+            spacing: 0
+
+            // ── 标题行 ──────────────────────────────────────────────────
+            Item { Layout.preferredHeight: 20 }
             RowLayout {
-                Layout.alignment: Qt.AlignHCenter
-                Layout.fillWidth: true
                 Layout.leftMargin: 20
                 Layout.rightMargin: 20
-                spacing: 12
+                spacing: 10
                 Text {
                     text: "✅"
-                    font.pixelSize: 28
-                    color: "#5fd17a"
+                    font.pixelSize: 24
                 }
                 Text {
-                    Layout.fillWidth: true
                     text: qsTr("上传成功")
                     color: "#e8f5ec"
-                    font.pixelSize: 16
+                    font.pixelSize: 17
                     font.bold: true
+                }
+            }
+
+            // ── 分隔线 ──────────────────────────────────────────────────
+            Item { Layout.preferredHeight: 14 }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                height: 1
+                color: "#2a3d2a"
+            }
+            Item { Layout.preferredHeight: 12 }
+
+            // ── 信息卡片：本次上传摘要 ──────────────────────────────────
+            GridLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                columns: 2
+                columnSpacing: 10
+                rowSpacing: 10
+
+                // 行 1：评分模式
+                Text {
+                    text: qsTr("评分模式")
+                    color: "#7a9a7a"
+                    font.pixelSize: 12
+                    Layout.preferredWidth: 64
+                }
+                Text {
+                    text: uploadSuccessDialog._modeName || "—"
+                    color: "#d4f0d4"
+                    font.pixelSize: 13
+                    font.bold: true
+                    Layout.fillWidth: true
                     elide: Text.ElideRight
                 }
+
+                // 行 2：备注 tag
+                Text {
+                    text: qsTr("备注 tag")
+                    color: "#7a9a7a"
+                    font.pixelSize: 12
+                }
+                Text {
+                    text: uploadSuccessDialog._tag || "—"
+                    color: "#5fd17a"
+                    font.pixelSize: 13
+                    font.family: "Menlo, Monaco, monospace"
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+
+                // 行 3：评分人
+                Text {
+                    text: qsTr("评分人")
+                    color: "#7a9a7a"
+                    font.pixelSize: 12
+                }
+                Text {
+                    text: uploadSuccessDialog._rater || "—"
+                    color: "#d4f0d4"
+                    font.pixelSize: 13
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+
+                // 行 4：上传文件夹（相对路径列表）
+                Text {
+                    text: qsTr("文件夹")
+                    color: "#7a9a7a"
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignTop
+                }
+                Column {
+                    Layout.fillWidth: true
+                    spacing: 3
+                    Repeater {
+                        model: uploadSuccessDialog._folderPaths
+                        Text {
+                            width: parent.width
+                            text: modelData
+                            color: "#d4f0d4"
+                            font.pixelSize: 12
+                            elide: Text.ElideMiddle
+                        }
+                    }
+                }
             }
-            Text {
-                Layout.fillWidth: true
-                Layout.leftMargin: 20
-                Layout.rightMargin: 20
-                text: uploadSuccessDialog._msg
-                color: "#cfeede"
-                font.pixelSize: 13
-                wrapMode: Text.WordWrap
-                lineHeight: 1.35
-            }
-            // 进度条样式倒计时（视觉提示"几秒后自动关闭"）。
-            // 实现细节：内层 Rectangle 的 width 不能预先用 binding 表达式（会被 onOpened 里的
-            // 命令式赋值打断 → "left-hand side of assignment operator is not an lvalue"）。
-            // 改为：父开门时把 NumberAnimation 启动，由动画把 width 从满变到 0；动画自带 lvalue 写入路径。
+
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 16 }
+
+            // ── 底部按钮行 ──────────────────────────────────────────────
             Rectangle {
-                id: _autoCloseTrack
                 Layout.fillWidth: true
-                Layout.leftMargin: 20
-                Layout.rightMargin: 20
-                Layout.preferredHeight: 3
-                radius: 2
-                color: "#22381f"
-                Rectangle {
-                    id: _autoCloseBar
-                    height: parent.height
-                    radius: parent.radius
-                    color: "#3aa55a"
-                    width: 0   // 初始 0，开门时由动画把它推到满再线性收缩
-                }
-                NumberAnimation {
-                    id: _autoCloseAnim
-                    target: _autoCloseBar
-                    property: "width"
-                    duration: uploadSuccessAutoClose.interval
-                    easing.type: Easing.Linear
-                    // from/to 在动画启动时即时取值，保证宽度跟随父容器实际像素
-                    from: _autoCloseTrack.width
-                    to: 0
-                }
+                height: 1
+                color: "#2a3d2a"
             }
             RowLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 20
                 Layout.rightMargin: 20
+                Layout.topMargin: 12
                 Layout.bottomMargin: 16
+                spacing: 8
+                // 查看结果按钮：仅在有服务器地址时显示
+                PillBtn {
+                    visible: uploadSuccessDialog._viewUrl.length > 0
+                    text: qsTr("查看结果 ↗")
+                    emphasized: true
+                    onClicked: Qt.openUrlExternally(uploadSuccessDialog._viewUrl)
+                }
                 Item { Layout.fillWidth: true }
                 PillBtn {
                     text: qsTr("确定")
@@ -3177,20 +3267,14 @@ Window {
                 }
             }
         }
-
-        // 打开时启动倒计时动画（NumberAnimation 自身负责 lvalue 写入）
-        onOpened: {
-            _autoCloseAnim.stop()
-            _autoCloseAnim.start()
-        }
-        onClosed: _autoCloseAnim.stop()
     }
 
     Timer {
         id: uploadSuccessAutoClose
         interval: 4000
         repeat: false
-        onTriggered: uploadSuccessDialog.close()
+        // 已禁用自动关闭：弹窗需用户手动点击确定（有「查看结果」跳转需求）
+        // onTriggered: uploadSuccessDialog.close()
     }
 
     // 鉴权失败对话框：服务器开启了 token 校验、但客户端未配置/配错时，弹强提醒并提供"打开设置"快捷入口。
