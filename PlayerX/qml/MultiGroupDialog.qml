@@ -2564,19 +2564,8 @@ ApplicationWindow {
                 }
                 enabled: canStart
                 onClicked: {
-                    // 多维模式：先等待最新维度配置加载完成，再启动（保证面板用新维度渲染）
-                    // 所有评分模式：先从服务器加载当前模式对应的激活配置，完成后再启动
-                    // 非评分模式（off）或未配置服务器时直接启动
-                    var curMode = (typeof Rating !== "undefined") ? (Rating.currentMode || "off") : "off"
-                    if (curMode !== "off" && typeof dlg.onDimLoadNeeded === "function") {
-                        dlg.onDimLoadNeeded(curMode, function() {
-                            _startWithResumeCheck()
-                        })
-                    } else {
-                        // 先走「接着评分 / 重置」检查；无进度则直接启动并关 dlg。
-                        // 有进度时弹窗，弹窗按钮内部已自行处理 start() + dlg.close()。
-                        _startWithResumeCheck()
-                    }
+                    // 直接用本地缓存配置启动（远程配置更新通过后台差异检测 + 通知卡片处理）
+                    _startWithResumeCheck()
                 }
                 background: Rectangle {
                     color: !startBtn.enabled ? "#1a1a1d"

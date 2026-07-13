@@ -929,7 +929,7 @@ Window {
                         Behavior on border.color { ColorAnimation { duration: 160 } }
                     }
                     // 实时同步：每次键入都立刻写回 Rating.uploadTag，
-                    // 避免“改完 tag 直接点上传按钮，但首次点击还在用旧值”的时序问题
+                    // 避免"改完 tag 直接点上传按钮，但首次点击还在用旧值"的时序问题
                     // （旧逻辑只在 editingFinished 即失焦/回车时才同步）。
                     onTextChanged: {
                         if (typeof Rating !== "undefined"
@@ -939,8 +939,19 @@ Window {
                         // 用户开始输入即清掉无效态
                         if (root._invalidTag && text.trim().length > 0) root._invalidTag = false
                     }
-                }
-                Text {
+                    // 远程配置热更新后，Rating.uploadTag 会被外部改写，
+                    // 但 TextField.text 的 QML 绑定在用户首次输入后已断开（binding break），
+                    // 需要通过信号监听主动刷新，否则输入框永远显示旧 tag。
+                    Connections {
+                        target: (typeof Rating !== "undefined") ? Rating : null
+                        function onUploadConfigChanged() {
+                            if (typeof Rating !== "undefined"
+                                    && tagField.text !== Rating.uploadTag) {
+                                tagField.text = Rating.uploadTag
+                            }
+                        }
+                    }
+                }                Text {
                     text: qsTr("回车保存")
                     color: "#6a6a72"
                     font.pixelSize: 11

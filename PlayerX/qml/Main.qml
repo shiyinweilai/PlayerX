@@ -52,7 +52,9 @@ ApplicationWindow {
         root._applyAutoPhoneScale()
 
         // 加载多维度评分配置
-        // 优先从后端服务器拉取激活配置（保证与后端同步），失败则 fallback 到本地文件。
+        // 策略：优先从本地缓存文件加载（零延迟，不阻塞启动），
+        //       加载完成后立即后台静默检测远程配置是否有更新。
+        //       有更新时弹出通知卡片，用户主动点击后才应用，不阻塞任何操作。
         // macOS: PlayerX.app/Contents/Resources/dimensions.json
         // 其他:  可执行文件同级目录 dimensions.json
         function _loadDimensions(url, fallbackUrl) {
@@ -69,23 +71,28 @@ ApplicationWindow {
                                 return Object.assign({}, d, { starCount: sc })
                             })
                             root.reviewDimensions = _dims0
-                            // 同步远程配置的 tag 到备注 tag 输入框（用户可手动覆盖）
+                            // 同步 tag
                             if (obj.tag && typeof Rating !== "undefined") {
                                 Rating.uploadTag = obj.tag
                             }
-                            // 存储远程 tag，供上传时校验
                             root._remoteTag = obj.tag || ""
+                            // 建立本地指纹基线（用于后续差异检测）
+                            var _mode0 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : "multi_dim"
+                            var _fp0 = root._localConfigFingerprint
+                            _fp0[_mode0] = root._configFingerprint(obj)
+                            root._localConfigFingerprint = _fp0
                             return
                         }
                     } catch (e) {}
                 }
                 // 加载失败且还有 fallback，尝试 fallback
                 if (fallbackUrl) _loadDimensions(fallbackUrl, null)
+                // 本地无缓存，configInitCheckTimer 会在 1.5s 后触发首次检测
             }
             xhr2.open("GET", url)
             xhr2.send()
         }
-        // 构建 bundle Resources 路径作为 fallback
+        // 构建 bundle Resources 路径
         var exePath = Qt.application.arguments[0]  // 如 .../PlayerX.app/Contents/MacOS/PlayerX
         var resourcesUrl = ""
         if (Qt.platform.os === "osx") {
@@ -96,22 +103,8 @@ ApplicationWindow {
             var binDir = exePath.substring(0, exePath.lastIndexOf("/"))
             resourcesUrl = "file://" + binDir + "/dimensions.json"
         }
-        // 优先从服务器拉取激活配置（使用用户配置的 uploadServerUrl），失败再读本地文件
-        var dimUrl = ""
-        if (typeof Rating !== "undefined" && Rating.uploadServerUrl) {
-            var _base = Rating.uploadServerUrl.trim()
-            var _m = _base.match(/^(https?:\/\/[^/]+)/)
-            if (_m) {
-                // 带上当前评分模式，让服务端返回对应模式绑定的配置
-                var _mode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
-                dimUrl = _m[1] + "/api/dimensions" + (_mode ? ("?mode=" + encodeURIComponent(_mode)) : "")
-            }
-        }
-        if (dimUrl.length > 0) {
-            _loadDimensions(dimUrl, resourcesUrl)
-        } else {
-            _loadDimensions(resourcesUrl, null)
-        }
+        // 直接从本地缓存加载（不再优先走网络），后台差异检测由 _checkRemoteConfigUpdate 负责
+        _loadDimensions(resourcesUrl, null)
     }
 
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
@@ -1182,6 +1175,137 @@ ApplicationWindow {
         }
     }
 
+    // ─── 任务配置更新通知卡片 ─────────────────────────────────────────────
+    // 后台检测到远程配置有更新时浮现，用户点击后一键应用，不阻塞任何操作。
+    // 位置：右下角，updateToast 上方。
+    Popup {
+        id: taskUpdateCard
+        visible: root._taskUpdateVisible
+        modal: false
+        focus: false
+        closePolicy: Popup.NoAutoClose
+        x: root.width - width - 24
+        y: root.height - height - 36
+        padding: 0
+        implicitWidth: 280
+
+        background: Rectangle {
+            color: "#cc1a1a1f"
+            border.color: "#33ffffff"
+            border.width: 1
+            radius: 6
+        }
+
+        contentItem: Column {
+            spacing: 0
+
+            // 标题行
+            RowLayout {
+                width: 280
+                height: 36
+                spacing: 6
+
+                Item { width: 12 }  // 左边距
+
+                Text {
+                    text: "🔔"
+                    font.pixelSize: 14
+                    Layout.alignment: Qt.AlignVCenter
+                }
+                Text {
+                    text: "远程有新任务配置"
+                    color: "#e8e8ec"
+                    font.pixelSize: 13
+                    font.bold: true
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.fillWidth: true
+                }
+                // 关闭按钮
+                Text {
+                    text: "✕"
+                    color: "#888"
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+                    MouseArea {
+                        anchors.fill: parent
+                        anchors.margins: -6
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            root._taskUpdateVisible = false
+                            root._pendingRemoteConfig = null
+                        }
+                    }
+                }
+                Item { width: 8 }  // 右边距
+            }
+
+            // 分隔线
+            Rectangle { width: 280; height: 1; color: "#33ffffff" }
+
+            // 描述行
+            Text {
+                width: 280
+                leftPadding: 12
+                rightPadding: 12
+                topPadding: 8
+                bottomPadding: 4
+                text: {
+                    var cfg = root._pendingRemoteConfig
+                    if (!cfg) return "配置已更新，点击应用"
+                    if (!Array.isArray(cfg)) return "配置已更新，点击应用"
+                    return cfg.map(function(item) {
+                        var obj  = item.obj || {}
+                        var type = obj.type || ""
+                        var tag  = obj.tag  || ""
+                        var parts = []
+                        if (type.length > 0) parts.push("类型：" + type)
+                        if (tag.length  > 0) parts.push("tag：" + tag)
+                        if (parts.length === 0) parts.push(item.mode)
+                        return parts.join("  ·  ")
+                    }).join("\n")
+                }
+                color: "#aaaabc"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+
+            // 应用按钮
+            Rectangle {
+                width: 280
+                height: 36
+                color: "transparent"
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    anchors.bottomMargin: 8
+                    height: 28
+                    radius: 4
+                    color: applyBtnMouse.containsMouse ? "#0db092" : "#0fa085"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "立即应用新配置"
+                        color: "#ffffff"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+
+                    MouseArea {
+                        id: applyBtnMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root._applyPendingRemoteConfig()
+                    }
+                }
+            }
+        }
+    }
+
 
     // ─── 关闭全部视频：二次确认（深色，与 about/shortcuts 风格一致）──
     //  · 触发源：工具栏【✕ 全部】、菜单【文件 ▸ 关闭所有视频】、快捷键 ⌘W/Ctrl+W
@@ -1525,6 +1649,172 @@ ApplicationWindow {
     property var reviewDimensions: []
     // 远程激活配置的 tag（加载维度时同步写入，供上传时校验用）
     property string _remoteTag: ""
+
+    // ── 任务配置后台差异检测 ──────────────────────────────────────────────
+    // 设计：启动时先用本地缓存初始化（零延迟），后台静默拉取远程配置做指纹对比。
+    // 有差异时弹出通知卡片，用户主动点击后才应用远程配置，不阻塞任何操作。
+    // 轮询间隔：5 分钟（软件运行期间持续检测）。
+
+    // 本地已应用配置的指纹映射 { mode -> fingerprint }（用于与远程对比）
+    property var    _localConfigFingerprint: ({})
+    // 待应用的远程配置列表（检测到差异时暂存，等用户点击通知卡片后才应用）
+    // 每项：{ mode, obj, configName }
+    property var    _pendingRemoteConfig: null
+    // 通知卡片是否可见
+    property bool   _taskUpdateVisible: false
+
+    // 计算配置指纹：全量 JSON 序列化，任何字段变化都能检测到
+    function _configFingerprint(obj) {
+        if (!obj) return ""
+        try {
+            return JSON.stringify(obj)
+        } catch (e) { return "" }
+    }
+
+    // 后台静默检测所有模式的远程配置是否有更新（不影响当前已加载的配置）
+    // 流程：先拉 /api/active-config 获取所有模式绑定，再并发请求每个配置内容，
+    //       任意一个模式与本地指纹不同，就弹出通知卡片。
+    function _checkRemoteConfigUpdate() {
+        var base = root._dimApiUrl()
+        if (base.length === 0) return  // 未配置服务器，跳过
+
+        // 第一步：拉取所有模式绑定
+        var activeUrl = base.replace(/\/api\/dimensions.*$/, '') + "/api/active-config"
+        var xhr0 = new XMLHttpRequest()
+        var _done0 = false
+        var _t0 = Qt.createQmlObject('import QtQuick 2.0; Timer { interval: 8000; repeat: false }', root)
+        _t0.triggered.connect(function() { if (!_done0) { _done0 = true; xhr0.abort() } _t0.destroy() })
+        _t0.start()
+        xhr0.onreadystatechange = function() {
+            if (xhr0.readyState !== XMLHttpRequest.DONE) return
+            if (_done0) return
+            _done0 = true
+            _t0.stop()
+            if (xhr0.status !== 200 && xhr0.status !== 0) return
+            try {
+                var activeObj = JSON.parse(xhr0.responseText)
+                if (!activeObj || !activeObj.bindings) return
+                var bindings = activeObj.bindings  // { mode -> configName }
+                var modes = Object.keys(bindings)
+                if (modes.length === 0) return
+
+                // 第二步：并发请求每个绑定配置的内容
+                var configBase = base.replace(/\/api\/dimensions.*$/, '') + "/api/configs/"
+                var pending = []   // 收集有差异的 { mode, obj, configName }
+                var total = modes.length
+                var finished = 0
+
+                function onAllDone() {
+                    if (pending.length === 0) return
+                    // 有差异：暂存，弹通知
+                    root._pendingRemoteConfig = pending
+                    root._taskUpdateVisible = true
+                    console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新")
+                }
+
+                modes.forEach(function(mode) {
+                    var configName = bindings[mode]
+                    var cfgUrl = configBase + encodeURIComponent(configName)
+                    var xhr1 = new XMLHttpRequest()
+                    var _done1 = false
+                    var _t1 = Qt.createQmlObject('import QtQuick 2.0; Timer { interval: 8000; repeat: false }', root)
+                    _t1.triggered.connect(function() { if (!_done1) { _done1 = true; xhr1.abort() } _t1.destroy() })
+                    _t1.start()
+                    xhr1.onreadystatechange = function() {
+                        if (xhr1.readyState !== XMLHttpRequest.DONE) return
+                        if (_done1) return
+                        _done1 = true
+                        _t1.stop()
+                        finished++
+                        if (xhr1.status === 200 || xhr1.status === 0) {
+                            try {
+                                var obj = JSON.parse(xhr1.responseText)
+                                if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
+                                    var remoteFp = root._configFingerprint(obj)
+                                    var localFp  = root._localConfigFingerprint[mode] || ""
+                                    if (localFp.length === 0) {
+                                        // 首次检测该模式：建立基线，不弹通知
+                                        var fp2 = root._localConfigFingerprint
+                                        fp2[mode] = remoteFp
+                                        root._localConfigFingerprint = fp2
+                                    } else if (remoteFp !== localFp) {
+                                        pending.push({ mode: mode, obj: obj, configName: configName })
+                                    }
+                                }
+                            } catch (e) {
+                                console.warn("[ConfigCheck] 解析配置失败 mode=", mode, e)
+                            }
+                        }
+                        if (finished >= total) onAllDone()
+                    }
+                    xhr1.open("GET", cfgUrl)
+                    xhr1.send()
+                })
+            } catch (e) {
+                console.warn("[ConfigCheck] 解析 active-config 失败：", e)
+            }
+        }
+        xhr0.open("GET", activeUrl)
+        xhr0.send()
+    }
+
+    // 用户点击通知卡片后，应用所有待更新的远程配置
+    function _applyPendingRemoteConfig() {
+        var list = root._pendingRemoteConfig
+        if (!list || !Array.isArray(list) || list.length === 0) return
+        try {
+            var currentMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+            var fp2 = root._localConfigFingerprint
+
+            list.forEach(function(item) {
+                var obj = item.obj
+                // 更新指纹基线
+                fp2[item.mode] = root._configFingerprint(obj)
+                // 只有当前播放器模式匹配时，才热更新播放器维度
+                if (item.mode === currentMode || list.length === 1) {
+                    var _dims = obj.dimensions.map(function(d) {
+                        var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
+                        return Object.assign({}, d, { starCount: sc })
+                    })
+                    root.reviewDimensions = _dims
+                    if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
+                    root._remoteTag = obj.tag || ""
+                    // 持久化到本地缓存文件
+                    var localPath = root._resourcesDir() + "/dimensions.json"
+                    if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                        EngineBridge.writeTextFile(localPath, JSON.stringify(obj))
+                    }
+                    console.log("[ConfigCheck] 已热更新播放器维度，mode:", item.mode, "tag:", obj.tag)
+                } else {
+                    console.log("[ConfigCheck] 已更新指纹基线（非当前模式），mode:", item.mode)
+                }
+            })
+
+            root._localConfigFingerprint = fp2
+            root._pendingRemoteConfig = null
+            root._taskUpdateVisible = false
+        } catch (e) {
+            console.warn("[ConfigCheck] 应用配置失败：", e)
+        }
+    }
+
+    // 启动后立即触发第一次差异检测（等待 0.5s 让本地配置和 Rating 模块完成初始化）
+    Timer {
+        id: configInitCheckTimer
+        interval: 500
+        repeat: false
+        running: true
+        onTriggered: root._checkRemoteConfigUpdate()
+    }
+
+    // 后台轮询定时器（调试：5 秒检测一次）
+    Timer {
+        id: configPollTimer
+        interval: 5 * 1000
+        repeat: true
+        running: typeof Rating !== "undefined" && Rating.uploadServerUrl && Rating.uploadServerUrl.trim().length > 0
+        onTriggered: root._checkRemoteConfigUpdate()
+    }
 
     // ── 维度配置网络加载 ──────────────────────────────────────────────────
 
