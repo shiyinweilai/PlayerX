@@ -1208,6 +1208,35 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 }
 .dim-sidebar-item:hover { background: rgba(255,255,255,.06); }
 .dim-sidebar-item.is-active { background: rgba(0,113,227,.18); }
+
+/* 拖拽手柄 */
+.dim-sidebar-drag-handle {
+    font-size: 14px;
+    color: var(--muted, #86868b);
+    cursor: grab;
+    opacity: 0;
+    transition: opacity .15s;
+    flex-shrink: 0;
+    user-select: none;
+    line-height: 1;
+    padding: 0 2px;
+}
+.dim-sidebar-item:hover .dim-sidebar-drag-handle { opacity: 1; }
+.dim-sidebar-drag-handle:active { cursor: grabbing; }
+
+/* 拖拽中的卡片 */
+.dim-sidebar-item-dragging {
+    opacity: .45;
+    background: rgba(0,113,227,.10) !important;
+}
+
+/* 拖拽目标位置指示线 */
+.dim-sidebar-item-drag-over-top {
+    box-shadow: 0 -2px 0 0 var(--primary, #0071e3);
+}
+.dim-sidebar-item-drag-over-bottom {
+    box-shadow: 0 2px 0 0 var(--primary, #0071e3);
+}
 /* 第一行：名字 + badge */
 .dim-sidebar-item-main {
     min-width: 0;

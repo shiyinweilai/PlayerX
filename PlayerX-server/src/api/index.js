@@ -78,6 +78,7 @@ function mountApi(app) {
 
     // 多配置文件管理（GET 公开，写操作需管理员）
     app.get('/api/configs',              dimensions.handleList);
+    app.put('/api/configs-order',        auth.requireAdmin, jsonParser, dimensions.handleReorder);
     app.get('/api/configs/:name',        dimensions.handleGetOne);
     app.put('/api/configs/:name',        auth.requireAdmin, jsonParser, dimensions.handlePutOne);
     app.delete('/api/configs/:name',     auth.requireAdmin, dimensions.handleDeleteOne);

@@ -451,24 +451,29 @@
             dimSidebarList.innerHTML = '<div class="dim-sidebar-loading">暂无配置</div>';
             return;
         }
+        const admin = isLoggedIn();
         dimSidebarList.innerHTML = configs.map(c => {
             // 该配置绑定了哪些模式
             const activeModes = MODE_ORDER.filter(m => dimActiveBindings[m] === c.name);
             const badgesHtml = activeModes.map(m =>
                 `<span class="dim-active-badge" data-mode="${m}" title="已绑定到模式：${modeLabel(m)}">${modeLabel(m)}</span>`
             ).join('');
+            const dragHandle = admin
+                ? `<span class="dim-sidebar-drag-handle" title="拖动调整顺序">⠿</span>`
+                : '';
             return `
-            <div class="dim-sidebar-item ${c.name === dimCurrentName ? 'is-active' : ''}" data-name="${escHtml(c.name)}">
+            <div class="dim-sidebar-item ${c.name === dimCurrentName ? 'is-active' : ''}${admin ? ' dim-sidebar-item-draggable' : ''}" data-name="${escHtml(c.name)}"${admin ? ' draggable="true"' : ''}>
                 <div class="dim-sidebar-item-main">
+                    ${dragHandle}
                     <span class="dim-sidebar-item-type" title="双击重命名">${escHtml(c.type || c.name)}</span>
                     ${badgesHtml}
                 </div>
                 <div class="dim-sidebar-item-row2">
                     <span class="dim-sidebar-item-task">${c.task ? escHtml(c.task) : ''}</span>
                     <div class="dim-sidebar-item-actions">
-                        ${isLoggedIn() ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="绑定/解绑模式">📌 绑定</button>` : ''}
-                        ${isLoggedIn() ? `<button class="dim-copy-btn ghost-btn" data-name="${escHtml(c.name)}" title="复制一份此配置">复制</button>` : ''}
-                        ${isLoggedIn() ? `<button class="dim-sidebar-del ghost-btn" data-name="${escHtml(c.name)}" title="删除此配置">🗑</button>` : ''}
+                        ${admin ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="绑定/解绑模式">📌 绑定</button>` : ''}
+                        ${admin ? `<button class="dim-copy-btn ghost-btn" data-name="${escHtml(c.name)}" title="复制一份此配置">复制</button>` : ''}
+                        ${admin ? `<button class="dim-sidebar-del ghost-btn" data-name="${escHtml(c.name)}" title="删除此配置">🗑</button>` : ''}
                     </div>
                 </div>
             </div>
@@ -481,12 +486,13 @@
                 if (e.target.closest('.dim-activate-btn')) return;
                 if (e.target.closest('.dim-copy-btn')) return;
                 if (e.target.closest('.dim-sidebar-rename-input')) return;
+                if (e.target.closest('.dim-sidebar-drag-handle')) return;
                 selectConfig(el.dataset.name);
             });
         });
 
         // 双击重命名（仅管理员）
-        if (isLoggedIn()) {
+        if (admin) {
             dimSidebarList.querySelectorAll('.dim-sidebar-item-type').forEach(span => {
                 span.addEventListener('dblclick', (e) => {
                     e.stopPropagation();
@@ -518,6 +524,73 @@
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 deleteConfig(btn.dataset.name);
+            });
+        });
+
+        // 拖拽排序（仅管理员）
+        if (admin) {
+            _bindSidebarDragSort();
+        }
+    }
+
+    /** 拖拽排序：绑定 dim-sidebar-item 的 drag & drop 事件 */
+    function _bindSidebarDragSort() {
+        let dragSrcName = null;
+        dimSidebarList.querySelectorAll('.dim-sidebar-item-draggable').forEach(item => {
+            item.addEventListener('dragstart', e => {
+                dragSrcName = item.dataset.name;
+                item.classList.add('dim-sidebar-item-dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', dragSrcName);
+                e.stopPropagation(); // 防止冒泡到页面级文件拖入监听
+            });
+            item.addEventListener('dragend', () => {
+                item.classList.remove('dim-sidebar-item-dragging');
+                dimSidebarList.querySelectorAll('.dim-sidebar-item').forEach(el => {
+                    el.classList.remove('dim-sidebar-item-drag-over-top', 'dim-sidebar-item-drag-over-bottom');
+                });
+                dragSrcName = null;
+            });
+            item.addEventListener('dragover', e => {
+                if (!dragSrcName || item.dataset.name === dragSrcName) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                const rect = item.getBoundingClientRect();
+                const isTop = e.clientY < rect.top + rect.height / 2;
+                dimSidebarList.querySelectorAll('.dim-sidebar-item').forEach(el => {
+                    el.classList.remove('dim-sidebar-item-drag-over-top', 'dim-sidebar-item-drag-over-bottom');
+                });
+                item.classList.add(isTop ? 'dim-sidebar-item-drag-over-top' : 'dim-sidebar-item-drag-over-bottom');
+            });
+            item.addEventListener('dragleave', () => {
+                item.classList.remove('dim-sidebar-item-drag-over-top', 'dim-sidebar-item-drag-over-bottom');
+            });
+            item.addEventListener('drop', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                const targetName = item.dataset.name;
+                if (!dragSrcName || dragSrcName === targetName) return;
+                // 计算插入位置
+                const rect = item.getBoundingClientRect();
+                const insertBefore = e.clientY < rect.top + rect.height / 2;
+                // 重排 DOM 中的 item 顺序
+                const allItems = Array.from(dimSidebarList.querySelectorAll('.dim-sidebar-item'));
+                const srcEl = allItems.find(el => el.dataset.name === dragSrcName);
+                const tgtEl = item;
+                if (!srcEl) return;
+                if (insertBefore) {
+                    dimSidebarList.insertBefore(srcEl, tgtEl);
+                } else {
+                    dimSidebarList.insertBefore(srcEl, tgtEl.nextSibling);
+                }
+                // 读取新顺序并保存
+                const newOrder = Array.from(dimSidebarList.querySelectorAll('.dim-sidebar-item')).map(el => el.dataset.name);
+                fetch('/api/configs-order', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order: newOrder }),
+                    credentials: 'include',
+                }).catch(() => {});
             });
         });
     }

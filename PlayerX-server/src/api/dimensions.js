@@ -110,7 +110,16 @@ function handleList(_req, res) {
             if (!configModes[name]) configModes[name] = [];
             configModes[name].push(mode);
         }
-        const files = fs.readdirSync(CONFIGS_DIR)
+        // 读取自定义排序
+        let orderList = [];
+        try {
+            if (fs.existsSync(ACTIVE_CONFIG_FILE)) {
+                const obj = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8'));
+                orderList = Array.isArray(obj.order) ? obj.order : [];
+            }
+        } catch (_) {}
+
+        const allFiles = fs.readdirSync(CONFIGS_DIR)
             .filter(f => f.endsWith('.json') && f !== '_active.json')
             .map(f => {
                 const name = f.replace(/\.json$/, '');
@@ -123,7 +132,15 @@ function handleList(_req, res) {
                 } catch (_) {}
                 return meta;
             });
-        res.json({ ok: true, configs: files, bindings });
+
+        // 按 order 排序：order 中有的按顺序排前面，其余追加到末尾
+        const nameToMeta = {};
+        allFiles.forEach(m => { nameToMeta[m.name] = m; });
+        const ordered = [];
+        orderList.forEach(n => { if (nameToMeta[n]) { ordered.push(nameToMeta[n]); delete nameToMeta[n]; } });
+        Object.values(nameToMeta).forEach(m => ordered.push(m));
+
+        res.json({ ok: true, configs: ordered, bindings });
     } catch (e) {
         res.status(500).json({ ok: false, error: e.message });
     }
@@ -314,4 +331,25 @@ function handlePut(req, res) {
     handlePutOne(req, res);
 }
 
-module.exports = { handleList, handleGetOne, handlePutOne, handleDeleteOne, handleGetActive, handleSetActive, handleGet, handlePut };
+// ─────────────────────────────────────────────────────────────
+// PUT /api/configs-order — 保存配置列表排序（管理员）
+// body: { order: ['name1', 'name2', ...] }
+// ─────────────────────────────────────────────────────────────
+function handleReorder(req, res) {
+    ensureConfigsDir();
+    const { order } = req.body || {};
+    if (!Array.isArray(order)) return res.status(400).json({ ok: false, error: '缺少 order 数组' });
+    try {
+        let active = {};
+        if (fs.existsSync(ACTIVE_CONFIG_FILE)) {
+            try { active = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8')); } catch (_) {}
+        }
+        active.order = order;
+        fs.writeFileSync(ACTIVE_CONFIG_FILE, JSON.stringify(active, null, 2), 'utf8');
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ ok: false, error: '保存排序失败：' + e.message });
+    }
+}
+
+module.exports = { handleList, handleGetOne, handlePutOne, handleDeleteOne, handleGetActive, handleSetActive, handleGet, handlePut, handleReorder };
