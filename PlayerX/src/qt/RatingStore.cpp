@@ -461,7 +461,8 @@ bool RatingStore::recordSlideRating(const QString& filePathL,
     // 仅在 quality_slide 模式下生效
     if (currentMode() != QStringLiteral("quality_slide")) return false;
 
-    const int cap = maxStars();
+    // 滑动评分的星数由第二个维度配置决定，不受模式级 maxStars 截断
+    // （与多维评分的处理方式一致）
     QString rater = currentUser();
     if (rater.isEmpty()) rater = systemUserName();
 
@@ -469,7 +470,7 @@ bool RatingStore::recordSlideRating(const QString& filePathL,
         QString name = fn.isEmpty() ? QFileInfo(fp).fileName() : fn;
         if (ch >= 0) name = QString::number(ch + 1) + QStringLiteral("_") + name;
         if (stars < 0) stars = 0;
-        if (cap > 0 && stars > cap) stars = cap;
+        // 不截断：滑动评分星数由 QML 层的 slideMaxStars 控制
         QVariantMap r;
         r["updated_at"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
         r["rater"]      = rater;

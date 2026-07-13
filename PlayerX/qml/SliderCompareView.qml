@@ -27,14 +27,19 @@ Item {
     // 是否显示两侧通道信息条（与 Main.qml 的 effectiveChannelVisible 联动）
     property bool channelVisible: true
 
-    // ── 质量比较2（quality_slide）专用：是否显示左右 2 星打分条 ──
+    // ── 质量比较2（quality_slide）专用：是否显示左右打分条 ──
     // 由 Main.qml 直接绑定到 root.isQualitySlideMode；非该模式时整组评分条不渲染。
     property bool slideRatingEnabled: false
-    // 当前 L/R 评分（0/1/2），由 Main.qml 的 root.slideRatingL/R 绑定回来
+    // 当前 L/R 评分（0/1/N），由 Main.qml 的 root.slideRatingL/R 绑定回来
     property int  slideRatingL: 0
     property int  slideRatingR: 0
-    // 评分回调：side ∈ {"L", "R"}, score ∈ {0, 1, 2}
+    // 评分回调：side ∈ {"L", "R"}, score ∈ {0..slideMaxStars}
     property var  setSlideRatingFn: null
+    // 滑动对比维度配置（来自 reviewDimensions[1]，quality_slide 模式专用）
+    // slideMaxStars：星星数量，默认 2（兜底）
+    // slideDimLabel：维度名称，默认空（显示"评分"）
+    property int    slideMaxStars: 2
+    property string slideDimLabel: ""
     property real splitRatio: 0.5
 
     // ─── 渲染主体 ─────────────────────────────────────────────────────
@@ -326,12 +331,12 @@ Item {
                 color: bar.accent
                 font.pixelSize: 11
                 font.bold: true
-                text: bar.side + " · 评分"
+                text: bar.side + " · " + (view.slideDimLabel.length > 0 ? view.slideDimLabel : "评分")
             }
             Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 12; color: "#55ffffff" }
-            // 2 颗星：点击即赋分；再次点击当前分数 = 取消（与 setSlideRating 的 toggle 一致）
+            // N 颗星：点击即赋分；再次点击当前分数 = 取消（与 setSlideRating 的 toggle 一致）
             Repeater {
-                model: 2
+                model: view.slideMaxStars
                 delegate: Item {
                     Layout.preferredWidth: 20
                     Layout.preferredHeight: 20
@@ -363,6 +368,8 @@ Item {
         side: "R"
         accent: "#ffd0a8"
         score: view.slideRatingR
+        // 宽度随星星数量自适应
+        width: Math.max(180, 100 + view.slideMaxStars * 24)
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.rightMargin: 12
@@ -373,6 +380,7 @@ Item {
         side: "L"
         accent: "#a8d8ff"
         score: view.slideRatingL
+        width: Math.max(180, 100 + view.slideMaxStars * 24)
         anchors.right: parent.right
         anchors.bottom: rBar.top
         anchors.rightMargin: 12

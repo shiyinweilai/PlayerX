@@ -453,8 +453,11 @@
         }
         const admin = isLoggedIn();
         dimSidebarList.innerHTML = configs.map(c => {
-            // 该配置绑定了哪些模式
-            const activeModes = MODE_ORDER.filter(m => dimActiveBindings[m] === c.name);
+            // 该配置绑定了哪些模式（兼容新格式数组和旧格式字符串）
+            const activeModes = MODE_ORDER.filter(m => {
+                const v = dimActiveBindings[m];
+                return Array.isArray(v) ? v.includes(c.name) : v === c.name;
+            });
             const badgesHtml = activeModes.map(m =>
                 `<span class="dim-active-badge" data-mode="${m}" title="已绑定到模式：${modeLabel(m)}">${modeLabel(m)}</span>`
             ).join('');
@@ -603,13 +606,15 @@
         const popup = document.createElement('div');
         popup.className = 'dim-bind-popup';
         popup.innerHTML = MODE_ORDER.map(mode => {
-            const isBound = dimActiveBindings[mode] === configName;
-            const boundTo = dimActiveBindings[mode];
-            const otherBound = boundTo && boundTo !== configName;
+            const boundVal = dimActiveBindings[mode];
+            // 兼容新格式（数组）和旧格式（字符串）
+            const boundArr = Array.isArray(boundVal) ? boundVal : (boundVal ? [boundVal] : []);
+            const isBound = boundArr.includes(configName);
+            const otherBound = boundArr.filter(n => n !== configName);
             return `<div class="dim-bind-item ${isBound ? 'is-bound' : ''}" data-mode="${mode}" data-name="${escHtml(configName)}">
                 <span class="dim-bind-check">${isBound ? '✓' : ''}</span>
                 <span class="dim-bind-label">${modeLabel(mode)}</span>
-                ${otherBound ? `<span class="dim-bind-other" title="当前绑定：${escHtml(boundTo)}">已绑定其他</span>` : ''}
+                ${otherBound.length > 0 ? `<span class="dim-bind-other" title="同模式还绑定：${otherBound.map(escHtml).join('、')}">+${otherBound.length}个</span>` : ''}
             </div>`;
         }).join('');
         document.body.appendChild(popup);
@@ -676,8 +681,11 @@
                 if (!main) return;
                 // 移除旧 badges
                 main.querySelectorAll('.dim-active-badge').forEach(b => b.remove());
-                // 重新生成 badges
-                const activeModes = MODE_ORDER.filter(m => dimActiveBindings[m] === cName);
+                // 重新生成 badges（兼容新格式数组和旧格式字符串）
+                const activeModes = MODE_ORDER.filter(m => {
+                    const v = dimActiveBindings[m];
+                    return Array.isArray(v) ? v.includes(cName) : v === cName;
+                });
                 activeModes.forEach(m => {
                     const badge = document.createElement('span');
                     badge.className = 'dim-active-badge';
@@ -1003,10 +1011,10 @@
                 const lvIdx  = +btn.dataset.lv;
                 patchDimData(data => {
                     data.dimensions[dimIdx].levels.splice(lvIdx, 1);
-                    // 删除后重新按降序分配 score
+                    // 删除后重新按降序连续分配 score（1~N）
                     const lvs = data.dimensions[dimIdx].levels;
-                    const scores = lvs.map(l => +l.score || 0).slice().sort((a, b) => b - a);
-                    lvs.forEach((l, i) => { l.score = scores[i]; });
+                    const n = lvs.length;
+                    lvs.forEach((l, i) => { l.score = n - i; });
                     refreshCard(dimIdx, data);
                 });
             });
@@ -1018,8 +1026,10 @@
                 const dimIdx = +btn.dataset.dim;
                 patchDimData(data => {
                     const levels = data.dimensions[dimIdx].levels || [];
-                    const maxScore = levels.reduce((m, l) => Math.max(m, +l.score || 0), 0);
-                    levels.push({ score: maxScore + 1, label: '新等级', description: '' });
+                    // 追加新等级，然后按降序重新分配 score（1~N 连续，最左最高）
+                    levels.push({ score: 0, label: '新等级', description: '' });
+                    const n = levels.length;
+                    levels.forEach((l, i) => { l.score = n - i; });
                     data.dimensions[dimIdx].levels = levels;
                     refreshCard(dimIdx, data);
                 });
@@ -1350,10 +1360,10 @@
                 patchDimData(d2 => {
                     const dIdx = +btn.dataset.dim;
                     d2.dimensions[dIdx].levels.splice(+btn.dataset.lv, 1);
-                    // 删除后重新按降序分配 score
+                    // 删除后重新按降序连续分配 score（1~N）
                     const lvs = d2.dimensions[dIdx].levels;
-                    const scores = lvs.map(l => +l.score || 0).slice().sort((a, b) => b - a);
-                    lvs.forEach((l, i) => { l.score = scores[i]; });
+                    const n = lvs.length;
+                    lvs.forEach((l, i) => { l.score = n - i; });
                     refreshCard(dIdx, d2);
                 });
             });
@@ -1363,8 +1373,10 @@
                 patchDimData(d2 => {
                     const dIdx = +btn.dataset.dim;
                     const lvs = d2.dimensions[dIdx].levels || [];
-                    const maxScore = lvs.reduce((m, l) => Math.max(m, +l.score || 0), 0);
-                    lvs.push({ score: maxScore + 1, label: '新等级', description: '' });
+                    // 追加新等级，然后按降序重新分配 score（1~N 连续，最左最高）
+                    lvs.push({ score: 0, label: '新等级', description: '' });
+                    const n = lvs.length;
+                    lvs.forEach((l, i) => { l.score = n - i; });
                     d2.dimensions[dIdx].levels = lvs;
                     refreshCard(dIdx, d2);
                 });

@@ -1247,12 +1247,12 @@ ApplicationWindow {
             // 分隔线
             Rectangle { width: 280; height: 1; color: "#33ffffff" }
 
-            // 每个待更新配置一行：左边类型+tag，右边独立应用按钮
+            // 每个待更新配置一行：左边类型+tag，右边忽略+应用按钮
             Repeater {
                 model: Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
                 delegate: Item {
                     width: 280
-                    height: 44
+                    height: 64
 
                     // 悬停背景
                     Rectangle {
@@ -1264,70 +1264,143 @@ ApplicationWindow {
                     }
                     HoverHandler { id: rowHover }
 
-                    // 左侧：类型 + tag
+                    // 上下两行布局：第一行文字，第二行按钮
                     Column {
                         anchors.left: parent.left
-                        anchors.leftMargin: 12
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.right: applyBtn.left
-                        anchors.rightMargin: 8
-                        spacing: 2
-
-                        Text {
-                            width: parent.width
-                            text: {
-                                var obj  = modelData.obj || {}
-                                var type = obj.type || ""
-                                var tag  = obj.tag  || ""
-                                if (type.length > 0 && tag.length > 0) return type + "  ·  " + tag
-                                if (type.length > 0) return type
-                                if (tag.length  > 0) return tag
-                                return modelData.mode
-                            }
-                            color: "#e8e8ec"
-                            font.pixelSize: 12
-                            elide: Text.ElideRight
-                        }
-                        Text {
-                            width: parent.width
-                            text: {
-                                var ml = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList : []
-                                for (var i = 0; i < ml.length; i++) {
-                                    if (ml[i].id === modelData.mode) return ml[i].label
-                                }
-                                return modelData.mode
-                            }
-                            color: "#6a6a7c"
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
-                        }
-                    }
-
-                    // 右侧：应用按钮
-                    Rectangle {
-                        id: applyBtn
                         anchors.right: parent.right
+                        anchors.leftMargin: 12
                         anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 52
-                        height: 26
-                        radius: 4
-                        color: applyMouse.containsMouse ? "#0db092" : "#0fa085"
+                        spacing: 4
 
-                        Text {
-                            anchors.centerIn: parent
-                            text: "应用"
-                            color: "#ffffff"
-                            font.pixelSize: 11
-                            font.bold: true
+                        // 第一行：类型 + tag
+                        Row {
+                            spacing: 4
+                            width: parent.width
+                            Text {
+                                text: "类型："
+                                color: "#6a6a7c"
+                                font.pixelSize: 11
+                            }
+                            Text {
+                                text: {
+                                    var obj = modelData.obj || {}
+                                    return obj.type || "—"
+                                }
+                                color: "#e8e8ec"
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                                width: Math.min(implicitWidth, 70)
+                            }
+                            Text {
+                                text: "  tag："
+                                color: "#6a6a7c"
+                                font.pixelSize: 11
+                            }
+                            Text {
+                                text: {
+                                    var obj = modelData.obj || {}
+                                    return obj.tag || "—"
+                                }
+                                color: "#e8e8ec"
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                                width: Math.min(implicitWidth, 90)
+                            }
                         }
 
-                        MouseArea {
-                            id: applyMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root._applyRemoteConfigItem(modelData)
+                        // 第二行：模式（左）+ 忽略/应用按钮（右）
+                        Item {
+                            width: parent.width
+                            height: 26
+
+                            // 模式文字（左对齐）
+                            Row {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 4
+                                Text {
+                                    text: "模式："
+                                    color: "#6a6a7c"
+                                    font.pixelSize: 11
+                                }
+                                Text {
+                                    text: {
+                                        var ml = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList : []
+                                        for (var i = 0; i < ml.length; i++) {
+                                            if (ml[i].id === modelData.mode) return ml[i].label
+                                        }
+                                        return modelData.mode
+                                    }
+                                    color: "#6a6a7c"
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                    width: Math.min(implicitWidth, 120)
+                                }
+                            }
+
+                            // 忽略按钮（右侧）
+                            Rectangle {
+                                id: ignoreBtn
+                                anchors.right: applyBtn.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 44
+                                height: 26
+                                radius: 4
+                                color: ignoreMouse.containsMouse ? "#3a3a44" : "#2a2a34"
+                                border.color: "#44ffffff"
+                                border.width: 1
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "忽略"
+                                    color: "#aaaabc"
+                                    font.pixelSize: 11
+                                }
+
+                                MouseArea {
+                                    id: ignoreMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        var _ignKey = modelData.mode + ":" + modelData.configName
+                                        var rem = (root._pendingRemoteConfig || []).filter(function(x) {
+                                            return (x.mode + ":" + x.configName) !== _ignKey
+                                        })
+                                        root._pendingRemoteConfig = rem.length > 0 ? rem : null
+                                        if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
+                                    }
+                                }
+                            }
+
+                            // 应用按钮（最右）
+                            Rectangle {
+                                id: applyBtn
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 44
+                                height: 26
+                                radius: 4
+                                color: applyMouse.containsMouse ? "#0db092" : "#0fa085"
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "应用"
+                                    color: "#ffffff"
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                }
+
+                                MouseArea {
+                                    id: applyMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root._applyRemoteConfigItem(modelData)
+                                }
+                            }
                         }
                     }
 
@@ -1691,6 +1764,12 @@ ApplicationWindow {
         (typeof Rating !== "undefined") && Rating.currentMode === "multi_dim"
     // 维度列表（启动时从服务器/本地文件动态加载，初始为空）
     property var reviewDimensions: []
+    // quality_slide 模式下，cellReviewDimensions 只包含第一个维度（用于左右对比普通打分）
+    // 第二个维度专用于滑动对比，不在 cell 评分条中显示
+    // 其他模式下与 reviewDimensions 完全一致
+    readonly property var cellReviewDimensions:
+        (isQualitySlideMode && reviewDimensions && reviewDimensions.length >= 2)
+        ? [reviewDimensions[0]] : reviewDimensions
     // 按 mode 缓存各自的维度列表，避免多 mode 应用时互相覆盖
     property var _dimsByMode: ({})
     // 远程激活配置的 tag（加载维度时同步写入，供上传时校验用）
@@ -1755,7 +1834,7 @@ ApplicationWindow {
             try {
                 var activeObj = JSON.parse(xhr0.responseText)
                 if (!activeObj || !activeObj.bindings) return
-                var bindings = activeObj.bindings  // { mode -> configName }
+                var bindings = activeObj.bindings  // { mode -> configName[] }
                 var modes = Object.keys(bindings)
                 if (modes.length === 0) return
 
@@ -1765,10 +1844,17 @@ ApplicationWindow {
                 var bindingsFp = JSON.stringify(sortedBindings)
                 var localBindingsFp = (root._localConfigFingerprint || {})["__bindings__"] || ""
 
-                // 第二步：并发请求每个绑定配置的内容
+                // 第二步：展开为 (mode, configName) 对，并发请求每个绑定配置的内容
                 var configBase = base.replace(/\/api\/dimensions.*$/, '') + "/api/configs/"
                 var pending = []   // 收集有差异的 { mode, obj, configName }
-                var total = modes.length
+                // 展开所有 (mode, configName) 对
+                var allPairs = []
+                modes.forEach(function(m) {
+                    var names = bindings[m]
+                    if (!Array.isArray(names)) names = [names]  // 兼容旧字符串格式
+                    names.forEach(function(n) { allPairs.push({ mode: m, configName: n }) })
+                })
+                var total = allPairs.length
                 var finished = 0
 
                 function onAllDone() {
@@ -1788,12 +1874,15 @@ ApplicationWindow {
                         return
                     }
                     // 有差异：合并到已有列表（避免覆盖用户已部分应用的条目）
+                    // key = mode + ":" + configName，同一 mode 可有多个配置
                     var existing = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
                     var merged = existing.slice()
                     pending.forEach(function(newItem) {
                         var found = false
+                        var newKey = newItem.mode + ":" + newItem.configName
                         for (var k = 0; k < merged.length; k++) {
-                            if (merged[k].mode === newItem.mode) { merged[k] = newItem; found = true; break }
+                            var existKey = merged[k].mode + ":" + merged[k].configName
+                            if (existKey === newKey) { merged[k] = newItem; found = true; break }
                         }
                         if (!found) merged.push(newItem)
                     })
@@ -1802,8 +1891,9 @@ ApplicationWindow {
                     console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新，当前待应用", merged.length, "个")
                 }
 
-                modes.forEach(function(mode) {
-                    var configName = bindings[mode]
+                allPairs.forEach(function(pair) {
+                    var mode = pair.mode
+                    var configName = pair.configName
                     var cfgUrl = configBase + encodeURIComponent(configName)
                     // 指纹 key = "mode:configName"
                     var fpKey = mode + ":" + configName
@@ -1831,7 +1921,10 @@ ApplicationWindow {
                                         (function() {
                                             try {
                                                 var oldBindings = JSON.parse(localBindingsFp)
-                                                return oldBindings[mode] !== configName
+                                                var oldVal = oldBindings[mode]
+                                                // 兼容旧格式（字符串）和新格式（数组）
+                                                var oldNames = Array.isArray(oldVal) ? oldVal : (oldVal ? [oldVal] : [])
+                                                return oldNames.indexOf(configName) === -1
                                             } catch(e) { return false }
                                         })()
 
@@ -1963,9 +2056,10 @@ ApplicationWindow {
             }
             console.log("[ConfigCheck] 已应用配置，mode:", item.mode, "维度数:", _dims.length, "tag:", obj.tag)
 
-            // 从待更新列表中移除该条
+            // 从待更新列表中移除该条（按 mode+configName 精确匹配）
+            var _appliedKey = item.mode + ":" + item.configName
             var remaining = (root._pendingRemoteConfig || []).filter(function(x) {
-                return x.mode !== item.mode
+                return (x.mode + ":" + x.configName) !== _appliedKey
             })
             root._pendingRemoteConfig = remaining.length > 0 ? remaining : null
             if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
@@ -2167,16 +2261,22 @@ ApplicationWindow {
 
     // 切换到多维模式或维度配置变化时，重新初始化 cellRatings
     // 有维度配置（不限于 multi_dim）时初始化为对象数组；无维度时恢复为数字数组
+    // quality_slide 模式下：reviewDimensions[0] 给左右对比，reviewDimensions[1] 给滑动对比
+    // cellRatings 只使用第一个维度，避免滑动对比维度混入普通打分界面
     function _rebuildCellRatingsForDims() {
         var n = Engine.fileCount
         if (n <= 0) return
-        var hasDims = reviewDimensions && reviewDimensions.length > 0
+        // quality_slide 模式下只取第一个维度用于普通打分
+        var activeDims = reviewDimensions
+        if (isQualitySlideMode && activeDims && activeDims.length >= 2)
+            activeDims = [activeDims[0]]
+        var hasDims = activeDims && activeDims.length > 0
         var arr = []
         for (var i = 0; i < n; ++i) {
             if (hasDims) {
                 var obj = {}
-                for (var d = 0; d < reviewDimensions.length; ++d)
-                    obj[reviewDimensions[d].key] = 0
+                for (var d = 0; d < activeDims.length; ++d)
+                    obj[activeDims[d].key] = 0
                 arr.push(obj)
             } else {
                 arr.push(0)
@@ -2197,9 +2297,19 @@ ApplicationWindow {
     //   · 切到下一组后必须清空（_resetSlideRatings），下一组重新进入再评
     readonly property bool isQualitySlideMode:
         (typeof Rating !== "undefined") && Rating.currentMode === "quality_slide"
+    // quality_slide 模式下，第二个维度（reviewDimensions[1]）专用于滑动对比评分
+    // 其他模式或维度不足 2 个时为 null，兜底使用 2 星制
+    readonly property var slideDimension:
+        (isQualitySlideMode && reviewDimensions && reviewDimensions.length >= 2)
+        ? reviewDimensions[1] : null
+    readonly property int  slideMaxStars:
+        (slideDimension && slideDimension.levels && slideDimension.levels.length > 0)
+        ? slideDimension.levels.length : 2
+    readonly property string slideDimLabel:
+        (slideDimension && slideDimension.name) ? slideDimension.name : ""
     property bool slideEnteredOnce: false   // 本组中是否进入过滑动对比
-    property int  slideRatingL: 0           // 滑动模式左侧评分（0=未打，1/2）
-    property int  slideRatingR: 0           // 滑动模式右侧评分（0=未打，1/2）
+    property int  slideRatingL: 0           // 滑动模式左侧评分（0=未打，1..slideMaxStars）
+    property int  slideRatingR: 0           // 滑动模式右侧评分（0=未打，1..slideMaxStars）
     function _resetSlideRatings() {
         slideEnteredOnce = false
         slideRatingL = 0
@@ -2231,7 +2341,7 @@ ApplicationWindow {
     }
     function setSlideRating(side, score) {
         if (score < 0) score = 0
-        if (score > 2) score = 2
+        if (score > root.slideMaxStars) score = root.slideMaxStars
         if (side === "L") slideRatingL = (slideRatingL === score ? 0 : score)
         else if (side === "R") slideRatingR = (slideRatingR === score ? 0 : score)
 
@@ -2910,6 +3020,9 @@ ApplicationWindow {
             var n = Engine.fileCount
             var arr = []
             var dims = root.reviewDimensions
+            // quality_slide 模式下只取第一个维度用于普通打分，第二个维度留给滑动对比
+            if (root.isQualitySlideMode && dims && dims.length >= 2)
+                dims = [dims[0]]
             var hasDims = dims && dims.length > 0
             for (var i = 0; i < n; ++i) {
                 var fp = Engine.filePathAt(i)
@@ -7359,10 +7472,12 @@ ApplicationWindow {
             leftIndex: 0
             rightIndex: 1
             channelVisible: root.effectiveChannelVisible
-            // ── 质量比较 2 专用：左右 2 星评分条与本地状态双向同步 ──
+            // ── 质量比较 2 专用：左右 N 星评分条与本地状态双向同步 ──
             slideRatingEnabled: root.isQualitySlideMode
             slideRatingL: root.slideRatingL
             slideRatingR: root.slideRatingR
+            slideMaxStars: root.slideMaxStars
+            slideDimLabel: root.slideDimLabel
             setSlideRatingFn: function(side, score) { root.setSlideRating(side, score) }
         }
 
@@ -7473,6 +7588,9 @@ ApplicationWindow {
             var miss = []
             var n = Engine.fileCount
             var dims = root.reviewDimensions
+            // quality_slide 模式下只检查第一个维度（第二个维度是滑动对比专用）
+            if (root.isQualitySlideMode && dims && dims.length >= 2)
+                dims = [dims[0]]
             var hasDims = dims && dims.length > 0
             if (hasDims) {
                 // 有维度配置时（不限于 multi_dim 模式）：每个通道的所有维度都 > 0 才算已评分
@@ -7526,7 +7644,7 @@ ApplicationWindow {
         }
         // 多维评分模式注入
         isMultiDimMode: root.isMultiDimMode
-        reviewDimensions: root.reviewDimensions
+        reviewDimensions: root.cellReviewDimensions
         dimsByMode: root._dimsByMode
         // 点击「启动对比」时，先从网络加载当前模式对应的激活配置，完成后再启动
         onDimLoadNeeded: function(mode, callback) {

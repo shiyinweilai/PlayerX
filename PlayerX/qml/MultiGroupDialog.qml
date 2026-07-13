@@ -692,7 +692,11 @@ ApplicationWindow {
         if (bindingsStr.length > 0) {
             try {
                 var bindings = JSON.parse(bindingsStr)
-                if (bindings && bindings[mode]) return bindings[mode]
+                if (bindings && bindings[mode]) {
+                    // 兼容新格式（数组）和旧格式（字符串）
+                    var val = bindings[mode]
+                    return Array.isArray(val) ? (val[0] || "") : val
+                }
             } catch(e) {}
         }
         // 兜底：遍历 key（格式 "mode:configName"），取最后一个匹配（最新写入）
