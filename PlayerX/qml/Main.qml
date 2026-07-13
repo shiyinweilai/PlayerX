@@ -76,11 +76,6 @@ ApplicationWindow {
                                 Rating.uploadTag = obj.tag
                             }
                             root._remoteTag = obj.tag || ""
-                            // 建立本地指纹基线（用于后续差异检测）
-                            var _mode0 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : "multi_dim"
-                            var _fp0 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
-                            _fp0[_mode0] = root._configFingerprint(obj)
-                            root._localConfigFingerprint = _fp0
                             return
                         }
                     } catch (e) {}
@@ -1710,7 +1705,7 @@ ApplicationWindow {
     // 后台静默检测所有模式的远程配置是否有更新（不影响当前已加载的配置）
     // 流程：先拉 /api/active-config 获取所有模式绑定，再并发请求每个配置内容，
     //       任意一个模式与本地指纹不同，就弹出通知卡片。
-    function _checkRemoteConfigUpdate() {
+    function _checkRemoteConfigUpdate(onNoUpdate) {
         var base = root._dimApiUrl()
         if (base.length === 0) return  // 未配置服务器，跳过
 
@@ -1734,6 +1729,12 @@ ApplicationWindow {
                 var modes = Object.keys(bindings)
                 if (modes.length === 0) return
 
+                // 对比绑定关系是否发生变化（用 JSON.stringify 排序后对比）
+                var sortedBindings = {}
+                modes.slice().sort().forEach(function(m) { sortedBindings[m] = bindings[m] })
+                var bindingsFp = JSON.stringify(sortedBindings)
+                var localBindingsFp = (root._localConfigFingerprint || {})["__bindings__"] || ""
+
                 // 第二步：并发请求每个绑定配置的内容
                 var configBase = base.replace(/\/api\/dimensions.*$/, '') + "/api/configs/"
                 var pending = []   // 收集有差异的 { mode, obj, configName }
@@ -1741,7 +1742,11 @@ ApplicationWindow {
                 var finished = 0
 
                 function onAllDone() {
-                    if (pending.length === 0) return
+                    if (pending.length === 0) {
+                        // 无更新：回调通知调用方
+                        if (typeof onNoUpdate === "function") onNoUpdate()
+                        return
+                    }
                     // 有差异：合并到已有列表（避免覆盖用户已部分应用的条目）
                     var existing = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
                     var merged = existing.slice()
@@ -1760,6 +1765,8 @@ ApplicationWindow {
                 modes.forEach(function(mode) {
                     var configName = bindings[mode]
                     var cfgUrl = configBase + encodeURIComponent(configName)
+                    // 指纹 key = "mode:configName"
+                    var fpKey = mode + ":" + configName
                     var xhr1 = new XMLHttpRequest()
                     var _done1 = false
                     var _t1 = Qt.createQmlObject('import QtQuick 2.0; Timer { interval: 8000; repeat: false }', root)
@@ -1776,23 +1783,56 @@ ApplicationWindow {
                                 var rawText = xhr1.responseText
                                 var obj = JSON.parse(rawText)
                                 if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
-                                    // 用原始响应字符串作为指纹，避免 JSON.stringify 字段顺序不稳定导致误判
                                     var remoteFp = rawText
-                                    var localFp  = root._localConfigFingerprint[mode] || ""
-                                    if (localFp.length === 0) {
-                                        // 首次检测该模式：建立基线，不弹通知
+                                    var localFp  = (root._localConfigFingerprint || {})[fpKey] || ""
+
+                                    // 判断是否为绑定切换：绑定关系指纹变了，且该 mode 的 configName 发生了变化
+                                    var bindingChanged = (localBindingsFp.length > 0) && (bindingsFp !== localBindingsFp) &&
+                                        (function() {
+                                            try {
+                                                var oldBindings = JSON.parse(localBindingsFp)
+                                                return oldBindings[mode] !== configName
+                                            } catch(e) { return false }
+                                        })()
+
+                                    if (localFp.length === 0 && localBindingsFp.length === 0) {
+                                        // 真正首次启动（无任何历史），建基线静默
                                         var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
-                                        fp2[mode] = remoteFp
+                                        fp2[fpKey] = remoteFp
+                                        fp2["__bindings__"] = bindingsFp
                                         root._localConfigFingerprint = fp2
+                                        root._saveFingerprintToFile()
+                                    } else if (bindingChanged) {
+                                        // 绑定切换了（运行中或重启后），视为变化，弹通知
+                                        console.log("[ConfigCheck] 绑定切换检测到：mode=", mode, "旧配置→新配置=", configName)
+                                        pending.push({ mode: mode, obj: obj, configName: configName, rawText: rawText, fpKey: fpKey, bindingsFp: bindingsFp })
+                                    } else if (localFp.length === 0) {
+                                        // 新增绑定（之前该 mode 没有绑定），建基线静默
+                                        var fp3 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+                                        fp3[fpKey] = remoteFp
+                                        fp3["__bindings__"] = bindingsFp
+                                        root._localConfigFingerprint = fp3
+                                        root._saveFingerprintToFile()
                                     } else if (remoteFp !== localFp) {
-                                        pending.push({ mode: mode, obj: obj, configName: configName, rawText: rawText })
+                                        // 同一绑定，内容发生了变化
+                                        pending.push({ mode: mode, obj: obj, configName: configName, rawText: rawText, fpKey: fpKey, bindingsFp: bindingsFp })
                                     }
                                 }
                             } catch (e) {
                                 console.warn("[ConfigCheck] 解析配置失败 mode=", mode, e)
                             }
                         }
-                        if (finished >= total) onAllDone()
+                        if (finished >= total) {
+                            // 所有模式检测完毕后，更新绑定关系指纹基线
+                            if (pending.length === 0 && bindingsFp !== localBindingsFp) {
+                                // 绑定有变化但没有内容差异（不太可能，保险起见更新基线）
+                                var fpUpd = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+                                fpUpd["__bindings__"] = bindingsFp
+                                root._localConfigFingerprint = fpUpd
+                                root._saveFingerprintToFile()
+                            }
+                            onAllDone()
+                        }
                     }
                     xhr1.open("GET", cfgUrl)
                     xhr1.send()
@@ -1812,10 +1852,14 @@ ApplicationWindow {
         try {
             var obj = item.obj
 
-            // 更新指纹基线（用原始响应字符串，与检测时保持一致；深拷贝后赋值确保 binding 触发）
+            // 更新指纹基线（key = mode:configName，与检测时保持一致；深拷贝后赋值确保 binding 触发）
             var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
-            fp2[item.mode] = item.rawText || root._configFingerprint(obj)
+            var _fpKey = item.fpKey || (item.mode + ":" + item.configName)
+            fp2[_fpKey] = item.rawText || root._configFingerprint(obj)
+            // 同步更新绑定关系指纹，防止下次轮询再次触发 bindingChanged
+            if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
             root._localConfigFingerprint = fp2
+            root._saveFingerprintToFile()
 
             // 热更新播放器维度
             var _dims = obj.dimensions.map(function(d) {
@@ -1859,8 +1903,11 @@ ApplicationWindow {
 
             list.forEach(function(item) {
                 var obj = item.obj
-                // 更新指纹基线（用 rawText 与检测时保持一致）
-                fp2[item.mode] = item.rawText || root._configFingerprint(obj)
+                // 更新指纹基线（key = mode:configName，与检测时保持一致）
+                var _fpKey = item.fpKey || (item.mode + ":" + item.configName)
+                fp2[_fpKey] = item.rawText || root._configFingerprint(obj)
+                // 同步更新绑定关系指纹，防止下次轮询再次触发 bindingChanged
+                if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
                 // 只有当前播放器模式匹配时，才热更新播放器维度
                 if (item.mode === currentMode || list.length === 1) {
                     var _dims = obj.dimensions.map(function(d) {
@@ -1882,6 +1929,7 @@ ApplicationWindow {
             })
 
             root._localConfigFingerprint = fp2
+            root._saveFingerprintToFile()
             root._pendingRemoteConfig = null
             root._taskUpdateVisible = false
         } catch (e) {
@@ -1895,7 +1943,12 @@ ApplicationWindow {
         interval: 500
         repeat: false
         running: true
-        onTriggered: root._checkRemoteConfigUpdate()
+        onTriggered: {
+            // 先加载本地持久化指纹，再做差异检测，确保重启后绑定切换能被检测到
+            root._loadFingerprintFromFile(function() {
+                root._checkRemoteConfigUpdate()
+            })
+        }
     }
 
     // 后台轮询定时器（调试：5 秒检测一次）
@@ -1919,6 +1972,35 @@ ApplicationWindow {
         } else {
             return exe.substring(0, exe.lastIndexOf("/"))
         }
+    }
+
+    // 持久化指纹到本地文件，重启后仍能检测绑定切换
+    function _saveFingerprintToFile() {
+        var fpPath = root._resourcesDir() + "/config_fingerprint.json"
+        if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+            EngineBridge.writeTextFile(fpPath, JSON.stringify(root._localConfigFingerprint || {}))
+        }
+    }
+
+    // 从本地文件加载指纹（启动时调用，callback 在加载完成后触发）
+    function _loadFingerprintFromFile(callback) {
+        var fpUrl = "file://" + root._resourcesDir() + "/config_fingerprint.json"
+        var xhr = new XMLHttpRequest()
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return
+            if (xhr.status === 200 || xhr.status === 0) {
+                try {
+                    var obj = JSON.parse(xhr.responseText)
+                    if (obj && typeof obj === "object") {
+                        root._localConfigFingerprint = obj
+                        console.log("[ConfigCheck] 已从文件加载指纹，共", Object.keys(obj).length, "条")
+                    }
+                } catch (e) {}
+            }
+            if (typeof callback === "function") callback()
+        }
+        xhr.open("GET", fpUrl)
+        xhr.send()
     }
 
     // 从任意 URL（file:// 或 https://）加载维度配置并热重载，无需重启
@@ -2981,34 +3063,74 @@ ApplicationWindow {
             // ── 任务配置更新常驻入口按钮（🔔）紧贴 📱 按钮左侧 ──────────
             Button {
                 id: taskUpdateEntryBtn
-                visible: Array.isArray(root._pendingRemoteConfig) && root._pendingRemoteConfig.length > 0
+                // 始终常驻显示
+                visible: true
                 Layout.preferredWidth: 32
                 Layout.preferredHeight: 28
                 Layout.alignment: Qt.AlignVCenter
                 hoverEnabled: true
-                onClicked: root._taskUpdateVisible = !root._taskUpdateVisible
-                ToolTip.visible: hovered
-                ToolTip.delay: 400
-                ToolTip.text: "远程有 " + (Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length : 0) + " 个任务配置更新（点击查看）"
+
+                // 有待更新：切换面板；无待更新：主动抓取一次，无变化则提示
+                property bool _checking: false
+                property bool _showNoUpdate: false
+
+                onClicked: {
+                    var hasPending = Array.isArray(root._pendingRemoteConfig) && root._pendingRemoteConfig.length > 0
+                    if (hasPending) {
+                        root._taskUpdateVisible = !root._taskUpdateVisible
+                    } else {
+                        if (_checking) return
+                        _checking = true
+                        _showNoUpdate = false
+                        root._checkRemoteConfigUpdate(function() {
+                            // 检测完毕，仍无更新
+                            taskUpdateEntryBtn._checking = false
+                            taskUpdateEntryBtn._showNoUpdate = true
+                            noUpdateHideTimer.restart()
+                        })
+                        // 请求发出后重置 _checking（网络回调里再置 false）
+                        // 用一个保底定时器防止卡住
+                        Qt.callLater(function() { taskUpdateEntryBtn._checking = false })
+                    }
+                }
+
+                // 无更新提示自动消失
+                Timer {
+                    id: noUpdateHideTimer
+                    interval: 2500
+                    repeat: false
+                    onTriggered: taskUpdateEntryBtn._showNoUpdate = false
+                }
+
+                ToolTip.visible: hovered || _showNoUpdate
+                ToolTip.delay: hovered ? 400 : 0
+                ToolTip.text: {
+                    if (_showNoUpdate) return "✅ 远程没有任务配置更新"
+                    var cnt = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length : 0
+                    return cnt > 0 ? "远程有 " + cnt + " 个任务配置更新（点击查看）" : "点击检测远程任务配置更新"
+                }
+
                 background: Rectangle {
                     color: taskUpdateEntryBtn.down ? "#4a4a55"
                           : taskUpdateEntryBtn.hovered ? "#33333a" : "#202024"
-                    border.color: "#e05050"
+                    border.color: "#33ffffff"
                     border.width: 1
                     radius: 5
                 }
                 contentItem: Item {
                     Text {
+                        id: bellIcon
                         anchors.centerIn: parent
                         text: "🔔"
                         font.pixelSize: 14
+                        opacity: taskUpdateEntryBtn._checking ? 0.5 : 1.0
+                        Behavior on opacity { NumberAnimation { duration: 200 } }
                     }
-                    // 红点角标
+                    // 红色数字角标，贴在 🔔 右上角
                     Rectangle {
-                        anchors.top: parent.top
-                        anchors.right: parent.right
-                        anchors.topMargin: 1
-                        anchors.rightMargin: 1
+                        visible: Array.isArray(root._pendingRemoteConfig) && root._pendingRemoteConfig.length > 0
+                        x: bellIcon.x + bellIcon.width - 4
+                        y: bellIcon.y - 3
                         width: 13
                         height: 13
                         radius: 7
