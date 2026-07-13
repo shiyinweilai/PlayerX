@@ -668,6 +668,8 @@ ApplicationWindow {
     // 多维评分模式支持（由 Main.qml 注入）
     property bool isMultiDimMode: false
     property var  reviewDimensions: []
+    // 按 mode 缓存的维度列表（由 Main.qml 注入），切换 mode 时自动加载对应维度
+    property var  dimsByMode: ({})
     // 有维度配置时（不限于 multi_dim 模式）走多维布局
     readonly property bool hasDims: reviewDimensions && reviewDimensions.length > 0
     // 启动对比时，如果是多维模式，Main.qml 注入此回调以静默加载最新维度配置
@@ -2534,7 +2536,11 @@ ApplicationWindow {
                     return "⚙️ 配置"
                 }
                 onClicked: {
-                    // 在按钮正上方弹出（上拉菜单式）
+                    // 已打开则收回（toggle），否则弹出
+                    if (settingsPopup.visible) {
+                        settingsPopup.close()
+                        return
+                    }
                     var p = configBtn.mapToItem(null, 0, 0)
                     settingsPopup.x = dlg.x + p.x
                     settingsPopup.y = dlg.y + p.y - settingsPopup.height - 4
@@ -2607,7 +2613,11 @@ ApplicationWindow {
 
             Button {
                 text: "关闭"
-                onClicked: dlg.close()
+                onClicked: {
+                    // 先关掉评分模式弹出菜单（若还开着），再关主弹窗
+                    if (settingsPopup.visible) settingsPopup.close()
+                    dlg.close()
+                }
                 background: Rectangle {
                     color: parent.down ? "#4a4a55"
                           : parent.hovered ? "#33333a"
@@ -2770,6 +2780,9 @@ ApplicationWindow {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 if (typeof Rating !== "undefined") Rating.currentMode = modeData.id
+                                // 切换 mode 后，从缓存加载对应维度（避免多 mode 应用后维度互相覆盖）
+                                var cached = (dlg.dimsByMode || {})[modeData.id]
+                                if (cached && cached.length > 0) dlg.reviewDimensions = cached
                                 settingsPopup.close()
                             }
                         }

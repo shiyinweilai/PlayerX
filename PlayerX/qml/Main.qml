@@ -1691,8 +1691,25 @@ ApplicationWindow {
         (typeof Rating !== "undefined") && Rating.currentMode === "multi_dim"
     // 维度列表（启动时从服务器/本地文件动态加载，初始为空）
     property var reviewDimensions: []
+    // 按 mode 缓存各自的维度列表，避免多 mode 应用时互相覆盖
+    property var _dimsByMode: ({})
     // 远程激活配置的 tag（加载维度时同步写入，供上传时校验用）
     property string _remoteTag: ""
+
+    // 监听 Rating.currentMode 变化：自动从 _dimsByMode 加载对应 mode 的维度
+    // 这样无论是通知卡片应用、手动切换 mode，reviewDimensions 都能跟随 mode 正确切换
+    Connections {
+        target: Rating
+        function onCurrentModeChanged() {
+            var mode = Rating.currentMode
+            if (!mode || mode === "off") return
+            var cached = root._dimsByMode[mode]
+            if (cached && cached.length > 0) {
+                root.reviewDimensions = cached
+                console.log("[DimSync] mode 切换到", mode, "，自动加载缓存维度，共", cached.length, "个")
+            }
+        }
+    }
 
     // ── 任务配置后台差异检测 ──────────────────────────────────────────────
     // 设计：启动时先用本地缓存初始化（零延迟），后台静默拉取远程配置做指纹对比。
@@ -1756,7 +1773,17 @@ ApplicationWindow {
 
                 function onAllDone() {
                     if (pending.length === 0) {
-                        // 无更新：回调通知调用方
+                        // 无更新（含首次启动静默应用完毕）：把当前 mode 的维度同步到 reviewDimensions
+                        // 这样首次启动时用户无需手动应用，打开评分规则面板就能看到配置
+                        var curMode = (typeof Rating !== "undefined") ? Rating.currentMode : ""
+                        if (curMode && curMode !== "off") {
+                            var curDims = root._dimsByMode[curMode]
+                            if (curDims && curDims.length > 0 && root.reviewDimensions.length === 0) {
+                                root.reviewDimensions = curDims
+                                console.log("[ConfigCheck] 首次启动静默加载 mode=", curMode, "维度数:", curDims.length)
+                            }
+                        }
+                        // 回调通知调用方
                         if (typeof onNoUpdate === "function") onNoUpdate()
                         return
                     }
@@ -1809,23 +1836,57 @@ ApplicationWindow {
                                         })()
 
                                     if (localFp.length === 0 && localBindingsFp.length === 0) {
-                                        // 真正首次启动（无任何历史），建基线静默
+                                        // 真正首次启动（无任何历史）：静默自动应用配置，不弹通知
+                                        // 各 mode 各自存入 _dimsByMode，不切换当前 mode
+                                        var _dimsInit = obj.dimensions.map(function(d) {
+                                            var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
+                                            return Object.assign({}, d, { starCount: sc })
+                                        })
+                                        var dimsCacheInit = root._dimsByMode || {}
+                                        dimsCacheInit[mode] = _dimsInit
+                                        root._dimsByMode = dimsCacheInit
+                                        // 写本地缓存文件（供下次启动离线加载）
+                                        var localPathInit = root._resourcesDir() + "/dimensions.json"
+                                        if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                                            EngineBridge.writeTextFile(localPathInit, JSON.stringify(obj))
+                                        }
+                                        // 更新 tag
+                                        if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
+                                        root._remoteTag = obj.tag || ""
+                                        // 建指纹基线
                                         var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
                                         fp2[fpKey] = remoteFp
                                         fp2["__bindings__"] = bindingsFp
                                         root._localConfigFingerprint = fp2
                                         root._saveFingerprintToFile()
+                                        console.log("[ConfigCheck] 首次启动，静默应用 mode=", mode, "维度数:", _dimsInit.length)
                                     } else if (bindingChanged) {
                                         // 绑定切换了（运行中或重启后），视为变化，弹通知
                                         console.log("[ConfigCheck] 绑定切换检测到：mode=", mode, "旧配置→新配置=", configName)
                                         pending.push({ mode: mode, obj: obj, configName: configName, rawText: rawText, fpKey: fpKey, bindingsFp: bindingsFp })
                                     } else if (localFp.length === 0) {
-                                        // 新增绑定（之前该 mode 没有绑定），建基线静默
+                                        // 新增绑定（之前该 mode 没有绑定）：静默自动应用，不弹通知
+                                        var _dimsNew = obj.dimensions.map(function(d) {
+                                            var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
+                                            return Object.assign({}, d, { starCount: sc })
+                                        })
+                                        var dimsCacheNew = root._dimsByMode || {}
+                                        dimsCacheNew[mode] = _dimsNew
+                                        root._dimsByMode = dimsCacheNew
+                                        // 写本地缓存文件
+                                        var localPathNew = root._resourcesDir() + "/dimensions.json"
+                                        if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                                            EngineBridge.writeTextFile(localPathNew, JSON.stringify(obj))
+                                        }
+                                        if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
+                                        root._remoteTag = obj.tag || ""
+                                        // 建指纹基线
                                         var fp3 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
                                         fp3[fpKey] = remoteFp
                                         fp3["__bindings__"] = bindingsFp
                                         root._localConfigFingerprint = fp3
                                         root._saveFingerprintToFile()
+                                        console.log("[ConfigCheck] 新增绑定，静默应用 mode=", mode, "维度数:", _dimsNew.length)
                                     } else if (remoteFp !== localFp) {
                                         // 同一绑定，内容发生了变化
                                         pending.push({ mode: mode, obj: obj, configName: configName, rawText: rawText, fpKey: fpKey, bindingsFp: bindingsFp })
@@ -1874,26 +1935,33 @@ ApplicationWindow {
             root._localConfigFingerprint = fp2
             root._saveFingerprintToFile()
 
-            // 热更新播放器维度
+            // 计算该 mode 的维度列表
             var _dims = obj.dimensions.map(function(d) {
                 var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
                 return Object.assign({}, d, { starCount: sc })
             })
-            root.reviewDimensions = _dims
-            if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
-            root._remoteTag = obj.tag || ""
+
+            // 将维度存入按 mode 的缓存（用 JS 对象直接操作，不依赖 QML property 异步更新）
+            var dimsCacheUpd = root._dimsByMode || {}
+            dimsCacheUpd[item.mode] = _dims
+            root._dimsByMode = dimsCacheUpd
 
             // 自动切换到对应评分模式
             if (typeof Rating !== "undefined" && item.mode && item.mode !== "off") {
                 Rating.currentMode = item.mode
             }
 
-            // 持久化到本地缓存文件
+            // 直接用本次计算的 _dims 更新 reviewDimensions（不从 _dimsByMode 读，避免 QML property 异步问题）
+            root.reviewDimensions = _dims
+            if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
+            root._remoteTag = obj.tag || ""
+
+            // 持久化到本地缓存文件（只写当前切换到的 mode 的配置）
             var localPath = root._resourcesDir() + "/dimensions.json"
             if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
                 EngineBridge.writeTextFile(localPath, JSON.stringify(obj))
             }
-            console.log("[ConfigCheck] 已应用配置并切换模式，mode:", item.mode, "tag:", obj.tag)
+            console.log("[ConfigCheck] 已应用配置，mode:", item.mode, "维度数:", _dims.length, "tag:", obj.tag)
 
             // 从待更新列表中移除该条
             var remaining = (root._pendingRemoteConfig || []).filter(function(x) {
@@ -1913,6 +1981,7 @@ ApplicationWindow {
             var currentMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
             // 深拷贝后修改再赋值，确保 QML property var binding 触发更新
             var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+            var dimsCache = JSON.parse(JSON.stringify(root._dimsByMode || {}))
 
             list.forEach(function(item) {
                 var obj = item.obj
@@ -1921,12 +1990,16 @@ ApplicationWindow {
                 fp2[_fpKey] = item.rawText || root._configFingerprint(obj)
                 // 同步更新绑定关系指纹，防止下次轮询再次触发 bindingChanged
                 if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
-                // 只有当前播放器模式匹配时，才热更新播放器维度
+
+                // 所有 mode 都存入维度缓存
+                var _dims = obj.dimensions.map(function(d) {
+                    var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
+                    return Object.assign({}, d, { starCount: sc })
+                })
+                dimsCache[item.mode] = _dims
+
+                // 只有当前播放器模式匹配时，才热更新 reviewDimensions 和持久化缓存
                 if (item.mode === currentMode || list.length === 1) {
-                    var _dims = obj.dimensions.map(function(d) {
-                        var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
-                        return Object.assign({}, d, { starCount: sc })
-                    })
                     root.reviewDimensions = _dims
                     if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
                     root._remoteTag = obj.tag || ""
@@ -1941,6 +2014,7 @@ ApplicationWindow {
                 }
             })
 
+            root._dimsByMode = dimsCache
             root._localConfigFingerprint = fp2
             root._saveFingerprintToFile()
             root._pendingRemoteConfig = null
@@ -2048,6 +2122,13 @@ ApplicationWindow {
                             return Object.assign({}, d, { starCount: sc })
                         })
                         root.reviewDimensions = _dims1
+                        // 1a. 同步更新 _dimsByMode 缓存（按当前 mode 存储）
+                        var _curMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                        if (_curMode && _curMode !== "off") {
+                            var _dimsUpd = JSON.parse(JSON.stringify(root._dimsByMode || {}))
+                            _dimsUpd[_curMode] = _dims1
+                            root._dimsByMode = _dimsUpd
+                        }
                         // 1b. 同步远程配置的 tag 到备注 tag 输入框（用户可手动覆盖）
                         if (obj.tag && typeof Rating !== "undefined") {
                             Rating.uploadTag = obj.tag
@@ -7446,6 +7527,7 @@ ApplicationWindow {
         // 多维评分模式注入
         isMultiDimMode: root.isMultiDimMode
         reviewDimensions: root.reviewDimensions
+        dimsByMode: root._dimsByMode
         // 点击「启动对比」时，先从网络加载当前模式对应的激活配置，完成后再启动
         onDimLoadNeeded: function(mode, callback) {
             var base = root._dimApiUrl()

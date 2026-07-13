@@ -161,10 +161,10 @@ QString RatingStore::systemUserName() const {
 
 QString RatingStore::currentMode() const {
     QSettings s;
-    QString m = s.value(kSettingsModeKey, QStringLiteral("subjective")).toString().trimmed();
-    // 兼容性兜底：值不在表里且不是 "off" 时回退到 subjective，避免脏数据卡死 UI。
+    QString m = s.value(kSettingsModeKey, QStringLiteral("off")).toString().trimmed();
+    // 兼容性兜底：值不在表里且不是 "off" 时回退到 off，避免脏数据卡死 UI。
     if (m == QStringLiteral("off")) return m;
-    if (!findMode(m)) return QStringLiteral("subjective");
+    if (!findMode(m)) return QStringLiteral("off");
     return m;
 }
 
