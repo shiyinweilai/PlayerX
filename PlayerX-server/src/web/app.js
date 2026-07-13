@@ -783,9 +783,13 @@
     // ── 卡片渲染 ──
     function renderDimCards(obj) {
         if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
-            dimView.innerHTML = '<div class="dim-view-loading">暂无维度配置</div>';
+            const admin = isLoggedIn();
+            dimView.innerHTML = `<div class="dim-view-loading">暂无维度配置${admin ? '' : ''}</div>`
+                + (admin ? `<div style="padding:0 28px"><button class="dim-add-dim-btn ghost-btn" style="margin-top:8px">＋ 添加维度</button></div>` : '');
+            if (admin) setTimeout(() => bindCardEdit(obj || { dimensions: [] }), 0);
             return;
         }
+        const admin = isLoggedIn();
         const metaItems = [];
         if (obj.type)  metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
         // 评测任务：可内联编辑
@@ -796,37 +800,513 @@
         const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';
 
         // 渲染后绑定内联编辑事件（延迟到 innerHTML 写入后）
-        setTimeout(() => bindMetaInlineEdit(), 0);
+        setTimeout(() => {
+            bindMetaInlineEdit();
+            if (admin) bindCardEdit(obj);
+        }, 0);
 
-        const cardsHtml = obj.dimensions.map((d, idx) => {
-            const levelsHtml = Array.isArray(d.levels) && d.levels.length
-            ? d.levels.slice().map(lv => {
-                    const score = lv.score != null ? lv.score : '';
-                    const totalStars = d.levels.length;
-                    const stars = '★'.repeat(Math.max(0, +score || 0)) + '☆'.repeat(Math.max(0, totalStars - (+score || 0)));
-                    return `<div class="dim-level">
-                        <div class="dim-level-score">
-                            <span class="dim-level-num">${escHtml(String(score))}</span>
-                            <span class="dim-level-stars">${stars}</span>
-                            <span class="dim-level-label">${escHtml(lv.label || '')}</span>
-                        </div>
-                        <div class="dim-level-desc">${escHtml(lv.description || '')}</div>
-                    </div>`;
-                }).join('')
+        const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
+        const addDimBtn = admin ? `<button class="dim-add-dim-btn ghost-btn">＋ 添加维度</button>` : '';
+
+        dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>` + addDimBtn;
+    }
+
+    /** 渲染单张维度卡片 HTML（纯字符串，不绑定事件） */
+    function renderDimCardHtml(d, idx, totalDims, admin) {
+        const levels = Array.isArray(d.levels) ? d.levels : [];
+        const totalStars = levels.length;
+
+        const levelsHtml = levels.map((lv, lvIdx) => {
+            const score = lv.score != null ? lv.score : '';
+            const filledStars = Math.max(0, +score || 0);
+            const emptyStars  = Math.max(0, totalStars - filledStars);
+            const starsHtml = admin
+                ? `<span class="dim-level-stars-edit" data-dim="${idx}" data-lv="${lvIdx}" title="点击调整分值">`
+                    + '★'.repeat(filledStars) + '☆'.repeat(emptyStars)
+                    + `</span>`
+                : `<span class="dim-level-stars">${'★'.repeat(filledStars)}${'☆'.repeat(emptyStars)}</span>`;
+
+            const labelEl = admin
+                ? `<span class="dim-card-editable dim-level-label${lv.label ? '' : ' dim-card-placeholder'}" data-dim="${idx}" data-lv="${lvIdx}" data-field="label" title="点击编辑标签">${escHtml(lv.label || '点击填写标签')}</span>`
+                : `<span class="dim-level-label">${escHtml(lv.label || '')}</span>`;
+
+            const descEl = admin
+                ? `<div class="dim-card-editable dim-level-desc${lv.description ? '' : ' dim-card-placeholder'}" data-dim="${idx}" data-lv="${lvIdx}" data-field="description" title="点击编辑描述">${escHtml(lv.description || '点击填写描述')}</div>`
+                : `<div class="dim-level-desc">${escHtml(lv.description || '')}</div>`;
+
+            const delBtn = admin
+                ? `<button class="dim-del-lv-btn ghost-btn" data-dim="${idx}" data-lv="${lvIdx}" title="删除此等级">✕</button>`
                 : '';
-            return `<div class="dim-card">
-                <div class="dim-card-left">
-                    <div class="dim-card-header">
-                        <span class="dim-card-index">${idx + 1}</span>
-                        <span class="dim-card-key">${escHtml(d.key || '')}</span>
-                    </div>
-                    ${d.definition ? `<div class="dim-card-def">${escHtml(d.definition)}</div>` : ''}
+
+            const lvDragHandle = admin
+                ? `<span class="dim-lv-drag-handle" title="左右拖动调整顺序">⠿</span>`
+                : '';
+
+            return `<div class="dim-level${admin ? ' dim-level-admin' : ''}" data-dim="${idx}" data-lv="${lvIdx}"${admin ? ' draggable="true"' : ''}>
+                ${delBtn}
+                ${lvDragHandle}
+                <div class="dim-level-score">
+                    <span class="dim-level-num">${escHtml(String(score))}</span>
+                    ${starsHtml}
+                    ${labelEl}
                 </div>
-                ${levelsHtml ? `<div class="dim-card-levels">${levelsHtml}</div>` : ''}
+                ${descEl}
             </div>`;
         }).join('');
 
-        dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`;
+        const addLvBtn = admin
+            ? `<div class="dim-add-lv-cell"><button class="dim-add-lv-btn ghost-btn" data-dim="${idx}" title="添加等级">＋</button></div>`
+            : '';
+
+        const dragHandle = admin
+            ? `<span class="dim-drag-handle" title="拖动调整顺序">⠿</span>`
+            : '';
+
+        const keyEl = admin
+            ? `<span class="dim-card-editable dim-card-key${d.key ? '' : ' dim-card-placeholder'}" data-dim="${idx}" data-field="key" title="点击编辑维度名">${escHtml(d.key || '点击填写维度名')}</span>`
+            : `<span class="dim-card-key">${escHtml(d.key || '')}</span>`;
+
+        const defEl = admin
+            ? `<div class="dim-card-editable dim-card-def${d.definition ? '' : ' dim-card-placeholder'}" data-dim="${idx}" data-field="definition" title="点击编辑说明">${escHtml(d.definition || '点击添加维度说明')}</div>`
+            : (d.definition ? `<div class="dim-card-def">${escHtml(d.definition)}</div>` : '');
+
+        const delDimBtn = admin
+            ? `<button class="dim-del-dim-btn ghost-btn" data-dim="${idx}" title="删除此维度">🗑 删除</button>`
+            : '';
+
+        return `<div class="dim-card${admin ? ' dim-card-draggable' : ''}" data-dim="${idx}" draggable="${admin ? 'true' : 'false'}">
+            <div class="dim-card-left">
+                <div class="dim-card-header">
+                    ${dragHandle}
+                    <span class="dim-card-index">${idx + 1}</span>
+                    ${keyEl}
+                </div>
+                ${defEl}
+                ${delDimBtn}
+            </div>
+            <div class="dim-card-levels">
+                ${levelsHtml}
+                ${addLvBtn}
+            </div>
+        </div>`;
+    }
+
+    // ── 卡片可视化编辑：事件绑定 ──
+    function bindCardEdit(obj) {
+        if (!isLoggedIn()) return;
+
+        // 内联编辑：维度名 / 维度说明 / level标签 / level描述
+        dimView.querySelectorAll('.dim-card-editable').forEach(el => {
+            el.addEventListener('click', () => startCardFieldEdit(el));
+        });
+
+        // 星星点击：调整分值
+        dimView.querySelectorAll('.dim-level-stars-edit').forEach(el => {
+            el.addEventListener('click', (e) => {
+                const dimIdx = +el.dataset.dim;
+                const lvIdx  = +el.dataset.lv;
+                const rect   = el.getBoundingClientRect();
+                const relX   = e.clientX - rect.left;
+                const starW  = rect.width / (el.textContent.length || 1);
+                const clicked = Math.ceil(relX / starW);
+                patchDimData(data => {
+                    data.dimensions[dimIdx].levels[lvIdx].score = clicked;
+                    // 同步 dim-level-num
+                    const card = dimView.querySelector(`.dim-card[data-dim="${dimIdx}"]`);
+                    if (card) {
+                        const lvEl = card.querySelector(`.dim-level[data-lv="${lvIdx}"]`);
+                        if (lvEl) lvEl.querySelector('.dim-level-num').textContent = clicked;
+                    }
+                    // 重新渲染该卡片的星星
+                    refreshCard(dimIdx, data);
+                });
+            });
+        });
+
+        // 删除等级
+        dimView.querySelectorAll('.dim-del-lv-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const dimIdx = +btn.dataset.dim;
+                const lvIdx  = +btn.dataset.lv;
+                patchDimData(data => {
+                    data.dimensions[dimIdx].levels.splice(lvIdx, 1);
+                    // 删除后重新按降序分配 score
+                    const lvs = data.dimensions[dimIdx].levels;
+                    const scores = lvs.map(l => +l.score || 0).slice().sort((a, b) => b - a);
+                    lvs.forEach((l, i) => { l.score = scores[i]; });
+                    refreshCard(dimIdx, data);
+                });
+            });
+        });
+
+        // 添加等级
+        dimView.querySelectorAll('.dim-add-lv-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const dimIdx = +btn.dataset.dim;
+                patchDimData(data => {
+                    const levels = data.dimensions[dimIdx].levels || [];
+                    const maxScore = levels.reduce((m, l) => Math.max(m, +l.score || 0), 0);
+                    levels.push({ score: maxScore + 1, label: '新等级', description: '' });
+                    data.dimensions[dimIdx].levels = levels;
+                    refreshCard(dimIdx, data);
+                });
+            });
+        });
+
+        // 删除维度
+        dimView.querySelectorAll('.dim-del-dim-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const dimIdx = +btn.dataset.dim;
+                patchDimData(data => {
+                    data.dimensions.splice(dimIdx, 1);
+                    renderDimCards(data);
+                });
+            });
+        });
+
+        // 拖拽排序（卡片上下）
+        _bindDimDragSort();
+
+        // 等级列左右拖拽排序
+        _bindLevelDragSort(null);
+
+        // 添加维度
+        const addDimBtn = dimView.querySelector('.dim-add-dim-btn');
+        if (addDimBtn) {
+            addDimBtn.addEventListener('click', () => {
+                patchDimData(data => {
+                    data.dimensions.push({
+                        key: '新维度',
+                        definition: '',
+                        levels: [
+                            { score: 5, label: '优秀', description: '' },
+                            { score: 4, label: '良好', description: '' },
+                            { score: 3, label: '一般', description: '' },
+                            { score: 2, label: '较差', description: '' },
+                            { score: 1, label: '很差', description: '' }
+                        ]
+                    });
+                    renderDimCards(data);
+                    // 滚动到底部
+                    setTimeout(() => dimView.scrollTo({ top: dimView.scrollHeight, behavior: 'smooth' }), 50);
+                });
+            });
+        }
+    }
+
+    /** 拖拽排序：绑定 dim-card 的 drag & drop 事件 */
+    function _bindDimDragSort() {
+        const grid = dimView.querySelector('.dim-cards-grid');
+        if (!grid) return;
+        let dragSrcIdx = -1;
+
+        grid.querySelectorAll('.dim-card-draggable').forEach(card => {
+            card.addEventListener('dragstart', e => {
+                dragSrcIdx = +card.dataset.dim;
+                card.classList.add('dim-card-dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', dragSrcIdx);
+            });
+            card.addEventListener('dragend', () => {
+                card.classList.remove('dim-card-dragging');
+                grid.querySelectorAll('.dim-card').forEach(c => c.classList.remove('dim-card-drag-over'));
+            });
+            card.addEventListener('dragover', e => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                const targetIdx = +card.dataset.dim;
+                if (targetIdx !== dragSrcIdx) {
+                    grid.querySelectorAll('.dim-card').forEach(c => c.classList.remove('dim-card-drag-over'));
+                    card.classList.add('dim-card-drag-over');
+                }
+            });
+            card.addEventListener('dragleave', () => {
+                card.classList.remove('dim-card-drag-over');
+            });
+            card.addEventListener('drop', e => {
+                e.preventDefault();
+                const targetIdx = +card.dataset.dim;
+                if (targetIdx === dragSrcIdx) return;
+                patchDimData(data => {
+                    const dims = data.dimensions;
+                    const [moved] = dims.splice(dragSrcIdx, 1);
+                    dims.splice(targetIdx, 0, moved);
+                    renderDimCards(data);
+                });
+            });
+        });
+    }
+
+    /** 等级列左右拖拽排序：绑定每张卡片内 dim-level 的 drag & drop 事件
+     *  @param {Element} [singleCard] 传入则只绑定该卡片，否则绑定所有卡片
+     */
+    function _bindLevelDragSort(singleCard) {
+        const cards = singleCard ? [singleCard] : Array.from(dimView.querySelectorAll('.dim-card'));
+        cards.forEach(card => {
+            const dimIdx = +card.dataset.dim;
+            const levelsContainer = card.querySelector('.dim-card-levels');
+            if (!levelsContainer) return;
+
+            let dragSrcLvIdx = -1;
+
+            levelsContainer.querySelectorAll('.dim-level[draggable="true"]').forEach(lvEl => {
+                lvEl.addEventListener('dragstart', e => {
+                    // 如果是从内联编辑输入框触发，忽略
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                        e.preventDefault();
+                        return;
+                    }
+                    dragSrcLvIdx = +lvEl.dataset.lv;
+                    lvEl.classList.add('dim-lv-dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', dragSrcLvIdx);
+                    // 阻止冒泡，防止触发卡片的 dragstart
+                    e.stopPropagation();
+                });
+
+                lvEl.addEventListener('dragend', () => {
+                    lvEl.classList.remove('dim-lv-dragging');
+                    levelsContainer.querySelectorAll('.dim-level').forEach(el => {
+                        el.classList.remove('dim-lv-drag-over-left', 'dim-lv-drag-over-right');
+                    });
+                    dragSrcLvIdx = -1;
+                });
+
+                lvEl.addEventListener('dragover', e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.dataTransfer.dropEffect = 'move';
+                    const targetLvIdx = +lvEl.dataset.lv;
+                    if (targetLvIdx === dragSrcLvIdx) return;
+                    levelsContainer.querySelectorAll('.dim-level').forEach(el => {
+                        el.classList.remove('dim-lv-drag-over-left', 'dim-lv-drag-over-right');
+                    });
+                    // 判断鼠标在目标列的左半还是右半，决定插入方向
+                    const rect = lvEl.getBoundingClientRect();
+                    const midX = rect.left + rect.width / 2;
+                    if (e.clientX < midX) {
+                        lvEl.classList.add('dim-lv-drag-over-left');
+                    } else {
+                        lvEl.classList.add('dim-lv-drag-over-right');
+                    }
+                });
+
+                lvEl.addEventListener('dragleave', () => {
+                    lvEl.classList.remove('dim-lv-drag-over-left', 'dim-lv-drag-over-right');
+                });
+
+                lvEl.addEventListener('drop', e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const targetLvIdx = +lvEl.dataset.lv;
+                    if (targetLvIdx === dragSrcLvIdx) return;
+
+                    // 判断插入到目标左侧还是右侧
+                    const rect = lvEl.getBoundingClientRect();
+                    const midX = rect.left + rect.width / 2;
+                    const insertBefore = e.clientX < midX;
+
+                    patchDimData(data => {
+                        const levels = data.dimensions[dimIdx].levels;
+                        // 取出被拖拽的等级
+                        const [moved] = levels.splice(dragSrcLvIdx, 1);
+                        // 重新计算插入位置（splice 后索引可能偏移）
+                        let insertIdx = targetLvIdx;
+                        if (dragSrcLvIdx < targetLvIdx) insertIdx--;
+                        if (!insertBefore) insertIdx++;
+                        insertIdx = Math.max(0, Math.min(insertIdx, levels.length));
+                        levels.splice(insertIdx, 0, moved);
+
+                        // 拖拽后按从左到右降序重新分配 score（最左边最高分）
+                        const scores = levels.map(l => +l.score || 0).slice().sort((a, b) => b - a);
+                        levels.forEach((l, i) => { l.score = scores[i]; });
+
+                        data.dimensions[dimIdx].levels = levels;
+                        refreshCard(dimIdx, data);
+                    });
+                });
+            });
+        });
+    }
+
+    /** 内联编辑卡片字段（维度名/说明/level标签/level描述） */
+    function startCardFieldEdit(el) {
+        if (el.querySelector('input,textarea')) return;
+        const dimIdx  = +el.dataset.dim;
+        const lvIdx   = el.dataset.lv !== undefined ? +el.dataset.lv : -1;
+        const field   = el.dataset.field;
+        const isMultiline = (field === 'definition' || field === 'description');
+
+        let currentVal = '';
+        try {
+            const data = JSON.parse(dimRawData || '{}');
+            if (lvIdx >= 0) {
+                currentVal = (data.dimensions[dimIdx].levels[lvIdx][field]) || '';
+            } else {
+                currentVal = (data.dimensions[dimIdx][field]) || '';
+            }
+        } catch (_) {}
+
+        const origHtml = el.innerHTML;
+
+        if (isMultiline) {
+            const ta = document.createElement('textarea');
+            ta.className = 'dim-card-inline-input dim-card-inline-textarea';
+            ta.value = currentVal;
+            ta.rows = 3;
+            el.innerHTML = '';
+            el.appendChild(ta);
+            ta.focus();
+            ta.select();
+
+            async function commitTa() {
+                const newVal = ta.value.trim();
+                if (newVal) {
+                    el.classList.remove('dim-card-placeholder');
+                    el.innerHTML = escHtml(newVal);
+                } else {
+                    el.classList.add('dim-card-placeholder');
+                    el.innerHTML = escHtml('点击添加维度说明');
+                }
+                await saveCardField(dimIdx, lvIdx, field, newVal);
+            }
+            ta.addEventListener('blur', commitTa);
+            ta.addEventListener('keydown', e => {
+                if (e.key === 'Escape') { el.innerHTML = origHtml; ta.removeEventListener('blur', commitTa); }
+            });
+        } else {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'dim-card-inline-input';
+            input.value = currentVal;
+            el.innerHTML = '';
+            el.appendChild(input);
+            input.focus();
+            input.select();
+
+            async function commitIn() {
+                const newVal = input.value.trim();
+                const placeholders = { key: '点击填写维度名', label: '点击填写标签', description: '点击填写描述' };
+                if (newVal) {
+                    el.classList.remove('dim-card-placeholder');
+                    el.innerHTML = escHtml(newVal);
+                } else {
+                    el.classList.add('dim-card-placeholder');
+                    el.innerHTML = escHtml(placeholders[field] || '');
+                }
+                await saveCardField(dimIdx, lvIdx, field, newVal);
+            }
+            input.addEventListener('blur', commitIn);
+            input.addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                if (e.key === 'Escape') { el.innerHTML = origHtml; input.removeEventListener('blur', commitIn); }
+            });
+        }
+    }
+
+    /** 保存单个字段到后端，同步更新 dimRawData */
+    async function saveCardField(dimIdx, lvIdx, field, newVal) {
+        if (!dimRawData) return;
+        let data;
+        try { data = JSON.parse(dimRawData); } catch (_) { return; }
+        if (lvIdx >= 0) {
+            data.dimensions[dimIdx].levels[lvIdx][field] = newVal;
+        } else {
+            data.dimensions[dimIdx][field] = newVal;
+        }
+        await persistDimData(data);
+    }
+
+    /** 修改内存数据并保存（传入 mutator 函数，mutator 直接修改 data 对象） */
+    function patchDimData(mutator) {
+        if (!dimRawData) return;
+        let data;
+        try { data = JSON.parse(dimRawData); } catch (_) { return; }
+        mutator(data);
+        persistDimData(data);
+    }
+
+    /** 将 data 序列化、保存到后端，并更新 dimRawData */
+    async function persistDimData(data) {
+        const newRaw = JSON.stringify(data, null, 2);
+        try {
+            const r = await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: newRaw,
+            });
+            if (r.status === 401) return;
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '保存失败'), 'err'); return; }
+            dimRawData = newRaw;
+            showToast('✅ 已保存', 'ok');
+        } catch (e) {
+            showToast('❌ 网络错误：' + e.message, 'err');
+        }
+    }
+
+    /** 重新渲染单张卡片（不刷新整个视图，避免丢失焦点） */
+    function refreshCard(dimIdx, data) {
+        const card = dimView.querySelector(`.dim-card[data-dim="${dimIdx}"]`);
+        if (!card) return;
+        const newHtml = renderDimCardHtml(data.dimensions[dimIdx], dimIdx, data.dimensions.length, true);
+        const tmp = document.createElement('div');
+        tmp.innerHTML = newHtml;
+        const newCard = tmp.firstElementChild;
+        card.replaceWith(newCard);
+        // 重新绑定该卡片内的事件
+        newCard.querySelectorAll('.dim-card-editable').forEach(el => {
+            el.addEventListener('click', () => startCardFieldEdit(el));
+        });
+        newCard.querySelectorAll('.dim-level-stars-edit').forEach(el => {
+            el.addEventListener('click', (e) => {
+                const dIdx = +el.dataset.dim;
+                const lIdx = +el.dataset.lv;
+                const rect = el.getBoundingClientRect();
+                const relX = e.clientX - rect.left;
+                const starW = rect.width / (el.textContent.length || 1);
+                const clicked = Math.ceil(relX / starW);
+                patchDimData(d2 => {
+                    d2.dimensions[dIdx].levels[lIdx].score = clicked;
+                    refreshCard(dIdx, d2);
+                });
+            });
+        });
+        newCard.querySelectorAll('.dim-del-lv-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                patchDimData(d2 => {
+                    const dIdx = +btn.dataset.dim;
+                    d2.dimensions[dIdx].levels.splice(+btn.dataset.lv, 1);
+                    // 删除后重新按降序分配 score
+                    const lvs = d2.dimensions[dIdx].levels;
+                    const scores = lvs.map(l => +l.score || 0).slice().sort((a, b) => b - a);
+                    lvs.forEach((l, i) => { l.score = scores[i]; });
+                    refreshCard(dIdx, d2);
+                });
+            });
+        });
+        newCard.querySelectorAll('.dim-add-lv-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                patchDimData(d2 => {
+                    const dIdx = +btn.dataset.dim;
+                    const lvs = d2.dimensions[dIdx].levels || [];
+                    const maxScore = lvs.reduce((m, l) => Math.max(m, +l.score || 0), 0);
+                    lvs.push({ score: maxScore + 1, label: '新等级', description: '' });
+                    d2.dimensions[dIdx].levels = lvs;
+                    refreshCard(dIdx, d2);
+                });
+            });
+        });
+        newCard.querySelectorAll('.dim-del-dim-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                patchDimData(d2 => {
+                    d2.dimensions.splice(+btn.dataset.dim, 1);
+                    renderDimCards(d2);
+                });
+            });
+        });
+        // 重新绑定该卡片的等级拖拽排序
+        _bindLevelDragSort(newCard);
     }
 
     // ── 顶部 meta 行内联编辑（task / tag 字段） ──
@@ -1060,16 +1540,20 @@
     }
 
     // 整个评分规则页面响应拖拽（左侧+右侧大区域均可）
+    // 只有拖入外部文件时才显示蓝色边框，页面内元素拖拽不触发
+    function _isFileDrag(e) {
+        return e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
+    }
     if (dimPage) {
-        dimPage.addEventListener('dragenter', (e) => { e.preventDefault(); dimPage.classList.add('drag-over'); });
-        dimPage.addEventListener('dragover',  (e) => { e.preventDefault(); dimPage.classList.add('drag-over'); });
+        dimPage.addEventListener('dragenter', (e) => { if (!_isFileDrag(e)) return; e.preventDefault(); dimPage.classList.add('drag-over'); });
+        dimPage.addEventListener('dragover',  (e) => { if (!_isFileDrag(e)) return; e.preventDefault(); dimPage.classList.add('drag-over'); });
         dimPage.addEventListener('dragleave', (e) => {
             if (!dimPage.contains(e.relatedTarget)) dimPage.classList.remove('drag-over');
         });
         dimPage.addEventListener('drop', (e) => {
             e.preventDefault();
             dimPage.classList.remove('drag-over');
-            readJsonFile(e.dataTransfer.files[0]);
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) readJsonFile(e.dataTransfer.files[0]);
         });
     }
 

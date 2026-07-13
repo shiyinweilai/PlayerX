@@ -1643,3 +1643,219 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     color: var(--danger, #ff453a);
     padding: 6px 0;
 }
+
+/* ── 卡片可视化编辑（管理员） ── */
+
+/* 可编辑字段：hover 提示 */
+.dim-card-editable {
+    cursor: text;
+    border-radius: 4px;
+    padding: 1px 3px;
+    transition: background 0.15s, outline 0.15s;
+}
+.dim-card-editable:hover {
+    background: rgba(0, 113, 227, .13);
+    outline: 1px dashed rgba(0, 113, 227, .5);
+}
+
+/* 占位提示文字（空字段） */
+.dim-card-placeholder {
+    color: rgba(134, 134, 139, 0.55) !important;
+    font-style: italic;
+    font-weight: 400 !important;
+}
+
+/* 拖拽手柄 */
+.dim-drag-handle {
+    font-size: 14px;
+    color: var(--muted, #86868b);
+    cursor: grab;
+    padding: 2px 4px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+    user-select: none;
+    line-height: 1;
+}
+.dim-card:hover .dim-drag-handle {
+    opacity: 0.6;
+}
+.dim-drag-handle:hover {
+    opacity: 1 !important;
+    background: rgba(255,255,255,.08);
+}
+.dim-drag-handle:active {
+    cursor: grabbing;
+}
+
+/* 拖拽中的卡片 */
+.dim-card-dragging {
+    opacity: 0.4;
+    outline: 2px dashed var(--primary, #0071e3);
+}
+
+/* 拖拽目标高亮 */
+.dim-card-drag-over {
+    outline: 2px solid var(--primary, #0071e3);
+    background: rgba(0, 113, 227, .06);
+}
+
+/* 内联编辑输入框（单行） */
+.dim-card-inline-input {
+    font-size: inherit;
+    font-weight: inherit;
+    color: var(--text, #ecedf3);
+    background: rgba(0, 113, 227, .12);
+    border: 1px solid rgba(0, 113, 227, .6);
+    border-radius: 4px;
+    padding: 1px 6px;
+    outline: none;
+    min-width: 80px;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+}
+
+/* 内联编辑多行文本框 */
+.dim-card-inline-textarea {
+    resize: vertical;
+    min-height: 60px;
+    line-height: 1.5;
+    font-size: 15px;
+}
+
+/* 星星可点击编辑 */
+.dim-level-stars-edit {
+    font-size: 16px;
+    letter-spacing: 1px;
+    color: #f5a623;
+    flex-shrink: 0;
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 1px 2px;
+    transition: background 0.12s;
+    user-select: none;
+}
+.dim-level-stars-edit:hover {
+    background: rgba(245, 166, 35, .18);
+}
+
+/* 管理员模式下 level 格子：相对定位，放置删除按钮 */
+.dim-level.dim-level-admin {
+    position: relative;
+    padding-top: 22px;
+    cursor: grab;
+}
+.dim-level.dim-level-admin:active {
+    cursor: grabbing;
+}
+
+/* 等级列拖拽手柄 */
+.dim-lv-drag-handle {
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    color: var(--muted, #86868b);
+    opacity: 0;
+    transition: opacity 0.15s;
+    user-select: none;
+    pointer-events: none;
+    line-height: 1;
+}
+.dim-level.dim-level-admin:hover .dim-lv-drag-handle {
+    opacity: 0.5;
+}
+
+/* 等级列拖拽中 */
+.dim-lv-dragging {
+    opacity: 0.35;
+    outline: 2px dashed var(--primary, #0071e3);
+    background: rgba(0, 113, 227, .06) !important;
+}
+
+/* 等级列拖拽目标高亮（左侧插入） */
+.dim-lv-drag-over-left {
+    border-left: 3px solid var(--primary, #0071e3) !important;
+    background: rgba(0, 113, 227, .08) !important;
+}
+
+/* 等级列拖拽目标高亮（右侧插入） */
+.dim-lv-drag-over-right {
+    border-right: 3px solid var(--primary, #0071e3) !important;
+    background: rgba(0, 113, 227, .08) !important;
+}
+
+/* level 删除按钮（右上角） */
+.dim-del-lv-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    font-size: 10px !important;
+    padding: 1px 5px !important;
+    opacity: 0;
+    transition: opacity 0.15s;
+    color: var(--danger, #ff453a) !important;
+    border-color: transparent !important;
+}
+.dim-level.dim-level-admin:hover .dim-del-lv-btn {
+    opacity: 1;
+}
+
+/* 添加等级按钮格子 */
+.dim-add-lv-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 48px;
+    padding: 0 8px;
+    border-left: 1px dashed var(--border, #2a2b33);
+    flex-shrink: 0;
+}
+.dim-add-lv-btn {
+    font-size: 18px !important;
+    padding: 4px 8px !important;
+    color: var(--primary, #0071e3) !important;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+.dim-add-lv-btn:hover { opacity: 1; }
+
+/* 维度删除按钮（左侧底部） */
+.dim-del-dim-btn {
+    margin-top: auto;
+    font-size: 11px !important;
+    padding: 3px 8px !important;
+    color: var(--danger, #ff453a) !important;
+    opacity: 0;
+    transition: opacity 0.15s;
+    align-self: flex-start;
+}
+.dim-card:hover .dim-del-dim-btn {
+    opacity: 0.7;
+}
+.dim-del-dim-btn:hover {
+    opacity: 1 !important;
+}
+
+/* 添加维度按钮（卡片列表底部） */
+.dim-add-dim-btn {
+    display: block;
+    margin: 8px 0 16px;
+    font-size: 13px !important;
+    padding: 8px 20px !important;
+    color: var(--primary, #0071e3) !important;
+    border: 1px dashed rgba(0, 113, 227, .4) !important;
+    border-radius: 8px !important;
+    width: 100%;
+    text-align: center;
+    opacity: 0.8;
+    transition: opacity 0.15s, border-color 0.15s;
+}
+.dim-add-dim-btn:hover {
+    opacity: 1;
+    border-color: var(--primary, #0071e3) !important;
+}
