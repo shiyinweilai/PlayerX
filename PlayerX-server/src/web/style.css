@@ -235,6 +235,18 @@ button {
     color: #ff9f0a;
     border-color: rgba(255,159,10,.35);
 }
+/* 多维评分：紫色（对齐 macOS 系统紫，与蓝/橙有明显区分度） */
+.mode-pill.mode-multi_dim {
+    background: rgba(191,90,242,.14);
+    color: #bf5af2;
+    border-color: rgba(191,90,242,.35);
+}
+/* 质量比较2（含滑动对比）：青绿色，与"质量比较"的橙相邻但可区分 */
+.mode-pill.mode-quality_slide {
+    background: rgba(48,209,88,.14);
+    color: #30d158;
+    border-color: rgba(48,209,88,.35);
+}
 .mode-pill.mode-off {
     background: var(--bg-elev-2);
     color: var(--text-dim);
