@@ -111,17 +111,20 @@ public slots:
                       const QString& slideType = QString());
 
     // 记录一次滑动对比评分（quality_slide 模式专用）。
-    // 滑动评分独立存储到 ratings_quality_slide_slide.csv，
-    // 与普通打分（ratings_quality_slide.csv）完全隔离，互不覆盖。
-    // 每次打分立即持久化；同 (file_path, rater) 覆盖最新一条。
+    // 滑动评分独立存储到 ratings_quality_slide.csv（主 CSV），
+    // 通过 slide_type 列区分普通打分。每次打分立即持久化。
     // starsL/starsR ∈ {0,1,2}；0 = 取消/未打，也会写入便于审计。
     // 非 quality_slide 模式下调用安静返回 false。
+    // slideType：CSV 里 slide_type 列的写入值。
+    //   · 推荐传入 "multi_<第二维度key>"（与其他多维打分语义一致，便于服务端展示统一）；
+    //   · 兜底：为空时写 "slide"（保持向后兼容）。
     Q_INVOKABLE bool recordSlideRating(const QString& filePathL,
                                        const QString& fileNameL,
                                        int starsL,
                                        const QString& filePathR,
                                        const QString& fileNameR,
-                                       int starsR);
+                                       int starsR,
+                                       const QString& slideType = QString());
 
     // 查询某文件路径在 *当前评分人 + 当前模式* 下的评分。
     //   · 命中：返回 0..maxStars（含 0 = 已取消评分）

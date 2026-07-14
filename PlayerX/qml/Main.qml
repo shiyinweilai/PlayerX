@@ -1414,6 +1414,18 @@ ApplicationWindow {
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
                                         var _ignKey = modelData.mode + ":" + modelData.configName
+                                        // 【关键】把"当前这一版的内容指纹"写入忽略表，
+                                        // 下次轮询发现远端 == 忽略版 时就不再入队；
+                                        // 一旦服务端后续又改了这个配置（rawText 变），忽略自动失效、会重新弹。
+                                        var _rawIgn = modelData.rawText || ""
+                                        if (_rawIgn) {
+                                            var fpIgn = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+                                            fpIgn["__ignored__:" + _ignKey] = _rawIgn
+                                            root._localConfigFingerprint = fpIgn
+                                            root._saveFingerprintToFile()
+                                            console.log("[ConfigCheck] 已忽略配置的当前版本：", _ignKey,
+                                                "（服务端后续修改后会重新弹出）")
+                                        }
                                         var rem = (root._pendingRemoteConfig || []).filter(function(x) {
                                             return (x.mode + ":" + x.configName) !== _ignKey
                                         })
@@ -2072,6 +2084,22 @@ ApplicationWindow {
                                 if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
                                     var remoteFp = rawText
                                     var localFp  = (root._localConfigFingerprint || {})[fpKey] || ""
+                                    // 【忽略机制】用户曾主动忽略过"这个配置的某一版"（rawText 快照），
+                                    // 如果远端当前 rawText == 忽略快照 → 本次直接跳过，不入队、不弹窗；
+                                    // 如果远端 rawText 变了 → 忽略不再匹配，往下走正常流程（重新弹）。
+                                    var ignoredFp = (root._localConfigFingerprint || {})["__ignored__:" + fpKey] || ""
+                                    if (ignoredFp && ignoredFp === remoteFp) {
+                                        console.log("[ConfigCheck] 命中忽略快照，静默跳过：", fpKey)
+                                        return  // 直接从本个 xhr1.onreadystatechange 中返回，不影响 finished / onAllDone
+                                    }
+                                    // 远端 rawText 已不再与忽略快照相同，清掋忽略记录，避免长期残留
+                                    if (ignoredFp && ignoredFp !== remoteFp) {
+                                        var fpClr = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+                                        delete fpClr["__ignored__:" + fpKey]
+                                        root._localConfigFingerprint = fpClr
+                                        root._saveFingerprintToFile()
+                                        console.log("[ConfigCheck] 远端已变化，忽略快照自动失效：", fpKey)
+                                    }
 
                                     // 判断是否为绑定切换：绑定关系指纹变了，且该 mode 的 configName 发生了变化
                                     var bindingChanged = (localBindingsFp.length > 0) && (bindingsFp !== localBindingsFp) &&
@@ -2211,6 +2239,8 @@ ApplicationWindow {
                 var _fpKey = item.fpKey || (mode + ":" + configName)
                 fp2[_fpKey] = rawText || root._configFingerprint(obj)
                 if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
+                // 用户点了应用 = 明确接受该配置，清掉可能残留的忽略快照
+                delete fp2["__ignored__:" + _fpKey]
                 root._localConfigFingerprint = fp2
                 root._saveFingerprintToFile()
 
@@ -2346,6 +2376,8 @@ ApplicationWindow {
                 fp2[_fpKey] = item.rawText || root._configFingerprint(obj)
                 // 同步更新绑定关系指纹，防止下次轮询再次触发 bindingChanged
                 if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
+                // 用户点了应用 = 明确接受该配置，清掉可能残留的忽略快照
+                delete fp2["__ignored__:" + _fpKey]
 
                 // 所有 mode 都存入维度缓存
                 var _dims = obj.dimensions.map(function(d) {
@@ -2644,18 +2676,30 @@ ApplicationWindow {
         var fpL = Engine.filePathAt(0)
         var fpR = Engine.filePathAt(1)
         if (!fpL || !fpR) return
-        var fnL = Engine.fileNameAt(0)
-        var fnR = Engine.fileNameAt(1)
-        // file_name 存储时加了 ch+1_ 前缀：L侧="1_xxx"，R侧="2_xxx"
-        var storedNameL = "1_" + fnL
-        var storedNameR = "2_" + fnR
-        var rows = Rating.getSlideRatings()
-        var rL = 0, rR = 0
-        for (var i = 0; i < rows.length; ++i) {
-            var r = rows[i]
-            if (r.file_path === fpL && r.file_name === storedNameL) rL = r.stars || 0
-            else if (r.file_path === fpR && r.file_name === storedNameR) rR = r.stars || 0
+
+        // 新格式：滑动打分的 slide_type = "multi_<第二维度key>"，与第一维度语义并列。
+        // 优先按 file_path + slide_type 精确查找；找不到再走旧格式兼容分支。
+        var rL = -1, rR = -1
+        var slideKey = (slideDimension && slideDimension.key) ? slideDimension.key : ""
+        if (slideKey.length > 0) {
+            rL = Rating.ratingFor(fpL, "multi_" + slideKey)
+            rR = Rating.ratingFor(fpR, "multi_" + slideKey)
         }
+        // 兼容旧数据：新格式没读到时，回退到旧的 slide_type=="slide" 硬编码格式
+        if (rL < 0 || rR < 0) {
+            var fnL = Engine.fileNameAt(0)
+            var fnR = Engine.fileNameAt(1)
+            var storedNameL = "1_" + fnL
+            var storedNameR = "2_" + fnR
+            var rows = Rating.getSlideRatings() || []
+            for (var i = 0; i < rows.length; ++i) {
+                var r = rows[i]
+                if (rL < 0 && r.file_path === fpL && r.file_name === storedNameL) rL = r.stars || 0
+                else if (rR < 0 && r.file_path === fpR && r.file_name === storedNameR) rR = r.stars || 0
+            }
+        }
+        if (rL < 0) rL = 0
+        if (rR < 0) rR = 0
         slideRatingL = rL
         slideRatingR = rR
         // 如果任意一侧已有评分，说明本组曾经进入过滑动对比
@@ -2667,14 +2711,20 @@ ApplicationWindow {
         if (side === "L") slideRatingL = (slideRatingL === score ? 0 : score)
         else if (side === "R") slideRatingR = (slideRatingR === score ? 0 : score)
 
-        // 立即持久化到 ratings_quality_slide_slide.csv（与普通打分隔离）
+        // 立即持久化：slide_type 使用 "multi_<第二维度key>"，
+        // 让服务端展示的字段直接是远程配置的维度名，与第一维度语义统一。
         if (typeof Rating !== "undefined" && Engine.fileCount >= 2) {
             var fpL = Engine.filePathAt(0)
             var fpR = Engine.filePathAt(1)
             var fnL = Engine.fileNameAt(0)
             var fnR = Engine.fileNameAt(1)
-            Rating.recordSlideRating(fpL, fnL, slideRatingL, fpR, fnR, slideRatingR)
+            var slideKey = (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""
+            var st = (slideKey.length > 0) ? ("multi_" + slideKey) : ""
+            Rating.recordSlideRating(fpL, fnL, slideRatingL, fpR, fnR, slideRatingR, st)
         }
+        // 触发 allGroupsRated 响应式重算，让"下一组"按钮及时更新亮/灰状态
+        if (typeof multiGroupDialog !== "undefined" && multiGroupDialog._bumpState)
+            multiGroupDialog._bumpState()
     }
 
     // -1 表示未选中——默认就是 -1，避免一打开应用就有一路被高亮，造成视觉干扰。
@@ -7932,12 +7982,16 @@ ApplicationWindow {
                 for (var j = 0; j < n; ++j) {
                     if (root.ratingAt(j) <= 0) miss.push(j)
                 }
-                // quality_slide：仅当 fileCount===2 时滑动对比才有意义；
-                // 多于 2 路的场景退化回普通 quality 校验，避免误拦。
-                if (root.isQualitySlideMode && Engine.fileCount === 2) {
-                    if (root.slideRatingL <= 0) miss.push(-2)
-                    if (root.slideRatingR <= 0) miss.push(-3)
-                }
+            }
+            // quality_slide：仅当 fileCount===2 时滑动对比才有意义；
+            // 多于 2 路的场景退化回普通 quality 校验，避免误拦。
+            // 【关键修复】滑动检测必须在 hasDims/无维度 两种情况下都生效——
+            // quality_slide 模式恰好是 hasDims=true（第一维度"并排"），
+            // 之前把这段放在 else 里，导致 quality_slide 永远不检查滑动 L/R，
+            // 切下一组时滑动没打也放行。
+            if (root.isQualitySlideMode && Engine.fileCount === 2) {
+                if (root.slideRatingL <= 0) miss.push(-2)
+                if (root.slideRatingR <= 0) miss.push(-3)
             }
             return miss
         }
@@ -7969,6 +8023,8 @@ ApplicationWindow {
         reviewDimensions: root.cellReviewDimensions
         reviewDimensionsVersion: root.reviewDimensionsVersion
         dimsByMode: root._dimsByMode
+        // quality_slide 模式下第二维度 key，供 allGroupsRated 判断滑动打分是否完整
+        slideDimKey: (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""
         // 点击「启动对比」时，先从网络加载当前模式对应的激活配置，完成后再启动
         onDimLoadNeeded: function(mode, callback) {
             var base = root._dimApiUrl()
@@ -7999,6 +8055,9 @@ ApplicationWindow {
         visible: false
         transientParent: root
         remoteTag: root._remoteTag
+        // 让 RatingsDialog 能区分"哪个 slide_type 属于滑动打分（第二维度）"，
+        // 从而正确分到"滑动对比打分"分组。非 quality_slide 模式或维度不足时为 ""。
+        slideDimKey: (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""
     }
 
     // 全局进度条已移除：多路场景下各路独立播放控制，全局进度条语义

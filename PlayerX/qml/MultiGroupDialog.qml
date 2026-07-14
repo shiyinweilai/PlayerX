@@ -668,6 +668,9 @@ ApplicationWindow {
     // 多维评分模式支持（由 Main.qml 注入）
     property bool isMultiDimMode: false
     property var  reviewDimensions: []
+    // quality_slide 模式下第二维度（滑动对比专用）的 key，由 Main.qml 注入。
+    // 用于 allGroupsRated 检查每组两文件是否都有滑动评分。非该模式时为 ""。
+    property string slideDimKey: ""
     // 每次维度更新时递增，供内层 Repeater 强制重新求值
     property int reviewDimensionsVersion: 0
     // 按 mode 缓存的维度列表（由 Main.qml 注入），切换 mode 时自动加载对应维度
@@ -813,6 +816,11 @@ ApplicationWindow {
         if (n === 0) return false
         var totalGroups = groupCount()
         if (totalGroups <= 0) return false
+        // 【quality_slide 特殊处理】除了第一维度按每文件检查，还要检查第二维度（滑动）
+        // slide_type = "multi_<slideDimKey>" 是滑动打分，对每个 file_path 打一次分。
+        var isQS = (typeof Rating !== "undefined") && Rating.currentMode === "quality_slide"
+        var slideTag = (isQS && slideDimKey && slideDimKey.length > 0)
+            ? ("multi_" + slideDimKey) : ""
         // 遍历所有通道，检查每个通道的每个文件（每组）是否都有评分
         for (var li = 0; li < n; ++li) {
             var lane = _rowsModel.get(li)
@@ -823,7 +831,8 @@ ApplicationWindow {
                 var fp = rt.visibleFiles[fi]
                 if (!fp) return false
                 if (hasDims) {
-                    // 有维度：每个维度都需要有评分
+                    // 有维度：每个维度都需要有评分（这里 reviewDimensions 已由 Main.qml
+                    // 通过 cellReviewDimensions 裁剪过——quality_slide 下不含第二维度）
                     for (var di = 0; di < reviewDimensions.length; ++di) {
                         var dimKey = reviewDimensions[di].key
                         var score = Rating.ratingFor(fp, "multi_" + dimKey)
@@ -832,6 +841,11 @@ ApplicationWindow {
                 } else {
                     var s = Rating.ratingFor(fp)
                     if (!(s > 0)) return false
+                }
+                // quality_slide：额外校验第二维度（滑动打分）每个文件都要有分
+                if (slideTag.length > 0) {
+                    var slideScore = Rating.ratingFor(fp, slideTag)
+                    if (!(slideScore > 0)) return false
                 }
             }
         }

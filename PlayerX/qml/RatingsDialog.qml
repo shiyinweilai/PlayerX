@@ -111,6 +111,10 @@ Window {
     property string _lastUploadArchiveBatch: ""
     // 远程激活配置的 tag（由 Main.qml 注入），用于上传前校验
     property string remoteTag: ""
+    // quality_slide 模式下第二维度的 key（由 Main.qml 注入，例如 "滑动"）。
+    // 用来区分同 CSV 里的滑动打分（slide_type == "multi_<slideDimKey>" 或旧值 "slide"）
+    // 和第一维度普通打分（slide_type == "multi_<其他key>"），便于分组显示。
+    property string slideDimKey: ""
 
     // 从 file_path 中提取所属目录（兼容 / 与 \）
     function _dirOf(fp) {
@@ -482,22 +486,20 @@ Window {
             }
         } else {
             raw = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
-            // quality_slide 模式：追加滑动打分数据，打 _source 标记以便分组显示
+            // quality_slide 模式：按 slide_type 分组打 _source 标记
+            //   · slide_type == "multi_<slideDimKey>"（新格式）或 == "slide"（旧格式）→ 滑动打分
+            //   · 其他                                                              → 普通打分
             if ((typeof Rating !== "undefined") && root._selectedMode === "quality_slide") {
-                var slideRaw = Rating.getSlideRatings() || []
-                // 普通打分标记
+                var slideMultiTag = (root.slideDimKey && root.slideDimKey.length > 0)
+                    ? ("multi_" + root.slideDimKey) : ""
                 for (var ni = 0; ni < raw.length; ++ni) {
                     var nr = {}
                     for (var nk in raw[ni]) nr[nk] = raw[ni][nk]
-                    nr._source = "normal"
+                    var stVal = String(nr.slide_type || "")
+                    var isSlide = (stVal === "slide") ||
+                                  (slideMultiTag.length > 0 && stVal === slideMultiTag)
+                    nr._source = isSlide ? "slide" : "normal"
                     raw[ni] = nr
-                }
-                // 滑动打分标记
-                for (var si = 0; si < slideRaw.length; ++si) {
-                    var sr = {}
-                    for (var sk in slideRaw[si]) sr[sk] = slideRaw[si][sk]
-                    sr._source = "slide"
-                    raw.push(sr)
                 }
             }
         }

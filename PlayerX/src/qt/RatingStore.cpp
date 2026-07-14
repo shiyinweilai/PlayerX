@@ -245,24 +245,19 @@ int RatingStore::totalCount() const {
 
 QVariantList RatingStore::getAllRatings() const {
     QList<QVariantMap> rows = readAll();
-    // quality_slide 模式下只返回普通打分（slide_type != "slide"），
-    // 滑动打分通过 getSlideRatings() 单独获取，避免在同一列表里混淆。
-    const bool isQS = (currentMode() == QStringLiteral("quality_slide"));
-    QList<QVariantMap> filtered;
-    filtered.reserve(rows.size());
-    for (const auto& r : rows) {
-        if (isQS && r.value("slide_type").toString() == QStringLiteral("slide"))
-            continue;
-        filtered.push_back(r);
-    }
+    // quality_slide 模式的滑动数据不再在 C++ 层过滤。
+    // 由 QML（RatingsDialog）根据当前第二维度 key 做区分：
+    //   · slide_type == "multi_<slideDimKey>" 或 == "slide" → 归到"滑动对比打分"分组
+    //   · 其他 → 归到"普通打分"分组
+    // 这样 C++ 不用感知"第二维度是哪个 key"，避免硬编码，同时兼容旧数据。
     // updated_at 倒序（字符串 ISO8601 直接字典序倒序即可近似时间倒序）
-    std::sort(filtered.begin(), filtered.end(),
+    std::sort(rows.begin(), rows.end(),
               [](const QVariantMap& a, const QVariantMap& b) {
                   return a.value("updated_at").toString() > b.value("updated_at").toString();
               });
     QVariantList out;
-    out.reserve(filtered.size());
-    for (const auto& r : filtered) out << r;
+    out.reserve(rows.size());
+    for (const auto& r : rows) out << r;
     return out;
 }
 
@@ -457,7 +452,8 @@ bool RatingStore::recordSlideRating(const QString& filePathL,
                                     int starsL,
                                     const QString& filePathR,
                                     const QString& fileNameR,
-                                    int starsR) {
+                                    int starsR,
+                                    const QString& slideType) {
     // 仅在 quality_slide 模式下生效
     if (currentMode() != QStringLiteral("quality_slide")) return false;
 
@@ -465,6 +461,12 @@ bool RatingStore::recordSlideRating(const QString& filePathL,
     // （与多维评分的处理方式一致）
     QString rater = currentUser();
     if (rater.isEmpty()) rater = systemUserName();
+
+    // slide_type 列的值：优先用调用方传入（推荐 "multi_<第二维度key>"），
+    // 为空时兜底 "slide"（向后兼容旧调用方）。
+    const QString stValue = slideType.isEmpty()
+        ? QStringLiteral("slide")
+        : slideType;
 
     auto makeRow = [&](const QString& fp, const QString& fn, int stars, int ch) -> QVariantMap {
         QString name = fn.isEmpty() ? QFileInfo(fp).fileName() : fn;
@@ -479,23 +481,30 @@ bool RatingStore::recordSlideRating(const QString& filePathL,
         r["file_size"]  = fileSizeOf(fp);
         r["quick_hash"] = quickHashOf(fp);
         r["stars"]      = stars;
-        r["slide_type"] = QStringLiteral("slide");
+        r["slide_type"] = stValue;
         return r;
     };
 
-    // 读取主 CSV，替换同 (file_path, rater, slide_type=slide, file_name) 的行
+    // 读取主 CSV，替换同 (file_path, rater, slide_type, file_name) 的行
     // 注意：file_name 含 ch+1_ 前缀（如 "1_foo.mp4" vs "2_foo.mp4"），
     // 用于区分 L/R 两侧，避免同路径文件互相覆盖。
+    //
+    // 兼容旧数据：若历史上该 (file_path, rater) 的滑动评分行写入的 slide_type 是
+    // 老的硬编码 "slide"，而本次写入的是新的 "multi_<key>"，理应视为同一条覆盖，
+    // 避免用户已有的滑动评分变成孤立残留 + 新格式重复行。
     QList<QVariantMap> rows = readAll();
     auto upsert = [&](const QString& fp, const QString& fn, int stars, int ch) {
         if (fp.trimmed().isEmpty()) return;
         QVariantMap row = makeRow(fp, fn, stars, ch);
+        const QString newName = row.value("file_name").toString();
         bool replaced = false;
         for (auto& r : rows) {
-            if (r.value("file_path").toString() == fp &&
-                r.value("rater").toString() == rater &&
-                r.value("slide_type").toString() == QStringLiteral("slide") &&
-                r.value("file_name").toString() == row.value("file_name").toString()) {
+            if (r.value("file_path").toString() != fp) continue;
+            if (r.value("rater").toString() != rater) continue;
+            if (r.value("file_name").toString() != newName) continue;
+            const QString oldSt = r.value("slide_type").toString();
+            // 匹配条件：slide_type 完全一致 或 属于"旧硬编码 slide"（升级情形）
+            if (oldSt == stValue || oldSt == QStringLiteral("slide")) {
                 r = row;
                 replaced = true;
                 break;
