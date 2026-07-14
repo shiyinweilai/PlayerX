@@ -1773,11 +1773,12 @@
     }
 
     // 模式胶囊：不同模式走不同颜色，走不同 CSS 变量。
+    // 显示文案统一走顶部 MODE_LABELS / modeLabel()，避免这里再定义局部 labelMap
+    // 造成 multi_dim / quality_slide 等新增模式漏译（图上表现为英文原文透出）。
+    // 特殊值 off 走 labelMap 覆盖："关闭"。
     function renderModePill(mode) {
         const m = (mode || 'subjective').toLowerCase();
-        // 显示文案：subjective → 主观评分；quality → 质量比较
-        const labelMap = { subjective: '主观评分', quality: '质量比较', off: '关闭' };
-        const label = labelMap[m] || m;
+        const label = (m === 'off') ? '关闭' : modeLabel(m);
         return `<span class="mode-pill mode-${escHtml(m)}" title="评分模式：${escHtml(label)}">${escHtml(label)}</span>`;
     }
 
