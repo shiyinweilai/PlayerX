@@ -668,6 +668,8 @@ ApplicationWindow {
     // 多维评分模式支持（由 Main.qml 注入）
     property bool isMultiDimMode: false
     property var  reviewDimensions: []
+    // 每次维度更新时递增，供内层 Repeater 强制重新求值
+    property int reviewDimensionsVersion: 0
     // 按 mode 缓存的维度列表（由 Main.qml 注入），切换 mode 时自动加载对应维度
     property var  dimsByMode: ({})
     // 有维度配置时（不限于 multi_dim 模式）走多维布局
@@ -3003,11 +3005,15 @@ ApplicationWindow {
                                     // 多维星星：每个维度一行
                                     Repeater {
                                         id: dimRepeaterDlg
-                                        model: chIdx >= 0 ? dlg.reviewDimensions.length : 0
+                                        // 【关键】直接把整个数组作为 model：
+                                        // 当 dlg.reviewDimensions 引用变化时，Repeater 会完全销毁重建所有 delegate，
+                                        // 内层 Repeater 也随之全部重建，从新的 modelData 直接读 starCount。
+                                        // chIdx < 0 时用空数组关闭 Repeater。
+                                        model: chIdx >= 0 ? dlg.reviewDimensions : []
                                         delegate: Row {
                                             spacing: 4
-                                            // 通过 index 直接访问 reviewDimensions，确保整体替换时响应式更新
-                                            readonly property var dimData: dlg.reviewDimensions[index] || null
+                                            // 直接从 modelData 拿维度对象（delegate 重建时会带上最新数据）
+                                            readonly property var dimData: modelData || null
                                             property string dimKey: dimData ? (dimData.key || "") : ""
                                             property int dimHover: -1
                                             Text {
@@ -3019,9 +3025,10 @@ ApplicationWindow {
                                                 anchors.verticalCenter: parent.verticalCenter
                                             }
                                             Repeater {
-                                                // 通过 index 读取 reviewDimensions，确保 starCount 响应式更新
+                                                // 直接从外层 delegate 的 dimData 取 starCount：
+                                                // delegate 由外层 Repeater 重建时创建，dimData 就是最新维度对象
                                                 model: {
-                                                    var d = dlg.reviewDimensions[index]
+                                                    var d = dimData
                                                     if (!d) return 5
                                                     if (d.starCount > 0) return d.starCount
                                                     return (d.levels && d.levels.length > 0) ? d.levels.length : 5

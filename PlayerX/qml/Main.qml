@@ -71,6 +71,9 @@ ApplicationWindow {
                                 return Object.assign({}, d, { starCount: sc })
                             })
                             root.reviewDimensions = _dims0
+                            root.reviewDimensionsVersion++
+                            console.log("[DimLoad-A] _loadDimensions 直写 reviewDimensions，维度数:", _dims0.length,
+                                "（理论上只在启动/fallback 时调用）")
                             // 同步 tag
                             if (obj.tag && typeof Rating !== "undefined") {
                                 Rating.uploadTag = obj.tag
@@ -87,19 +90,58 @@ ApplicationWindow {
             xhr2.open("GET", url)
             xhr2.send()
         }
+        // 【按 mode 独立缓存】读取 dimsByMode.json → 填充 root._dimsByMode，
+        // 并按当前 Rating.currentMode 装载对应维度到 UI。
+        // 这是解决"多 mode 配置串扰"的关键：每个 mode 的维度独立保存，不再共用 dimensions.json。
+        function _loadDimsByModeCache(url, onDone) {
+            var xhr3 = new XMLHttpRequest()
+            xhr3.onreadystatechange = function() {
+                if (xhr3.readyState !== XMLHttpRequest.DONE) return
+                var loaded = false
+                if (xhr3.status === 200 || xhr3.status === 0) {
+                    try {
+                        var cache = JSON.parse(xhr3.responseText)
+                        if (cache && typeof cache === "object") {
+                            root._dimsByMode = cache
+                            // 按当前 mode 装载到 UI（若有）
+                            var curMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                            if (curMode && curMode !== "off" && cache[curMode] && Array.isArray(cache[curMode]) && cache[curMode].length > 0) {
+                                root.reviewDimensions = cache[curMode]
+                                root.reviewDimensionsVersion++
+                                console.log("[DimLoad-B] _loadDimsByModeCache 启动装载 mode=", curMode, "维度数:", cache[curMode].length,
+                                    "（理论上只在启动时调用）")
+                            }
+                            loaded = true
+                        }
+                    } catch (e) {
+                        console.warn("[DimLoad] 解析 dimsByMode.json 失败：", e)
+                    }
+                }
+                if (typeof onDone === "function") onDone(loaded)
+            }
+            xhr3.open("GET", url)
+            xhr3.send()
+        }
         // 构建 bundle Resources 路径
         var exePath = Qt.application.arguments[0]  // 如 .../PlayerX.app/Contents/MacOS/PlayerX
         var resourcesUrl = ""
+        var dimsByModeUrl = ""
         if (Qt.platform.os === "osx") {
             var macosDir = exePath.substring(0, exePath.lastIndexOf("/"))  // .../Contents/MacOS
             var contentsDir = macosDir.substring(0, macosDir.lastIndexOf("/"))  // .../Contents
             resourcesUrl = "file://" + contentsDir + "/Resources/dimensions.json"
+            dimsByModeUrl = "file://" + contentsDir + "/Resources/dimsByMode.json"
         } else {
             var binDir = exePath.substring(0, exePath.lastIndexOf("/"))
             resourcesUrl = "file://" + binDir + "/dimensions.json"
+            dimsByModeUrl = "file://" + binDir + "/dimsByMode.json"
         }
-        // 直接从本地缓存加载（不再优先走网络），后台差异检测由 _checkRemoteConfigUpdate 负责
-        _loadDimensions(resourcesUrl, null)
+        // 优先加载 dimsByMode.json（多 mode 独立缓存）；失败/为空再回退 dimensions.json
+        _loadDimsByModeCache(dimsByModeUrl, function(loaded) {
+            if (!loaded || !root.reviewDimensions || root.reviewDimensions.length === 0) {
+                _loadDimensions(resourcesUrl, null)
+            }
+        })
     }
 
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
@@ -1764,6 +1806,8 @@ ApplicationWindow {
         (typeof Rating !== "undefined") && Rating.currentMode === "multi_dim"
     // 维度列表（启动时从服务器/本地文件动态加载，初始为空）
     property var reviewDimensions: []
+    // 每次维度更新时递增，供 VideoCellDelegate 内层 Repeater 强制重新求值
+    property int reviewDimensionsVersion: 0
     // quality_slide 模式下，cellReviewDimensions 只包含第一个维度（用于左右对比普通打分）
     // 第二个维度专用于滑动对比，不在 cell 评分条中显示
     // 其他模式下与 reviewDimensions 完全一致
@@ -1772,20 +1816,119 @@ ApplicationWindow {
         ? [reviewDimensions[0]] : reviewDimensions
     // 按 mode 缓存各自的维度列表，避免多 mode 应用时互相覆盖
     property var _dimsByMode: ({})
+
+    // 【按 mode 独立持久化】把 _dimsByMode 整体写入 Resources/dimsByMode.json，
+    // 供下次启动加载。这是保证多 mode 配置互不覆盖的关键落盘。
+    function _saveDimsByMode() {
+        try {
+            var path = root._resourcesDir() + "/dimsByMode.json"
+            if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                EngineBridge.writeTextFile(path, JSON.stringify(root._dimsByMode || {}))
+            }
+        } catch (e) {
+            console.warn("[DimSave] 保存 dimsByMode.json 失败：", e)
+        }
+    }
+
     // 远程激活配置的 tag（加载维度时同步写入，供上传时校验用）
     property string _remoteTag: ""
+
+    // 标志位：_applyRemoteConfigItem 正在处理维度，onCurrentModeChanged 应跳过，避免两处竞争
+    property bool _applyingConfig: false
+
+    // 【强制维度刷新】暂存待生效的维度数组，Timer 触发时赋值
+    property var _pendingDimsToApply: null
+    property string _pendingTagToApply: ""
+
+    // 【强制维度刷新】两阶段刷新 Timer：先清空 reviewDimensions（销毁所有星星 delegate），
+    // 延迟一小段时间后再赋新值（重建全部 delegate，从新的 modelData 读 starCount）。
+    // 这是解决"数量不变但 starCount 变化时 Repeater 不重建"的最可靠方式。
+    Timer {
+        id: _dimReloadTimer
+        interval: 60
+        repeat: false
+        onTriggered: {
+            var dims = root._pendingDimsToApply
+            if (!dims || !Array.isArray(dims)) return
+            root.reviewDimensions = dims
+            root.reviewDimensionsVersion = root.reviewDimensionsVersion + 1
+            if (root._pendingTagToApply && typeof Rating !== "undefined") {
+                Rating.uploadTag = root._pendingTagToApply
+            }
+            root._remoteTag = root._pendingTagToApply || ""
+            root._applyingConfig = false
+            console.log("[DimReload] 强制重建完成，维度：",
+                dims.map(function(d){return d.key + "(" + (d.starCount || (d.levels && d.levels.length) || 5) + "星)"}).join(", "))
+        }
+    }
+
+    // 【强制维度刷新】外部统一入口：先清空 → 定时器触发 → 赋新值
+    // dims:      维度数组（必须已预注入 starCount）
+    // tag:       远程 tag（可选）
+    // forMode:   本次刷新面向的 mode（可选，二重防线：与 Rating.currentMode 不同则拒绝执行）
+    // reason:    调用来源标签（日志用）
+    function _forceApplyDimensions(dims, tag, forMode, reason) {
+        // 【关键】QML property var 里存的数组读回来常常不是纯 JS Array（会被包装成 QJSValue/QVariantList），
+        // Array.isArray 会返回 false，导致这里静默 return。
+        // 因此先判断 length（duck-typing），再转成纯 JS 数组，避免误早退。
+        if (!dims) {
+            console.warn("[ForceApply] ⚠️ dims 为空，跳过。reason=", reason || "-", "forMode=", forMode || "-")
+            return
+        }
+        if (typeof dims.length !== "number" || dims.length <= 0) {
+            console.warn("[ForceApply] ⚠️ dims 无有效 length，跳过。reason=", reason || "-", "forMode=", forMode || "-", "typeof:", typeof dims)
+            return
+        }
+        // 统一转成纯 JS 数组，后续操作（map、赋值给 property var）都用它
+        var pureDims = []
+        for (var _i = 0; _i < dims.length; _i++) pureDims.push(dims[_i])
+        dims = pureDims
+        var curMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+        // 【二重防线】只要传入了 forMode 且与当前 mode 不一致，直接拦截，避免污染当前 UI
+        if (forMode && curMode && forMode !== curMode) {
+            console.warn("[ForceApply] ⚠️ 拒绝跨模式刷新 UI！forMode=", forMode, "currentMode=", curMode,
+                "reason=", reason || "-",
+                "，dims=", dims.map(function(d){return d.key+"("+(d.starCount||(d.levels&&d.levels.length)||5)+"星)"}).join(","))
+            return
+        }
+        console.log("[ForceApply] 开始强制刷新 → reason=", reason || "-",
+            "forMode=", forMode || "-", "currentMode=", curMode,
+            "，dims=", dims.map(function(d){return d.key+"("+(d.starCount||(d.levels&&d.levels.length)||5)+"星)"}).join(","))
+        root._applyingConfig = true
+        root._pendingDimsToApply = dims
+        root._pendingTagToApply = tag || ""
+        // 阶段1：清空数组，外层 Repeater 立即销毁所有 delegate
+        root.reviewDimensions = []
+        root.reviewDimensionsVersion = root.reviewDimensionsVersion + 1
+        // 阶段2：稍后重建（Timer 触发时赋新值）
+        _dimReloadTimer.restart()
+    }
 
     // 监听 Rating.currentMode 变化：自动从 _dimsByMode 加载对应 mode 的维度
     // 这样无论是通知卡片应用、手动切换 mode，reviewDimensions 都能跟随 mode 正确切换
     Connections {
         target: Rating
         function onCurrentModeChanged() {
+            // _applyRemoteConfigItem 正在处理，跳过（由它统一负责维度更新）
+            if (root._applyingConfig) return
             var mode = Rating.currentMode
             if (!mode || mode === "off") return
-            var cached = root._dimsByMode[mode]
-            if (cached && cached.length > 0) {
-                root.reviewDimensions = cached
-                console.log("[DimSync] mode 切换到", mode, "，自动加载缓存维度，共", cached.length, "个")
+            var cachedRaw = root._dimsByMode[mode]
+            // 【关键】QML property var 里的数组读出来可能是 QJSValue/QVariantList，Array.isArray=false。
+            // 用 length 做 duck-typing 判断，并转成纯 JS 数组再传给 _forceApplyDimensions，
+            // 避免函数入口的 Array.isArray 校验静默拒绝。
+            if (cachedRaw && typeof cachedRaw.length === "number" && cachedRaw.length > 0) {
+                var cached = []
+                for (var _k = 0; _k < cachedRaw.length; _k++) cached.push(cachedRaw[_k])
+                // 【强制两阶段刷新】切换 mode 时也强制清空后重建，保证 starCount 生效
+                root._forceApplyDimensions(cached, root._remoteTag, mode, "modeChange")
+                console.log("[DimSync] mode 切换到", mode, "，_dimsByMode 全部 keys:",
+                    Object.keys(root._dimsByMode).join(","),
+                    "，本 mode 加载维度：",
+                    cached.map(function(d){return d.key + "(" + d.starCount + "星)"}).join(", "))
+            } else {
+                console.log("[DimSync] mode 切换到", mode, "，但 _dimsByMode[", mode, "] 为空/未设置，keys:",
+                    Object.keys(root._dimsByMode).join(","))
             }
         }
     }
@@ -1866,6 +2009,7 @@ ApplicationWindow {
                             var curDims = root._dimsByMode[curMode]
                             if (curDims && curDims.length > 0 && root.reviewDimensions.length === 0) {
                                 root.reviewDimensions = curDims
+                                root.reviewDimensionsVersion++
                                 console.log("[ConfigCheck] 首次启动静默加载 mode=", curMode, "维度数:", curDims.length)
                             }
                         }
@@ -1892,8 +2036,8 @@ ApplicationWindow {
                 }
 
                 allPairs.forEach(function(pair) {
-                    var mode = pair.mode
-                    var configName = pair.configName
+                    // 用 IIFE 封装每次迭代，确保 xhr1/mode/configName/_done1/_t1 各自独立，避免闭包共享最后一个值
+                    (function(mode, configName) {
                     var cfgUrl = configBase + encodeURIComponent(configName)
                     // 指纹 key = "mode:configName"
                     var fpKey = mode + ":" + configName
@@ -1938,13 +2082,18 @@ ApplicationWindow {
                                         var dimsCacheInit = root._dimsByMode || {}
                                         dimsCacheInit[mode] = _dimsInit
                                         root._dimsByMode = dimsCacheInit
-                                        // 写本地缓存文件（供下次启动离线加载）
-                                        var localPathInit = root._resourcesDir() + "/dimensions.json"
-                                        if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
-                                            EngineBridge.writeTextFile(localPathInit, JSON.stringify(obj))
+                                        // 【关键】按 mode 独立持久化
+                                        root._saveDimsByMode()
+                                        // 只有该 mode 恰好是当前 mode 时，才写共享 dimensions.json（避免其他 mode 污染当前 UI 缓存）
+                                        var _curMode1 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                                        if (mode === _curMode1) {
+                                            var localPathInit = root._resourcesDir() + "/dimensions.json"
+                                            if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                                                EngineBridge.writeTextFile(localPathInit, JSON.stringify(obj))
+                                            }
+                                            // 更新 tag（只在当前 mode 匹配时才同步 uploadTag，避免不同 mode 的 tag 相互覆盖）
+                                            if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
                                         }
-                                        // 更新 tag
-                                        if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
                                         root._remoteTag = obj.tag || ""
                                         // 建指纹基线
                                         var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
@@ -1966,13 +2115,18 @@ ApplicationWindow {
                                         var dimsCacheNew = root._dimsByMode || {}
                                         dimsCacheNew[mode] = _dimsNew
                                         root._dimsByMode = dimsCacheNew
-                                        // 写本地缓存文件
-                                        var localPathNew = root._resourcesDir() + "/dimensions.json"
-                                        if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
-                                            EngineBridge.writeTextFile(localPathNew, JSON.stringify(obj))
+                                        // 【关键】按 mode 独立持久化
+                                        root._saveDimsByMode()
+                                        // 只有当前 mode 匹配时才写共享 dimensions.json + 覆盖 uploadTag/_remoteTag
+                                        var _curMode2 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                                        if (mode === _curMode2) {
+                                            var localPathNew = root._resourcesDir() + "/dimensions.json"
+                                            if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                                                EngineBridge.writeTextFile(localPathNew, JSON.stringify(obj))
+                                            }
+                                            if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
+                                            root._remoteTag = obj.tag || ""
                                         }
-                                        if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
-                                        root._remoteTag = obj.tag || ""
                                         // 建指纹基线
                                         var fp3 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
                                         fp3[fpKey] = remoteFp
@@ -2003,6 +2157,7 @@ ApplicationWindow {
                     }
                     xhr1.open("GET", cfgUrl)
                     xhr1.send()
+                    })(pair.mode, pair.configName)  // IIFE 结束：每次迭代变量独立
                 })
             } catch (e) {
                 console.warn("[ConfigCheck] 解析 active-config 失败：", e)
@@ -2014,57 +2169,131 @@ ApplicationWindow {
 
     // 用户点击通知卡片后，应用所有待更新的远程配置
     // 应用单条远程配置，并自动切换到对应评分模式
+    // 【关键】用户点应用时【现拉一次】远程最新数据，用最新 obj 而不是差异检测阶段缓存的 item.obj
+    // 保证"远程是啥，本地就是啥"
     function _applyRemoteConfigItem(item) {
-        if (!item || !item.obj) return
-        try {
-            var obj = item.obj
+        if (!item) return
+        var configName = item.configName || ""
+        var mode = item.mode || ""
+        console.log("[ApplyDebug] 点击应用 → mode:", mode, "configName:", configName,
+            "item.obj.type:", item.obj && item.obj.type, "item.obj.tag:", item.obj && item.obj.tag)
+        var base = root._dimApiUrl()  // 例如 http://host:port/api/dimensions
+        var apiRoot = base ? base.replace(/\/api\/dimensions$/, "") : ""
+        var fetchUrl = (apiRoot && configName)
+            ? (apiRoot + "/api/configs/" + encodeURIComponent(configName))
+            : ""
 
-            // 更新指纹基线（key = mode:configName，与检测时保持一致；深拷贝后赋值确保 binding 触发）
-            var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
-            var _fpKey = item.fpKey || (item.mode + ":" + item.configName)
-            fp2[_fpKey] = item.rawText || root._configFingerprint(obj)
-            // 同步更新绑定关系指纹，防止下次轮询再次触发 bindingChanged
-            if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
-            root._localConfigFingerprint = fp2
-            root._saveFingerprintToFile()
+        // 定义应用逻辑（拿到最新 obj 后走这一段）
+        function _doApply(obj, rawText) {
+            try {
+                if (!obj || !Array.isArray(obj.dimensions)) {
+                    console.warn("[ConfigCheck] 应用失败：配置内容无效")
+                    return
+                }
+                console.log("[ApplyDebug] _doApply → mode:", mode, "configName:", configName,
+                    "obj.type:", obj.type, "obj.tag:", obj.tag,
+                    "dims:", obj.dimensions.map(function(d){return d.key+"("+(d.levels?d.levels.length:0)+")"}).join(","))
+                // 更新指纹基线
+                var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+                var _fpKey = item.fpKey || (mode + ":" + configName)
+                fp2[_fpKey] = rawText || root._configFingerprint(obj)
+                if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
+                root._localConfigFingerprint = fp2
+                root._saveFingerprintToFile()
 
-            // 计算该 mode 的维度列表
-            var _dims = obj.dimensions.map(function(d) {
-                var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
-                return Object.assign({}, d, { starCount: sc })
-            })
+                // 计算该 mode 的维度列表（starCount 严格来自 levels.length）
+                var _dims = obj.dimensions.map(function(d) {
+                    var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
+                    return Object.assign({}, d, { starCount: sc })
+                })
 
-            // 将维度存入按 mode 的缓存（用 JS 对象直接操作，不依赖 QML property 异步更新）
-            var dimsCacheUpd = root._dimsByMode || {}
-            dimsCacheUpd[item.mode] = _dims
-            root._dimsByMode = dimsCacheUpd
+                // 存入按 mode 的维度缓存（无论当前是不是这个 mode，都保存进去）
+                var dimsCacheUpd = root._dimsByMode || {}
+                dimsCacheUpd[mode] = _dims
+                root._dimsByMode = dimsCacheUpd
+                // 【关键】立即按 mode 独立持久化，避免多 mode 通过共享 dimensions.json 相互覆盖
+                root._saveDimsByMode()
+                console.log("[ApplyDebug] _dimsByMode 更新完成 → keys:", Object.keys(root._dimsByMode).join(","),
+                    "，本次写入 mode=", mode,
+                    "，维度：", _dims.map(function(d){return d.key+"("+d.starCount+"星)"}).join(","))
 
-            // 自动切换到对应评分模式
-            if (typeof Rating !== "undefined" && item.mode && item.mode !== "off") {
-                Rating.currentMode = item.mode
+                // 【重要】绝对不要强制切换 Rating.currentMode！
+                // 应用配置只应更新对应 mode 的维度缓存 + 指纹（去红点），
+                // 保持用户当前所在的模式不变；用户下次自己切到该 mode 时，
+                // onCurrentModeChanged 会自动从 _dimsByMode 加载最新维度。
+                var currentMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+
+                if (mode === currentMode) {
+                    // 只有被应用的 mode 恰好就是用户当前所在 mode 时，才热更新 UI
+                    root._forceApplyDimensions(_dims, obj.tag || "", mode, "applyItem")
+
+                    // 持久化到本地缓存文件（只在与当前 mode 匹配时写，保持"当前 mode 的最新配置"语义）
+                    var localPath = root._resourcesDir() + "/dimensions.json"
+                    if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                        EngineBridge.writeTextFile(localPath, JSON.stringify(obj))
+                    }
+                    console.log("[ConfigCheck] 已热更新当前模式维度，mode:", mode,
+                        "维度：", _dims.map(function(d){return d.key + "(" + d.starCount + "星)"}).join(", "),
+                        "tag:", obj.tag)
+                } else {
+                    // 非当前模式：只更新缓存和指纹，不动 UI 也不切换模式
+                    console.log("[ConfigCheck] 已更新维度缓存（非当前模式，不切换、不重建UI）",
+                        "被应用 mode:", mode, "当前 mode:", currentMode,
+                        "维度：", _dims.map(function(d){return d.key + "(" + d.starCount + "星)"}).join(", "))
+                }
+
+                // 从待更新列表中移除该条
+                var _appliedKey = mode + ":" + configName
+                var remaining = (root._pendingRemoteConfig || []).filter(function(x) {
+                    return (x.mode + ":" + x.configName) !== _appliedKey
+                })
+                root._pendingRemoteConfig = remaining.length > 0 ? remaining : null
+                if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
+            } catch (e) {
+                console.warn("[ConfigCheck] 应用单条配置失败：", e)
             }
+        }
 
-            // 直接用本次计算的 _dims 更新 reviewDimensions（不从 _dimsByMode 读，避免 QML property 异步问题）
-            root.reviewDimensions = _dims
-            if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
-            root._remoteTag = obj.tag || ""
-
-            // 持久化到本地缓存文件（只写当前切换到的 mode 的配置）
-            var localPath = root._resourcesDir() + "/dimensions.json"
-            if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
-                EngineBridge.writeTextFile(localPath, JSON.stringify(obj))
-            }
-            console.log("[ConfigCheck] 已应用配置，mode:", item.mode, "维度数:", _dims.length, "tag:", obj.tag)
-
-            // 从待更新列表中移除该条（按 mode+configName 精确匹配）
-            var _appliedKey = item.mode + ":" + item.configName
-            var remaining = (root._pendingRemoteConfig || []).filter(function(x) {
-                return (x.mode + ":" + x.configName) !== _appliedKey
+        // 优先现拉最新；拉不到就 fallback 用 item.obj
+        if (fetchUrl) {
+            console.log("[ConfigCheck] 应用时现拉最新配置：", fetchUrl)
+            var xhr = new XMLHttpRequest()
+            var _finished = false
+            var _to = Qt.createQmlObject('import QtQuick 2.0; Timer { interval: 4000; repeat: false }', root)
+            _to.triggered.connect(function() {
+                if (_finished) { _to.destroy(); return }
+                _finished = true
+                console.warn("[ConfigCheck] 现拉超时，使用缓存 item.obj")
+                xhr.abort()
+                _doApply(item.obj, item.rawText)
+                _to.destroy()
             })
-            root._pendingRemoteConfig = remaining.length > 0 ? remaining : null
-            if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
-        } catch (e) {
-            console.warn("[ConfigCheck] 应用单条配置失败：", e)
+            _to.start()
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState !== XMLHttpRequest.DONE || _finished) return
+                _finished = true
+                _to.stop(); _to.destroy()
+                if (xhr.status === 200 || xhr.status === 0) {
+                    try {
+                        var latest = JSON.parse(xhr.responseText)
+                        console.log("[ApplyDebug] 现拉成功 → mode:", mode, "configName:", configName,
+                            "拉到 obj.type:", latest.type, "obj.tag:", latest.tag,
+                            "dims:", latest.dimensions.map(function(d){return d.key+"("+(d.levels?d.levels.length:0)+")"}).join(","))
+                        _doApply(latest, xhr.responseText)
+                    } catch (e) {
+                        console.warn("[ConfigCheck] 解析现拉数据失败，回退缓存：", e)
+                        _doApply(item.obj, item.rawText)
+                    }
+                } else {
+                    console.warn("[ConfigCheck] 现拉失败 status=", xhr.status, "，回退缓存")
+                    _doApply(item.obj, item.rawText)
+                }
+            }
+            xhr.open("GET", fetchUrl)
+            xhr.send()
+        } else {
+            // 没法现拉，直接用缓存的 obj
+            _doApply(item.obj, item.rawText)
         }
     }
 
@@ -2092,23 +2321,28 @@ ApplicationWindow {
                 })
                 dimsCache[item.mode] = _dims
 
-                // 只有当前播放器模式匹配时，才热更新 reviewDimensions 和持久化缓存
-                if (item.mode === currentMode || list.length === 1) {
-                    root.reviewDimensions = _dims
-                    if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
-                    root._remoteTag = obj.tag || ""
+                // 【重要】严格判断：只有被应用的 mode 恰好等于用户当前所在 mode 时，才热更新 UI 和持久化
+                // 绝不切换 Rating.currentMode，保持用户所在模式不变
+                if (item.mode === currentMode) {
+                    // 【强制两阶段刷新】先清空 → Timer 触发 → 赋新数组
+                    root._forceApplyDimensions(_dims, obj.tag || "", item.mode, "applyPending")
                     // 持久化到本地缓存文件
                     var localPath = root._resourcesDir() + "/dimensions.json"
                     if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
                         EngineBridge.writeTextFile(localPath, JSON.stringify(obj))
                     }
-                    console.log("[ConfigCheck] 已热更新播放器维度，mode:", item.mode, "tag:", obj.tag)
+                    console.log("[ConfigCheck] 已热更新当前模式维度，mode:", item.mode,
+                        "维度：", _dims.map(function(d){return d.key + "(" + d.starCount + "星)"}).join(", "),
+                        "tag:", obj.tag)
                 } else {
-                    console.log("[ConfigCheck] 已更新指纹基线（非当前模式），mode:", item.mode)
+                    console.log("[ConfigCheck] 已更新维度缓存（非当前模式，不切换、不重建UI）",
+                        "被应用 mode:", item.mode, "当前 mode:", currentMode)
                 }
             })
 
             root._dimsByMode = dimsCache
+            // 【关键】立即按 mode 独立持久化，保证多 mode 独立存储不互相覆盖
+            root._saveDimsByMode()
             root._localConfigFingerprint = fp2
             root._saveFingerprintToFile()
             root._pendingRemoteConfig = null
@@ -2186,7 +2420,32 @@ ApplicationWindow {
 
     // 从任意 URL（file:// 或 https://）加载维度配置并热重载，无需重启
     // callback(ok: bool) 在请求完成后调用（成功或失败均调用，ok 表示是否成功更新了维度）
-    function loadDimensionsFromUrl(url, callback) {
+    // 【重要】增加 forMode 参数（可选）：
+    //   - 若传入且 _dimsByMode[forMode] 已有缓存，直接使用缓存，跳过网络请求（避免服务端返回反覆盖本地已应用的配置）
+    //   - 若传入且拿到远程数据，会校验 forMode === Rating.currentMode，否则不动 UI
+    function loadDimensionsFromUrl(url, callback, forMode) {
+        var _fm = forMode || ""
+        // 【优先命中缓存】用户点过"应用"或启动装载过，_dimsByMode[forMode] 已有权威数据，
+        // 不再走网络（否则服务端返回可能与用户预期不一致，并会反覆盖已确认的缓存）
+        // 【关键】QML property var 里存的数组读回来常常不是纯 JS Array（会被包成 QJSValue/QVariantList），
+        // Array.isArray 会返回 false 导致这里错过缓存分支。改用 length 做 duck-typing，并转成纯数组。
+        var _rawCache = (_fm && root._dimsByMode) ? root._dimsByMode[_fm] : null
+        if (_rawCache && typeof _rawCache.length === "number" && _rawCache.length > 0) {
+            var cachedDims = []
+            for (var _ci = 0; _ci < _rawCache.length; _ci++) cachedDims.push(_rawCache[_ci])
+            console.log("[DimLoad] 命中缓存 → forMode:", _fm,
+                "维度：", cachedDims.map(function(d){return d.key+"("+(d.starCount||5)+"星)"}).join(","),
+                "，跳过网络请求")
+            var _curMode0 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+            if (_fm === _curMode0) {
+                root._forceApplyDimensions(cachedDims, root._remoteTag, _fm, "loadFromUrl(cache)")
+            } else {
+                console.warn("[DimLoad] ⚠️ forMode(", _fm, ") ≠ currentMode(", _curMode0, ")，不更新 UI")
+            }
+            if (typeof callback === "function") callback(true)
+            return
+        }
+        console.log("[DimLoad] 未命中缓存或未指定 mode，走网络请求 → url:", url, "forMode:", _fm || "-")
         var xhr = new XMLHttpRequest()
         var _done = false
         // 5秒超时兜底：防止网络不通时 callback 永远不触发导致评分面板空白
@@ -2215,13 +2474,29 @@ ApplicationWindow {
                             var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
                             return Object.assign({}, d, { starCount: sc })
                         })
-                        root.reviewDimensions = _dims1
-                        // 1a. 同步更新 _dimsByMode 缓存（按当前 mode 存储）
                         var _curMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                        // 【二重防线】若指定了 forMode 且不等于 currentMode，只写缓存，不动 UI
+                        if (_fm && _fm !== _curMode) {
+                            console.warn("[DimLoad] ⚠️ 网络返回但 forMode(", _fm, ") ≠ currentMode(", _curMode, ")，只写缓存不动 UI")
+                            var _dimsUpd0 = JSON.parse(JSON.stringify(root._dimsByMode || {}))
+                            _dimsUpd0[_fm] = _dims1
+                            root._dimsByMode = _dimsUpd0
+                            root._saveDimsByMode()
+                            if (typeof callback === "function") callback(true)
+                            return
+                        }
+                        console.log("[DimLoad] 网络返回并写入 UI → forMode:", _fm || "(unspecified)",
+                            "currentMode:", _curMode,
+                            "维度：", _dims1.map(function(d){return d.key+"("+d.starCount+"星)"}).join(","))
+                        // 【强制两阶段刷新】确保外层 Repeater delegate 完全重建，starCount 生效
+                        root._forceApplyDimensions(_dims1, obj.tag || "", _curMode, "loadFromUrl(net)")
+                        // 1a. 同步更新 _dimsByMode 缓存（按当前 mode 存储）
                         if (_curMode && _curMode !== "off") {
                             var _dimsUpd = JSON.parse(JSON.stringify(root._dimsByMode || {}))
                             _dimsUpd[_curMode] = _dims1
                             root._dimsByMode = _dimsUpd
+                            // 【关键】按 mode 独立持久化
+                            root._saveDimsByMode()
                         }
                         // 1b. 同步远程配置的 tag 到备注 tag 输入框（用户可手动覆盖）
                         if (obj.tag && typeof Rating !== "undefined") {
@@ -7645,13 +7920,17 @@ ApplicationWindow {
         // 多维评分模式注入
         isMultiDimMode: root.isMultiDimMode
         reviewDimensions: root.cellReviewDimensions
+        reviewDimensionsVersion: root.reviewDimensionsVersion
         dimsByMode: root._dimsByMode
         // 点击「启动对比」时，先从网络加载当前模式对应的激活配置，完成后再启动
         onDimLoadNeeded: function(mode, callback) {
             var base = root._dimApiUrl()
             if (base.length > 0) {
                 var url = base + (mode ? ("?mode=" + encodeURIComponent(mode)) : "")
-                root.loadDimensionsFromUrl(url, callback)
+                console.log("[DimLoad] 启动对比触发 → mode:", mode, "url:", url)
+                // 传入 mode，让 loadDimensionsFromUrl 走"缓存优先"路径，
+                // 并对返回数据做 forMode === currentMode 二重校验，杜绝跨模式污染
+                root.loadDimensionsFromUrl(url, callback, mode)
             } else {
                 // 未配置服务器地址，直接用本地缓存维度启动
                 console.warn("[DimLoad] 未配置服务器地址，跳过远程加载")

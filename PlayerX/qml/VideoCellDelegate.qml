@@ -568,13 +568,17 @@ Rectangle {
 
                 Repeater {
                     id: dimRepeater
-                    model: viewRoot.cellReviewDimensions.length
+                    // 【关键】直接把整个数组作为 model：
+                    // 当 root.reviewDimensions = _dims 时数组引用变化，Repeater 会完全销毁重建所有 delegate，
+                    // 内层 Repeater 也随之全部重建，从新的 modelData 直接读 starCount，
+                    // 彻底避免 QML var 惰性求值 / binding 依赖建立失败等问题。
+                    model: viewRoot.cellReviewDimensions
                     delegate: Row {
                         id: dimRow
                         spacing: 2
                         layoutDirection: Qt.LeftToRight
-                        // 通过 index 直接访问 cellReviewDimensions，确保整体替换时响应式更新
-                        readonly property var dimData: viewRoot.cellReviewDimensions[index] || null
+                        // 直接从 modelData 拿维度对象（delegate 重建时会带上最新数据）
+                        readonly property var dimData: modelData || null
                         property string dimKey: dimData ? (dimData.key || "") : ""
                         property int dimHover: 0
 
@@ -588,9 +592,10 @@ Rectangle {
                         }
 
                             Repeater {
-                            // 通过 index 读取 cellReviewDimensions，确保 starCount 响应式更新
+                            // 直接从外层 delegate 的 dimData 取 starCount：
+                            // delegate 由外层 Repeater 重建时创建，dimData 就是最新维度对象
                             model: {
-                                var d = viewRoot.cellReviewDimensions[index]
+                                var d = dimRow.dimData
                                 if (!d) return 5
                                 if (d.starCount > 0) return d.starCount
                                 return (d.levels && d.levels.length > 0) ? d.levels.length : 5
