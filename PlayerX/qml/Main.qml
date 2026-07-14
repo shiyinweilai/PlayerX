@@ -158,11 +158,17 @@ ApplicationWindow {
     menuBar: MenuBar {
         id: appMenuBar
 
-        // ─── 深色主题 + 紧凑高度 ───────────────────────────────────────
-        // 仅 Windows/Linux 走这套自定义外观；macOS 使用系统全局菜单栏，
-        // 自动忽略 background/delegate，不受影响。
-        // 配色与应用整体一致：底 #1a1a1d、分隔 #2c2c32、hover #2a2a32、
-        // 按下/打开态 #3a3a45，正文 #e8e8ec、未 hover 次级 #cfcfd2。
+        // ─── MenuBar 下拉菜单样式 ───────────────────────────────────────
+        // Windows/Linux：使用同目录下的 DarkMenu / DarkMenuItem / DarkMenuSeparator
+        // 三件套，呈现半透明深色 + 白字 + 蓝底 hover，与全局 ToolTip / 通知
+        // 卡片 / phoneAspectPopup 一致。
+        // macOS：MenuBar 走系统全局菜单（NSMenu），会自动忽略上述自定义
+        // 组件对 background / contentItem 的覆盖，继续显示原生外观。
+        //
+        // 【重要】Qt 6.x Menu.delegate 只对"动态创建"的项生效，对源码里
+        // inline 的 MenuItem 不生效 —— 所以必须把 MenuItem 逐一换成
+        // DarkMenuItem（组件内已在自身层面覆盖 contentItem/background 等）。
+
         background: Rectangle {
             implicitHeight: 26
             color: "#1a1a1d"
@@ -206,37 +212,37 @@ ApplicationWindow {
             }
         }
 
-        Menu {
+        DarkMenu {
             title: qsTr("文件")
-            MenuItem {
+            DarkMenuItem {
                 id: miOpenFile
                 text: qsTr("打开文件…")
                 enabled: Engine.fileCount < 9
                 onTriggered: addDialog.open()
             }
             // 合并入口：单入口同时支持"打开文件夹"（勾选1路）和"多组对比"（勾选≥2路）
-            MenuItem {
+            DarkMenuItem {
                 id: miOpenFolder
                 text: qsTr("打开文件夹…")
                 onTriggered: multiGroupDialog.showAndRefresh()
             }
-            MenuSeparator {}
+            DarkMenuSeparator {}
             // 一次性关闭所有视频（与单路 ✕ 一致；带二次确认）
-            MenuItem {
+            DarkMenuItem {
                 id: miCloseAll
                 text: qsTr("关闭所有视频")
                 enabled: Engine.fileCount > 0
                 onTriggered: confirmCloseAllDialog.open()
             }
-            MenuSeparator {}
+            DarkMenuSeparator {}
             // 评分数据：查看/导出/清空本地 CSV（与播放完全解耦）
-            MenuItem {
+            DarkMenuItem {
                 id: miRatings
                 text: qsTr("评分数据…")
                 onTriggered: ratingsDialog.open()
             }
-            MenuSeparator {}
-            MenuItem {
+            DarkMenuSeparator {}
+            DarkMenuItem {
                 id: miQuit
                 text: qsTr("退出 PlayerX")
                 onTriggered: Qt.quit()
@@ -249,34 +255,34 @@ ApplicationWindow {
         //  · 系统菜单为原生 NSMenu / Win32 菜单渲染，不接受自定义深色 delegate —— 这是
         //    macOS 标准外观，与系统其他应用一致。
         //  · "偏好设置…"作为兜底入口，仍能弹出原深色自绘面板（与右键面板/快捷键一致）。
-        Menu {
+        DarkMenu {
             id: settingsTopMenu
             title: qsTr("设置")
 
             // ── 布局 ▶ ──（4 种多路布局，互斥单选）
             // 不用 Repeater：macOS 全局菜单对动态实例化的 MenuItem 支持不稳定，
             // 显式声明每一项最稳，且和 multiLayoutNames/Values（[1,2,3,4]）一一对应。
-            Menu {
+            DarkMenu {
                 title: qsTr("布局")
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("1×N 横排")
                     checkable: true
                     checked: Engine.layoutMode === 1
                     onTriggered: { Engine.layoutMode = 1; root.lastMultiLayout = 1 }
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("2×2")
                     checkable: true
                     checked: Engine.layoutMode === 2
                     onTriggered: { Engine.layoutMode = 2; root.lastMultiLayout = 2 }
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("2×3")
                     checkable: true
                     checked: Engine.layoutMode === 3
                     onTriggered: { Engine.layoutMode = 3; root.lastMultiLayout = 3 }
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("3×3")
                     checkable: true
                     checked: Engine.layoutMode === 4
@@ -286,65 +292,65 @@ ApplicationWindow {
 
             // ── 播放速度 ▶ ──（5 个常用档位 + 减速/加速/重置）
             // 同样不用 Repeater，原因同上。
-            Menu {
+            DarkMenu {
                 title: qsTr("播放速度")
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("0.25x")
                     checkable: true
                     checked: Math.abs(Engine.speed - 0.25) < 1e-3
                     enabled: Engine.fileCount > 0
                     onTriggered: Engine.setSpeed(0.25)
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("0.5x")
                     checkable: true
                     checked: Math.abs(Engine.speed - 0.5) < 1e-3
                     enabled: Engine.fileCount > 0
                     onTriggered: Engine.setSpeed(0.5)
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("1.0x （正常）")
                     checkable: true
                     checked: Math.abs(Engine.speed - 1.0) < 1e-3
                     enabled: Engine.fileCount > 0
                     onTriggered: Engine.setSpeed(1.0)
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("1.5x")
                     checkable: true
                     checked: Math.abs(Engine.speed - 1.5) < 1e-3
                     enabled: Engine.fileCount > 0
                     onTriggered: Engine.setSpeed(1.5)
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("2.0x")
                     checkable: true
                     checked: Math.abs(Engine.speed - 2.0) < 1e-3
                     enabled: Engine.fileCount > 0
                     onTriggered: Engine.setSpeed(2.0)
                 }
-                MenuSeparator {}
-                MenuItem {
+                DarkMenuSeparator {}
+                DarkMenuItem {
                     text: qsTr("减速 ( - )")
                     enabled: Engine.fileCount > 0
                     onTriggered: Engine.adjustSpeed(-1)
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("加速 ( = )")
                     enabled: Engine.fileCount > 0
                     onTriggered: Engine.adjustSpeed(+1)
                 }
-                MenuItem {
+                DarkMenuItem {
                     text: qsTr("重置为 1.0x ( 0 )")
                     enabled: Engine.fileCount > 0
                     onTriggered: Engine.resetSpeed()
                 }
             }
 
-            MenuSeparator {}
+            DarkMenuSeparator {}
 
             // ── 滑动对比（仅 2 路视频可用，B 快捷键联动）──
-            MenuItem {
+            DarkMenuItem {
                 text: qsTr("滑动对比 (B)")
                 checkable: true
                 checked: root.compareSliderActive
@@ -353,7 +359,7 @@ ApplicationWindow {
             }
 
             // ── 通道信息显示（C 快捷键联动）──
-            MenuItem {
+            DarkMenuItem {
                 text: qsTr("通道信息 (C)")
                 checkable: true
                 checked: root.globalChannelVisible
@@ -368,7 +374,7 @@ ApplicationWindow {
             }
 
             // ── 视频信息显示（V 快捷键联动）──
-            MenuItem {
+            DarkMenuItem {
                 text: qsTr("视频信息 (V)")
                 checkable: true
                 checked: root.globalInfoVisible
@@ -383,7 +389,7 @@ ApplicationWindow {
             }
 
             // ── 单路悬停控制条（与下方自绘菜单同步，无快捷键）──
-            MenuItem {
+            DarkMenuItem {
                 text: qsTr("单路悬停控制条")
                 checkable: true
                 checked: root.singleControlsHoverEnabled
@@ -392,52 +398,52 @@ ApplicationWindow {
 
             // ── 自动重播（播放结束后无缝从头继续，与下方自绘菜单同步）──
             // 默认开启；关闭时回退到旧行为：播放结束停在最后一帧。
-            MenuItem {
+            DarkMenuItem {
                 text: qsTr("自动重播")
                 checkable: true
                 checked: Engine.loopEnabled
                 onTriggered: Engine.loopEnabled = !Engine.loopEnabled
             }
 
-            MenuSeparator {}
+            DarkMenuSeparator {}
 
             // ── 打开日志目录 ──（与下方自绘菜单同名条目联动；调用同一个 Fs API）
-            MenuItem {
+            DarkMenuItem {
                 text: qsTr("打开日志目录")
                 onTriggered: Fs.revealInFileManager(Fs.appLogDir())
             }
 
             // 兜底：弹出原深色自绘设置面板（与快捷键 ⌘, 一致）
-            MenuItem {
+            DarkMenuItem {
                 text: qsTr("偏好设置…")
                 onTriggered: root._popupSettingsMenu()
             }
         }
 
-        Menu {
+        DarkMenu {
             id: helpMenu
             title: qsTr("帮助")
             // 动态首项：仅在检测到新版本时显示，作为"系统全局菜单"下的兜底入口
             // —— macOS 顶端原生菜单不允许塞自定义控件，所以这里给一份纯 MenuItem。
-            MenuItem {
+            DarkMenuItem {
                 id: miUpdateAvailable
                 visible: Updater.updateAvailable
                 height: visible ? implicitHeight : 0
                 text: qsTr("⬆ 安装新版本 %1…").arg(Updater.latestVersion)
                 onTriggered: updateDialog.open()
             }
-            MenuSeparator { visible: miUpdateAvailable.visible }
-            MenuItem {
+            DarkMenuSeparator { visible: miUpdateAvailable.visible }
+            DarkMenuItem {
                 text: qsTr("检查更新…")
                 onTriggered: { updateDialog.userInitiated = true; Updater.checkForUpdates(false) }
             }
-            MenuSeparator {}
-            MenuItem {
+            DarkMenuSeparator {}
+            DarkMenuItem {
                 text: qsTr("快捷键…")
                 onTriggered: shortcutsDialog.open()
             }
-            MenuSeparator {}
-            MenuItem {
+            DarkMenuSeparator {}
+            DarkMenuItem {
                 text: qsTr("教程…")
                 // 占位 URL 见 root.tutorialUrl；点击后用系统默认浏览器打开
                 onTriggered: {
@@ -446,8 +452,8 @@ ApplicationWindow {
                     }
                 }
             }
-            MenuSeparator {}
-            MenuItem {
+            DarkMenuSeparator {}
+            DarkMenuItem {
                 text: qsTr("关于 PlayerX")
                 onTriggered: aboutDialog.open()
             }
@@ -1808,12 +1814,19 @@ ApplicationWindow {
     property var reviewDimensions: []
     // 每次维度更新时递增，供 VideoCellDelegate 内层 Repeater 强制重新求值
     property int reviewDimensionsVersion: 0
-    // quality_slide 模式下，cellReviewDimensions 只包含第一个维度（用于左右对比普通打分）
-    // 第二个维度专用于滑动对比，不在 cell 评分条中显示
-    // 其他模式下与 reviewDimensions 完全一致
-    readonly property var cellReviewDimensions:
-        (isQualitySlideMode && reviewDimensions && reviewDimensions.length >= 2)
-        ? [reviewDimensions[0]] : reviewDimensions
+    // quality_slide 模式下：reviewDimensions[1] 专用于滑动对比，不在 cell 评分条中显示；
+    // 其余维度（第 1 维 + 第 3 维起的全部维度）都进 cell 评分条。
+    // 其他模式下与 reviewDimensions 完全一致。
+    readonly property var cellReviewDimensions: {
+        if (!isQualitySlideMode || !reviewDimensions || reviewDimensions.length < 2)
+            return reviewDimensions
+        var out = []
+        for (var i = 0; i < reviewDimensions.length; ++i) {
+            if (i === 1) continue // 跳过滑动对比专用维度
+            out.push(reviewDimensions[i])
+        }
+        return out
+    }
     // 按 mode 缓存各自的维度列表，避免多 mode 应用时互相覆盖
     property var _dimsByMode: ({})
 
@@ -2217,11 +2230,13 @@ ApplicationWindow {
                     "，本次写入 mode=", mode,
                     "，维度：", _dims.map(function(d){return d.key+"("+d.starCount+"星)"}).join(","))
 
-                // 【重要】绝对不要强制切换 Rating.currentMode！
-                // 应用配置只应更新对应 mode 的维度缓存 + 指纹（去红点），
-                // 保持用户当前所在的模式不变；用户下次自己切到该 mode 时，
-                // onCurrentModeChanged 会自动从 _dimsByMode 加载最新维度。
+                // 【模式切换策略（用户约定）】
+                // - 空闲态（Engine.fileCount === 0，还没打开对比）：应用配置时【自动切换】到通知里那个 mode，
+                //   下次开对比就直接使用该配置。
+                // - 已打开对比（fileCount > 0）：仅更新对应 mode 的缓存，绝不动 UI/切模式，
+                //   避免打断用户正在做的评分。
                 var currentMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                var _isIdle = (typeof Engine !== "undefined") ? (Engine.fileCount === 0) : true
 
                 if (mode === currentMode) {
                     // 只有被应用的 mode 恰好就是用户当前所在 mode 时，才热更新 UI
@@ -2235,10 +2250,24 @@ ApplicationWindow {
                     console.log("[ConfigCheck] 已热更新当前模式维度，mode:", mode,
                         "维度：", _dims.map(function(d){return d.key + "(" + d.starCount + "星)"}).join(", "),
                         "tag:", obj.tag)
+                } else if (_isIdle) {
+                    // 空闲态：主动帮用户把当前模式切到通知里那个 mode。
+                    // 切换后 onCurrentModeChanged 会自动从 _dimsByMode[mode] 加载最新维度到 UI。
+                    console.log("[ConfigCheck] 空闲态应用→自动切换当前模式：", currentMode, "→", mode,
+                        "（fileCount=0）")
+                    if (typeof Rating !== "undefined") {
+                        Rating.currentMode = mode
+                    }
+                    // 同步 tag（应用到当前模式，因为已经切过去了）
+                    if (obj.tag && typeof Rating !== "undefined") {
+                        Rating.uploadTag = obj.tag
+                    }
+                    root._remoteTag = obj.tag || ""
                 } else {
-                    // 非当前模式：只更新缓存和指纹，不动 UI 也不切换模式
-                    console.log("[ConfigCheck] 已更新维度缓存（非当前模式，不切换、不重建UI）",
+                    // 已打开对比：不切换、不动 UI，只更新缓存（避免打断评分）
+                    console.log("[ConfigCheck] 已更新维度缓存（非当前模式且已在对比中，不切换、不重建UI）",
                         "被应用 mode:", mode, "当前 mode:", currentMode,
+                        "fileCount:", (typeof Engine !== "undefined") ? Engine.fileCount : "?",
                         "维度：", _dims.map(function(d){return d.key + "(" + d.starCount + "星)"}).join(", "))
                 }
 
@@ -2302,6 +2331,10 @@ ApplicationWindow {
         if (!list || !Array.isArray(list) || list.length === 0) return
         try {
             var currentMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+            // 【模式切换策略】空闲态一次应用多条时，最终切到"最后一条"对应的 mode。
+            var _isIdle = (typeof Engine !== "undefined") ? (Engine.fileCount === 0) : true
+            var _switchToMode = ""
+            var _switchTag = ""
             // 深拷贝后修改再赋值，确保 QML property var binding 触发更新
             var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
             var dimsCache = JSON.parse(JSON.stringify(root._dimsByMode || {}))
@@ -2321,8 +2354,6 @@ ApplicationWindow {
                 })
                 dimsCache[item.mode] = _dims
 
-                // 【重要】严格判断：只有被应用的 mode 恰好等于用户当前所在 mode 时，才热更新 UI 和持久化
-                // 绝不切换 Rating.currentMode，保持用户所在模式不变
                 if (item.mode === currentMode) {
                     // 【强制两阶段刷新】先清空 → Timer 触发 → 赋新数组
                     root._forceApplyDimensions(_dims, obj.tag || "", item.mode, "applyPending")
@@ -2334,9 +2365,15 @@ ApplicationWindow {
                     console.log("[ConfigCheck] 已热更新当前模式维度，mode:", item.mode,
                         "维度：", _dims.map(function(d){return d.key + "(" + d.starCount + "星)"}).join(", "),
                         "tag:", obj.tag)
+                } else if (_isIdle) {
+                    // 空闲态：记下要切到的 mode（覆盖式：最后一条生效）
+                    _switchToMode = item.mode
+                    _switchTag = obj.tag || ""
+                    console.log("[ConfigCheck] 空闲态应用→将在循环结束后切换到 mode：", item.mode)
                 } else {
-                    console.log("[ConfigCheck] 已更新维度缓存（非当前模式，不切换、不重建UI）",
-                        "被应用 mode:", item.mode, "当前 mode:", currentMode)
+                    console.log("[ConfigCheck] 已更新维度缓存（非当前模式且已在对比中，不切换、不重建UI）",
+                        "被应用 mode:", item.mode, "当前 mode:", currentMode,
+                        "fileCount:", (typeof Engine !== "undefined") ? Engine.fileCount : "?")
                 }
             })
 
@@ -2347,6 +2384,16 @@ ApplicationWindow {
             root._saveFingerprintToFile()
             root._pendingRemoteConfig = null
             root._taskUpdateVisible = false
+
+            // 空闲态：在所有缓存都落盘后再切模式，onCurrentModeChanged 就能从 _dimsByMode 拿到最新维度
+            if (_isIdle && _switchToMode && _switchToMode !== currentMode) {
+                console.log("[ConfigCheck] 空闲态应用完成→自动切换当前模式：", currentMode, "→", _switchToMode)
+                if (typeof Rating !== "undefined") {
+                    Rating.currentMode = _switchToMode
+                    if (_switchTag) Rating.uploadTag = _switchTag
+                }
+                root._remoteTag = _switchTag
+            }
         } catch (e) {
             console.warn("[ConfigCheck] 应用配置失败：", e)
         }

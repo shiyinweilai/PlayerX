@@ -134,6 +134,14 @@ qt_add_qml_module(PlayerX
         # 扁平工具按钮：从 Main.qml inline component 抽出，便于跨文件复用。
         # （inline component 仅在定义文件内可见，独立 .qml 才能被外部引用）
         qml/FlatToolButton.qml
+        # ── MenuBar 下拉菜单深色主题三件套 ──
+        # Windows/Linux 上 Basic style 的下拉菜单是白底黑字，与应用整体
+        # 深色半透明风格严重冲突。这里把 Menu / MenuItem / MenuSeparator
+        # 封装成 Dark* 变体，统一预设配色。macOS 走原生 NSMenu，
+        # 自动忽略这些自定义（保持系统一致的原生外观）。
+        qml/DarkMenu.qml
+        qml/DarkMenuItem.qml
+        qml/DarkMenuSeparator.qml
 )
 
 # ─── 头文件搜索路径 ───────────────────────────────────────────────────────────
