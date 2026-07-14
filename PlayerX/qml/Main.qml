@@ -1243,7 +1243,10 @@ ApplicationWindow {
         x: 16
         y: root.height - height - 56
         padding: 0
-        implicitWidth: 280
+        // 固定宽度 320：容纳"类型+模式"一行 + tag 一行 + 忽略/应用按钮。
+        // 【历史教训】不要用 Column/Positioner 的 implicitWidth 反推 Popup
+        // 尺寸（会跟 anchors.left+right 冲突 → Popup 变 0×0 弹不出来）。
+        implicitWidth: 320
 
         background: Rectangle {
             color: "#cc1a1a1f"
@@ -1257,7 +1260,7 @@ ApplicationWindow {
 
             // 标题行
             RowLayout {
-                width: 280
+                width: 320
                 height: 36
                 spacing: 6
 
@@ -1293,14 +1296,42 @@ ApplicationWindow {
             }
 
             // 分隔线
-            Rectangle { width: 280; height: 1; color: "#33ffffff" }
+            Rectangle { width: 320; height: 1; color: "#33ffffff" }
 
-            // 每个待更新配置一行：左边类型+tag，右边忽略+应用按钮
+            // 每一条待更新配置：三列水平布局
+            //   列 1（左侧信息区）：上行=类型+模式，下行=tag（超长自动 elide）
+            //   列 2：忽略按钮 —— 高度 ≈ 两行信息总高
+            //   列 3：应用按钮 —— 高度同上
+            //
+            // 【稳定要点】所有子项 width/height 都基于 rowItem 固定值 320，
+            // anchors 只用单向引用链（applyBtn→parent.right、ignoreBtn→applyBtn.left、
+            // infoWrap.right→ignoreBtn.left），绝无回环 → Popup 一定能算出尺寸。
             Repeater {
                 model: Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
                 delegate: Item {
-                    width: 280
-                    height: 64
+                    id: rowItem
+                    width: 320
+                    // 高度 = 两行 11px 文字 + spacing 4 + 上下各 8px 边距 ≈ 42
+                    height: 44
+
+                    // 模式显示文字：去掉中英文括号及其内容
+                    //   例："质量比较 2（含滑动对比）" → "质量比较 2"
+                    readonly property string _modeText: {
+                        var ml = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList : []
+                        var raw = modelData.mode
+                        for (var i = 0; i < ml.length; i++) {
+                            if (ml[i].id === modelData.mode) { raw = ml[i].label; break }
+                        }
+                        return String(raw).replace(/[（(][^）)]*[）)]/g, "").trim()
+                    }
+                    readonly property string _typeText: {
+                        var obj = modelData.obj || {}
+                        return obj.type || "—"
+                    }
+                    readonly property string _tagText: {
+                        var obj = modelData.obj || {}
+                        return obj.tag || "—"
+                    }
 
                     // 悬停背景
                     Rectangle {
@@ -1312,153 +1343,149 @@ ApplicationWindow {
                     }
                     HoverHandler { id: rowHover }
 
-                    // 上下两行布局：第一行文字，第二行按钮
-                    Column {
-                        anchors.left: parent.left
+                    // 列 3：应用按钮（最右）
+                    //   先声明按钮再声明信息区，让 infoWrap.anchors.right 引用
+                    //   ignoreBtn.left 时不会出现"未定义 id"警告。
+                    Rectangle {
+                        id: applyBtn
                         anchors.right: parent.right
-                        anchors.leftMargin: 12
-                        anchors.rightMargin: 10
+                        anchors.rightMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: 4
+                        width: 44
+                        // 高度 = 两行文字（11+11）+ spacing 4 ≈ 28，稍加余量到 28
+                        height: 28
+                        radius: 4
+                        color: applyMouse.containsMouse ? "#0db092" : "#0fa085"
 
-                        // 第一行：类型 + tag
-                        Row {
-                            spacing: 4
-                            width: parent.width
-                            Text {
-                                text: "类型："
-                                color: "#6a6a7c"
-                                font.pixelSize: 11
-                            }
-                            Text {
-                                text: {
-                                    var obj = modelData.obj || {}
-                                    return obj.type || "—"
-                                }
-                                color: "#e8e8ec"
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
-                                width: Math.min(implicitWidth, 70)
-                            }
-                            Text {
-                                text: "  tag："
-                                color: "#6a6a7c"
-                                font.pixelSize: 11
-                            }
-                            Text {
-                                text: {
-                                    var obj = modelData.obj || {}
-                                    return obj.tag || "—"
-                                }
-                                color: "#e8e8ec"
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
-                                width: Math.min(implicitWidth, 90)
-                            }
+                        Text {
+                            anchors.centerIn: parent
+                            text: "应用"
+                            color: "#ffffff"
+                            font.pixelSize: 11
+                            font.bold: true
                         }
 
-                        // 第二行：模式（左）+ 忽略/应用按钮（右）
-                        Item {
-                            width: parent.width
-                            height: 26
+                        MouseArea {
+                            id: applyMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root._applyRemoteConfigItem(modelData)
+                        }
+                    }
 
-                            // 模式文字（左对齐）
+                    // 列 2：忽略按钮
+                    Rectangle {
+                        id: ignoreBtn
+                        anchors.right: applyBtn.left
+                        anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 44
+                        height: 28
+                        radius: 4
+                        color: ignoreMouse.containsMouse ? "#3a3a44" : "#2a2a34"
+                        border.color: "#44ffffff"
+                        border.width: 1
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "忽略"
+                            color: "#aaaabc"
+                            font.pixelSize: 11
+                        }
+
+                        MouseArea {
+                            id: ignoreMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                var _ignKey = modelData.mode + ":" + modelData.configName
+                                // 【关键】把"当前这一版的内容指纹"写入忽略表，
+                                // 下次轮询发现远端 == 忽略版 时就不再入队；
+                                // 一旦服务端后续又改了这个配置（rawText 变），忽略自动失效、会重新弹。
+                                var _rawIgn = modelData.rawText || ""
+                                if (_rawIgn) {
+                                    var fpIgn = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+                                    fpIgn["__ignored__:" + _ignKey] = _rawIgn
+                                    root._localConfigFingerprint = fpIgn
+                                    root._saveFingerprintToFile()
+                                    console.log("[ConfigCheck] 已忽略配置的当前版本：", _ignKey,
+                                        "（服务端后续修改后会重新弹出）")
+                                }
+                                var rem = (root._pendingRemoteConfig || []).filter(function(x) {
+                                    return (x.mode + ":" + x.configName) !== _ignKey
+                                })
+                                root._pendingRemoteConfig = rem.length > 0 ? rem : null
+                                if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
+                            }
+                        }
+                    }
+
+                    // 列 1：信息区（左侧）—— Item 外壳 + 内层 Column
+                    //   Item 用 anchors.left/right 定位（合法），Column 用
+                    //   width: parent.width 撑满（Positioner 铁律：不能 anchors.left+right）。
+                    Item {
+                        id: infoWrap
+                        anchors.left: parent.left
+                        anchors.leftMargin: 12
+                        anchors.right: ignoreBtn.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: infoCol.implicitHeight
+
+                        Column {
+                            id: infoCol
+                            width: parent.width
+                            spacing: 4
+
+                            // 上行：类型 + 模式（同一行）
                             Row {
-                                anchors.left: parent.left
-                                anchors.verticalCenter: parent.verticalCenter
                                 spacing: 4
+                                width: parent.width
                                 Text {
-                                    text: "模式："
+                                    text: "类型："
                                     color: "#6a6a7c"
                                     font.pixelSize: 11
                                 }
                                 Text {
-                                    text: {
-                                        var ml = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList : []
-                                        for (var i = 0; i < ml.length; i++) {
-                                            if (ml[i].id === modelData.mode) return ml[i].label
-                                        }
-                                        return modelData.mode
-                                    }
-                                    color: "#6a6a7c"
+                                    text: rowItem._typeText
+                                    color: "#e8e8ec"
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
-                                    width: Math.min(implicitWidth, 120)
+                                    // 类型最多占 70px，剩下留给模式
+                                    width: Math.min(implicitWidth, 70)
+                                }
+                                Text {
+                                    text: "  模式："
+                                    color: "#6a6a7c"
+                                    font.pixelSize: 11
+                                }
+                                Text {
+                                    text: rowItem._modeText
+                                    color: "#e8e8ec"
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
                                 }
                             }
 
-                            // 忽略按钮（右侧）
-                            Rectangle {
-                                id: ignoreBtn
-                                anchors.right: applyBtn.left
-                                anchors.rightMargin: 6
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 44
-                                height: 26
-                                radius: 4
-                                color: ignoreMouse.containsMouse ? "#3a3a44" : "#2a2a34"
-                                border.color: "#44ffffff"
-                                border.width: 1
-
+                            // 下行：tag（独占整行，超长 elide）
+                            Row {
+                                spacing: 4
+                                width: parent.width
                                 Text {
-                                    anchors.centerIn: parent
-                                    text: "忽略"
-                                    color: "#aaaabc"
+                                    id: tagLabel
+                                    text: "tag："
+                                    color: "#6a6a7c"
                                     font.pixelSize: 11
                                 }
-
-                                MouseArea {
-                                    id: ignoreMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        var _ignKey = modelData.mode + ":" + modelData.configName
-                                        // 【关键】把"当前这一版的内容指纹"写入忽略表，
-                                        // 下次轮询发现远端 == 忽略版 时就不再入队；
-                                        // 一旦服务端后续又改了这个配置（rawText 变），忽略自动失效、会重新弹。
-                                        var _rawIgn = modelData.rawText || ""
-                                        if (_rawIgn) {
-                                            var fpIgn = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
-                                            fpIgn["__ignored__:" + _ignKey] = _rawIgn
-                                            root._localConfigFingerprint = fpIgn
-                                            root._saveFingerprintToFile()
-                                            console.log("[ConfigCheck] 已忽略配置的当前版本：", _ignKey,
-                                                "（服务端后续修改后会重新弹出）")
-                                        }
-                                        var rem = (root._pendingRemoteConfig || []).filter(function(x) {
-                                            return (x.mode + ":" + x.configName) !== _ignKey
-                                        })
-                                        root._pendingRemoteConfig = rem.length > 0 ? rem : null
-                                        if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
-                                    }
-                                }
-                            }
-
-                            // 应用按钮（最右）
-                            Rectangle {
-                                id: applyBtn
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 44
-                                height: 26
-                                radius: 4
-                                color: applyMouse.containsMouse ? "#0db092" : "#0fa085"
-
                                 Text {
-                                    anchors.centerIn: parent
-                                    text: "应用"
-                                    color: "#ffffff"
+                                    text: rowItem._tagText
+                                    color: "#e8e8ec"
                                     font.pixelSize: 11
-                                    font.bold: true
-                                }
-
-                                MouseArea {
-                                    id: applyMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root._applyRemoteConfigItem(modelData)
+                                    width: parent.width - tagLabel.width - 4
+                                    elide: Text.ElideRight
+                                    wrapMode: Text.NoWrap
                                 }
                             }
                         }
@@ -1479,7 +1506,7 @@ ApplicationWindow {
             }
 
             // 底部间距
-            Item { width: 280; height: 6 }
+            Item { width: 320; height: 6 }
         }
     }
 
