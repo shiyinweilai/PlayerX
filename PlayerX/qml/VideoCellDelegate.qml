@@ -60,6 +60,26 @@ Rectangle {
     function _dur() { Engine.duration; return Engine.durationAt(cell.playerIdx) }
     function _playing() { Engine.playing; return Engine.playingAt(cell.playerIdx) }
 
+    // 单路首/末帧判定：与 Main.qml 全局工具栏使用同一半帧容差策略。
+    // 用途：本 cell 独立工具条上的 << / < / > / >> 灰化，避免用户在末帧
+    // 处连按下一帧让底层单路播放器空跑造成卡顿。
+    // 依赖 Engine.position/duration，会随 Engine 60Hz tick 自动重求值。
+    function _cellFrameDur() {
+        var fd = (typeof Engine.frameDurationAt === "function")
+                 ? Engine.frameDurationAt(cell.playerIdx) : 0
+        return (fd && fd > 0) ? fd : (1.0 / 30.0)
+    }
+    function _atFirstFrameLocal() {
+        var d = _dur()
+        if (d <= 0) return false
+        return _pos() <= _cellFrameDur() * 0.5
+    }
+    function _atLastFrameLocal() {
+        var d = _dur()
+        if (d <= 0) return false
+        return (d - _pos()) <= _cellFrameDur() * 0.5
+    }
+
     // ─── 内容内框（手机比例 / 固定尺寸锁定）───────────────────
     // 三种模式（与 Main.qml root 上的属性保持一致）：
     //   1) viewRoot.phoneFixedActive (W>0 && H>0)：固定像素尺寸；
@@ -974,13 +994,20 @@ Rectangle {
                     FlatToolButton {
                         text: "<<"
                         implicitWidth: 32
-                        onClicked: Engine.seekAt(cell.playerIdx,
+                        // 首帧短路：不改变按钮视觉，仅阻断点击流水线避免解码器空跑
+                        onClicked: {
+                            if (cell._atFirstFrameLocal()) return
+                            Engine.seekAt(cell.playerIdx,
                                     Math.max(0, cell._pos() - 5))
+                        }
                     }
                     FlatToolButton {
                         text: "<"
                         implicitWidth: 28
-                        onClicked: Engine.stepFrameAt(cell.playerIdx, -1)
+                        onClicked: {
+                            if (cell._atFirstFrameLocal()) return
+                            Engine.stepFrameAt(cell.playerIdx, -1)
+                        }
                     }
                     // 单路播放/暂停按钮：保持图标差异区分状态
                     FlatToolButton {
@@ -992,13 +1019,20 @@ Rectangle {
                     FlatToolButton {
                         text: ">"
                         implicitWidth: 28
-                        onClicked: Engine.stepFrameAt(cell.playerIdx, 1)
+                        // 末帧短路：核心场景——不改按钮观感，只阻止连点造成的卡顿
+                        onClicked: {
+                            if (cell._atLastFrameLocal()) return
+                            Engine.stepFrameAt(cell.playerIdx, 1)
+                        }
                     }
                     FlatToolButton {
                         text: ">>"
                         implicitWidth: 32
-                        onClicked: Engine.seekAt(cell.playerIdx,
+                        onClicked: {
+                            if (cell._atLastFrameLocal()) return
+                            Engine.seekAt(cell.playerIdx,
                                     Math.min(cell._dur(), cell._pos() + 5))
+                        }
                     }
 
                     // 与"快进/快退/帧步进"分组，避免误点。窄 cell 下也能保留这条线。

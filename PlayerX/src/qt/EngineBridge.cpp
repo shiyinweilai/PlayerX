@@ -432,6 +432,19 @@ bool EngineBridge::playingAt(int idx) const {
     return false;
 }
 
+// 全局单帧时长：直接复用引擎侧的"多路最小值"实现（同一口径与 rbStepFrame 对齐）。
+// 之所以选最小值而非当前 activeIndex 那一路：多路对比时任意一路先到末帧就应该
+// 视为"到达末帧"，与全局帧步进的推进上限一致，防止 QML 按钮和实际帧步进语义脱节。
+double EngineBridge::frameDuration() const {
+    if (!m_engine) return 0.0;
+    return m_engine->rbFrameDuration();
+}
+
+double EngineBridge::frameDurationAt(int idx) const {
+    if (auto sp = playerAtShared(idx)) return sp->rbFrameDuration();
+    return 0.0;
+}
+
 QVariantMap EngineBridge::videoInfoAt(int idx) const {
     QVariantMap info;
     auto sp = playerAtShared(idx);

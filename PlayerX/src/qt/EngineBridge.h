@@ -159,6 +159,15 @@ public slots:
     double  positionAt(int idx) const;
     double  durationAt(int idx) const;
     bool    playingAt(int idx) const;
+    // 全局单帧时长（秒）；取所有路中最小值（与全局帧步进同一口径）。
+    // 用途：QML 端按钮"首帧/末帧"灰化判断——用 fd/2 作为位置容差，
+    // 避免因浮点 PTS 与 duration 存在毫厘偏差把最后一帧当成"还没到末尾"，
+    // 从而防止用户在末帧继续按下一帧/快进导致解码器一次次空跑造成卡顿。
+    // 未打开视频或获取失败返回 0。
+    Q_INVOKABLE double frameDuration() const;
+    // 单路单帧时长（秒）；未打开或索引越界返回 0。
+    // VideoCellDelegate 里"每路一份"的 << < > >> 按钮用此判断。
+    Q_INVOKABLE double frameDurationAt(int idx) const;
     // 视频信息（供右键信息面板使用）
     // 返回 QVariantMap，包含：
     //   codec(string), width(int), height(int), fps(double),

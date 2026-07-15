@@ -1872,6 +1872,54 @@ ApplicationWindow {
     property bool compareSliderActive: false
     readonly property bool compareSliderAvailable: Engine.fileCount === 2
 
+    // ─── 播放器"首末帧守卫"派生属性 ──────────────────────────────────────
+    // 用途：底部工具栏 `<<`/`<`/`>`/`>>` 与键盘 ←/→/,/. 判断是否已到首/末帧，
+    //       到达时把对应按钮置灰、快捷键短路，避免用户连按导致解码器空跑卡顿。
+    // 单帧时长 fd：优先取 C++ 侧 Engine.frameDuration()（多路取最小值，与
+    //   rbStepFrame 内部推进步长同一口径）；未打开视频时兜底 1/30 秒。
+    // 阈值取半帧（fd*0.5）：视频末帧的 PTS 是 duration - fd，若严格用 duration
+    //   判断会把最后一帧永远视为"未到末尾"。用半帧容差刚好覆盖 PTS 精度误差，
+    //   同时不会误伤中间任意一帧。
+    // 依赖变化：Engine.position / Engine.duration / Engine.fileCount。这些 property
+    //   的信号都会正常触发本 readonly property 重算，无需手动 emit。
+    readonly property real _playerFrameDur: {
+        if (Engine.fileCount <= 0) return 1.0 / 30.0
+        var fd = (typeof Engine.frameDuration === "function") ? Engine.frameDuration() : 0
+        return (fd && fd > 0) ? fd : (1.0 / 30.0)
+    }
+    readonly property bool _atFirstFrame:
+        Engine.fileCount > 0
+        && Engine.duration > 0
+        && Engine.position <= root._playerFrameDur * 0.5
+    readonly property bool _atLastFrame:
+        Engine.fileCount > 0
+        && Engine.duration > 0
+        && (Engine.duration - Engine.position) <= root._playerFrameDur * 0.5
+
+    // 点击/快捷键守卫用的"即时判定"函数：
+    // 属性绑定 _atFirstFrame/_atLastFrame 在极少数场景（例如 seek 后 QML 端
+    // 属性重求值稍有滞后、或多路独立时钟场景下派生依赖没及时刷新）可能出现
+    // "视觉已回退但 _atLastFrame 仍为 true"的窗口，导致快退后立刻点"下一帧"
+    // 又被短路，用户体验成"卡死了"。这里在每次点击/快捷键触发时【当场】重新
+    // 读取 Engine.position / duration / frameDuration()，绕开任何属性缓存/
+    // 绑定链，保证只要用户看到位置已经回退，"下一帧/快进"就能立刻恢复可用。
+    function _fdNow() {
+        if (Engine.fileCount <= 0) return 1.0 / 30.0
+        var fd = (typeof Engine.frameDuration === "function") ? Engine.frameDuration() : 0
+        return (fd && fd > 0) ? fd : (1.0 / 30.0)
+    }
+    function _isAtFirstFrameNow() {
+        if (Engine.fileCount <= 0) return false
+        if (Engine.duration <= 0) return false
+        return Engine.position <= _fdNow() * 0.5
+    }
+    function _isAtLastFrameNow() {
+        if (Engine.fileCount <= 0) return false
+        var d = Engine.duration
+        if (d <= 0) return false
+        return (d - Engine.position) <= _fdNow() * 0.5
+    }
+
     // cell 右上角 🔁 "替换本路"按钮 ↔ replaceDialog 的中转变量：
     // FileDialog 是全局只一份，不能随 cell 上下文变化；点按钮时先写入该值，
     // 对话框 onAccepted 里读取它去调 Engine.replaceAt(idx, url)。初值 -1 表示未选中。
@@ -4527,7 +4575,11 @@ ApplicationWindow {
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
                 // 相对快退：每路在自己当前位置 -5s，独立时钟的路不被对齐到主时钟
-                onClicked: Engine.seekRelative(-5)
+                // 首帧短路：不改变按钮外观，用户连点也不会触发无效 seek，避免解码器空跑卡顿
+                onClicked: {
+                    if (root._isAtFirstFrameNow()) return
+                    Engine.seekRelative(-5)
+                }
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("快退 5 秒（←）")
@@ -4538,7 +4590,11 @@ ApplicationWindow {
                 visible: Engine.fileCount > 0
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
-                onClicked: Engine.stepFrame(-1)
+                // 首帧短路：外观保持一致，但阻止内核在 pts=0 附近反复尝试回退造成卡顿
+                onClicked: {
+                    if (root._isAtFirstFrameNow()) return
+                    Engine.stepFrame(-1)
+                }
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("上一帧（,）")
@@ -4563,7 +4619,13 @@ ApplicationWindow {
                 visible: Engine.fileCount > 0
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
-                onClicked: Engine.stepFrame(1)
+                // 末帧短路（核心场景）：不改变按钮视觉，仅阻断点击流水线——避免
+                // 用户在最后一帧继续点"下一帧"让解码器被反复驱动去请求超出末端
+                // 的帧，累积后出现明显卡顿。
+                onClicked: {
+                    if (root._isAtLastFrameNow()) return
+                    Engine.stepFrame(1)
+                }
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("下一帧（.）")
@@ -4575,7 +4637,11 @@ ApplicationWindow {
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 enabled: Engine.duration > 0
                 // 相对快进：每路在自己当前位置 +5s，独立时钟的路不被对齐到主时钟
-                onClicked: Engine.seekRelative(5)
+                // 末帧短路：外观保持一致，用户连点也不会触发无效 seek
+                onClicked: {
+                    if (root._isAtLastFrameNow()) return
+                    Engine.seekRelative(5)
+                }
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("快进 5 秒（→）")
@@ -5351,19 +5417,35 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: "Left"; context: Qt.ApplicationShortcut
-        onActivated: Engine.seek(Math.max(0, Engine.position - 5))
+        // 首帧守卫（即时判定）：与工具栏 `<<` 按钮语义一致。
+        onActivated: {
+            if (root._isAtFirstFrameNow()) return
+            Engine.seek(Math.max(0, Engine.position - 5))
+        }
     }
     Shortcut {
         sequence: "Right"; context: Qt.ApplicationShortcut
-        onActivated: Engine.seek(Math.min(Engine.duration, Engine.position + 5))
+        // 末帧守卫（即时判定）：与工具栏 `>>` 按钮语义一致。
+        onActivated: {
+            if (root._isAtLastFrameNow()) return
+            Engine.seek(Math.min(Engine.duration, Engine.position + 5))
+        }
     }
     Shortcut {
         sequence: ","; context: Qt.ApplicationShortcut
-        onActivated: Engine.stepFrame(-1)
+        // 上一帧：首帧守卫，避免解码器空跑
+        onActivated: {
+            if (root._isAtFirstFrameNow()) return
+            Engine.stepFrame(-1)
+        }
     }
     Shortcut {
         sequence: "."; context: Qt.ApplicationShortcut
-        onActivated: Engine.stepFrame(1)
+        // 下一帧：末帧守卫，避免解码器空跑
+        onActivated: {
+            if (root._isAtLastFrameNow()) return
+            Engine.stepFrame(1)
+        }
     }
     Shortcut {
         sequence: "F"; context: Qt.ApplicationShortcut
