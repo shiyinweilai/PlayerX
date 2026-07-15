@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDebug>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -97,6 +98,70 @@ RatingStore::RatingStore(QObject* parent) : QObject(parent) {
     // 预热默认模式的文件（首启动即生成 ratings_subjective.csv，
     // 避免 UI 首次读取 dataFilePath 时拿到一个不存在的路径）。
     ensureFileForMode(currentMode());
+
+    // ── 【开发者本地 override】───────────────────────────────────────
+    // 优先级（从高到低）：
+    //   1) 环境变量 PLAYERX_UPLOAD_URL_DEV（临时覆盖：export 一次即可，重启失效）
+    //   2) bundle 内 dev-upload.conf（每次 `python3 build.py` 编译时由 build.py 写入，
+    //      内容格式：
+    //          url=http://<本机内网IP>:8765/
+    //          token=10086
+    //      这样"每次本地编译产物"天然带上当前机器的 dev URL，换电脑重编译自动跟新 IP；
+    //      正式分发包（--package）不会写入此文件，普通用户看不到）
+    // 命中后：
+    //   · 不写入 QSettings，关掉环境变量 / 换成正式包重启行为完全等同旧版；
+    //   · setUploadServerUrl/setUploadToken 命中时被短路，防止远端 latest.json
+    //     的 clientConfig 或用户在 UI 里改的 URL 又覆盖调试环境；
+    //   · 未命中的普通用户完全无感知，与之前一模一样。
+    QString envUrl   = qEnvironmentVariable("PLAYERX_UPLOAD_URL_DEV").trimmed();
+    QString envToken = qEnvironmentVariable("PLAYERX_UPLOAD_TOKEN_DEV");
+    QString source   = QStringLiteral("env");
+    if (envUrl.isEmpty()) {
+        // 兜底：读 <app>/Contents/Resources/dev-upload.conf（macOS）或 exe 同目录（Windows）
+        // 位置计算与 dimensions.json 的读取一致，都走 applicationDirPath() 定位。
+        const QString appDir = QCoreApplication::applicationDirPath();
+        QStringList candidates;
+    #ifdef Q_OS_MACOS
+        // .app/Contents/MacOS/ → 上一层 Resources/
+        candidates << QDir(appDir).filePath(QStringLiteral("../Resources/dev-upload.conf"));
+    #endif
+        // Windows / 兜底：exe 同目录
+        candidates << QDir(appDir).filePath(QStringLiteral("dev-upload.conf"));
+
+        for (const QString& p : candidates) {
+            QFile f(p);
+            if (!f.exists() || !f.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+            // 极简 KV 解析：忽略空行 / '#' 开头注释；识别 url= / token= 两个键
+            QString fUrl, fTok;
+            while (!f.atEnd()) {
+                const QString line = QString::fromUtf8(f.readLine()).trimmed();
+                if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) continue;
+                const int eq = line.indexOf(QLatin1Char('='));
+                if (eq <= 0) continue;
+                const QString k = line.left(eq).trimmed();
+                const QString v = line.mid(eq + 1).trimmed();
+                if (k == QLatin1String("url"))   fUrl = v;
+                else if (k == QLatin1String("token")) fTok = v;
+            }
+            if (!fUrl.isEmpty()) {
+                envUrl   = fUrl;
+                envToken = fTok;
+                source   = QStringLiteral("conf:%1").arg(QFileInfo(p).absoluteFilePath());
+            }
+            break;
+        }
+    }
+
+    if (!envUrl.isEmpty()) {
+        m_uploadUrlOverridden = true;
+        m_uploadUrlOverride   = envUrl;
+        m_uploadTokenOverride = envToken;
+        qInfo().noquote() << "[RatingStore] 开发者 override 生效 [" << source << "]："
+                          << "uploadServerUrl =" << envUrl
+                          << (m_uploadTokenOverride.isEmpty()
+                              ? QStringLiteral("(token 未设置)")
+                              : QStringLiteral("(token 已设置)"));
+    }
 }
 
 // 按 mode 路由 CSV 文件：
@@ -795,11 +860,22 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
 // ═════════════════════════════════════════════════════════════════════
 
 QString RatingStore::uploadServerUrl() const {
+    // 【开发者 override 优先】：环境变量 PLAYERX_UPLOAD_URL_DEV 命中时，
+    // 直接返回内存态 URL，不读 QSettings；这样即使 QSettings 里存着正式 URL，
+    // 开发/联调期间 UI/上传/维度 API 全部走 dev URL。
+    if (m_uploadUrlOverridden) return m_uploadUrlOverride.trimmed();
     QSettings s;
     return s.value(kSettingsUploadUrlKey).toString().trimmed();
 }
 
 void RatingStore::setUploadServerUrl(const QString& url) {
+    // 【开发者 override 保护】：命中 override 时忽略任何来源的写入（远端 latest.json、
+    // 用户 UI 里改的、旧版持久化恢复），保证进程期内 uploadServerUrl 稳定不被抢走。
+    // 仍然发一次 uploadConfigChanged 通知，让 UI 刷新，但底层值不变。
+    if (m_uploadUrlOverridden) {
+        emit uploadConfigChanged();
+        return;
+    }
     QSettings s;
     QString trimmed = url.trimmed();
     if (s.value(kSettingsUploadUrlKey).toString() == trimmed) return;
@@ -809,11 +885,19 @@ void RatingStore::setUploadServerUrl(const QString& url) {
 }
 
 QString RatingStore::uploadToken() const {
+    // 【开发者 override 优先】：URL override 生效时，token 也走内存态，
+    // 允许 dev token 为空（例如后端未启用 PLAYERX_TOKEN），此时返回空串即可。
+    if (m_uploadUrlOverridden) return m_uploadTokenOverride;
     QSettings s;
     return s.value(kSettingsUploadTokKey).toString();
 }
 
 void RatingStore::setUploadToken(const QString& token) {
+    // 【开发者 override 保护】：与 URL 相同的短路策略。
+    if (m_uploadUrlOverridden) {
+        emit uploadConfigChanged();
+        return;
+    }
     QSettings s;
     if (s.value(kSettingsUploadTokKey).toString() == token) return;
     s.setValue(kSettingsUploadTokKey, token);

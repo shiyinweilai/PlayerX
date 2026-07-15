@@ -615,6 +615,15 @@ ApplicationWindow {
         // 远端 latest.json 下发了新的客户端上传配置 → 静默更新本地存储
         function onClientConfigChanged() {
             if (typeof Rating === "undefined") return
+            // 【开发者本地 override 生效时，忽略远端下发】
+            //   PLAYERX_UPLOAD_URL_DEV 命中后，进程期内 uploadServerUrl/uploadToken 由
+            //   环境变量决定，远端 latest.json 的 clientConfig 不应再回写本地。
+            //   （即使这里调 setUploadServerUrl，C++ 端 setter 也会被 override 短路，
+            //    这里提前 return 只是为了避免在日志里制造"看起来在切换"的噪音。）
+            if (Rating.uploadUrlOverridden === true) {
+                console.log("[UploadCfg] 开发者 override 生效，忽略远端 clientConfig 下发")
+                return
+            }
             var newUrl   = Updater.clientUploadUrl
             var newToken = Updater.clientToken
             if (!newUrl || newUrl.trim().length === 0) return

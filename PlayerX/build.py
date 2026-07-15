@@ -508,6 +508,91 @@ def install(target: str, deploy_qt: bool = False):
     run(["cmake", "--install", bdir])
 
 
+def _detect_local_ip() -> str:
+    """探测本机所在内网 IP（LAN 地址）。
+
+    实现原理：向公网 IP:port 发起一个 UDP "connect"（不实际发包），让内核根据路由表
+    选出出口网卡的地址，再读 socket.getsockname() 拿到它。这套做法在 macOS/Linux
+    上都是标准解法，且无需真的联网、无需查 DNS，速度快、无副作用。
+
+    换电脑/换 WiFi 每次会自动跟随当前网卡地址变化，符合"本地编译动态识别 IP"的诉求。
+    完全离线（无路由）时会兜底为 127.0.0.1，走 loopback 也能连本机 server。
+    """
+    import socket
+    ip = "127.0.0.1"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        pass
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+    return ip
+
+
+def emit_dev_upload_config(target: str):
+    """在 build tree 的 .app（macOS）或 install/bin（Windows）里写入开发者上传直连配置。
+
+    动机：
+      - 我每次都用 `python3 build.py` 编本地版，产物直接 open .app 调试；
+      - 服务端就跑在同一台开发机的 http://<内网 IP>:8765/（token=10086）；
+      - 换电脑内网 IP 会变，端口不变；不想每次都手动 export 一长串环境变量。
+    因此把"开发者本机 URL"作为编译期动态数据，落到 .app 内 Resources/dev-upload.conf。
+    C++ RatingStore 构造时读这个文件即可拿到 dev URL；优先级排在环境变量之下、
+    远端 clientConfig 之上。
+
+    文件位置：
+      - macOS   : <build/out/bin/PlayerX.app>/Contents/Resources/dev-upload.conf
+      - Windows : <build/out_win/bin>/dev-upload.conf
+    文件格式（简单 KV，每行一个）：
+        url=http://10.35.17.93:8765/
+        token=10086
+
+    关键行为：
+      - 打包模式（--package/--package-only）不会调用本函数，因此正式分发产物永远不会带该文件；
+      - 只写 build tree（build/out/bin），不写 install 目录，避免污染 `cmake --install` 产物；
+      - 目标目录不存在时安静返回，不阻断构建。
+    """
+    ip    = _detect_local_ip()
+    url   = f"http://{ip}:8765/"
+    token = "10086"
+    content = f"url={url}\ntoken={token}\n"
+
+    if target == "windows":
+        # Windows：exe 同目录（install/bin 由 post_build 部署完成，这里挑 build tree 的 bin，
+        # 因为普通模式不清空 install 目录，写 install 反而可能落到已部署产物里）
+        bin_dir = os.path.join(build_dir_for(target), "bin")
+        if not os.path.isdir(bin_dir):
+            return
+        conf_path = os.path.join(bin_dir, "dev-upload.conf")
+        with open(conf_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        info(f"[dev-upload] 已写入 {conf_path}  → {url}  token={token}")
+        return
+
+    # macOS：找到 build tree 的 .app，写进 Contents/Resources/
+    bin_dir = os.path.join(build_dir_for(target), "bin")
+    if not os.path.isdir(bin_dir):
+        return
+    app_path = None
+    for entry in os.listdir(bin_dir):
+        if entry.endswith(".app"):
+            app_path = os.path.join(bin_dir, entry); break
+    if not app_path:
+        return
+    res_dir = os.path.join(app_path, "Contents", "Resources")
+    os.makedirs(res_dir, exist_ok=True)
+    conf_path = os.path.join(res_dir, "dev-upload.conf")
+    with open(conf_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    info(f"[dev-upload] 已写入 {conf_path}  → {url}  token={token}")
+
+
 def post_build(target: str, qt_dir: str, deploy_qt: bool = False):
     """平台相关后处理：
     macOS  → ad-hoc 签名 .app
@@ -920,6 +1005,16 @@ def package_macos(version: str) -> dict:
     info(f"打包 .app → {zip_path}")
 
     # ── 打包前防御性清理（避免构建机历史 xattr / 只读权限污染分发包）──
+    # 0) 剔除开发者调试文件：若此前跑过 `python3 build.py`（非 --package），
+    #    install 目录里可能残留 Contents/Resources/dev-upload.conf；正式分发包
+    #    绝对不能带上"开发机内网 IP + token" 泄露到用户机，这里主动删干净。
+    dev_conf = os.path.join(app, "Contents", "Resources", "dev-upload.conf")
+    if os.path.isfile(dev_conf):
+        info(f"[dev-upload] 打包前剔除调试配置: {dev_conf}")
+        try:
+            os.remove(dev_conf)
+        except OSError as e:
+            warn(f"删除 {dev_conf} 失败（可能被锁定，请手动清理）: {e}")
     # 1) 补全 owner 写权限：ditto 不会改权限，只读文件会让用户端二次操作（rm/mv）失败
     run(["chmod", "-R", "u+w", app], check=False)
     # 2) 清掉所有扩展属性（quarantine / provenance / 资源派生属性等）
@@ -941,6 +1036,17 @@ def package_windows(version: str) -> dict:
     if not os.path.isdir(src_bin):
         error(f"未找到 Windows 安装产物目录: {src_bin}\n请先 python3 build.py -p windows")
         sys.exit(1)
+
+    # 打包前防御性清理：正式分发包绝不能带开发者调试配置（内网 IP + token 泄露风险）。
+    # dev-upload.conf 是 `python3 build.py` 非 --package 模式下写到 build tree 的
+    # bin/ 里的；理论上 cmake --install 不会拷贝它，但保险起见双重清理。
+    dev_conf = os.path.join(src_bin, "dev-upload.conf")
+    if os.path.isfile(dev_conf):
+        info(f"[dev-upload] 打包前剔除调试配置: {dev_conf}")
+        try:
+            os.remove(dev_conf)
+        except OSError as e:
+            warn(f"删除 {dev_conf} 失败: {e}")
 
     dist = _ensure_dist_dir()
     out = {}
@@ -1147,7 +1253,7 @@ def write_latest_json(version: str, downloads: dict):
     if url_tpl:
         info("⚠ notes / mandatory 等字段请手工编辑 release/latest.json；下载 url 已按 release/remote-url.json 的模板生成")
     else:
-        info("⚠ notes / mandatory 等字段请手工编辑 release/latest.json；url 占位符上传 CDN 前替换为真实域名（或在 release/remote-url.json 配置 url 模板自动生成）")
+        info("⚠ notes / mandatory 等字段请手工编辑 release/latest.json；url 占位符上传 CDN 前替换为真实域名（或在 release/remote-url.json 配置 url 模板自动生成")
 
 def package(target: str):
     """对应 --package：常规 build/install 完成后生成分发包。"""
@@ -1180,6 +1286,16 @@ def main():
     parser.add_argument("-f", "--force", "--allow-version-overwrite",
                         dest="force", action="store_true",
                         help="允许 --bump 到与当前相同或更低的版本号（同版本重打包 / 临时回退专用）")
+    # ── 开发者上传直连开关 ──
+    # 每次本地 `python3 build.py`（macOS 非打包模式）默认会把开发者上传 URL
+    # （http://<本机内网 IP>:8765/ + token=10086）写入 build tree 的 .app：
+    #     <PlayerX.app>/Contents/Resources/dev-upload.conf
+    # C++ 端 RatingStore 启动时会读这个文件，优先于远端 latest.json 的 clientConfig，
+    # 让开发/联调本地打开的 .app 直连本机 server，换电脑无需改代码（每次编译动态取 IP）。
+    # --no-dev-upload：偶尔想让本地编译版走"正式 URL"路径（比如复现线上问题）时使用。
+    # --package/--package-only：自动跳过，不会往分发包里写这个文件。
+    parser.add_argument("--no-dev-upload", action="store_true",
+                        help="本地编译时不写入开发者上传直连配置（用于本地复现正式 URL 行为）")
     args = parser.parse_args()
 
     target     = args.platform
@@ -1221,6 +1337,13 @@ def main():
     build(target)
     install(target, deploy_qt=deploy_qt)
     post_build(target, qt_dir, deploy_qt=deploy_qt)
+
+    # 本地编译（非打包）时把开发者上传直连配置写入 build tree 的 .app，
+    # 让 C++ RatingStore 启动时能读到、优先于远端 clientConfig。
+    # --package/--package-only 会走 deploy_qt=True 分支，此处严格跳过，
+    # 保证正式包永远干净不带调试配置。
+    if not deploy_qt and not args.no_dev_upload:
+        emit_dev_upload_config(target)
 
     success("PlayerX 构建完成！")
     out = output_path(target)

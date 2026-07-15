@@ -61,6 +61,12 @@ class RatingStore : public QObject {
     //   uploadToken    : 可选；后端开了 PLAYERX_TOKEN 时填一致的值，未开可以为空。
     Q_PROPERTY(QString uploadServerUrl READ uploadServerUrl WRITE setUploadServerUrl NOTIFY uploadConfigChanged)
     Q_PROPERTY(QString uploadToken     READ uploadToken     WRITE setUploadToken     NOTIFY uploadConfigChanged)
+    // 【开发者本地覆盖】uploadUrlOverridden == true 表示当前 uploadServerUrl/uploadToken
+    // 由进程内 override（来源：环境变量 PLAYERX_UPLOAD_URL_DEV / PLAYERX_UPLOAD_TOKEN_DEV）
+    // 优先返回，不落 QSettings，也不接受远端 latest.json 的 clientConfig 覆盖。
+    // 关掉环境变量重启，行为完全等同旧版；因此开发/联调期间使用完全无副作用。
+    // QML 侧用它决定"是否忽略 Updater.clientConfigChanged"，也可用于 UI 上标注"开发者模式"。
+    Q_PROPERTY(bool    uploadUrlOverridden READ uploadUrlOverridden CONSTANT)
     // 备注 tag：用于区分同一评分人多轮提交（如 test1 / 公司终评）。
     // 同 (rater, tag) 重复上传时后端返回 409，由 UI 弹窗确认后再带 force=true 重传。
     Q_PROPERTY(QString uploadTag       READ uploadTag       WRITE setUploadTag       NOTIFY uploadConfigChanged)
@@ -237,6 +243,10 @@ public slots:
     void    setUploadServerUrl(const QString& url);
     QString uploadToken() const;
     void    setUploadToken(const QString& token);
+    // 是否命中开发者本地 override（环境变量 PLAYERX_UPLOAD_URL_DEV 非空）。
+    // 命中时 uploadServerUrl()/uploadToken() 会优先返回内存态 override，
+    // 且远端下发的 clientConfig 会被 QML 侧忽略（避免开发时被覆盖）。
+    bool    uploadUrlOverridden() const { return m_uploadUrlOverridden; }
     QString uploadTag() const;
     void    setUploadTag(const QString& tag);
     bool    uploading() const { return m_uploading; }
@@ -366,6 +376,16 @@ private:
                             int channelIndex = -1);
 
     QString m_baseDir;    // 数据根目录（AppDataLocation/PlayerX）
+
+    // 【开发者本地 override】进程启动时从环境变量读入，之后不落 QSettings；
+    //   · m_uploadUrlOverridden : 是否命中（PLAYERX_UPLOAD_URL_DEV 非空）
+    //   · m_uploadUrlOverride   : 覆盖的 URL（例如 http://localhost:8765/）
+    //   · m_uploadTokenOverride : 覆盖的 token（可空；仅当 URL 也 override 时才生效）
+    // 命中时 uploadServerUrl() / uploadToken() 直接返回内存态值，setUploadServerUrl
+    // 拒绝写入以防远端 clientConfig 或 QSettings 里的旧值把它顶掉。
+    bool    m_uploadUrlOverridden = false;
+    QString m_uploadUrlOverride;
+    QString m_uploadTokenOverride;
 
     // QNetworkAccessManager 懒初始化：不走上传的运行不产生任何网络资源。
     mutable QNetworkAccessManager* m_nam = nullptr;
