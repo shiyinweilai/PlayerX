@@ -126,22 +126,75 @@ ApplicationWindow {
         var exePath = Qt.application.arguments[0]  // 如 .../PlayerX.app/Contents/MacOS/PlayerX
         var resourcesUrl = ""
         var dimsByModeUrl = ""
+        var dimsByModeLocalPath = ""   // 无 file:// 前缀，用于 Fs.readTextFile 同步读
         if (Qt.platform.os === "osx") {
             var macosDir = exePath.substring(0, exePath.lastIndexOf("/"))  // .../Contents/MacOS
             var contentsDir = macosDir.substring(0, macosDir.lastIndexOf("/"))  // .../Contents
             resourcesUrl = "file://" + contentsDir + "/Resources/dimensions.json"
             dimsByModeUrl = "file://" + contentsDir + "/Resources/dimsByMode.json"
+            dimsByModeLocalPath = contentsDir + "/Resources/dimsByMode.json"
         } else {
             var binDir = exePath.substring(0, exePath.lastIndexOf("/"))
             resourcesUrl = "file://" + binDir + "/dimensions.json"
             dimsByModeUrl = "file://" + binDir + "/dimsByMode.json"
+            dimsByModeLocalPath = binDir + "/dimsByMode.json"
         }
-        // 优先加载 dimsByMode.json（多 mode 独立缓存）；失败/为空再回退 dimensions.json
-        _loadDimsByModeCache(dimsByModeUrl, function(loaded) {
-            if (!loaded || !root.reviewDimensions || root.reviewDimensions.length === 0) {
+
+        // 【无感启动优化】优先用 Fs.readTextFile 同步读取本地 dimsByMode.json，
+        //   这样 Component.onCompleted 一返回，reviewDimensions 就已就绪。
+        //   避免"打开文件夹后星星隔一下才出现"的问题：
+        //     - 之前走异步 XMLHttpRequest：从 Component.onCompleted 到 xhr.DONE
+        //       之间存在几十~几百 ms 的窗口，用户手速快时会先看到空白再看到星星。
+        //     - 现在走 Q_INVOKABLE 同步读：本地几十 KB 文件读完就是毫秒级，
+        //       打开文件夹时 onFilesChanged 直接读到 reviewDimensions 立即回填评分。
+        //   同步失败（文件不存在/JSON 错误）时回退到异步 XHR 保底路径，
+        //   不影响原有的 dimensions.json fallback 逻辑；也完全不动远程配置更新流程。
+        var syncLoaded = false
+        if (typeof Fs !== "undefined" && typeof Fs.readTextFile === "function") {
+            try {
+                var text = Fs.readTextFile(dimsByModeLocalPath) || ""
+                if (text.length > 0) {
+                    var cache = JSON.parse(text)
+                    if (cache && typeof cache === "object") {
+                        root._dimsByMode = cache
+                        var curMode0 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                        if (curMode0 && curMode0 !== "off"
+                                && cache[curMode0] && Array.isArray(cache[curMode0])
+                                && cache[curMode0].length > 0) {
+                            // 预注入 starCount，避免 Repeater delegate 依赖深层
+                            // levels.length 动态计算（与 _loadDimensions 保持一致）
+                            var _dimsSync = cache[curMode0].map(function(d) {
+                                var sc = (d && d.levels && Array.isArray(d.levels) && d.levels.length > 0)
+                                            ? d.levels.length : 5
+                                return Object.assign({}, d, { starCount: sc })
+                            })
+                            root.reviewDimensions = _dimsSync
+                            root.reviewDimensionsVersion++
+                            console.log("[DimLoad-Sync] 同步读取 dimsByMode.json 完成，mode=",
+                                curMode0, "维度数:", _dimsSync.length)
+                        }
+                        syncLoaded = true
+                    }
+                }
+            } catch (e) {
+                console.warn("[DimLoad-Sync] 同步解析 dimsByMode.json 失败，回退异步路径：", e)
+            }
+        }
+
+        if (syncLoaded) {
+            // 同步已装载成功：只在极端情况（同步读到了但 curMode 对应无维度）
+            // 才补跑 _loadDimensions 老路径作为兜底；正常情况完全不再走异步 XHR。
+            if (!root.reviewDimensions || root.reviewDimensions.length === 0) {
                 _loadDimensions(resourcesUrl, null)
             }
-        })
+        } else {
+            // 同步读失败（首次启动 / 文件缺失 / 平台无 Fs）：保底走原异步流程，行为与之前完全一致。
+            _loadDimsByModeCache(dimsByModeUrl, function(loaded) {
+                if (!loaded || !root.reviewDimensions || root.reviewDimensions.length === 0) {
+                    _loadDimensions(resourcesUrl, null)
+                }
+            })
+        }
     }
 
     // 教程文档链接（占位 URL，后续替换为正式地址即可，无需改任何调用方）
@@ -1911,7 +1964,63 @@ ApplicationWindow {
             root._applyingConfig = false
             console.log("[DimReload] 强制重建完成，维度：",
                 dims.map(function(d){return d.key + "(" + (d.starCount || (d.levels && d.levels.length) || 5) + "星)"}).join(", "))
+            // 【关键修复】维度到位后，若已有文件加载，主动重跑一次评分回填。
+            //   原因：启动 / 应用远程配置期间会经历「reviewDimensions = []」的空
+            //   窗期（阶段 1 → Timer 阶段 2 之间约 60ms）。如果这段时间用户刚好
+            //   打开了文件夹（onFilesChanged 触发），回填逻辑会走 !hasDims 分支，
+            //   cellRatings 结构错误（标量而非对象），星星显示全空。
+            //   到这里 reviewDimensions 已经重建完毕，重跑一次幂等回填即可修正 UI。
+            if (typeof Engine !== "undefined" && Engine.fileCount > 0) {
+                root._rebuildCellRatingsFromCsv("dimReload")
+            }
         }
+    }
+
+    // 【评分回填】用当前 reviewDimensions 从 CSV 重建 cellRatings + 滑动评分。
+    //   幂等：多次调用结果一致；不触碰 selectedIdx，避免干扰用户选中状态。
+    //   两个调用点：
+    //     · onFilesChanged（翻组 / 切宫格 / 打开文件）
+    //     · _dimReloadTimer.onTriggered（远程配置应用完成后 / 启动首次加载完成后）
+    function _rebuildCellRatingsFromCsv(reason) {
+        if (typeof Engine === "undefined") return
+        var n = Engine.fileCount
+        if (n <= 0) return
+        var arr = []
+        var dims = root.reviewDimensions
+        // quality_slide 模式下只取第一个维度用于普通打分，第二个维度留给滑动对比
+        if (root.isQualitySlideMode && dims && dims.length >= 2)
+            dims = [dims[0]]
+        var hasDims = dims && dims.length > 0
+        for (var i = 0; i < n; ++i) {
+            var fp = Engine.filePathAt(i)
+            if (hasDims) {
+                // 有维度配置时（不限于 multi_dim 模式）：每项初始化为对象，从 CSV 按 slide_type 回填各维度
+                var obj = {}
+                for (var d = 0; d < dims.length; ++d) {
+                    var dimKey = dims[d].key
+                    var saved = -1
+                    if (typeof Rating !== "undefined" && fp && fp.length > 0) {
+                        saved = Rating.ratingFor(fp, "multi_" + dimKey)
+                    }
+                    obj[dimKey] = (typeof saved === "number" && saved >= 1 && saved <= 5) ? saved : 0
+                }
+                arr.push(obj)
+            } else {
+                var v = -1
+                if (typeof Rating !== "undefined" && fp && fp.length > 0) {
+                    v = Rating.ratingFor(fp)
+                }
+                arr.push((typeof v === "number" && v >= 1 && v <= 5) ? v : 0)
+            }
+        }
+        root.cellRatings = arr
+        // quality_slide：先清零再从 CSV 恢复本组已有的滑动评分，
+        // 避免循环切组时评分被清零，同时防止上一组评分残留。
+        root._resetSlideRatings()
+        root._restoreSlideRatings()
+        console.log("[RebuildRatings] reason=", reason || "-", " 回填完成，n=", n,
+                    "，hasDims=", hasDims, "，dims=",
+                    hasDims ? dims.map(function(x){return x.key}).join(",") : "(none)")
     }
 
     // 【强制维度刷新】外部统一入口：先清空 → 定时器触发 → 赋新值
@@ -2666,12 +2775,19 @@ ApplicationWindow {
         cellRatings = arr
     }
     onIsMultiDimModeChanged: {
-        // 切换模式时仅重新初始化 cellRatings，维度配置在点击「启动对比」时加载
-        _rebuildCellRatingsForDims()
+        // 切换 mode 时：重建 cellRatings 结构 + 立即从 CSV 回填当前维度评分。
+        // 不能只清零（_rebuildCellRatingsForDims），否则切模式后需要再手动翻组 / 重开
+        // 文件夹才能看到历史评分。
+        _rebuildCellRatingsFromCsv("isMultiDimModeChanged")
     }
     onReviewDimensionsChanged: {
-        // 维度配置更新时（启动对比加载远程配置后），重建 cellRatings 结构
-        _rebuildCellRatingsForDims()
+        // 维度配置更新时（启动装载 / 远程配置应用 / 模式切换后异步加载维度）：
+        //   直接调 _rebuildCellRatingsFromCsv 用当前 reviewDimensions 从 CSV 回填。
+        //   【重要】曾经这里调的是 _rebuildCellRatingsForDims，它只会把 cellRatings
+        //   全部清零，不读 CSV。结果是：用户打开文件夹后，只要 reviewDimensions 又
+        //   被赋值一次（例如"无更新"轮询里的静默同步），历史评分就会被清零，
+        //   造成"重启后星星全空、跳过再切回来才修好"的体感 bug。
+        _rebuildCellRatingsFromCsv("reviewDimensionsChanged")
     }
     //   · 实时写入 ratings_quality_slide_slide.csv（与普通打分文件完全隔离）
     //   · 与普通 quality 评分（cellRatings）解耦，互不覆盖
@@ -3414,45 +3530,14 @@ ApplicationWindow {
         }
         // 翻组 / 切宫格 / 重新打开文件后，按新文件路径重建 cellRatings —
         // 避免上一组的评分残留到下一组（同一 idx 但 path 已变）。
-        // RatingStore.ratingFor(path) 命中返回 0-5、未命中返回 -1（视为未评分）。
+        // 具体回填逻辑抽到 root._rebuildCellRatingsFromCsv（供 _dimReloadTimer 复用）。
         function onFilesChanged() {
-            var n = Engine.fileCount
-            var arr = []
-            var dims = root.reviewDimensions
-            // quality_slide 模式下只取第一个维度用于普通打分，第二个维度留给滑动对比
-            if (root.isQualitySlideMode && dims && dims.length >= 2)
-                dims = [dims[0]]
-            var hasDims = dims && dims.length > 0
-            for (var i = 0; i < n; ++i) {
-                var fp = Engine.filePathAt(i)
-                if (hasDims) {
-                    // 有维度配置时（不限于 multi_dim 模式）：每项初始化为对象，从 CSV 按 slide_type 回填各维度
-                    var obj = {}
-                    for (var d = 0; d < dims.length; ++d) {
-                        var dimKey = dims[d].key
-                        var saved = -1
-                        if (typeof Rating !== "undefined" && fp && fp.length > 0) {
-                            saved = Rating.ratingFor(fp, "multi_" + dimKey)
-                        }
-                        obj[dimKey] = (typeof saved === "number" && saved >= 1 && saved <= 5) ? saved : 0
-                    }
-                    arr.push(obj)
-                } else {
-                    var v = -1
-                    if (typeof Rating !== "undefined" && fp && fp.length > 0) {
-                        v = Rating.ratingFor(fp)
-                    }
-                    arr.push((typeof v === "number" && v >= 1 && v <= 5) ? v : 0)
-                }
-            }
-            root.cellRatings = arr
+            root._rebuildCellRatingsFromCsv("filesChanged")
             // 切换文件 / 翻组 / 改宫格后，主动复位 selectedIdx，避免上一组的
             // 选中（蓝边）残留误导。用户若需要再选中，单击或 [ / ] 即可。
+            // （注意 selectedIdx 复位不放进 _rebuildCellRatingsFromCsv：远程配置
+            //  应用完成后的重跑不应该干扰用户当前选中状态。）
             root.selectedIdx = -1
-            // quality_slide：先清零再从 CSV 恢复本组已有的滑动评分，
-            // 避免循环切组时评分被清零，同时防止上一组评分残留。
-            root._resetSlideRatings()
-            root._restoreSlideRatings()
         }
     }
 
