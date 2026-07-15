@@ -4568,6 +4568,187 @@ ApplicationWindow {
                 Layout.bottomMargin: 6
                 visible: Engine.fileCount > 0
             }
+            // ── 常驻"播放速度"按钮（放在 << 快退左侧）─────────────────────────
+            // 设计要点：
+            //  1) 与顶部菜单栏【设置】▸【播放速度】语义完全一致，底层都调
+            //     Engine.setSpeed / adjustSpeed / resetSpeed，快捷键 - / = / 0
+            //     不受影响；这里只是把功能做成常驻可点入口。同时它已经替代了
+            //     早期只在非 1.0x 时才出现的右侧 speedBadge 胶囊（已移除，避免重复）。
+            //  2) 遵循项目 UI 铁律：macOS 上 QtQuick.Controls 的 Menu 会被替换为 native
+            //     NSMenu，自定义 background/delegate 全部失效，会漏出系统白底黑字。
+            //     所以【必须】用 Popup + Repeater 自绘。此处深色主题与 phoneAspectPopup、
+            //     全局 ToolTip 完全对齐（#cc1a1a1f / #33ffffff / #e8e8ec）。
+            //  3) 按钮文案实时显示当前倍速（例 "1.00x" / "1.5x"），非 1.0x 时用高亮色
+            //     提醒用户，一眼就能识别当前是否处于非常规速率。
+            FlatButton {
+                id: speedToolbarBtn
+                visible: Engine.fileCount > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                enabled: Engine.fileCount > 0
+                // 记录 speedPopup 上一次关闭的时间戳（ms）。用于吃掉"点外面关掉→onClicked 又打开"
+                // 的两连击：外部点击关闭 popup 时 CloseOnPressOutsideParent 先触发，
+                // Qt 随后仍会把该次 press 派发给下方按钮的 onClicked。若不做闸门，会立即再次
+                // 打开，用户视觉上表现为"点 1x 关不掉菜单"。
+                // 参考做法与 settingsBtn._menuClosedAtMs 完全一致。
+                property double _menuClosedAtMs: 0
+                // 展示当前倍速：与已移除的 speedBadgeLabel 采用同一格式化规则，保持观感稳定
+                text: {
+                    var s = Engine.speed
+                    if (s >= 1.0)
+                        return s.toFixed(s >= 10 ? 0 : 2).replace(/\.?0+$/,"") + "x"
+                    return s.toFixed(2).replace(/0+$/,"").replace(/\.$/,"") + "x"
+                }
+                // 非 1.0x 时高亮，视觉与右侧胶囊呼应
+                textColor: (Math.abs(Engine.speed - 1.0) < 1e-6) ? "#e8e8ec" : "#00c0a0"
+                onClicked: {
+                    // 若 popup 处于打开状态，直接收起（toggle 语义）。
+                    if (speedPopup.visible) { speedPopup.close(); return }
+                    // 若刚刚（<250ms）因外部点击关闭过，则这次点击其实是"关闭态"的收尾，
+                    // 吃掉它，避免立刻二次打开。
+                    if (Date.now() - _menuClosedAtMs < 250) return
+                    speedPopup.openAt(speedToolbarBtn)
+                }
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("播放速度（点击选择档位；快捷键 - / = / 0）")
+            }
+            // 播放速度下拉：自绘深色 Popup，主题对齐全局 ToolTip / phoneAspectPopup
+            Popup {
+                id: speedPopup
+                // 尺寸由内容决定，避免超长文案被裁；含分隔线共 9 项
+                implicitWidth: 190
+                implicitHeight: speedListCol.implicitHeight + 12
+                padding: 6
+                modal: false
+                focus: true
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+
+                // 关闭时打时间戳，供 speedToolbarBtn.onClicked 判断"是否刚被外部点击关闭"，
+                // 从而吃掉紧随其后的按钮点击，避免立即再次打开（=> 支持"再点一次收起"）。
+                onClosed: {
+                    if (speedToolbarBtn)
+                        speedToolbarBtn._menuClosedAtMs = Date.now()
+                }
+
+                // 定位在锚点按钮的正上方（弹层与按钮的间隙 2px，符合项目 UI 铁律）
+                function openAt(anchorBtn) {
+                    var p = anchorBtn.mapToItem(parent, 0, 0)
+                    x = p.x
+                    y = p.y - implicitHeight - 2
+                    open()
+                }
+
+                background: Rectangle {
+                    color: "#cc1a1a1f"
+                    border.color: "#33ffffff"
+                    border.width: 1
+                    radius: 6
+                }
+
+                // 用 Column + Repeater 自绘，杜绝任何 native 化风险
+                contentItem: Column {
+                    id: speedListCol
+                    spacing: 0
+
+                    // 常用档位区
+                    Repeater {
+                        model: [0.25, 0.5, 1.0, 1.5, 2.0]
+                        delegate: Rectangle {
+                            required property real modelData
+                            readonly property bool isCurrent: Math.abs(Engine.speed - modelData) < 1e-3
+                            width: parent.width
+                            height: 28
+                            radius: 4
+                            color: rowHover.hovered ? "#0a64f0" : "transparent"
+                            Row {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                spacing: 6
+                                Text {
+                                    width: 14
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: isCurrent ? "✓" : ""
+                                    color: "#e8e8ec"
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: {
+                                        var v = modelData
+                                        if (Math.abs(v - 1.0) < 1e-6) return "1.0x （正常）"
+                                        return (v < 1.0
+                                                ? v.toFixed(2).replace(/0+$/,"").replace(/\.$/,"")
+                                                : v.toFixed(v >= 10 ? 0 : 1).replace(/\.0$/,"")) + "x"
+                                    }
+                                    color: "#e8e8ec"
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                            }
+                            HoverHandler { id: rowHover; cursorShape: Qt.PointingHandCursor }
+                            TapHandler {
+                                onTapped: {
+                                    Engine.setSpeed(modelData)
+                                    speedPopup.close()
+                                }
+                            }
+                        }
+                    }
+
+                    // 分隔线（1px，白 20% α，与项目其它弹层一致）
+                    Rectangle {
+                        width: parent.width
+                        height: 1
+                        color: "#33ffffff"
+                    }
+
+                    // 步进/重置区：语义与快捷键 - = 0 完全等价
+                    Repeater {
+                        model: [
+                            { label: "减速 ( - )",         act: "dec"   },
+                            { label: "加速 ( = )",         act: "inc"   },
+                            { label: "重置为 1.0x ( 0 )",  act: "reset" }
+                        ]
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: parent.width
+                            height: 28
+                            radius: 4
+                            color: stepHover.hovered ? "#0a64f0" : "transparent"
+                            Row {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                spacing: 6
+                                Text {
+                                    width: 14
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: ""
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData.label
+                                    color: "#e8e8ec"
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                            }
+                            HoverHandler { id: stepHover; cursorShape: Qt.PointingHandCursor }
+                            TapHandler {
+                                onTapped: {
+                                    var a = modelData.act
+                                    if (a === "dec")        Engine.adjustSpeed(-1)
+                                    else if (a === "inc")   Engine.adjustSpeed(+1)
+                                    else if (a === "reset") Engine.resetSpeed()
+                                    speedPopup.close()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // 快退 5 秒
             FlatButton {
                 text: "<<"
@@ -4815,46 +4996,9 @@ ApplicationWindow {
                 onClicked: confirmCloseAllDialog.open()
             }
 
-            // ── 当前倍速指示（只在非 1.0x 时显示；点击复位；不占额外宽度）──
-            // 设计目标：日常 1.0x 时完全隐藏不占位；进入慢/快速时给一个紧凑的高亮提示，
-            // 单击即可回到 1.0x。详细控制仍走 ⚙ → 播放速度 子菜单。
-            Item {
-                id: speedBadge
-                visible: Math.abs(Engine.speed - 1.0) > 1e-6
-                Layout.preferredWidth: visible ? speedBadgeLabel.implicitWidth + 14 : 0
-                Layout.fillHeight: true
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    height: 22
-                    radius: 11
-                    color: "#1f3a33"           // 深绿底，和高亮色 #00c0a0 同色系
-                    border.color: "#00c0a0"
-                    border.width: 1
-                    Label {
-                        id: speedBadgeLabel
-                        anchors.centerIn: parent
-                        color: "#00c0a0"
-                        font.pixelSize: 12
-                        font.bold: true
-                        text: {
-                            var s = Engine.speed
-                            if (s >= 1.0) return s.toFixed(s >= 10 ? 0 : 2).replace(/\.?0+$/,"") + "x"
-                            return s.toFixed(2).replace(/0+$/,"").replace(/\.$/,"") + "x"
-                        }
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        hoverEnabled: true
-                        onClicked: Engine.resetSpeed()
-                        ToolTip.visible: containsMouse
-                        ToolTip.delay: 600
-                        ToolTip.text: "当前倍速 " + speedBadgeLabel.text + "，点击重置为 1.0x ( 0 )"
-                    }
-                }
-            }
+            // 说明：早期这里有一个"当前倍速胶囊 speedBadge"（仅非 1.0x 时显示、点击复位）。
+            // 现已被工具栏左侧常驻的 speedToolbarBtn 完全替代——后者始终显示当前倍速，
+            // 且提供档位下拉，语义/交互更完整。为避免右下重复展示同一信息，此处移除。
 
             // 设置按钮已收纳到顶部系统菜单栏【设置】▸ 偏好设置…
             // 这里保留 settingsMenu 的定义，由顶部菜单触发其 popup（锚到窗口右上角）。
