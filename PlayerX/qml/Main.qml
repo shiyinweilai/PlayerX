@@ -30,6 +30,9 @@ ApplicationWindow {
     // 后续 50+ 处的 `ToolTip.text/visible` 附加属性都会自动套用此暗色主题，
     // 不需要逐处改写 background/contentItem，最大限度避免破坏既有功能。
     Component.onCompleted: {
+        // 【启动钝感排查】T0：Component.onCompleted 起点。后续所有 [BootTrace] 都以此为基准。
+        root._bootT0 = Date.now()
+        console.log("[BootTrace] T0=0ms  Component.onCompleted 起点")
         try {
             var tip = ToolTip.toolTip
             if (tip) {
@@ -79,6 +82,11 @@ ApplicationWindow {
                                 Rating.uploadTag = obj.tag
                             }
                             root._remoteTag = obj.tag || ""
+                            // 【tag 按 mode 独立缓存】把当前 mode 的 tag 记入 _tagByMode
+                            var _curModeA = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                            if (_curModeA && _curModeA !== "off") {
+                                root._setTagForMode(_curModeA, obj.tag || "")
+                            }
                             return
                         }
                     } catch (e) {}
@@ -172,6 +180,13 @@ ApplicationWindow {
                             root.reviewDimensionsVersion++
                             console.log("[DimLoad-Sync] 同步读取 dimsByMode.json 完成，mode=",
                                 curMode0, "维度数:", _dimsSync.length)
+                            // 【启动钝感排查】T1a：同步预加载命中，星星此刻应已可渲染
+                            console.log("[BootTrace] T1a=" + (Date.now() - root._bootT0) + "ms  同步预加载命中 mode=" + curMode0
+                                + " dims=" + _dimsSync.length)
+                        } else {
+                            // 【启动钝感排查】T1b：同步读到 cache 但当前 mode 无维度 → 后续要靠 HTTP 补
+                            console.log("[BootTrace] T1b=" + (Date.now() - root._bootT0) + "ms  同步预加载 cache 存在但未命中 mode="
+                                + curMode0 + " keys=" + Object.keys(cache).join(","))
                         }
                         syncLoaded = true
                     }
@@ -181,14 +196,47 @@ ApplicationWindow {
             }
         }
 
+        // 【tag 按 mode 独立缓存 - 同步读取】
+        //   与 dimsByMode.json 平行的一份 tag 落盘，Resources/tagByMode.json。
+        //   启动瞬间就把当前 Rating.currentMode 对应的 tag 灌进 _remoteTag / Rating.uploadTag，
+        //   RatingsDialog 一打开就能显示正确的备注 tag，不会所有模式都是同一个。
+        //   同步失败/文件缺失 → 静默跳过，走后续远程配置流程再补齐。
+        if (typeof Fs !== "undefined" && typeof Fs.readTextFile === "function") {
+            try {
+                var tagPath = (Qt.platform.os === "osx")
+                        ? (contentsDir + "/Resources/tagByMode.json")
+                        : (binDir + "/tagByMode.json")
+                var tagText = Fs.readTextFile(tagPath) || ""
+                if (tagText.length > 0) {
+                    var tagCache = JSON.parse(tagText)
+                    if (tagCache && typeof tagCache === "object") {
+                        root._tagByMode = tagCache
+                        var curModeT = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                        if (curModeT && curModeT !== "off" && typeof tagCache[curModeT] === "string") {
+                            var tagInit = tagCache[curModeT]
+                            root._remoteTag = tagInit
+                            if (typeof Rating !== "undefined" && Rating.uploadTag !== tagInit) {
+                                Rating.uploadTag = tagInit
+                            }
+                            console.log("[TagLoad-Sync] 同步读取 tagByMode.json 完成，mode=", curModeT, "tag=", tagInit)
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn("[TagLoad-Sync] 同步解析 tagByMode.json 失败：", e)
+            }
+        }
+
         if (syncLoaded) {
             // 同步已装载成功：只在极端情况（同步读到了但 curMode 对应无维度）
             // 才补跑 _loadDimensions 老路径作为兜底；正常情况完全不再走异步 XHR。
             if (!root.reviewDimensions || root.reviewDimensions.length === 0) {
+                console.log("[BootTrace] T1c=" + (Date.now() - root._bootT0) + "ms  syncLoaded 但 reviewDimensions 为空 → 走 _loadDimensions 兜底")
                 _loadDimensions(resourcesUrl, null)
             }
         } else {
             // 同步读失败（首次启动 / 文件缺失 / 平台无 Fs）：保底走原异步流程，行为与之前完全一致。
+            console.log("[BootTrace] T1d=" + (Date.now() - root._bootT0) + "ms  同步预加载失败 → 走异步 XHR 兜底")
             _loadDimsByModeCache(dimsByModeUrl, function(loaded) {
                 if (!loaded || !root.reviewDimensions || root.reviewDimensions.length === 0) {
                     _loadDimensions(resourcesUrl, null)
@@ -1954,6 +2002,9 @@ ApplicationWindow {
     property var reviewDimensions: []
     // 每次维度更新时递增，供 VideoCellDelegate 内层 Repeater 强制重新求值
     property int reviewDimensionsVersion: 0
+    // 【启动钝感排查】记录 QML Component.onCompleted 起点时间戳（毫秒），
+    // 后续各阶段用 (Date.now() - _bootT0) 打印相对耗时。排查完可整块删除。
+    property real _bootT0: 0
     // quality_slide 模式下：reviewDimensions[1] 专用于滑动对比，不在 cell 评分条中显示；
     // 其余维度（第 1 维 + 第 3 维起的全部维度）都进 cell 评分条。
     // 其他模式下与 reviewDimensions 完全一致。
@@ -1983,7 +2034,38 @@ ApplicationWindow {
         }
     }
 
+    // 【按 mode 独立缓存 tag】各评分模式对应各自远程配置的 tag（如 "0.0.8_subj_0714"）。
+    // 之所以必须"按 mode 分"：Rating.uploadTag 是全局单值，如果多个 mode 都往它/_remoteTag
+    // 上写，最后加载的那个 mode 会覆盖前面所有 mode 的 tag，导致 RatingsDialog 右上角
+    // 输入框、上传逻辑无法区分各 mode 各自的 tag。
+    // 持久化文件：Resources/tagByMode.json，形如 { "multi_dim": "0.0.8_subj_0714", ... }。
+    property var _tagByMode: ({})
+
+    function _saveTagByMode() {
+        try {
+            var path = root._resourcesDir() + "/tagByMode.json"
+            if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                EngineBridge.writeTextFile(path, JSON.stringify(root._tagByMode || {}))
+            }
+        } catch (e) {
+            console.warn("[TagSave] 保存 tagByMode.json 失败：", e)
+        }
+    }
+
+    // 【统一入口】把某个 mode 的 tag 写入按 mode 缓存并落盘。
+    // 使用深拷贝赋值以确保 property var 的响应式通知（与 _dimsByMode 保持一致的写法）。
+    function _setTagForMode(mode, tag) {
+        if (!mode || mode === "off") return
+        var m = JSON.parse(JSON.stringify(root._tagByMode || {}))
+        m[mode] = tag || ""
+        root._tagByMode = m
+        root._saveTagByMode()
+    }
+
     // 远程激活配置的 tag（加载维度时同步写入，供上传时校验用）
+    // 【语义】始终等于"当前 Rating.currentMode 对应的 tag"（跟随 mode 切换而变化），
+    // 由 _tagByMode + onCurrentModeChanged 保证。上传时 RatingStore 读的是 Rating.uploadTag，
+    // 我们在切 mode 时也同步刷新 Rating.uploadTag，保证 UI/上传/校验三者一致。
     property string _remoteTag: ""
 
     // 标志位：_applyRemoteConfigItem 正在处理维度，onCurrentModeChanged 应跳过，避免两处竞争
@@ -2012,6 +2094,8 @@ ApplicationWindow {
             root._applyingConfig = false
             console.log("[DimReload] 强制重建完成，维度：",
                 dims.map(function(d){return d.key + "(" + (d.starCount || (d.levels && d.levels.length) || 5) + "星)"}).join(", "))
+            // 【启动钝感排查】T5b：阶段2 完成，星星实际渲染时刻
+            console.log("[BootTrace] T5b=" + (Date.now() - root._bootT0) + "ms  _dimReloadTimer 阶段2 完成 → 星星此刻渲染")
             // 【关键修复】维度到位后，若已有文件加载，主动重跑一次评分回填。
             //   原因：启动 / 应用远程配置期间会经历「reviewDimensions = []」的空
             //   窗期（阶段 1 → Timer 阶段 2 之间约 60ms）。如果这段时间用户刚好
@@ -2103,6 +2187,8 @@ ApplicationWindow {
         console.log("[ForceApply] 开始强制刷新 → reason=", reason || "-",
             "forMode=", forMode || "-", "currentMode=", curMode,
             "，dims=", dims.map(function(d){return d.key+"("+(d.starCount||(d.levels&&d.levels.length)||5)+"星)"}).join(","))
+        // 【启动钝感排查】T5a：进入两阶段刷新阶段1（清空 reviewDimensions）
+        console.log("[BootTrace] T5a=" + (Date.now() - root._bootT0) + "ms  _forceApplyDimensions 阶段1 清空（reason=" + (reason || "-") + "）")
         root._applyingConfig = true
         root._pendingDimsToApply = dims
         root._pendingTagToApply = tag || ""
@@ -2122,6 +2208,17 @@ ApplicationWindow {
             if (root._applyingConfig) return
             var mode = Rating.currentMode
             if (!mode || mode === "off") return
+            // 【tag 跟随 mode 切换】先把该 mode 对应的 tag 灌回 _remoteTag + Rating.uploadTag，
+            // 这样 RatingsDialog 显示的备注 tag、上传时的 tag 都能正确反映"当前 mode"的配置。
+            // 若该 mode 还没缓存 tag（历史遗留 / 未同步过），沿用旧 _remoteTag 兜底，避免误清空。
+            var tagForMode = (root._tagByMode && root._tagByMode[mode] !== undefined)
+                    ? root._tagByMode[mode] : null
+            if (tagForMode !== null) {
+                root._remoteTag = tagForMode
+                if (typeof Rating !== "undefined" && Rating.uploadTag !== tagForMode) {
+                    Rating.uploadTag = tagForMode
+                }
+            }
             var cachedRaw = root._dimsByMode[mode]
             // 【关键】QML property var 里的数组读出来可能是 QJSValue/QVariantList，Array.isArray=false。
             // 用 length 做 duck-typing 判断，并转成纯 JS 数组再传给 _forceApplyDimensions，
@@ -2169,6 +2266,8 @@ ApplicationWindow {
     function _checkRemoteConfigUpdate(onNoUpdate) {
         var base = root._dimApiUrl()
         if (base.length === 0) return  // 未配置服务器，跳过
+        // 【启动钝感排查】T3：xhr0 发起
+        console.log("[BootTrace] T3=" + (Date.now() - root._bootT0) + "ms  xhr0 发起 (active-config)")
 
         // 第一步：拉取所有模式绑定
         var activeUrl = base.replace(/\/api\/dimensions.*$/, '') + "/api/active-config"
@@ -2183,6 +2282,8 @@ ApplicationWindow {
             _done0 = true
             _t0.stop()
             if (xhr0.status !== 200 && xhr0.status !== 0) return
+            // 【启动钝感排查】T3b：xhr0 到达
+            console.log("[BootTrace] T3b=" + (Date.now() - root._bootT0) + "ms  xhr0 到达 status=" + xhr0.status)
             try {
                 var activeObj = JSON.parse(xhr0.responseText)
                 if (!activeObj || !activeObj.bindings) return
@@ -2268,6 +2369,11 @@ ApplicationWindow {
                                 if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
                                     var remoteFp = rawText
                                     var localFp  = (root._localConfigFingerprint || {})[fpKey] || ""
+                                    // 【启动钝感排查】T4：xhr1 到达 + 内容比对结果
+                                    console.log("[BootTrace] T4=" + (Date.now() - root._bootT0) + "ms  xhr1 到达 mode="
+                                        + mode + " configName=" + configName
+                                        + " localFpEmpty=" + (localFp.length === 0)
+                                        + " sameAsLocal=" + (localFp.length > 0 && remoteFp === localFp))
                                     // 【忽略机制】用户曾主动忽略过"这个配置的某一版"（rawText 快照），
                                     // 如果远端当前 rawText == 忽略快照 → 本次直接跳过，不入队、不弹窗；
                                     // 如果远端 rawText 变了 → 忽略不再匹配，往下走正常流程（重新弹）。
@@ -2309,6 +2415,9 @@ ApplicationWindow {
                                         root._dimsByMode = dimsCacheInit
                                         // 【关键】按 mode 独立持久化
                                         root._saveDimsByMode()
+                                        // 【tag 按 mode 独立缓存】无论当前 mode 是不是这个 mode，
+                                        // 都记录该 mode 的 tag，防止后续任何一次远程返回覆盖掉别人。
+                                        root._setTagForMode(mode, obj.tag || "")
                                         // 只有该 mode 恰好是当前 mode 时，才写共享 dimensions.json（避免其他 mode 污染当前 UI 缓存）
                                         var _curMode1 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
                                         if (mode === _curMode1) {
@@ -2318,8 +2427,8 @@ ApplicationWindow {
                                             }
                                             // 更新 tag（只在当前 mode 匹配时才同步 uploadTag，避免不同 mode 的 tag 相互覆盖）
                                             if (obj.tag && typeof Rating !== "undefined") Rating.uploadTag = obj.tag
+                                            root._remoteTag = obj.tag || ""
                                         }
-                                        root._remoteTag = obj.tag || ""
                                         // 建指纹基线
                                         var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
                                         fp2[fpKey] = remoteFp
@@ -2342,6 +2451,8 @@ ApplicationWindow {
                                         root._dimsByMode = dimsCacheNew
                                         // 【关键】按 mode 独立持久化
                                         root._saveDimsByMode()
+                                        // 【tag 按 mode 独立缓存】
+                                        root._setTagForMode(mode, obj.tag || "")
                                         // 只有当前 mode 匹配时才写共享 dimensions.json + 覆盖 uploadTag/_remoteTag
                                         var _curMode2 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
                                         if (mode === _curMode2) {
@@ -2440,6 +2551,9 @@ ApplicationWindow {
                 root._dimsByMode = dimsCacheUpd
                 // 【关键】立即按 mode 独立持久化，避免多 mode 通过共享 dimensions.json 相互覆盖
                 root._saveDimsByMode()
+                // 【tag 按 mode 独立缓存】同步记录该 mode 的 tag（不管是不是当前 mode），
+                // 这样后续切到该 mode 时能显示正确的备注 tag，也不会被其他 mode 覆盖。
+                root._setTagForMode(mode, obj.tag || "")
                 console.log("[ApplyDebug] _dimsByMode 更新完成 → keys:", Object.keys(root._dimsByMode).join(","),
                     "，本次写入 mode=", mode,
                     "，维度：", _dims.map(function(d){return d.key+"("+d.starCount+"星)"}).join(","))
@@ -2552,6 +2666,8 @@ ApplicationWindow {
             // 深拷贝后修改再赋值，确保 QML property var binding 触发更新
             var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
             var dimsCache = JSON.parse(JSON.stringify(root._dimsByMode || {}))
+            // 【tag 按 mode 独立缓存】批量应用时同步更新，避免多 mode 共享单一 tag 造成相互覆盖
+            var tagCache = JSON.parse(JSON.stringify(root._tagByMode || {}))
 
             list.forEach(function(item) {
                 var obj = item.obj
@@ -2569,6 +2685,8 @@ ApplicationWindow {
                     return Object.assign({}, d, { starCount: sc })
                 })
                 dimsCache[item.mode] = _dims
+                // 同步存入该 mode 的 tag（无论当前 mode 是否匹配）
+                tagCache[item.mode] = obj.tag || ""
 
                 if (item.mode === currentMode) {
                     // 【强制两阶段刷新】先清空 → Timer 触发 → 赋新数组
@@ -2596,6 +2714,8 @@ ApplicationWindow {
             root._dimsByMode = dimsCache
             // 【关键】立即按 mode 独立持久化，保证多 mode 独立存储不互相覆盖
             root._saveDimsByMode()
+            root._tagByMode = tagCache
+            root._saveTagByMode()
             root._localConfigFingerprint = fp2
             root._saveFingerprintToFile()
             root._pendingRemoteConfig = null
@@ -2615,15 +2735,28 @@ ApplicationWindow {
         }
     }
 
-    // 启动后立即触发第一次差异检测（等待 0.5s 让本地配置和 Rating 模块完成初始化）
+    // 启动后立即触发第一次差异检测。
+    // 【无感启动优化】interval=0 表示"下一 event loop tick 立即触发"，比原来 500ms 快很多：
+    //   - QML 就绪瞬间 → 立刻发起 /api/active-config + /api/configs/* 两轮 HTTP 请求；
+    //   - 用户从"看到主窗口"到"选完文件夹点开始对比"通常要几秒，
+    //     这几秒里远程配置往返早已完成，_dimsByMode 也已回填；
+    //   - 于是"打开对比 → 星星立即渲染"，不会再有"过一会儿才弹出星星"的钝感。
+    // 之所以敢去掉 500ms 缓冲：本地指纹用 EngineBridge 异步读文件（自己会等就绪），
+    // Rating 模块的属性是 QQmlEngine 注册时就已经就绪的单例属性，不需要额外等待。
+    // _checkRemoteConfigUpdate 内部对 _dimApiUrl() 为空也做了 return 守护，
+    // 即便极端时序下 Rating.uploadServerUrl 尚未就绪，也只是这一次跳过，
+    // 后续 5s 的 configPollTimer 会自然把它补回来，不会破坏功能。
     Timer {
         id: configInitCheckTimer
-        interval: 500
+        interval: 0
         repeat: false
         running: true
         onTriggered: {
+            // 【启动钝感排查】T2：启动首拉入口触发
+            console.log("[BootTrace] T2=" + (Date.now() - root._bootT0) + "ms  configInitCheckTimer 触发 → 发起启动首拉")
             // 先加载本地持久化指纹，再做差异检测，确保重启后绑定切换能被检测到
             root._loadFingerprintFromFile(function() {
+                console.log("[BootTrace] T2b=" + (Date.now() - root._bootT0) + "ms  _loadFingerprintFromFile 完成 → 调 _checkRemoteConfigUpdate")
                 root._checkRemoteConfigUpdate()
             })
         }
@@ -2661,17 +2794,55 @@ ApplicationWindow {
     }
 
     // 从本地文件加载指纹（启动时调用，callback 在加载完成后触发）
+    //
+    // 【钝感优化 · 方案A】
+    //   实测日志显示：启动时用 XMLHttpRequest 读本地 file:// 的
+    //   config_fingerprint.json，从触发到 readyState===DONE 之间会耗时
+    //   ~5 秒（疑似 Qt 网络栈对本地 file scheme 的某种超时/调度），
+    //   直接把首拉后置了 5 秒，导致星星要 5s 之后才弹出。
+    //
+    //   优化：优先用 FsUtils 暴露给 QML 的 Fs.readTextFile 做「同步」读取
+    //   （底层就是 QFile.readAll，几十 KB 的 JSON 是毫秒级）。
+    //   同步成功 → 立即 callback，让 _checkRemoteConfigUpdate 紧接着起飞；
+    //   同步失败（Fs 未注册 / 抛异常等极端场景）→ 保底回退原异步 XHR 路径，
+    //   行为与老代码完全等价，不影响任何现有功能。
     function _loadFingerprintFromFile(callback) {
-        var fpUrl = "file://" + root._resourcesDir() + "/config_fingerprint.json"
+        var localFpPath = root._resourcesDir() + "/config_fingerprint.json"
+
+        // ── 优先同步读 ──────────────────────────────────────────────
+        if (typeof Fs !== "undefined" && typeof Fs.readTextFile === "function") {
+            try {
+                var text = Fs.readTextFile(localFpPath) || ""
+                if (text.length > 0) {
+                    var obj = JSON.parse(text)
+                    if (obj && typeof obj === "object") {
+                        root._localConfigFingerprint = obj
+                        console.log("[ConfigCheck] [Sync] 已从文件加载指纹，共",
+                            Object.keys(obj).length, "条")
+                    }
+                }
+                // 无论文件是否存在（首次启动就没有），都视为「已完成加载」
+                // ——文件不存在时 text 为空，_localConfigFingerprint 保持默认空对象即可，
+                // 与原异步版本 status===0/200 但内容为空的行为完全一致。
+                if (typeof callback === "function") callback()
+                return
+            } catch (e) {
+                console.warn("[ConfigCheck] [Sync] 同步读指纹失败，回退异步 XHR：", e)
+                // 落到下面的异步兜底
+            }
+        }
+
+        // ── 兜底：老路径异步 XHR（保留以防万一）────────────────────
+        var fpUrl = "file://" + localFpPath
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function() {
             if (xhr.readyState !== XMLHttpRequest.DONE) return
             if (xhr.status === 200 || xhr.status === 0) {
                 try {
-                    var obj = JSON.parse(xhr.responseText)
-                    if (obj && typeof obj === "object") {
-                        root._localConfigFingerprint = obj
-                        console.log("[ConfigCheck] 已从文件加载指纹，共", Object.keys(obj).length, "条")
+                    var obj2 = JSON.parse(xhr.responseText)
+                    if (obj2 && typeof obj2 === "object") {
+                        root._localConfigFingerprint = obj2
+                        console.log("[ConfigCheck] 已从文件加载指纹，共", Object.keys(obj2).length, "条")
                     }
                 } catch (e) {}
             }
@@ -2745,6 +2916,8 @@ ApplicationWindow {
                             _dimsUpd0[_fm] = _dims1
                             root._dimsByMode = _dimsUpd0
                             root._saveDimsByMode()
+                            // 【tag 按 mode 独立缓存】写缓存时同步写 _tagByMode[_fm]，不碰 Rating.uploadTag
+                            root._setTagForMode(_fm, obj.tag || "")
                             if (typeof callback === "function") callback(true)
                             return
                         }
@@ -2760,6 +2933,8 @@ ApplicationWindow {
                             root._dimsByMode = _dimsUpd
                             // 【关键】按 mode 独立持久化
                             root._saveDimsByMode()
+                            // 【tag 按 mode 独立缓存】与维度缓存保持同步，当前 mode 的 tag 也落盘
+                            root._setTagForMode(_curMode, obj.tag || "")
                         }
                         // 1b. 同步远程配置的 tag 到备注 tag 输入框（用户可手动覆盖）
                         if (obj.tag && typeof Rating !== "undefined") {

@@ -312,10 +312,17 @@ Rectangle {
         anchors.right: videoBox.right
         anchors.top: videoBox.top
         anchors.margins: 6
-        radius: 3
-        // 调稀透明度（0xaa≈67% → 0x33≈20%），与 pathBar 保持一致：
-        // 足以让星字/帧号/时间/按钮从亮底视频中跨出来，又不会遮挡画面。
-        color: "#22000000"
+        radius: 6
+        // 【苹果深色玻璃观感】(Vibrancy Dark 风格，参考 macOS 视频播放器悬浮控件)
+        //   底色：#66101014  ≈ 40% α 的近黑，比原 #55000000 略透一点，让下方视频
+        //          画面能"渗"上来一点色彩，形成深色玻璃的通透感。
+        //   无描边：与图 2 悬浮按钮观感一致，去掉勾边让胶囊融入视频。
+        //   圆角：保留 6，与全局深色 Popup / ToolTip 主题的圆角对齐。
+        // 注意：Qt Quick 的 Rectangle 无法真正对下层做高斯模糊（需要 MultiEffect/FastBlur
+        // 每帧采样视频纹理，性能代价大且不好裁剪），此处走"半透明深色"路线，
+        // 与项目现有 phoneAspectPopup / ToolTip 深色主题一致。
+        color: "#66101014"
+        border.width: 0
         z: 5
         visible: viewRoot.effectiveChannelVisible
         // 宽/高按内容自适应；同时设"可用上限"避免文件名过长把胶囊条
@@ -362,10 +369,18 @@ Rectangle {
                 spacing: 6
 
                 // 评分星条：非 multi_dim 模式且无维度配置时显示（有维度时走 multiDimBlock）
+                // 【恒定隐藏】原设计里"无维度配置"时把星星塞在顶部行末尾作为兜底；
+                // 但软件启动时远程配置尚未拉回 → cellReviewDimensions.length === 0，
+                // 会先在顶部露一排星星；几百毫秒后拉到维度 → 切换到下方"总分"行，
+                // 视觉上星星"从上方跳到下方"很突兀（见 issue：启动跳变）。
+                // 由于所有正式模式（quality/qualityAB/quality_slide/multi_dim 等）
+                // 都必然配置了维度，"无维度"只可能出现在"远程配置永远拉不到"的极端场景，
+                // 此时用户本就无法评分，索性不显示这个孤儿星条，让 UI 稳定不跳。
+                // 保留完整实现以便未来需要时可通过恢复 visible 条件复用。
                 Row {
                     id: inlineStarRow
                     spacing: 2
-                    visible: viewRoot.reviewMode && !viewRoot.isMultiDimMode && viewRoot.cellReviewDimensions.length === 0
+                    visible: false
                     Layout.alignment: Qt.AlignVCenter
                     property int hoverRating: 0
                     readonly property int currentRating: {
@@ -387,8 +402,11 @@ Rectangle {
                             Text {
                                 anchors.centerIn: parent
                                 text: parent.active ? "★" : "☆"
-                                color: parent.active ? "#f5c518" : "#bfc4ca"
+                                // 空心星星：深色玻璃底 + 纯白 + 加粗，深浅视频底都清晰可辨。
+                                // 点亮的实心星星保持金黄 #f5c518。
+                                color: parent.active ? "#f5c518" : "#ffffff"
                                 font.pixelSize: 15
+                                font.bold: true
                             }
                             MouseArea {
                                 anchors.fill: parent
@@ -550,9 +568,11 @@ Rectangle {
                 spacing: 8
 
                 // 帧号（固定最小宽度，避免 1/2/3/4 位数字之间抖动）
+                // 深色玻璃底 + 白字加粗，在任何视频画面下都清晰可辨。
                 Text {
-                    color: "#e8e8ec"
+                    color: "#ffffff"
                     font.pixelSize: 11
+                    font.bold: true
                     font.family: "Menlo, Monaco, Courier New, monospace"
                     horizontalAlignment: Text.AlignRight
                     Layout.minimumWidth: 56
@@ -564,12 +584,14 @@ Rectangle {
                 Rectangle {
                     Layout.preferredWidth: 1
                     Layout.preferredHeight: 12
+                    // 分隔小竖线：深色玻璃底上用半透明白
                     color: "#55ffffff"
                 }
                 // 时间戳（固定最小宽度，避免抖动）
                 Text {
-                    color: "#e8e8ec"
+                    color: "#ffffff"
                     font.pixelSize: 11
+                    font.bold: true
                     font.family: "Menlo, Monaco, Courier New, monospace"
                     horizontalAlignment: Text.AlignRight
                     Layout.minimumWidth: 70
@@ -604,8 +626,11 @@ Rectangle {
 
                         Text {
                             text: dimRow.dimKey
-                            color: "#e8e8ec"
+                            // 维度名（"总分/动作/物理/商品"等）：深色玻璃底 + 纯白 + 加粗，
+                            // 字号 10、宽度 28 保持不变，避免撑开原布局。
+                            color: "#ffffff"
                             font.pixelSize: 10
+                            font.bold: true
                             width: 28
                             horizontalAlignment: Text.AlignRight
                             anchors.verticalCenter: parent.verticalCenter
@@ -637,8 +662,12 @@ Rectangle {
                                 Text {
                                     anchors.centerIn: parent
                                     text: dimStarItem.lit ? "★" : "☆"
-                                    color: dimStarItem.lit ? "#f5c518" : "#bfc4ca"
+                                    // 空心星与维度名保持同色系（纯白 + 加粗），
+                                    // 在深色玻璃底 + 各种视频底色下稳定可见；
+                                    // 点亮的实心星保持金黄 #f5c518。
+                                    color: dimStarItem.lit ? "#f5c518" : "#ffffff"
                                     font.pixelSize: 14
+                                    font.bold: true
                                 }
                                 MouseArea {
                                     anchors.fill: parent
