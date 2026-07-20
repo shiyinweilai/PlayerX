@@ -508,64 +508,21 @@ def install(target: str, deploy_qt: bool = False):
     run(["cmake", "--install", bdir])
 
 
-def _detect_local_ip() -> str:
-    """探测本机所在内网 IP（LAN 地址）。
-
-    实现原理：向公网 IP:port 发起一个 UDP "connect"（不实际发包），让内核根据路由表
-    选出出口网卡的地址，再读 socket.getsockname() 拿到它。这套做法在 macOS/Linux
-    上都是标准解法，且无需真的联网、无需查 DNS，速度快、无副作用。
-
-    换电脑/换 WiFi 每次会自动跟随当前网卡地址变化，符合"本地编译动态识别 IP"的诉求。
-    完全离线（无路由）时会兜底为 127.0.0.1，走 loopback 也能连本机 server。
-    """
-    import socket
-    ip = "127.0.0.1"
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.settimeout(0.5)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-    except Exception:
-        pass
-    finally:
-        try:
-            s.close()
-        except Exception:
-            pass
-    return ip
+# ─── 开发者上传直连（dev-upload.conf）常量 ──────────────────────────
+# 写入 .app 里的 Contents/Resources/dev-upload.conf，C++ 端读它连本机 dev server。
+# 打包模式不会调用，不影响正式分发。
+DEV_UPLOAD_HOST  = "127.0.0.1"
+DEV_UPLOAD_PORT  = 8765
+DEV_UPLOAD_TOKEN = "10086"
 
 
 def emit_dev_upload_config(target: str):
-    """在 build tree 的 .app（macOS）或 install/bin（Windows）里写入开发者上传直连配置。
-
-    动机：
-      - 我每次都用 `python3 build.py` 编本地版，产物直接 open .app 调试；
-      - 服务端就跑在同一台开发机的 http://<内网 IP>:8765/（token=10086）；
-      - 换电脑内网 IP 会变，端口不变；不想每次都手动 export 一长串环境变量。
-    因此把"开发者本机 URL"作为编译期动态数据，落到 .app 内 Resources/dev-upload.conf。
-    C++ RatingStore 构造时读这个文件即可拿到 dev URL；优先级排在环境变量之下、
-    远端 clientConfig 之上。
-
-    文件位置：
-      - macOS   : <build/out/bin/PlayerX.app>/Contents/Resources/dev-upload.conf
-      - Windows : <build/out_win/bin>/dev-upload.conf
-    文件格式（简单 KV，每行一个）：
-        url=http://10.35.17.93:8765/
-        token=10086
-
-    关键行为：
-      - 打包模式（--package/--package-only）不会调用本函数，因此正式分发产物永远不会带该文件；
-      - 只写 build tree（build/out/bin），不写 install 目录，避免污染 `cmake --install` 产物；
-      - 目标目录不存在时安静返回，不阻断构建。
-    """
-    ip    = _detect_local_ip()
-    url   = f"http://{ip}:8765/"
-    token = "10086"
+    """把 dev 上传配置写入 build tree 的 .app（macOS）或 bin 目录（Windows）。"""
+    url     = f"http://{DEV_UPLOAD_HOST}:{DEV_UPLOAD_PORT}/"
+    token   = DEV_UPLOAD_TOKEN
     content = f"url={url}\ntoken={token}\n"
 
     if target == "windows":
-        # Windows：exe 同目录（install/bin 由 post_build 部署完成，这里挑 build tree 的 bin，
-        # 因为普通模式不清空 install 目录，写 install 反而可能落到已部署产物里）
         bin_dir = os.path.join(build_dir_for(target), "bin")
         if not os.path.isdir(bin_dir):
             return
@@ -575,7 +532,7 @@ def emit_dev_upload_config(target: str):
         info(f"[dev-upload] 已写入 {conf_path}  → {url}  token={token}")
         return
 
-    # macOS：找到 build tree 的 .app，写进 Contents/Resources/
+    # macOS：写进 .app/Contents/Resources/
     bin_dir = os.path.join(build_dir_for(target), "bin")
     if not os.path.isdir(bin_dir):
         return
