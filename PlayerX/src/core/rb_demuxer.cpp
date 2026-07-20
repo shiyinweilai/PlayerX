@@ -236,9 +236,11 @@ void RBDemuxer::readLoop() {
 
         if (pkt->stream_index == m_videoStreamIdx) {
             m_videoQueue.rbPush(pkt);
-        } else if (pkt->stream_index == m_audioStreamIdx) {
-            m_audioQueue.rbPush(pkt);
         }
+        // 注意：本项目目前不消费音频包（无 audio pop 线程）。
+        // 若把音频包塞入 m_audioQueue，队列很快会满（kCapacity=256），
+        // rbPush 阻塞 → demuxer 无法继续读任何包 → 视频卡在 packet queue 存货耗尽处。
+        // 因此音频包直接丢弃；未来若引入音频播放，再改回入队。
         av_packet_unref(pkt);
     }
 
