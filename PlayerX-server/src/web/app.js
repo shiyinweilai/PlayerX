@@ -1005,19 +1005,19 @@
 
             const fieldLabel = (text) => `<span class="dim-cl-fname">${text}</span>`;
             return `<div class="dim-cl-row" data-idx="${idx}">
-                <div class="dim-cl-cell dim-cl-cell-label">
-                    ${admin ? fieldLabel('名称') : ''}
-                    ${labelHtml}
-                </div>
                 ${admin ? `<div class="dim-cl-cell dim-cl-cell-key">
-                    ${fieldLabel('key')}
+                    ${fieldLabel('标签键')}
                     ${keyHtml}
                 </div>` : ''}
-                ${exclusiveBadge}
+                <div class="dim-cl-cell dim-cl-cell-label">
+                    ${admin ? fieldLabel('标签值') : ''}
+                    ${labelHtml}
+                </div>
                 <div class="dim-cl-cell dim-cl-cell-def">
-                    ${admin ? fieldLabel('说明') : ''}
+                    ${admin ? fieldLabel('描述') : ''}
                     ${defHtml}
                 </div>
+                ${exclusiveBadge}
                 ${delBtn}
             </div>`;
         }).join('');
