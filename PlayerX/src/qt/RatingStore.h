@@ -238,6 +238,25 @@ public slots:
     Q_INVOKABLE QString loadString(const QString& key, const QString& defaultValue = {}) const;
     Q_INVOKABLE void    saveString(const QString& key, const QString& value);
 
+    // ── 导出/上传 CSV 时的 checklist 白名单过滤 ──────────────────
+    // 【背景】checklist 勾选数据在 QSettings 里以 "checklist:<filePath>" 为 key
+    //   保存，**不带 mode 前缀**，因此同一个文件在不同模式（如从"多维评分"切到
+    //   "测试模式"）下会看到之前模式勾选过的旧数据。导出/上传 CSV 时如果不加过滤，
+    //   会把旧模式的 keys 一并写入 checklist 列——尽管当前模式的配置里根本没这些项，
+    //   造成"测试模式配置里 checklist 是空的，但上传的 CSV 里 checklist 有值"的问题。
+    //
+    // 【契约】QML 端在切换 mode / 应用远程配置时调用一次：
+    //     · active=false（默认调用 clearExportChecklistWhitelist()）：不过滤，
+    //       readChecklistCsvCell 直接返回 QSettings 现值，保留旧行为兼容；
+    //     · active=true 且 keys 非空：仅保留 keys 中出现过的 checklist 项，
+    //       其他项被丢弃；
+    //     · active=true 且 keys 为空：表示"当前模式没有 checklist 配置"，
+    //       所有行的 checklist 列全部输出为空字符串。
+    // 白名单只影响 CSV 导出结果，不改动 QSettings 存储本身，因此不会误删用户旧数据；
+    // 切模式回去仍能看到之前勾选状态。
+    Q_INVOKABLE void setExportChecklistWhitelist(const QStringList& keys, bool active);
+    Q_INVOKABLE void clearExportChecklistWhitelist();
+
     // ──上传配置 ──────────────────────────────────────
     QString uploadServerUrl() const;
     void    setUploadServerUrl(const QString& url);
@@ -390,6 +409,14 @@ private:
     // QNetworkAccessManager 懒初始化：不走上传的运行不产生任何网络资源。
     mutable QNetworkAccessManager* m_nam = nullptr;
     bool m_uploading = false;
+
+    // ── 导出/上传时的 checklist 白名单过滤状态 ──
+    // 见 setExportChecklistWhitelist 注释。默认关闭（保持旧行为）。
+    bool        m_hasExportChecklistWhitelist = false;
+    QStringList m_exportChecklistWhitelist;
+    // 私有 helper：给定文件在 QSettings 里存的 keys（已解析为 QStringList），
+    // 按当前 whitelist 状态过滤后返回逗号连接的字符串（供 CSV 单元格用）。
+    QString filterChecklistKeysForExport(const QStringList& rawKeys) const;
 };
 
 } // namespace rbqt

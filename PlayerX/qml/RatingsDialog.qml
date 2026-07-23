@@ -99,6 +99,21 @@ Window {
     // 仅用于"按文件夹勾选上传"功能，不影响导出 / 渲染。
     property var _checkedFolders: ({})
 
+    // ── 外部"一键上传"路由标志 ───────────────────────────────────
+    // Main.qml 通过 triggerQuickUploadForCurrentTab() 触发时，会将本标志
+    // 置 true。上传流程在 uploadFinished / uploadConflict / uploadNetError
+    // 信号里判断该标志：为 true 时【跳过】面板内的 uploadSuccessDialog /
+    // uploadConflictDialog 等，改为 emit quickUploadXxx 信号让 Main.qml
+    // 用主窗口顶层的对话框展示结果，从而实现"上传成功不弹面板"的体验。
+    // 校验失败（评分人/tag/未评完）时，主动切回可视化面板供用户修改，
+    // 并把本标志置 false，避免下一次弹窗被错误路由。
+    property bool _quickUploadInProgress: false
+
+    // 外部一键上传的结果信号：Main.qml 会连上这些信号，用自己的对话框展示。
+    signal quickUploadFinished(bool ok, string message)
+    signal quickUploadConflict(string message)
+    signal quickUploadNetError(string message)
+
     // 上次发起上传时所携带的文件夹白名单。
     // 设置框"保存并上传"、覆盖确认"覆盖上传"都会复用它，
     // 避免“点上传 → 弹设置 → 保存”过程中把白名单丢了变成全量上传。
@@ -252,6 +267,10 @@ Window {
             d.latest = dLatest
             d.avg = dCnt > 0 ? Math.round(dSum / dCnt * 10) / 10 : 0
             d.ratedCount = d.files.length
+            // 汇总列/预览面板都依赖 d.totalItems 展示"N 条评分"，
+            // 这里 total 是本文件夹下所有 file.items 累加，直接落到 d.totalItems。
+            // （之前遗漏此赋值，导致预览面板与汇总列都显示为 0 条）
+            d.totalItems = total
             var tot2 = d.ratedCount
             if (d.path && d.path.length > 0 && typeof Reference !== "undefined"
                     && typeof Reference.videoCountInFolder === "function") {
@@ -504,6 +523,242 @@ Window {
         }
         return out
     }
+
+    // ── 外部"一键上传"入口所需的预览接口 ─────────────────────────────
+    // 场景：Main.qml 的"📤 评分数据"按钮不再打开评分数据面板，而是
+    //   直接选中"当前正在评分的所有文件夹"，弹一个二次确认框。
+    // 本函数不依赖面板 UI 是否已打开：内部会强制刷新一次数据（_refresh），
+    //   然后基于最新 _folders 计算返回预览信息。
+    //
+    // 返回结构：
+    //   {
+    //     mode          : "subjective" 等
+    //     modeLabel     : 对应中文标签，用于展示
+    //     rater         : Rating.currentUser
+    //     tag           : Rating.uploadTag
+    //     folders       : [ { name, path, ratedCount, totalVideos, ckMissing, totalItems }, ... ]
+    //     recordCount   : 累计评分条数（用于文案 "N 条评分"）
+    //     incomplete    : 未评完的文件夹列表（同 _collectCheckedIncomplete 结构）
+    //     canUpload     : 是否所有校验通过，可直接上传
+    //     blockReason   : 未通过时的原因文案（评分人未填 / tag 未填 / 无可上传文件夹 / 有未评完）
+    //   }
+    function previewCurrentUpload() {
+        // 强制切到"当前"Tab 视图并刷新数据，避免残留归档 Tab 状态污染
+        // （用户可能之前打开过面板并切到"归档"Tab，这里我们要的是"当前正在评分"）
+        if (root._viewMode !== "current") root._viewMode = "current"
+        _refresh()
+        // 全选所有可上传文件夹，供后续 triggerQuickUploadForCurrentTab 直接使用
+        _setAllFoldersChecked(true)
+
+        var picked = _collectCheckedFolderPaths()
+        var incomplete = _collectCheckedIncomplete()
+
+        // 累计评分条数：这些文件夹里所有 file 的评分记录数之和
+        var recordCount = 0
+        for (var i = 0; i < _folders.length; ++i) {
+            var d = _folders[i]
+            if (!d) continue
+            if (typeof d.totalItems === "number") recordCount += d.totalItems
+        }
+
+        // 组装 folders 明细（用 name / path / 完整度）
+        var foldersOut = []
+        for (var j = 0; j < _folders.length; ++j) {
+            var fd = _folders[j]
+            if (!fd || !fd.path || fd.path.length === 0) continue
+            var rated = (fd.ratedCount === undefined ? fd.files.length : fd.ratedCount)
+            var total = (fd.totalVideos === undefined ? rated : fd.totalVideos)
+            foldersOut.push({
+                name: fd.name,
+                path: fd.path,
+                ratedCount: rated,
+                totalVideos: total,
+                ckMissing: fd.ckMissing || 0,
+                totalItems: fd.totalItems || 0
+            })
+        }
+
+        // 从 modeList 找 label
+        var modeLabel = root._selectedMode
+        try {
+            var _ml = (typeof Rating !== "undefined") ? Rating.modeList : []
+            for (var mi = 0; mi < _ml.length; ++mi) {
+                if (_ml[mi].id === root._selectedMode) { modeLabel = _ml[mi].label; break }
+            }
+        } catch (e) {}
+
+        // 校验：任何一项不满足都视为"不能直接上传，需要用户到面板里修改"
+        var raterText = (typeof Rating !== "undefined" && Rating.currentUser)
+                        ? String(Rating.currentUser).trim() : ""
+        var tagText   = (typeof Rating !== "undefined" && Rating.uploadTag)
+                        ? String(Rating.uploadTag).trim() : ""
+        var canUpload = true
+        var blockReason = ""
+        if (picked.length === 0) {
+            canUpload = false
+            blockReason = qsTr("当前没有可上传的评分记录，请先完成评分。")
+        } else if (raterText.length === 0) {
+            canUpload = false
+            blockReason = qsTr("评分人未填写，请先在评分数据面板顶部填写「评分人 *」。")
+        } else if (tagText.length === 0) {
+            canUpload = false
+            blockReason = qsTr("备注 tag 未填写，请先在评分数据面板顶部填写「备注 tag *」。")
+        } else if (incomplete.length > 0) {
+            canUpload = false
+            blockReason = qsTr("有 %1 个文件夹尚未评完，无法上传。").arg(incomplete.length)
+        }
+
+        return {
+            mode: root._selectedMode,
+            modeLabel: modeLabel,
+            rater: raterText,
+            tag: tagText,
+            folders: foldersOut,
+            recordCount: recordCount,
+            incomplete: incomplete,
+            canUpload: canUpload,
+            blockReason: blockReason
+        }
+    }
+
+    // 外部"一键上传"入口的执行函数：
+    // 已经由 previewCurrentUpload() 全选并校验过；这里直接触发上传主流程
+    // （复用所有既有拦截、tag 校验、成功回调、自动归档等）。
+    //
+    // 【路由说明】本 RatingsDialog 是独立 Window，其内部子对话框
+    //   （uploadConflictDialog / uploadSuccessDialog 等）必须依赖 Window
+    //   可见才能显示。为了让用户能"直接上传，不显示面板"的体验：
+    //     · 设置 _quickUploadInProgress = true 标志；
+    //     · onUploadFinished / onUploadConflict / onUploadNetError 里判断
+    //       该标志为 true 时，跳过面板内对话框，改为 emit 信号让 Main.qml
+    //       用主窗口的对话框展示结果；
+    //     · 只有校验失败（评分人/tag/未评完）时才把 Window show 出来供修改。
+    //
+    // 注意：本函数假设 previewCurrentUpload().canUpload === true。若外部
+    // 越过预览直接调用，遇到评分人/tag 缺失，_performUpload 内部的
+    // _rejectUpload / rejectDialog 会兜底提示，不会真的把脏数据上传出去。
+    function triggerQuickUploadForCurrentTab() {
+        root._quickUploadInProgress = true
+        _performUpload()
+    }
+
+    // 上传主流程：与 uploadBtn.onClicked 完全等价，抽出来是为了让
+    // "外部一键上传入口（Main.qml 的📤按钮）"和"评分数据面板内的上传按钮"
+    // 共用同一段校验/派发逻辑；任何一处扩展新校验都对两个入口自动生效。
+    function _performUpload() {
+        console.log("[QuickUpload] _performUpload() start")
+        if (typeof Rating === "undefined") { console.log("[QuickUpload] Rating undefined, abort"); root._quickUploadInProgress = false; return }
+        // 防御性兜底：把焦点中的输入框（tag / 评分人）强制提交，
+        // 避免"刚改完 tag 直接点上传"时旧值仍在使用。
+        if (typeof userField !== "undefined" && userField.activeFocus) userField.focus = false
+        if (typeof tagField  !== "undefined" && tagField.activeFocus)  tagField.focus  = false
+
+        // ── 上传前必填校验：评分人 + 备注 tag ───────────────────
+        // 外部一键上传入口（面板未打开）时，userField/tagField 仍存在
+        // （Dialog 一加载就实例化），所以照旧读它们的 text。
+        var raterText = (typeof userField !== "undefined") ? userField.text.trim() : ""
+        var tagText   = (typeof tagField  !== "undefined") ? tagField.text.trim()  : ""
+        // 兜底：如果 UI 输入框还没被填过（例如首次进入直接从外部一键上传），
+        // 就退回 Rating.currentUser / Rating.uploadTag（真数据源）。
+        if (raterText.length === 0 && Rating.currentUser)
+            raterText = String(Rating.currentUser).trim()
+        if (tagText.length === 0 && Rating.uploadTag)
+            tagText = String(Rating.uploadTag).trim()
+        console.log("[QuickUpload] rater=", raterText, "tag=", tagText)
+
+        // 辅助：外部一键上传遇到校验失败时，展开面板让用户修改，
+        // 并把外部标志清掉（免得后续弹窗被误路由）。
+        function _fallbackToPanel() {
+            if (root._quickUploadInProgress) {
+                root._quickUploadInProgress = false
+                if (!root.visible) {
+                    root.show()
+                    root.raise()
+                    root.requestActivate()
+                }
+            }
+        }
+
+        if (raterText.length === 0) {
+            console.log("[QuickUpload] rater empty → reject")
+            _fallbackToPanel()
+            root._rejectUpload(
+                qsTr("「评分人」为必填项，未填写将无法识别上传来源。\n请在顶部「评分人 *」输入框填写后再点上传。"),
+                (typeof userField !== "undefined" ? userField : null), "user")
+            return
+        }
+        if (tagText.length === 0) {
+            console.log("[QuickUpload] tag empty → reject")
+            _fallbackToPanel()
+            root._rejectUpload(
+                qsTr("「备注 tag」为必填项，用于在云端区分同一评分人的多次上传。\n请在顶部「备注 tag *」输入框填写后再点上传。"),
+                (typeof tagField !== "undefined" ? tagField : null), "tag")
+            return
+        }
+        // 校验通过：把评分人值落库
+        if (Rating.currentUser !== raterText) Rating.currentUser = raterText
+
+        // ── 必须至少勾选一个文件夹再上传
+        var picked = _collectCheckedFolderPaths()
+        console.log("[QuickUpload] picked.length=", picked.length,
+                    "_folders.length=", _folders.length,
+                    "checkedCount=", _checkedFolderCount())
+        if (picked.length === 0) {
+            console.log("[QuickUpload] picked empty → reject")
+            _fallbackToPanel()
+            rejectDialog.openWith(
+                qsTr("无法上传到云端"),
+                qsTr("还没有勾选任何文件夹，无法确定要上传哪些评分记录。\n请在列表里至少勾选一个文件夹后再点上传。"))
+            return
+        }
+
+        // ── 未评完拦截：归档 Tab 与当前 Tab 一致都走
+        var incomplete = _collectCheckedIncomplete()
+        if (incomplete.length > 0) {
+            console.log("[QuickUpload] incomplete → openWith incompleteUploadDialog")
+            _fallbackToPanel()
+            incompleteUploadDialog.openWith(incomplete)
+            return
+        }
+        // 归档 Tab 还要确认有选中批次
+        if (root._isArchiveView
+                && (!root._archiveBatch || root._archiveBatch.length === 0)) {
+            console.log("[QuickUpload] archive view without batch → reject")
+            _fallbackToPanel()
+            rejectDialog.openWith(
+                qsTr("无法上传到云端"),
+                qsTr("当前没有选中归档批次，无法确定要上传哪一份归档数据。"))
+            return
+        }
+        // 缓存本次勾选 + 上传来源
+        root._lastUploadFolders = picked
+        root._lastUploadKind = root._isArchiveView ? "archive" : "current"
+        root._lastUploadArchiveBatch = root._isArchiveView ? root._archiveBatch : ""
+
+        // ── tag 与远程激活配置校验 ──
+        if (root.remoteTag.length > 0 && tagText !== root.remoteTag) {
+            console.log("[QuickUpload] tag mismatch remote=", root.remoteTag, "→ open tagMismatchDialog")
+            _fallbackToPanel()
+            tagMismatchDialog.open()
+            return
+        }
+
+        if (!Rating.uploadServerUrl || Rating.uploadServerUrl.length === 0) {
+            console.log("[QuickUpload] uploadServerUrl empty → open uploadConfigDialog")
+            _fallbackToPanel()
+            uploadConfigDialog.open()
+        } else if (root._isArchiveView) {
+            console.log("[QuickUpload] → uploadArchiveBatchToCloud")
+            Rating.uploadArchiveBatchToCloud(
+                root._selectedMode,
+                root._archiveBatch,
+                false, picked)
+        } else {
+            console.log("[QuickUpload] → Rating.uploadToCloud(false, picked)")
+            Rating.uploadToCloud(false, picked)
+        }
+    }
+
     function _refresh() {
         var raw
         if (root._viewMode === "archive") {
@@ -1759,85 +2014,9 @@ Window {
                     return ""
                 }
                 onClicked: {
-                    if (typeof Rating === "undefined") return
-                    // 防御性兜底：把焦点中的输入框（tag / 评分人）强制提交，
-                    // 避免“刚改完 tag 直接点上传”时旧值仍在使用。
-                    // 现 tagField 已做实时同步，但 userField 仍依赖 editingFinished，
-                    // 触发一次 focus 切换可让两者都把当前值落地到 Rating。
-                    if (userField.activeFocus) userField.focus = false
-                    if (tagField.activeFocus)  tagField.focus  = false
-
-                    // ── 上传前必填校验：评分人 + 备注 tag ───────────────────
-                    // 评分人不能依赖 Rating.currentUser（它会用系统用户名兜底，
-                    // 会把“未手动设置”误判为已填），所以只看输入框文本。
-                    var raterText = userField.text.trim()
-                    var tagText   = tagField.text.trim()
-                    if (raterText.length === 0) {
-                        // 升级：模态拒绝弹窗 + 输入框红框闪烁，避免右下角小 toast 被忽略
-                        root._rejectUpload(
-                            qsTr("「评分人」为必填项，未填写将无法识别上传来源。\n请在顶部「评分人 *」输入框填写后再点上传。"),
-                            userField, "user")
-                        return
-                    }
-                    if (tagText.length === 0) {
-                        root._rejectUpload(
-                            qsTr("「备注 tag」为必填项，用于在云端区分同一评分人的多次上传。\n请在顶部「备注 tag *」输入框填写后再点上传。"),
-                            tagField, "tag")
-                        return
-                    }
-                    // 校验通过：把评分人值落库（避免 onEditingFinished 还没触发）
-                    if (Rating.currentUser !== raterText) {
-                        Rating.currentUser = raterText
-                    }
-
-                    // ── 必须至少勾选一个文件夹再上传
-                    var picked = root._collectCheckedFolderPaths()
-                    if (picked.length === 0) {
-                        rejectDialog.openWith(
-                            qsTr("无法上传到云端"),
-                            qsTr("还没有勾选任何文件夹，无法确定要上传哪些评分记录。\n请在列表里至少勾选一个文件夹后再点上传。"))
-                        return
-                    }
-
-                    // ── 未评完拦截：归档 Tab 与当前 Tab 一致都走
-                    // 设计动机：云端汇总通常按"文件夹完整评分"维度做统计，
-                    // 半成品上传（不论来自当前还是归档）都会让别人无法判断该批数据是否可用。
-                    var incomplete = root._collectCheckedIncomplete()
-                    if (incomplete.length > 0) {
-                        incompleteUploadDialog.openWith(incomplete)
-                        return
-                    }
-                    // 归档 Tab 还要确认有选中批次（双保险，避免 enabled 没及时刷新）
-                    if (root._isArchiveView
-                            && (!root._archiveBatch || root._archiveBatch.length === 0)) {
-                        rejectDialog.openWith(
-                            qsTr("无法上传到云端"),
-                            qsTr("当前没有选中归档批次，无法确定要上传哪一份归档数据。"))
-                        return
-                    }
-                    // 缓存本次勾选 + 上传来源，供"保存并上传"/"覆盖上传"等后续入口复用
-                    root._lastUploadFolders = picked
-                    root._lastUploadKind = root._isArchiveView ? "archive" : "current"
-                    root._lastUploadArchiveBatch = root._isArchiveView ? root._archiveBatch : ""
-
-                    // ── tag 与远程激活配置校验 ──────────────────────────────────
-                    // 远程有 tag 且本地填写的 tag 与远程不一致时，弹二次确认
-                    // 不阻止上传，用户确认后仍可继续
-                    if (root.remoteTag.length > 0 && tagText !== root.remoteTag) {
-                        tagMismatchDialog.open()
-                        return
-                    }
-
-                    if (!Rating.uploadServerUrl || Rating.uploadServerUrl.length === 0) {
-                        uploadConfigDialog.open()
-                    } else if (root._isArchiveView) {
-                        Rating.uploadArchiveBatchToCloud(
-                            root._selectedMode,
-                            root._archiveBatch,
-                            false, picked)
-                    } else {
-                        Rating.uploadToCloud(false, picked)
-                    }
+                    // 上传主流程已抽为 root 上的公共函数 _performUpload()，
+                    // 与"外部一键上传入口（Main.qml 的📤按钮）"共用同一段逻辑。
+                    root._performUpload()
                 }
                 // 双击 → 重新配置地址/Token
                 MouseArea {
@@ -2845,6 +3024,22 @@ Window {
         target: (typeof Rating !== "undefined") ? Rating : null
         ignoreUnknownSignals: true
         function onUploadFinished(ok, message) {
+            // ── 外部"一键上传"路由：跳过面板内弹窗，由 Main.qml 用主窗顶层
+            //   对话框展示结果，让"上传成功不需要打开面板"成立。──
+            if (root._quickUploadInProgress) {
+                // 无论成功/失败，本次外部上传都消费掉这个标志
+                root._quickUploadInProgress = false
+                if (!ok && message && (message.indexOf("[AUTH]") >= 0
+                                      || message.indexOf("[NET]") >= 0)) {
+                    // 权限 / 网络类错误也走同一个"失败"信号；Main.qml 弹一个
+                    // 简单错误对话框即可（此类错误较少见，无需精细分类）。
+                    var cleanErr = message.replace(/^\[(AUTH|NET)\]\s*/, "").trim()
+                    root.quickUploadNetError(cleanErr)
+                    return
+                }
+                root.quickUploadFinished(ok, message || "")
+                return
+            }
             // 鉴权类硬错（HTTP 401/403 由 C++ 端在文案前置 "[AUTH]"）单独弹模态提醒，
             // 防止"一闪而过的 toast"被用户漏看，进而以为上传成功。
             if (!ok && message && message.indexOf("[AUTH]") >= 0) {
@@ -2902,6 +3097,13 @@ Window {
         }
         // 服务端返回 409：(rater, tag) 重复上传 → 弹覆盖确认
         function onUploadConflict(message) {
+            // 外部"一键上传"路由：由 Main.qml 顶层对话框处理，避免面板弹出。
+            // 注意：这里【不】重置 _quickUploadInProgress，因为覆盖上传后
+            // 还会走一次 onUploadFinished，同一次外部上传流程结束才应重置。
+            if (root._quickUploadInProgress) {
+                root.quickUploadConflict(message || "")
+                return
+            }
             uploadConflictDialog._msg = message
             uploadConflictDialog.open()
         }

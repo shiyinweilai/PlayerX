@@ -394,8 +394,9 @@
         subjective:    '主观评分',
         quality:       '质量比较',
         quality_slide: '质量比较2',
+        test:          '测试模式',
     };
-    const MODE_ORDER = ['multi_dim', 'subjective', 'quality', 'quality_slide'];
+    const MODE_ORDER = ['multi_dim', 'subjective', 'quality', 'quality_slide', 'test'];
 
     function modeLabel(mode) { return MODE_LABELS[mode] || mode; }
 

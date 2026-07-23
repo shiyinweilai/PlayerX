@@ -50,6 +50,10 @@ static const ModeDef kModeTable[] = {
     {"quality_slide", "质量比较 2（含滑动对比）",     2},
     // 多维评分：从 dimensions.json 加载维度列表，每个维度独立打分（五分制）。
     {"multi_dim",     "多维评分",                   5},
+    // 测试模式：开发者调试用途，行为与 subjective 完全一致（五分制、单视频打星）。
+    // 单独一个 mode id 便于把测试数据从主观评分的 CSV / 归档批次里隔离出来，
+    // 不会污染真正的主观评分统计。
+    {"test",          "测试模式",                    5},
 };
 static constexpr int kModeCount = sizeof(kModeTable) / sizeof(kModeTable[0]);
 
@@ -287,6 +291,58 @@ void RatingStore::saveString(const QString& key, const QString& value) {
         s.setValue(key, value);
     }
     s.sync();
+}
+
+// ── 导出/上传 CSV 时的 checklist 白名单过滤 ──────────────────────
+// 见 RatingStore.h 中的详细说明。这里的实现仅"打上标记 + 存 QStringList"，
+// 真正过滤发生在 filterChecklistKeysForExport（buildExportCsvBytes /
+// buildArchiveExportCsvBytes 里的 lambda 会调它）。
+//
+// 注意：为方便 QML 侧数据集合去重，keys 会做 trim + 去空 + 去重。
+void RatingStore::setExportChecklistWhitelist(const QStringList& keys, bool active) {
+    m_hasExportChecklistWhitelist = active;
+    if (!active) {
+        m_exportChecklistWhitelist.clear();
+        return;
+    }
+    QStringList uniq;
+    uniq.reserve(keys.size());
+    for (const QString& raw : keys) {
+        const QString k = raw.trimmed();
+        if (k.isEmpty()) continue;
+        if (!uniq.contains(k)) uniq.push_back(k);
+    }
+    m_exportChecklistWhitelist = uniq;
+}
+
+void RatingStore::clearExportChecklistWhitelist() {
+    m_hasExportChecklistWhitelist = false;
+    m_exportChecklistWhitelist.clear();
+}
+
+QString RatingStore::filterChecklistKeysForExport(const QStringList& rawKeys) const {
+    // 情况 1：未设置白名单 → 保留旧行为（不过滤），仅去空 join
+    if (!m_hasExportChecklistWhitelist) {
+        QStringList out;
+        out.reserve(rawKeys.size());
+        for (const QString& k : rawKeys) {
+            if (!k.isEmpty()) out.push_back(k);
+        }
+        return out.join(QLatin1Char(','));
+    }
+    // 情况 2：白名单激活且为空 → "当前模式无 checklist"，全部输出空
+    if (m_exportChecklistWhitelist.isEmpty()) {
+        return QString();
+    }
+    // 情况 3：白名单激活且非空 → 仅保留白名单里的 keys
+    QStringList out;
+    out.reserve(rawKeys.size());
+    for (const QString& k : rawKeys) {
+        if (!k.isEmpty() && m_exportChecklistWhitelist.contains(k)) {
+            out.push_back(k);
+        }
+    }
+    return out.join(QLatin1Char(','));
 }
 
 // 返回导出 CSV 时 FileDialog 默认落脚的目录：系统下载文件夹（~/Downloads）。
@@ -709,16 +765,22 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
 
     // ── Checklist 读取器 ────────────────────────────────────────────
     // 存储由 QML 端 Rating.saveString("checklist:<filePath>", JSON.stringify(keys))
-    // 写入 QSettings；这里读回来解析成 keys 列表，逗号连接后作为 CSV 的 checklist 列。
-    // 空、格式错误、或非数组 → 输出空字符串（该文件未勾选任何检查项）。
-    auto readChecklistCsvCell = [](const QString& filePath) -> QString {
+    // 写入 QSettings；这里读回来解析成 keys 列表，再按当前模式的 checklist 白名单
+    // 过滤，逗号连接后作为 CSV 的 checklist 列。空、格式错误、或非数组 → 输出空字符串。
+    //
+    // 【重要】QSettings 里的 "checklist:<filePath>" 不带 mode 前缀，
+    // 因此同一文件在多个模式下勾选后会共享存储，导出时必须按当前模式的合法 keys
+    // 白名单过滤，否则 CSV 会串到别的模式（如"测试模式"却带着"多维评分"旧勾选）。
+    auto readChecklistCsvCell = [this](const QString& filePath) -> QString {
         if (filePath.isEmpty()) return QString();
         QSettings s;
         const QString raw = s.value(QStringLiteral("checklist:") + filePath).toString();
-        if (raw.isEmpty()) return QString();
+        if (raw.isEmpty()) return this->filterChecklistKeysForExport(QStringList{});
         QJsonParseError err{};
         const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
-        if (err.error != QJsonParseError::NoError || !doc.isArray()) return QString();
+        if (err.error != QJsonParseError::NoError || !doc.isArray()) {
+            return this->filterChecklistKeysForExport(QStringList{});
+        }
         const QJsonArray arr = doc.array();
         QStringList keys;
         keys.reserve(arr.size());
@@ -726,7 +788,7 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
             const QString k = v.toString();
             if (!k.isEmpty()) keys.push_back(k);
         }
-        return keys.join(QLatin1Char(','));
+        return this->filterChecklistKeysForExport(keys);
     };
 
     const QList<QVariantMap> rows = readAll();
@@ -878,17 +940,24 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
             }
         }
     }
-    auto readChecklistCsvCell = [&](const QString& filePath) -> QString {
+    auto readChecklistCsvCell = [this, &checklistSnapshot](const QString& filePath) -> QString {
         if (filePath.isEmpty()) return QString();
+        // 快照命中：将逗号连接后的字符串再拆回 keys 走过滤
         auto it = checklistSnapshot.constFind(filePath);
-        if (it != checklistSnapshot.constEnd()) return it.value();
+        if (it != checklistSnapshot.constEnd()) {
+            const QStringList snapKeys = it.value().split(QLatin1Char(','),
+                                                          Qt::SkipEmptyParts);
+            return this->filterChecklistKeysForExport(snapKeys);
+        }
         // 回退：QSettings 现值
         QSettings s;
         const QString raw = s.value(QStringLiteral("checklist:") + filePath).toString();
-        if (raw.isEmpty()) return QString();
+        if (raw.isEmpty()) return this->filterChecklistKeysForExport(QStringList{});
         QJsonParseError err{};
         const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
-        if (err.error != QJsonParseError::NoError || !doc.isArray()) return QString();
+        if (err.error != QJsonParseError::NoError || !doc.isArray()) {
+            return this->filterChecklistKeysForExport(QStringList{});
+        }
         const QJsonArray arr = doc.array();
         QStringList keys;
         keys.reserve(arr.size());
@@ -896,7 +965,7 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
             const QString k = v.toString();
             if (!k.isEmpty()) keys.push_back(k);
         }
-        return keys.join(QLatin1Char(','));
+        return this->filterChecklistKeysForExport(keys);
     };
 
     for (const auto& r : rows) {

@@ -54,6 +54,10 @@ ApplicationWindow {
         // 初始化手机模式校准系数（按当前 Screen.width 查表，跟随系统显示档位变化）
         root._applyAutoPhoneScale()
 
+        // 启动时立即同步一次 checklist 白名单到 C++（保证在任何配置加载完成前，
+        // 导出/上传就已经处于"过滤为空"状态，避免残留旧勾选被写入 CSV）。
+        _syncChecklistWhitelist()
+
         // 加载多维度评分配置
         // 策略：优先从本地缓存文件加载（零延迟，不阻塞启动），
         //       加载完成后立即后台静默检测远程配置是否有更新。
@@ -2053,6 +2057,33 @@ ApplicationWindow {
     property var reviewChecklist: []
     // checklist 互斥 key（exclusive_key 字段，勾选后自动取消其他选项）
     property string reviewChecklistExclusiveKey: ""
+
+    // ── 同步"当前模式合法 checklist keys"到 C++（用于导出/上传 CSV 时按白名单过滤）──
+    // 【问题背景】checklist 勾选数据存 QSettings 的 "checklist:<filePath>" key，
+    //   跨模式共享（不带 mode 前缀）。用户先在 A 模式勾选后切到 B 模式重新评分，
+    //   B 模式的配置里若没有对应 checklist，导出 CSV 时旧勾选会被带出去（图1 的
+    //   "测试模式却上传了 physics_issue" 就是这样来的）。
+    // 【修复方式】QML 侧在每次 reviewChecklist 变化时（模式切换 / 应用远程配置 /
+    //   加载持久化），把当前模式的合法 keys 集合同步给 C++；C++ 导出时按此白名单
+    //   过滤 checklist 列。空数组 = 当前模式无 checklist，CSV 里 checklist 列全部为空。
+    // 【为什么用 active=true 而不是 clear】：切换到"没有 checklist 的模式"时
+    //   reviewChecklist 是 []，我们要显式过滤成空字符串输出——而不是恢复到
+    //   "不过滤"（那样又会串回旧数据）。因此这里始终 active=true，仅用 keys 长度
+    //   区分"过滤成空" vs "过滤保留特定 keys"。
+    onReviewChecklistChanged: _syncChecklistWhitelist()
+    function _syncChecklistWhitelist() {
+        if (typeof Rating === "undefined") return
+        var arr = reviewChecklist || []
+        var keys = []
+        for (var i = 0; i < arr.length; i++) {
+            var it = arr[i]
+            if (!it) continue
+            // 兼容两种形态：{key,label,definition,...} 对象 / 或纯字符串
+            var k = (typeof it === "string") ? it : (it.key || "")
+            if (k && keys.indexOf(k) === -1) keys.push(k)
+        }
+        Rating.setExportChecklistWhitelist(keys, true)
+    }
     // 【启动钝感排查】记录 QML Component.onCompleted 起点时间戳（毫秒），
     // 后续各阶段用 (Date.now() - _bootT0) 打印相对耗时。排查完可整块删除。
     property real _bootT0: 0
@@ -5031,7 +5062,7 @@ ApplicationWindow {
             //   · 保留原有的淡入淡出动画（opacity 过渡），避免评分刚完就突然多出一个按钮。
             FlatButton {
                 id: allRatedShortcutBtn
-                text: "📤 上传评分"
+                text: "📤 上传数据"
                 visible: root.reviewMode && multiGroupDialog.active && multiGroupDialog.allGroupsRated
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 Layout.alignment: Qt.AlignVCenter
@@ -5039,13 +5070,15 @@ ApplicationWindow {
                 textColor: "#4fc3f7"
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
-                ToolTip.text: qsTr("所有评分已完成，点击查看 / 导出评分数据")
-                onClicked: ratingsDialog.open()
+                ToolTip.text: qsTr("所有评分已完成，点击直接上传当前评分数据")
+                onClicked: {
+                    console.log("[QuickUpload] allRatedShortcutBtn clicked")
+                    quickUploadConfirmDialog.openWithPreview()
+                }
 
                 Behavior on opacity { NumberAnimation { duration: 300 } }
                 opacity: visible ? 1.0 : 0.0
             }
-
             // ── 评分规则按钮（放在"第一根分隔线"左侧）────────────────────────────
             // 设计动机：
             //   · 评分规则属于「评分域」入口，语义上不属于播放器通用控件；
@@ -8970,6 +9003,612 @@ ApplicationWindow {
         slideDimKey: (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""
         // 当前模式的 checklist 配置：用于"文件夹是否评完"判定；空数组时完全不启用。
         reviewChecklist: root.reviewChecklist
+
+        // ── 外部"一键上传"的结果路由 ──
+        // 目的：让"评分数据"按钮 → 二次确认 → 直接上传，全程不需要打开评分数据面板。
+        //   评分数据面板是独立 Window，其内部 Popup 需要 Window 可见才能显示，
+        //   所以 RatingsDialog 把三种上传结果通过 signal 抛出来，由主窗顶层
+        //   对话框接手展示。
+        onQuickUploadFinished: function(ok, message) {
+            if (ok) {
+                quickUploadResultDialog.showSuccess(message)
+            } else {
+                // 一般性失败（服务端 400/500 等）：也用同一个"结果对话框"展示
+                quickUploadResultDialog.showFailure(message)
+            }
+        }
+        onQuickUploadConflict: function(message) {
+            quickUploadOverwriteDialog.showConflict(message)
+        }
+        onQuickUploadNetError: function(message) {
+            quickUploadResultDialog.showFailure(message)
+        }
+    }
+
+    // ─── 快速上传二次确认对话框 ────────────────────────────────────
+    // 触发点：工具栏「📤 评分数据」按钮（所有评分完成后浮现的入口）。
+    // 交互流程：
+    //   点按钮 → openWithPreview() → 从 RatingsDialog.previewCurrentUpload()
+    //   拉取"当前正在评分"的预览信息（模式、评分人、tag、文件夹清单、评分条数、
+    //   有无未评完/校验不通过）→ 用户在本对话框上看到摘要 →
+    //     · 点"☁ 确认上传"：调用 ratingsDialog.triggerQuickUploadForCurrentTab()
+    //       复用面板内的上传主流程（含 tagMismatch / uploadConfig / uploadSuccess 弹窗）；
+    //     · 点"✏️ 去修改"：仍打开完整的评分数据面板供用户手动调整。
+    // 设计动机：让"评分完 → 一键上传"路径减少一次多余的面板打开操作，
+    //   同时保留人工核对/修改的机会（防止误上传半成品或误 tag）。
+    Dialog {
+        id: quickUploadConfirmDialog
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        implicitWidth: 520
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        // ── 预览数据（openWithPreview 填充；关闭后不清空，方便调试）──
+        property string _mode: ""
+        property string _modeLabel: ""
+        property string _rater: ""
+        property string _tag: ""
+        property var    _folders: []         // [{name, path, ratedCount, totalVideos, ckMissing, totalItems}]
+        property int    _recordCount: 0
+        property bool   _canUpload: false
+        property string _blockReason: ""
+
+        // 打开前从 RatingsDialog 拉取预览信息，填充后再 open()
+        // 关键：任何 preview 内部异常都不能阻止 open()，否则用户会感觉按钮"点了没反应"。
+        // 因此这里用 try-catch 包裹 preview 调用，失败时退化为"信息为空，用户去修改"。
+        function openWithPreview() {
+            console.log("[QuickUpload] openWithPreview() start")
+            // 先重置成空态，避免上一次残留信息误导
+            _mode = ""; _modeLabel = ""; _rater = ""; _tag = ""
+            _folders = []; _recordCount = 0
+            _canUpload = false; _blockReason = ""
+
+            try {
+                if (typeof ratingsDialog !== "undefined"
+                        && typeof ratingsDialog.previewCurrentUpload === "function") {
+                    var p = ratingsDialog.previewCurrentUpload() || {}
+                    _mode        = p.mode        || ""
+                    _modeLabel   = p.modeLabel   || _mode
+                    _rater       = p.rater       || ""
+                    _tag         = p.tag         || ""
+                    _folders     = p.folders     || []
+                    _recordCount = p.recordCount || 0
+                    _canUpload   = !!p.canUpload
+                    _blockReason = p.blockReason || ""
+                    console.log("[QuickUpload] preview ok:",
+                                "mode=", _mode, "rater=", _rater, "tag=", _tag,
+                                "folders=", _folders.length, "canUpload=", _canUpload)
+                } else {
+                    _blockReason = qsTr("评分数据面板尚未就绪，请点「去修改」打开面板")
+                    console.log("[QuickUpload] ratingsDialog or preview fn missing")
+                }
+            } catch (e) {
+                _canUpload = false
+                _blockReason = qsTr("预览失败：") + String(e)
+                console.log("[QuickUpload] preview threw:", e)
+            }
+            console.log("[QuickUpload] calling open()...")
+            open()
+        }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+            Rectangle {
+                z: -1; anchors.fill: parent; anchors.margins: -8
+                radius: parent.radius + 4
+                color: "transparent"; border.color: "#80000000"; border.width: 1
+                opacity: 0.45
+            }
+            Rectangle {
+                z: -1; anchors.fill: parent; anchors.margins: -4
+                radius: parent.radius + 2
+                color: "transparent"; border.color: "#a0000000"; border.width: 1
+                opacity: 0.55
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 42
+            Text {
+                anchors.left: parent.left; anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("上传评分数据到云端？")
+                color: "#e8e8ec"
+                font.pixelSize: 15
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1; color: "#2a2a32"
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 12
+
+            // ── 摘要块（模式 / 评分人 / tag / 条数）────────────────
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: 12
+                rowSpacing: 6
+
+                Text {
+                    text: qsTr("评分模式：")
+                    color: "#9aa0a6"; font.pixelSize: 12
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: quickUploadConfirmDialog._modeLabel || "—"
+                    color: "#e8e8ec"; font.pixelSize: 13
+                    elide: Text.ElideRight
+                }
+                Text {
+                    text: qsTr("评分人：")
+                    color: "#9aa0a6"; font.pixelSize: 12
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: quickUploadConfirmDialog._rater.length > 0
+                          ? quickUploadConfirmDialog._rater
+                          : qsTr("（未填写）")
+                    color: quickUploadConfirmDialog._rater.length > 0 ? "#e8e8ec" : "#e07070"
+                    font.pixelSize: 13
+                    elide: Text.ElideRight
+                }
+                Text {
+                    text: qsTr("备注 tag：")
+                    color: "#9aa0a6"; font.pixelSize: 12
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: quickUploadConfirmDialog._tag.length > 0
+                          ? quickUploadConfirmDialog._tag
+                          : qsTr("（未填写）")
+                    color: quickUploadConfirmDialog._tag.length > 0 ? "#e8e8ec" : "#e07070"
+                    font.pixelSize: 13
+                    elide: Text.ElideRight
+                }
+                Text {
+                    text: qsTr("评分记录：")
+                    color: "#9aa0a6"; font.pixelSize: 12
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("%1 个文件夹 · %2 条评分")
+                            .arg(quickUploadConfirmDialog._folders.length)
+                            .arg(quickUploadConfirmDialog._recordCount)
+                    color: "#e8e8ec"; font.pixelSize: 13
+                }
+            }
+
+            // ── 文件夹列表（最多显示 6 行；超过用"…还有 N 个"折叠）──
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: Math.min(
+                    quickUploadConfirmDialog._folders.length * 22 + 16, 168)
+                color: "#141418"
+                border.color: "#2a2a32"; border.width: 1
+                radius: 4
+                visible: quickUploadConfirmDialog._folders.length > 0
+
+                ListView {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    clip: true
+                    interactive: contentHeight > height
+                    model: quickUploadConfirmDialog._folders
+                    delegate: Row {
+                        width: ListView.view.width
+                        height: 22
+                        spacing: 8
+                        Text {
+                            // 完成度小标
+                            width: 48
+                            text: (modelData.ratedCount === modelData.totalVideos
+                                   && modelData.ckMissing === 0)
+                                  ? "✓ " + modelData.ratedCount + "/" + modelData.totalVideos
+                                  : "⚠ " + modelData.ratedCount + "/" + modelData.totalVideos
+                            color: (modelData.ratedCount === modelData.totalVideos
+                                    && modelData.ckMissing === 0) ? "#5fd17a" : "#ffb05c"
+                            font.pixelSize: 12
+                        }
+                        Text {
+                            width: parent.width - 48 - 8
+                            text: modelData.name || "—"
+                            color: "#cfcfd4"
+                            font.pixelSize: 12
+                            elide: Text.ElideMiddle
+                        }
+                    }
+                }
+            }
+
+            // ── 未通过校验时的原因提示（红色 banner）────────────────
+            Rectangle {
+                Layout.fillWidth: true
+                visible: !quickUploadConfirmDialog._canUpload
+                         && quickUploadConfirmDialog._blockReason.length > 0
+                color: "#3a1f22"
+                border.color: "#7a3a3a"; border.width: 1
+                radius: 4
+                implicitHeight: blockText.implicitHeight + 16
+                Text {
+                    id: blockText
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    text: "⚠ " + quickUploadConfirmDialog._blockReason
+                    color: "#ffb0b0"
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            // ── 说明脚注 ──────────────────────────────────────────
+            Text {
+                Layout.fillWidth: true
+                text: quickUploadConfirmDialog._canUpload
+                      ? qsTr("上传完成后，这些评分记录会自动归档，「当前」Tab 将不再显示。")
+                      : qsTr("请点「去修改」在评分数据面板里补齐后再上传。")
+                color: "#9aa0a6"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1; color: "#2a2a32"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14; anchors.rightMargin: 14
+                anchors.topMargin: 12; anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                FlatButton {
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("取消")
+                    onClicked: quickUploadConfirmDialog.close()
+                }
+                FlatButton {
+                    implicitWidth: 110
+                    implicitHeight: 30
+                    text: qsTr("✏️ 去修改")
+                    textColor: "#e8e8ec"
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: qsTr("打开评分数据面板，人工核对/修改后再上传")
+                    onClicked: {
+                        quickUploadConfirmDialog.close()
+                        ratingsDialog.open()
+                    }
+                }
+                FlatButton {
+                    implicitWidth: 120
+                    implicitHeight: 30
+                    text: qsTr("☁ 确认上传")
+                    textColor: enabled ? "#4fc3f7" : "#5a5a60"
+                    // 校验未通过时禁用上传按钮，强制走"去修改"
+                    enabled: quickUploadConfirmDialog._canUpload
+                    ToolTip.visible: hovered && !enabled
+                    ToolTip.delay: 400
+                    ToolTip.text: quickUploadConfirmDialog._blockReason
+                    onClicked: {
+                        quickUploadConfirmDialog.close()
+                        if (typeof ratingsDialog !== "undefined"
+                                && typeof ratingsDialog.triggerQuickUploadForCurrentTab === "function") {
+                            ratingsDialog.triggerQuickUploadForCurrentTab()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ─── 快速上传·结果反馈对话框（成功 / 失败共用一个） ─────────────
+    // 作为"外部一键上传"（不打开评分数据面板）时的顶层反馈对话框：
+    //   · 上传成功：绿色标题、"✅ 上传成功" + 附带模式/评分人/tag/文件夹列表
+    //   · 上传失败：红色标题、"❌ 上传失败" + 服务端错误信息
+    // 之所以放在主窗顶层：评分数据面板是独立 Window，未打开时其内部 Popup
+    // 弹不出来；放主窗层次能保证任何时刻都能显示。
+    Dialog {
+        id: quickUploadResultDialog
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        implicitWidth: 480
+
+        property bool _ok: true
+        property string _msg: ""
+        property string _viewUrl: ""
+        // 展示上下文（成功时用）
+        property string _modeLabel: ""
+        property string _rater: ""
+        property string _tag: ""
+        property var    _folderPaths: []
+
+        // 从 quickUploadConfirmDialog 里"复用"上一次预览时的上下文信息，
+        // 避免重新收集：这些字段在点"确认上传"→ 触发上传时已经确定，
+        // 上传的中间过程也不会改变它们的语义。
+        function _fillContextFromConfirm() {
+            _modeLabel = quickUploadConfirmDialog._modeLabel || ""
+            _rater     = quickUploadConfirmDialog._rater     || ""
+            _tag       = quickUploadConfirmDialog._tag       || ""
+            // 文件夹路径列表转为 ~ 前缀相对路径展示
+            var raw = []
+            var fs = quickUploadConfirmDialog._folders || []
+            for (var i = 0; i < fs.length; ++i) {
+                var p = String(fs[i].path || "")
+                var m = p.match(/^(\/Users\/[^\/]+)(\/.*)?$/)
+                if (m) p = "~" + (m[2] || "")
+                raw.push(p)
+            }
+            _folderPaths = raw
+        }
+        function showSuccess(message) {
+            _ok = true
+            _msg = message || qsTr("上传成功")
+            var srvBase = (typeof Rating !== "undefined" && Rating.uploadServerUrl)
+                          ? Rating.uploadServerUrl.trim() : ""
+            var m = srvBase.match(/^(https?:\/\/[^/]+)/)
+            _viewUrl = m ? m[1] + "/#results" : ""
+            _fillContextFromConfirm()
+            open()
+        }
+        function showFailure(message) {
+            _ok = false
+            _msg = message || qsTr("上传失败")
+            _viewUrl = ""
+            _fillContextFromConfirm()
+            open()
+        }
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: quickUploadResultDialog._ok ? "#3a7a4d" : "#7a3a3a"
+            border.width: 1
+            radius: 8
+            Rectangle {
+                z: -1; anchors.fill: parent; anchors.margins: -6
+                radius: parent.radius + 4
+                color: "transparent"; border.color: "#80000000"; border.width: 1
+                opacity: 0.5
+            }
+        }
+        header: Rectangle {
+            color: "transparent"; implicitHeight: 44
+            Text {
+                anchors.left: parent.left; anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: quickUploadResultDialog._ok
+                      ? qsTr("✅ 上传成功")
+                      : qsTr("❌ 上传失败")
+                color: quickUploadResultDialog._ok ? "#7ce495" : "#ff8a8a"
+                font.pixelSize: 16; font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1; color: "#2a2a32"
+            }
+        }
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            // 成功时展示上下文明细（模式 / tag / 评分人 / 文件夹清单）
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: 12
+                rowSpacing: 6
+                visible: quickUploadResultDialog._ok
+
+                Text { text: qsTr("评分模式："); color: "#9aa0a6"; font.pixelSize: 12 }
+                Text {
+                    Layout.fillWidth: true
+                    text: quickUploadResultDialog._modeLabel || "—"
+                    color: "#e8e8ec"; font.pixelSize: 13; elide: Text.ElideRight
+                }
+                Text { text: qsTr("备注 tag："); color: "#9aa0a6"; font.pixelSize: 12 }
+                Text {
+                    Layout.fillWidth: true
+                    text: quickUploadResultDialog._tag || "—"
+                    color: "#4fc3f7"; font.pixelSize: 13; elide: Text.ElideRight
+                }
+                Text { text: qsTr("评分人："); color: "#9aa0a6"; font.pixelSize: 12 }
+                Text {
+                    Layout.fillWidth: true
+                    text: quickUploadResultDialog._rater || "—"
+                    color: "#e8e8ec"; font.pixelSize: 13; elide: Text.ElideRight
+                }
+                Text {
+                    text: qsTr("文件夹：")
+                    color: "#9aa0a6"; font.pixelSize: 12
+                    Layout.alignment: Qt.AlignTop
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Repeater {
+                        model: quickUploadResultDialog._folderPaths
+                        Text {
+                            Layout.fillWidth: true
+                            text: modelData || ""
+                            color: "#e8e8ec"; font.pixelSize: 12
+                            elide: Text.ElideMiddle
+                        }
+                    }
+                }
+            }
+
+            // 失败时只展示错误消息
+            Text {
+                Layout.fillWidth: true
+                visible: !quickUploadResultDialog._ok
+                text: quickUploadResultDialog._msg
+                color: "#ffb0b0"; font.pixelSize: 13
+                wrapMode: Text.WordWrap; lineHeight: 1.3
+            }
+        }
+        footer: Rectangle {
+            color: "transparent"; implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1; color: "#2a2a32"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14; anchors.rightMargin: 14
+                anchors.topMargin: 12; anchors.bottomMargin: 12
+                spacing: 8
+                FlatButton {
+                    implicitWidth: 110
+                    implicitHeight: 30
+                    text: qsTr("🔗 查看结果")
+                    textColor: "#4fc3f7"
+                    visible: quickUploadResultDialog._ok
+                             && quickUploadResultDialog._viewUrl.length > 0
+                    onClicked: Qt.openUrlExternally(quickUploadResultDialog._viewUrl)
+                }
+                Item { Layout.fillWidth: true }
+                FlatButton {
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("确定")
+                    onClicked: quickUploadResultDialog.close()
+                }
+            }
+        }
+    }
+
+    // ─── 快速上传·覆盖确认对话框 ────────────────────────────────
+    // 服务端返回 409（同 rater+tag 已存在同名上传）时，让用户确认是否覆盖。
+    // 确认 → 调 Rating.uploadToCloud(true, folderPaths) 携带 force=1 重发；
+    // 取消 → 什么都不做，用户可以自己去改 tag 后再点上传。
+    Dialog {
+        id: quickUploadOverwriteDialog
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        implicitWidth: 460
+
+        property string _msg: ""
+        function showConflict(message) {
+            _msg = message || qsTr("同 (评分人, tag) 已存在上传记录")
+            open()
+        }
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#7a5a3a"     // 警示色（琥珀）
+            border.width: 1
+            radius: 8
+            Rectangle {
+                z: -1; anchors.fill: parent; anchors.margins: -6
+                radius: parent.radius + 4
+                color: "transparent"; border.color: "#80000000"; border.width: 1
+                opacity: 0.5
+            }
+        }
+        header: Rectangle {
+            color: "transparent"; implicitHeight: 44
+            Text {
+                anchors.left: parent.left; anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("⚠ 服务器已存在同名上传")
+                color: "#ffcc80"; font.pixelSize: 15; font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1; color: "#2a2a32"
+            }
+        }
+        contentItem: ColumnLayout {
+            spacing: 10
+            Text {
+                Layout.fillWidth: true
+                text: quickUploadOverwriteDialog._msg
+                color: "#c8c8cc"; font.pixelSize: 13
+                wrapMode: Text.WordWrap; lineHeight: 1.3
+            }
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("是否要覆盖旧记录？\n（覆盖后旧文件会被服务端自动归档到旧版备份中，可事后追回。）")
+                color: "#9aa0a6"; font.pixelSize: 12
+                wrapMode: Text.WordWrap; lineHeight: 1.3
+            }
+        }
+        footer: Rectangle {
+            color: "transparent"; implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1; color: "#2a2a32"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14; anchors.rightMargin: 14
+                anchors.topMargin: 12; anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                FlatButton {
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("取消")
+                    onClicked: {
+                        // 用户放弃覆盖：把 quickUploadInProgress 关闭，
+                        // 避免下一次上传结果被误路由。
+                        if (typeof ratingsDialog !== "undefined")
+                            ratingsDialog._quickUploadInProgress = false
+                        quickUploadOverwriteDialog.close()
+                    }
+                }
+                FlatButton {
+                    implicitWidth: 130
+                    implicitHeight: 30
+                    text: qsTr("☁ 覆盖上传")
+                    textColor: "#4fc3f7"
+                    onClicked: {
+                        quickUploadOverwriteDialog.close()
+                        // 覆盖上传：force=true，走同一条 uploadToCloud 通路，
+                        // 上传结果仍会经 onQuickUploadFinished 回来（quickUploadInProgress 仍为 true）。
+                        if (typeof Rating !== "undefined"
+                                && typeof ratingsDialog !== "undefined") {
+                            var folders = ratingsDialog._lastUploadFolders || []
+                            if (ratingsDialog._lastUploadKind === "archive") {
+                                Rating.uploadArchiveBatchToCloud(
+                                    ratingsDialog._selectedMode,
+                                    ratingsDialog._lastUploadArchiveBatch,
+                                    true, folders)
+                            } else {
+                                Rating.uploadToCloud(true, folders)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // 全局进度条已移除：多路场景下各路独立播放控制，全局进度条语义

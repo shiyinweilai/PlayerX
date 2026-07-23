@@ -104,7 +104,12 @@ ApplicationWindow {
         try {
             if (typeof Rating === "undefined" || !Rating) return "off"
             var m = Rating.currentMode || "off"
-            if (m === "subjective" || m === "quality" || m === "quality_slide" || m === "off") return m
+            // 白名单：所有能承载多组评分的模式，均可作为持久化槽位 slug；
+            // 未知/未启用值兜底为 "off"。
+            // 注意：test（测试模式）行为与 subjective 完全一致，但独立成槽位，
+            // 保证测试期间的多组进度不污染真正主观评分的持久化数据。
+            if (m === "subjective" || m === "quality" || m === "quality_slide"
+                || m === "test" || m === "off") return m
             return "off"
         } catch (e) { return "off" }
     }
@@ -114,6 +119,7 @@ ApplicationWindow {
         if (m === "subjective")    return "主观评分"
         if (m === "quality")       return "质量比较"
         if (m === "quality_slide") return "质量比较2（含滑动对比）"
+        if (m === "test")          return "测试模式"
         return "未启用评分"
     }
     // 旧版本用的固定 key / 文件名：仅用于一次性迁移，迁完即删
@@ -122,12 +128,15 @@ ApplicationWindow {
     // 当前模式对应的 key / 文件名（绑定到 Rating.currentMode，模式切换时自动失效）
     readonly property string _persistKey: {
         var m = (typeof Rating !== "undefined" && Rating) ? (Rating.currentMode || "off") : "off"
-        if (m !== "subjective" && m !== "quality") m = "off"
+        // 允许被承载多组进度持久化的模式白名单，其余（quality_slide / multi_dim 等）
+        // 归到 "off" 槽位以避免与其他模式相互覆盖。
+        // test（测试模式）单列一个槽位，等价 subjective 但相互独立。
+        if (m !== "subjective" && m !== "quality" && m !== "test") m = "off"
         return "multiGroup/lanesJson/" + m
     }
     readonly property string _persistFileName: {
         var m = (typeof Rating !== "undefined" && Rating) ? (Rating.currentMode || "off") : "off"
-        if (m !== "subjective" && m !== "quality") m = "off"
+        if (m !== "subjective" && m !== "quality" && m !== "test") m = "off"
         return "multi_group_lanes_" + m + ".json"
     }
 

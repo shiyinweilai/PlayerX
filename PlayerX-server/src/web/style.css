@@ -247,6 +247,12 @@ button {
     color: #30d158;
     border-color: rgba(48,209,88,.35);
 }
+/* 测试模式：中性灰蓝（工具/调试色调），与业务模式区分，暗示"非正式统计" */
+.mode-pill.mode-test {
+    background: rgba(142,142,147,.16);
+    color: #a8b0bd;
+    border-color: rgba(142,142,147,.40);
+}
 .mode-pill.mode-off {
     background: var(--bg-elev-2);
     color: var(--text-dim);
