@@ -147,6 +147,16 @@ public slots:
     // 排序：updated_at 倒序（新→旧）。仅返回当前模式的数据。
     QVariantList getAllRatings() const;
 
+    // ── 按指定 mode 只读地读取该模式的数据 ────────────────────
+    // 设计动机：QML 端"评分数据"弹窗需要在切换查看 mode 时展示对应 CSV，
+    //   但绝对不能修改全局 currentMode（否则背后视频宫格的星条会跟着跳变）。
+    //   这三个接口是"完全解耦"的只读入口：不依赖 currentMode，也不发信号。
+    //   传入的 mode 与 modeList().id 一致；"off"/未知 mode 一律返回空/兜底值。
+    //   路径规则与 ensureFileForMode 完全一致（ratings_<mode>.csv）。
+    Q_INVOKABLE QVariantList getAllRatingsForMode(const QString& mode) const;
+    Q_INVOKABLE QString      dataFilePathForMode(const QString& mode) const;
+    Q_INVOKABLE int          maxStarsForMode(const QString& mode) const;
+
     // 返回滑动对比评分行（quality_slide 模式专用）。
     // 数据来自 slide/ratings_quality_slide.csv，与普通打分完全隔离。
     // 非 quality_slide 模式下返回空列表。

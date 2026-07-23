@@ -383,6 +383,67 @@ QVariantList RatingStore::getAllRatings() const {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// 按指定 mode 只读接口（不依赖 currentMode，也不发信号）
+// 用途：QML"评分数据"弹窗切换查看 mode 时读取对应 CSV，绝不修改全局状态，
+//       避免背景视频宫格的星条/cellRatings 跟着跳变。
+// 契约与 ensureFileForMode 一致：off / 未知 mode 一律返回空/兜底值。
+// ════════════════════════════════════════════════════════════════════════
+
+QVariantList RatingStore::getAllRatingsForMode(const QString& mode) const {
+    QVariantList out;
+    // 路径规则完全复用 ensureFileForMode：off / 未知 mode 返回空串 → 视为无数据。
+    const QString fp = ensureFileForMode(mode);
+    if (fp.isEmpty()) return out;
+    QFile f(fp);
+    if (!f.exists()) return out;
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return out;
+
+    QList<QVariantMap> rows;
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    bool firstLine = true;
+    while (!ts.atEnd()) {
+        QString line = ts.readLine();
+        if (firstLine) { firstLine = false; continue; }
+        if (line.trimmed().isEmpty()) continue;
+        QStringList cols = parseCsvLine(line);
+        if (cols.size() < 7) continue;
+        QVariantMap row;
+        row["updated_at"] = cols.value(0);
+        row["rater"]      = cols.value(1);
+        row["file_name"]  = cols.value(2);
+        row["file_path"]  = cols.value(3);
+        row["file_size"]  = cols.value(4).toLongLong();
+        row["quick_hash"] = cols.value(5);
+        row["stars"]      = cols.value(6).toInt();
+        row["slide_type"] = cols.size() >= 8 ? cols.value(7) : QString();
+        rows.push_back(row);
+    }
+
+    // updated_at 倒序，与 getAllRatings 保持一致
+    std::sort(rows.begin(), rows.end(),
+              [](const QVariantMap& a, const QVariantMap& b) {
+                  return a.value("updated_at").toString() > b.value("updated_at").toString();
+              });
+    out.reserve(rows.size());
+    for (const auto& r : rows) out << r;
+    return out;
+}
+
+QString RatingStore::dataFilePathForMode(const QString& mode) const {
+    // ensureFileForMode 已经处理 off / 未知 mode → 返回空串；
+    // 同时保证目录/表头文件存在，QML 端拿到的路径可以直接展示 / 拼 archive 目录。
+    return ensureFileForMode(mode);
+}
+
+int RatingStore::maxStarsForMode(const QString& mode) const {
+    if (mode.isEmpty() || mode == QStringLiteral("off")) return 0;
+    if (auto* d = findMode(mode)) return d->maxStars;
+    // 未知 mode 返回 0，让 QML 端走自己的兜底（当前 RatingsDialog 会兜到 5）。
+    return 0;
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // 读取滑动对比评分（quality_slide 模式专用）
 // 从 slide/ratings_quality_slide.csv 读取，与普通打分完全隔离。
 // 非 quality_slide 模式下返回空列表。

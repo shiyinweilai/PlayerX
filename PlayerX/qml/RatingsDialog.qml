@@ -70,25 +70,25 @@ Window {
     // archive：浏览某个归档批次（只读账本，仅支持导出 / 行级删除 / 删整批）
     // 切换 Tab 时会重置 _checkedFolders、清空选择，避免跨 Tab 误操作。
     property string _viewMode: "current"
-    // 弹窗内的「当前查看模式」：
-    // 由于底层 Rating.getAllRatings() / Rating.dataFilePath 都只按全局 currentMode 读写
-    // （每 mode 一个 ratings_<mode>.csv），弹窗内切胶囊必须同步切全局 currentMode
-    // 才能真正切到对应文件；为避免打断外部评分流程，打开时记录 _origMode，
-    // 关闭时恢复到原来的全局模式（方案 B：查看期临时切换 + 关闭还原）。
+    // 弹窗内的「当前查看模式」，与全局 Rating.currentMode 完全解耦：
+    // 切胶囊只改本属性，数据读取均走 Rating.*ForMode(_selectedMode) 只读接口，
+    // 绝不写入全局状态，避免背景视频宏格星条、cellRatings 跟着跳变。
+    // 打开弹窗时从 Rating.currentMode 初始化（默认就看当前模式）。
     property string _selectedMode: (typeof Rating !== "undefined") ? Rating.currentMode : "subjective"
-    // 打开弹窗那一刻的全局模式快照；关闭时回滚 Rating.currentMode 到此值。
-    // 空串表示当前不需要回滚（例如尚未打开过、或已回滚完毕）。
-    property string _origMode: ""
     // 归档 Tab 当前选中的批次名（首次打开自动取最新一批）
     property string _archiveBatch: ""
     // 归档 Tab 缓存的批次列表（[{name, count, latest, raters, modifiedAt, path}]）
     property var _archiveBatches: []
     // 便捷判断
     readonly property bool _isArchiveView: _viewMode === "archive"
-    // 当前评分模式的星级上限（决定“有效评分”区间与子项星条渲染长度）。
-    // off 模式下Rating.maxStars==0，本处兜底 5。
-    readonly property int _maxStars:
-        (typeof Rating !== "undefined" && Rating.maxStars > 0) ? Rating.maxStars : 5
+    // 当前「查看模式」的星级上限（决定“有效评分”区间与子项星条渲染长度）。
+    // 严格按 _selectedMode 读（而非全局 Rating.maxStars），与方案 C 的“弹窗与全局解耦”一致。
+    // off / 未知 mode 下 maxStarsForMode 会返回 0，本处兜底 5。
+    readonly property int _maxStars: {
+        if (typeof Rating === "undefined") return 5
+        var m = (typeof Rating.maxStarsForMode === "function") ? Rating.maxStarsForMode(_selectedMode) : Rating.maxStars
+        return (m > 0) ? m : 5
+    }
 
     // ── 分组（VSCode 风格三层树：文件夹 → 文件 → 评分记录）─────────
     // _folders: [{ key:'dir:<dir>', name, path, files:[file...], latest, avg, totalItems }]
@@ -784,7 +784,11 @@ Window {
                 raw = []
             }
         } else {
-            raw = (typeof Rating !== "undefined") ? Rating.getAllRatings() : []
+            raw = (typeof Rating !== "undefined")
+                    ? ((typeof Rating.getAllRatingsForMode === "function")
+                        ? Rating.getAllRatingsForMode(root._selectedMode)
+                        : Rating.getAllRatings())
+                    : []
             // quality_slide 模式：按 slide_type 分组打 _source 标记
             //   · slide_type == "multi_<slideDimKey>"（新格式）或 == "slide"（旧格式）→ 滑动打分
             //   · 其他                                                              → 普通打分
@@ -842,20 +846,10 @@ Window {
     onVisibleChanged: {
         if (visible) {
             _userBuffer = (typeof Rating !== "undefined") ? Rating.currentUser : ""
-            // 每次打开时从全局同步查看模式，避免上次关闭后全局模式已变
-            if (typeof Rating !== "undefined") {
-                _selectedMode = Rating.currentMode
-                // 记录打开时的全局模式，供关闭时回滚（若已在回滚流程中则不覆盖）
-                _origMode = Rating.currentMode
-            }
+            // 打开时从全局同步一次查看模式；之后弹窗内切胶囊
+            // 完全不会回写 Rating.currentMode（方案 C：严格只读）。
+            if (typeof Rating !== "undefined") _selectedMode = Rating.currentMode
             _refresh()
-        } else {
-            // 关闭弹窗：把打开期间可能被胶囊改动过的全局模式还原回去，
-            // 保证外部评分流程使用的模式不被弹窗内切换污染。
-            if (typeof Rating !== "undefined" && _origMode && Rating.currentMode !== _origMode) {
-                Rating.currentMode = _origMode
-            }
-            _origMode = ""
         }
     }
 
@@ -863,10 +857,14 @@ Window {
         target: (typeof Rating !== "undefined") ? Rating : null
         ignoreUnknownSignals: true
         function onChanged() { root._refresh() }
-        // 外部模式切换时同步弹窗的 _selectedMode，并刷新数据
+        // 外部模式切换：仅在弹窗不可见时同步 _selectedMode（避免弹窗打开
+        // 期间外部或其他组件意外写入 currentMode 污染用户选中的胶囊）。
+        // 弹窗打开后的胶囊切换不会触发此信号（方案 C 不写全局）。
         function onCurrentModeChanged() {
-            root._selectedMode = Rating.currentMode
-            root._refresh()
+            if (!root.visible) {
+                root._selectedMode = Rating.currentMode
+                root._refresh()
+            }
         }
     }
 
@@ -930,15 +928,11 @@ Window {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 if (root._selectedMode !== modeData.id) {
+                                    // 方案 C：切胶囊只改弹窗内本地 _selectedMode，
+                                    // 绝不写 Rating.currentMode，背景视频星条/cellRatings 不受影响。
+                                    // 数据层面改变由 _refresh 重新拉 getAllRatingsForMode。
                                     root._selectedMode = modeData.id
-                                    // 同步切换全局 currentMode，使 Rating.getAllRatings()
-                                    // 与 Rating.dataFilePath 都指向该 mode 的 CSV；
-                                    // onCurrentModeChanged 会触发 _refresh，无需重复调用。
-                                    if (typeof Rating !== "undefined" && Rating.currentMode !== modeData.id) {
-                                        Rating.currentMode = modeData.id
-                                    } else {
-                                        root._refresh()
-                                    }
+                                    root._refresh()
                                 }
                             }
                         }
@@ -1289,7 +1283,11 @@ Window {
                 TextField {
                     Layout.fillWidth: true
                     readOnly: true
-                    text: (typeof Rating !== "undefined") ? Rating.dataFilePath : ""
+                    text: (typeof Rating !== "undefined")
+                            ? ((typeof Rating.dataFilePathForMode === "function")
+                                ? Rating.dataFilePathForMode(root._selectedMode)
+                                : Rating.dataFilePath)
+                            : ""
                     color: "#c8c8cc"
                     selectByMouse: true
                     // 文件名/路径过长时让左侧显示省略，确保末尾的 ratings.csv 可见
@@ -2552,7 +2550,9 @@ Window {
                 }
                 Text {
                     text: qsTr("将存放在：%1/archive/%2/<批次名>/ratings.csv")
-                          .arg(((typeof Rating !== "undefined") ? Rating.dataFilePath : "")
+                          .arg((((typeof Rating !== "undefined") && (typeof Rating.dataFilePathForMode === "function"))
+                                    ? Rating.dataFilePathForMode(root._selectedMode)
+                                    : ((typeof Rating !== "undefined") ? Rating.dataFilePath : ""))
                                .replace(/\/[^\/]*$/, ""))
                           .arg(root._selectedMode)
                     color: "#6a6a72"
@@ -2606,7 +2606,9 @@ Window {
             // archiveByFolders 会把主 CSV 里的记录移走，所以必须在调用前收集
             var checklistSnapshot = {}
             try {
-                var allRows = Rating.getAllRatings() || []
+                var allRows = ((typeof Rating.getAllRatingsForMode === "function")
+                                ? Rating.getAllRatingsForMode(root._selectedMode)
+                                : Rating.getAllRatings()) || []
                 var pickedSet = {}
                 for (var pi = 0; pi < picked.length; ++pi) {
                     // 规整路径（去掉末尾斜杠）
@@ -2641,9 +2643,12 @@ Window {
                             && typeof Fs !== "undefined"
                             && typeof Fs.writeTextFile === "function") {
                         // 从 dataFilePath 推导 baseDir：<baseDir>/ratings_<mode>.csv
-                        var dfp = Rating.dataFilePath || ""
+                        // 一律使用 _selectedMode 对应的路径，与当前弹窗查看模式保持一致。
+                        var dfp = ((typeof Rating.dataFilePathForMode === "function")
+                                    ? Rating.dataFilePathForMode(root._selectedMode)
+                                    : (Rating.dataFilePath || "")) || ""
                         var baseDir = dfp.substring(0, dfp.lastIndexOf("/"))
-                        var mode = Rating.currentMode || ""
+                        var mode = root._selectedMode || ""
                         // 拿最新批次名（listArchiveBatches 按时间倒序，第一个就是刚归档的）
                         var batches = Rating.listArchiveBatches(mode) || []
                         var batchName = (batches.length > 0) ? (batches[0]["name"] || "") : ""
