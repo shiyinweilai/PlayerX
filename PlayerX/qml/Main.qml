@@ -3214,6 +3214,52 @@ ApplicationWindow {
         return m ? m[1] + "/api/dimensions" : ""
     }
 
+    // ── 当前模式绑定的评分配置名 ──────────────────────────────
+    // 与 MultiGroupDialog 中的 _boundConfigName 实现一致：
+    //   优先从 _localConfigFingerprint["__bindings__"] 反查（JSON: mode -> configName）
+    //   兜底：遍历指纹 key（格式 "mode:configName"）取最后一个匹配。
+    // 用途：底部工具栏"评分规则"按钮据此判断当前 mode 是否有可查规则，并构造跳转 URL。
+    function _boundConfigName() {
+        var mode = (typeof Rating !== "undefined") ? Rating.currentMode : ""
+        if (!mode || mode === "off") return ""
+        var fp = root._localConfigFingerprint
+        if (!fp) return ""
+        var bindingsStr = fp["__bindings__"] || ""
+        if (bindingsStr.length > 0) {
+            try {
+                var bindings = JSON.parse(bindingsStr)
+                if (bindings && bindings[mode]) {
+                    var val = bindings[mode]
+                    return Array.isArray(val) ? (val[0] || "") : val
+                }
+            } catch(e) {}
+        }
+        // 兜底：遍历 key "mode:configName"，取最后一个匹配
+        var result = ""
+        var keys = Object.keys(fp)
+        for (var i = 0; i < keys.length; ++i) {
+            var k = keys[i]
+            if (k === "__bindings__") continue
+            if (k.indexOf("__ignored__:") === 0) continue
+            var sep = k.indexOf(":")
+            if (sep < 0) continue
+            if (k.substring(0, sep) === mode) result = k.substring(sep + 1)
+        }
+        return result
+    }
+
+    // ── 构造后端规则页面 URL：origin + /#rules/ + encodeURIComponent(configName) ──
+    // 与 MultiGroupDialog._rulesPageUrl 一致；无绑定配置或服务器地址为空时返回 ""。
+    function _rulesPageUrl() {
+        var base = (typeof Rating !== "undefined" && Rating.uploadServerUrl) ? Rating.uploadServerUrl.trim() : ""
+        if (base.length === 0) return ""
+        var configName = _boundConfigName()
+        if (configName.length === 0) return ""
+        var m = base.match(/^(https?:\/\/[^/]+)/)
+        var origin = m ? m[1] : base.replace(/\/$/, "")
+        return origin + "/#rules/" + encodeURIComponent(configName)
+    }
+
     // 切换到多维模式或维度配置变化时，重新初始化 cellRatings
     // 有维度配置（不限于 multi_dim）时初始化为对象数组；无维度时恢复为数字数组
     // quality_slide 模式下：reviewDimensions[0] 给左右对比，reviewDimensions[1] 给滑动对比
@@ -4976,6 +5022,92 @@ ApplicationWindow {
             // 没有视频的"空状态"下，工具栏整体保持空白（顶部菜单栏接管入口）。
             Item { Layout.fillWidth: true }
 
+            // ── 评分完成快捷入口（放在"评分规则"左侧）────────────────────────────
+            // 设计动机：
+            //   · 评分数据入口和评分规则一样，属于「评分域」按钮，不属于播放器通用控件，
+            //     所以整体挪到分隔线左侧非播放器区，和"评分规则"并列，语义分组清晰。
+            //   · 可见性沿用旧规则：仅在评分模式下 + 多组已启动 + 所有组评分完成时浮现，
+            //     其余情况占位宽度归 0，不干扰其他按钮布局。
+            //   · 保留原有的淡入淡出动画（opacity 过渡），避免评分刚完就突然多出一个按钮。
+            FlatButton {
+                id: allRatedShortcutBtn
+                text: "📤 上传评分"
+                visible: root.reviewMode && multiGroupDialog.active && multiGroupDialog.allGroupsRated
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                Layout.alignment: Qt.AlignVCenter
+                font.pixelSize: 12
+                textColor: "#4fc3f7"
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("所有评分已完成，点击查看 / 导出评分数据")
+                onClicked: ratingsDialog.open()
+
+                Behavior on opacity { NumberAnimation { duration: 300 } }
+                opacity: visible ? 1.0 : 0.0
+            }
+
+            // ── 评分规则按钮（放在"第一根分隔线"左侧）────────────────────────────
+            // 设计动机：
+            //   · 评分规则属于「评分域」入口，语义上不属于播放器通用控件；
+            //     所以放在分隔线【左侧】的"非播放器控件区"，与右侧的 1x/<<>>/多组切换分开。
+            //   · 与 MultiGroupDialog 顶部的"查看规则 ↗"按钮完全同源：点击后
+            //     Qt.openUrlExternally 到后端 /#rules/<configName>。
+            //   · 可见性双重守卫：仅当有视频（fileCount>0）且当前 mode 已绑定后端配置
+            //     （_rulesPageUrl 非空）时才显示；否则宽度 0 不留空白。
+            //   · 样式沿用 MultiGroupDialog viewRulesBtn 的深蓝底+浅蓝字方案，
+            //     视觉上与"多维评分"那一套呼应，用户能一眼认出这是评分域按钮。
+            Button {
+                id: viewRulesToolbarBtn
+                visible: Engine.fileCount > 0 && root._rulesPageUrl().length > 0
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                Layout.preferredHeight: 22
+                Layout.alignment: Qt.AlignVCenter
+                hoverEnabled: true
+                padding: 0
+                leftPadding: 9
+                rightPadding: 9
+                onClicked: {
+                    var url = root._rulesPageUrl()
+                    if (url.length > 0) Qt.openUrlExternally(url)
+                }
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: {
+                    // 解析当前模式的展示名（label）：优先用 Rating.modeList 里的 label，
+                    // 拿不到时兜底展示 mode id，避免出现空白。
+                    var modeId = (typeof Rating !== "undefined") ? Rating.currentMode : ""
+                    var modeLabel = modeId
+                    var ml = (typeof Rating !== "undefined") ? (Rating.modeList || []) : []
+                    for (var i = 0; i < ml.length; ++i) {
+                        if (ml[i].id === modeId) { modeLabel = ml[i].label || modeId; break }
+                    }
+                    var cfg = root._boundConfigName()
+                    if (root._rulesPageUrl().length === 0) {
+                        // 兜底：当前模式尚未绑定规则配置（按钮此时其实是隐藏的，这里仅为鲁棒）
+                        return qsTr("当前模式「%1」未绑定评分规则").arg(modeLabel || qsTr("未选择"))
+                    }
+                    return qsTr("当前模式：%1\n规则配置：%2\n点击查看完整评分规则")
+                            .arg(modeLabel || qsTr("未选择"))
+                            .arg(cfg || qsTr("未绑定"))
+                }
+                background: Rectangle {
+                    radius: 11
+                    color: viewRulesToolbarBtn.down     ? "#0a4a8a"
+                         : viewRulesToolbarBtn.hovered  ? "#1a5faa"
+                                                        : "#152a4a"
+                    border.color: "#2a6abf"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 120 } }
+                }
+                contentItem: Text {
+                    text: "📋 评分规则 ↗"
+                    color: "#7ab8f5"
+                    font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
             // 第一根分隔线：把"打开"与"播放控制组"隔开（仅有视频时存在）
             Rectangle {
                 width: 1
@@ -5375,23 +5507,6 @@ ApplicationWindow {
                 Layout.topMargin: 6
                 Layout.bottomMargin: 6
                 visible: Engine.fileCount > 0
-            }
-
-            // ── 评分完成快捷入口：所有组评分完成后浮现，点击打开评分数据面板 ──
-            FlatButton {
-                id: allRatedShortcutBtn
-                text: "📤 评分数据"
-                visible: root.reviewMode && multiGroupDialog.active && multiGroupDialog.allGroupsRated
-                Layout.preferredWidth: visible ? implicitWidth : 0
-                font.pixelSize: 12
-                textColor: "#4fc3f7"
-                ToolTip.visible: hovered
-                ToolTip.delay: 400
-                ToolTip.text: qsTr("所有评分已完成，点击查看 / 导出评分数据")
-                onClicked: ratingsDialog.open()
-
-                Behavior on opacity { NumberAnimation { duration: 300 } }
-                opacity: visible ? 1.0 : 0.0
             }
 
             // ── 关闭全部视频（一次性清空所有路）──
