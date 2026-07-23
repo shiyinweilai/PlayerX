@@ -671,6 +671,9 @@ ApplicationWindow {
     // quality_slide 模式下第二维度（滑动对比专用）的 key，由 Main.qml 注入。
     // 用于 allGroupsRated 检查每组两文件是否都有滑动评分。非该模式时为 ""。
     property string slideDimKey: ""
+    // Checklist 配置（由 Main.qml 注入）：非空时 allGroupsRated 额外校验
+    // 每个文件是否至少勾选一项（数据来源：Rating.loadString("checklist:"+filePath)）。
+    property var  reviewChecklist: []
     // 每次维度更新时递增，供内层 Repeater 强制重新求值
     property int reviewDimensionsVersion: 0
     // 按 mode 缓存的维度列表（由 Main.qml 注入），切换 mode 时自动加载对应维度
@@ -805,7 +808,15 @@ ApplicationWindow {
     // 下划线开头的属性名会被 QML 视为“私有”但仍有 changed 信号，只是不能用
     // onXxxChanged 在同作用域写 handler。这里改为普通名字 stateBumper，不需要 handler。
     property int stateBumper: 0
-    function _bumpState() { stateBumper = stateBumper + 1 }
+    function _bumpState() {
+        stateBumper = stateBumper + 1
+        // 联动：让 unratedDialog 里 checklist 相关的响应式属性重新计算
+        // （unratedDialog 是本 dialog 的子组件，勾选变化 → 弹窗内提示与按钮态同步）
+        try {
+            if (typeof unratedDialog !== "undefined" && unratedDialog !== null)
+                unratedDialog._ckBump = (unratedDialog._ckBump || 0) + 1
+        } catch (e) {}
+    }
 
     // 所有组的所有通道是否都已评分（供主窗控制栏显示"评分数据"快捷按钮）
     readonly property bool allGroupsRated: {
@@ -821,6 +832,11 @@ ApplicationWindow {
         var isQS = (typeof Rating !== "undefined") && Rating.currentMode === "quality_slide"
         var slideTag = (isQS && slideDimKey && slideDimKey.length > 0)
             ? ("multi_" + slideDimKey) : ""
+        // 【Checklist 校验】有 checklist 配置时，每个文件必须至少勾选一项 checklist。
+        // 数据存储在 Rating.loadString("checklist:" + filePath) 里，JSON 数组字符串。
+        var hasChecklist = reviewChecklist
+                && typeof reviewChecklist.length === "number"
+                && reviewChecklist.length > 0
         // 遍历所有通道，检查每个通道的每个文件（每组）是否都有评分
         for (var li = 0; li < n; ++li) {
             var lane = _rowsModel.get(li)
@@ -846,6 +862,18 @@ ApplicationWindow {
                 if (slideTag.length > 0) {
                     var slideScore = Rating.ratingFor(fp, slideTag)
                     if (!(slideScore > 0)) return false
+                }
+                // Checklist：至少勾选一项才算完成
+                if (hasChecklist) {
+                    var rawCk = Rating.loadString("checklist:" + fp, "")
+                    var ckCount = 0
+                    if (rawCk && rawCk.length > 0) {
+                        try {
+                            var arrCk = JSON.parse(rawCk)
+                            if (arrCk && typeof arrCk.length === "number") ckCount = arrCk.length
+                        } catch (eCk) { ckCount = 0 }
+                    }
+                    if (ckCount === 0) return false
                 }
             }
         }
@@ -2856,8 +2884,30 @@ ApplicationWindow {
         // 弹窗内对各通道的本地评分缓存：chIdx -> 1..5；评分后用于驻留显示星位。
         // 真实评分写入由 dlg.setRatingAt 完成，本字段仅用于 UI 展示，避免点快了不知道打了几分。
         property var _localRatings: ({})
+        // 【Checklist 未勾选状态】响应式 bumper：外部主界面 checklist 勾选变化后会
+        // 通过 dlg 触发 _ckBump++，让 _allRated / 文案 / 每行未勾提示重新求值。
+        property int _ckBump: 0
+        // 判断某通道是否 checklist 未勾（有 checklist 配置且该文件的持久化勾选为空）。
+        // 供 _allRated 与详情行响应式使用；_ckBump 参数只用于建立依赖。
+        function _isCkMissing(chIdx) {
+            var _ = _ckBump  // 触达依赖
+            if (chIdx < 0) return false  // sentinel（滑动 L/R）不参与 checklist
+            var ck = dlg.reviewChecklist
+            if (!(ck && typeof ck.length === "number" && ck.length > 0)) return false
+            if (typeof Rating === "undefined") return false
+            var fp = ""
+            try { fp = Engine.filePathAt(chIdx) || "" } catch (e) { fp = "" }
+            if (fp.length === 0) return true
+            var raw = Rating.loadString("checklist:" + fp, "")
+            if (!raw || raw.length === 0) return true
+            try {
+                var arr = JSON.parse(raw)
+                return !(arr && typeof arr.length === "number" && arr.length > 0)
+            } catch (e) { return true }
+        }
         // 全部通道是否都已评分（基于 _pendingMissing 与 _localRatings 派生）
         readonly property bool _allRated: {
+            var _b = _ckBump  // 建立对 checklist 变化的响应式依赖
             var arr = dlg._pendingMissing || []
             if (!arr.length) return true
             for (var i = 0; i < arr.length; ++i) {
@@ -2865,14 +2915,18 @@ ApplicationWindow {
                 var v = _localRatings[chIdx]
                 if (dlg.hasDims) {
                     // 有维度：需要每个维度都 > 0
-                    if (typeof v !== "object" || v === null) return false
-                    var dims = dlg.reviewDimensions
-                    for (var d = 0; d < dims.length; ++d) {
-                        if (!(v[dims[d].key] > 0)) return false
+                    if (chIdx >= 0) {
+                        if (typeof v !== "object" || v === null) return false
+                        var dims = dlg.reviewDimensions
+                        for (var d = 0; d < dims.length; ++d) {
+                            if (!(v[dims[d].key] > 0)) return false
+                        }
                     }
                 } else {
-                    if (!v || v <= 0) return false
+                    if (chIdx >= 0 && (!v || v <= 0)) return false
                 }
+                // Checklist 校验：任一通道 checklist 未勾选也算未完成
+                if (chIdx >= 0 && _isCkMissing(chIdx)) return false
             }
             return true
         }
@@ -2907,6 +2961,8 @@ ApplicationWindow {
                 }
                 _localRatings = init
                 _toastText = ""
+                // 打开弹窗时触发一次 checklist 响应式，确保 _allRated 与文案基于最新持久化数据计算
+                _ckBump = _ckBump + 1
             } else {
                 _localRatings = ({})
                 _toastText = ""
@@ -2923,12 +2979,17 @@ ApplicationWindow {
                 spacing: 10
                 Label {
                     text: {
+                        var _b = unratedDialog._ckBump  // 建立 checklist 响应式依赖
                         var total = (dlg._pendingMissing || []).length
                         if (total === 0) return "✅ 当前组全部评分完成"
-                        // 已在弹窗内完成的数量
+                        // 已在弹窗内完成的数量（星星维度）
                         var done = 0
+                        // 未勾选 checklist 的通道数（不含 sentinel）
+                        var ckMiss = 0
                         for (var i = 0; i < total; ++i) {
-                            var v = unratedDialog._localRatings[dlg._pendingMissing[i]]
+                            var chIdx = dlg._pendingMissing[i]
+                            var v = unratedDialog._localRatings[chIdx]
+                            var starOk = false
                             if (dlg.hasDims) {
                                 if (typeof v === "object" && v !== null) {
                                     var dims = dlg.reviewDimensions
@@ -2936,14 +2997,25 @@ ApplicationWindow {
                                     for (var d = 0; d < dims.length; ++d) {
                                         if (!(v[dims[d].key] > 0)) { allOk = false; break }
                                     }
-                                    if (allOk) done++
+                                    if (allOk) starOk = true
+                                } else if (chIdx < 0) {
+                                    // sentinel：不参与星星统计
+                                    starOk = true
                                 }
                             } else {
-                                if (v && v > 0) done++
+                                if (chIdx < 0) starOk = true
+                                else if (v && v > 0) starOk = true
                             }
+                            if (starOk) done++
+                            // Checklist 校验
+                            if (chIdx >= 0 && unratedDialog._isCkMissing(chIdx)) ckMiss++
                         }
-                        if (done >= total) return "✅ 当前组全部评分完成"
-                        return "🔔 当前组还有 " + (total - done) + " 个通道未评分"
+                        var starLeft = total - done
+                        if (starLeft <= 0 && ckMiss <= 0) return "✅ 当前组全部评分完成"
+                        var parts = []
+                        if (starLeft > 0) parts.push(starLeft + " 个通道未评分")
+                        if (ckMiss > 0) parts.push(ckMiss + " 个通道未勾选检查项")
+                        return "🔔 当前组还有 " + parts.join("、")
                     }
                     color: "#e8e8ec"
                     font.pixelSize: 15
@@ -2959,9 +3031,19 @@ ApplicationWindow {
                 }
             }
             Label {
-                text: unratedDialog._allRated
-                      ? "可点击「继续翻组」进入下一组。"
-                      : "在下方直接点星号完成评分（也可在主界面使用 Shift+1~5 快捷键）。"
+                text: {
+                    if (unratedDialog._allRated) return "可点击「继续翻组」进入下一组。"
+                    // 判断是否有 checklist 未勾选，给用户更明确的引导
+                    var _b = unratedDialog._ckBump
+                    var hasCkMiss = false
+                    var arr = dlg._pendingMissing || []
+                    for (var i = 0; i < arr.length; ++i) {
+                        if (arr[i] >= 0 && unratedDialog._isCkMissing(arr[i])) { hasCkMiss = true; break }
+                    }
+                    if (hasCkMiss)
+                        return "在下方直接点星号完成评分；⚠️ 检查项未勾选的通道请回到主界面点星星右侧展开 checklist 勾选。"
+                    return "在下方直接点星号完成评分（也可在主界面使用 Shift+1~5 快捷键）。"
+                }
                 color: "#9a9aa8"
                 font.pixelSize: 11
                 Layout.fillWidth: true
@@ -2991,9 +3073,9 @@ ApplicationWindow {
                                 // 防止被内层 Repeater 的 modelData/index 遮蔽。
                                 property int chIdx: modelData
                                 Layout.fillWidth: true
-                                // 多维模式：文件名行(24) + 每维度行(22) + 间距；单维：固定32
+                                // 多维模式：文件名行(24) + checklist提示行(16可选) + 每维度行(22) + 间距；单维：固定32
                                 implicitHeight: dlg.hasDims && chIdx >= 0
-                                    ? 24 + dlg.reviewDimensions.length * 22 + 8
+                                    ? 24 + (unratedDialog._isCkMissing(chIdx) ? 16 : 0) + dlg.reviewDimensions.length * 22 + 8
                                     : 32
                                 color: "transparent"
                                 radius: 3
@@ -3033,6 +3115,17 @@ ApplicationWindow {
                                         color: "#ffb86c"
                                         font.pixelSize: 11
                                         font.italic: true
+                                    }
+
+                                    // Checklist 未勾选提示（响应式依赖 _ckBump）
+                                    Label {
+                                        visible: chIdx >= 0 && unratedDialog._isCkMissing(chIdx)
+                                        text: "⚠️ 未勾选检查项：请在主界面点星星右侧 ☑ 展开勾选"
+                                        color: "#ffb86c"
+                                        font.pixelSize: 11
+                                        font.italic: true
+                                        Layout.fillWidth: true
+                                        elide: Text.ElideRight
                                     }
 
                                     // 多维星星：每个维度一行

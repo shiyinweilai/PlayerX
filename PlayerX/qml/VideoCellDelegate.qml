@@ -782,6 +782,11 @@ Rectangle {
             }
             _checked = newChecked
             _saveChecked()
+            // 通知 Main.qml：checklist 勾选变化 → 触发 allGroupsRated 响应式重算，
+            // 让"下一组"按钮亮/灰状态与"下一组切换未评分校验"同步生效。
+            if (viewRoot && typeof viewRoot._onChecklistChanged === "function") {
+                try { viewRoot._onChecklistChanged() } catch (e) {}
+            }
         }
 
         background: Rectangle {

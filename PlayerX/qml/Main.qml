@@ -5397,12 +5397,12 @@ ApplicationWindow {
             // ── 关闭全部视频（一次性清空所有路）──
             // 设计：
             //   · 只在 fileCount > 0 时显示，与单路 ✕ 一致；
-            //   · 文案 "✕ 全部" 用红色调色，悬停加深，与单路关闭按钮的语义/视觉对齐；
+            //   · 文案 "✕ 关闭" 用红色调色，悬停加深，与单路关闭按钮的语义/视觉对齐；
             //   · 点击先弹深色二次确认弹窗，避免误触一次性丢失全部正在比较的视频；
             //   · 也可通过【文件】▸ 关闭所有视频 / ⌘W 触发。
             FlatButton {
                 id: closeAllBtn
-                text: "✕ 全部"
+                text: "✕ 关闭"
                 visible: Engine.fileCount > 0
                 Layout.preferredWidth: visible ? implicitWidth : 0
                 font.pixelSize: 12
@@ -6108,9 +6108,24 @@ ApplicationWindow {
         if (Engine.fileCount === 1) return 0
         return -1
     }
+    // 【Checklist 勾选变更通知】由 VideoCellDelegate 的 checklistPopup 在
+    // 每次勾/取消勾选后调用，触发 multiGroupDialog._bumpState() 让 allGroupsRated
+    // 响应式重算，避免"下一组"按钮亮灭状态延迟。
+    function _onChecklistChanged() {
+        if (typeof multiGroupDialog !== "undefined" && multiGroupDialog._bumpState)
+            multiGroupDialog._bumpState()
+        // 若「视频评分数据」对话框已打开，让它同步重算文件夹完成度（含 checklist 未勾选统计），
+        // 避免用户勾/取消后要重开 Dialog 才看到最新的 ✓ / ⚠ 状态。
+        if (typeof ratingsDialog !== "undefined"
+                && ratingsDialog.visible
+                && typeof ratingsDialog._refresh === "function") {
+            ratingsDialog._refresh()
+        }
+    }
+
     // 快捷键评分专用：不走 setRatingAt（那里含 toggle 语义，给鼠标点星条用），
-    // 这里一律“强制覆盖写入”：不管以前是几星，按下 Shift+N 就是 N 星，
-    // 避免“首次评分出现已清除评分”、“连按两下变 0 分”这些迷惑场景。
+    // 这里一律"强制覆盖写入"：不管以前是几星，按下 Shift+N 就是 N 星，
+    // 避免"首次评分出现已清除评分"、"连按两下变 0 分"这些迷惑场景。
     // 超过当前模式 maxStars 的会被自动钉到上限（如主观模式 Shift+5 → 实际写 3）。
     function _writeRating(idx, score, dimKey) {
         // 超出当前模式上限时仅 UI 层钉一下，避免 cellRatings 写出 "5" 但后端实际存为 3
@@ -8738,6 +8753,29 @@ ApplicationWindow {
                     if (root.ratingAt(j) <= 0) miss.push(j)
                 }
             }
+            // 【Checklist 校验】仅当有 checklist 配置时才检查：
+            // 每个通道必须至少勾选一项 checklist，否则视为未评分完成。
+            // 已经因为维度未打分被加入 miss 的通道无需重复添加。
+            var hasChecklist = root.reviewChecklist
+                    && typeof root.reviewChecklist.length === "number"
+                    && root.reviewChecklist.length > 0
+            if (hasChecklist && typeof Rating !== "undefined") {
+                for (var k = 0; k < n; ++k) {
+                    if (miss.indexOf(k) >= 0) continue  // 已在 miss 里，跳过
+                    var fp = ""
+                    try { fp = Engine.filePathAt(k) || "" } catch (e) { fp = "" }
+                    if (fp.length === 0) { miss.push(k); continue }
+                    var raw = Rating.loadString("checklist:" + fp, "")
+                    var checkedCount = 0
+                    if (raw && raw.length > 0) {
+                        try {
+                            var arr = JSON.parse(raw)
+                            if (arr && typeof arr.length === "number") checkedCount = arr.length
+                        } catch (e) { checkedCount = 0 }
+                    }
+                    if (checkedCount === 0) miss.push(k)
+                }
+            }
             // quality_slide：仅当 fileCount===2 时滑动对比才有意义；
             // 多于 2 路的场景退化回普通 quality 校验，避免误拦。
             // 【关键修复】滑动检测必须在 hasDims/无维度 两种情况下都生效——
@@ -8780,6 +8818,8 @@ ApplicationWindow {
         dimsByMode: root._dimsByMode
         // quality_slide 模式下第二维度 key，供 allGroupsRated 判断滑动打分是否完整
         slideDimKey: (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""
+        // Checklist 配置：非空时 allGroupsRated 会额外校验每个文件是否至少勾选一项
+        reviewChecklist: root.reviewChecklist
         // 点击「启动对比」时，先从网络加载当前模式对应的激活配置，完成后再启动
         onDimLoadNeeded: function(mode, callback) {
             var base = root._dimApiUrl()
@@ -8813,6 +8853,8 @@ ApplicationWindow {
         // 让 RatingsDialog 能区分"哪个 slide_type 属于滑动打分（第二维度）"，
         // 从而正确分到"滑动对比打分"分组。非 quality_slide 模式或维度不足时为 ""。
         slideDimKey: (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""
+        // 当前模式的 checklist 配置：用于"文件夹是否评完"判定；空数组时完全不启用。
+        reviewChecklist: root.reviewChecklist
     }
 
     // 全局进度条已移除：多路场景下各路独立播放控制，全局进度条语义

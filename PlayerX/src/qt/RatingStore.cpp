@@ -689,7 +689,7 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
     QTextStream ts(&buf, QIODevice::WriteOnly);
     ts.setEncoding(QStringConverter::Utf8);
     ts.setGenerateByteOrderMark(true);
-    ts << "updated_at,rater,folder,file_name,stars,slide_type\n";
+    ts << "updated_at,rater,folder,file_name,stars,slide_type,checklist\n";
 
     // 历史本地 CSV 里 file_name 形如 "1_xxx.mp4"（带通道前缀）。
     // 上传/导出阶段把通道前缀剥掉，只保留原始文件名；通道维度由
@@ -705,6 +705,28 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
             return name.mid(i + 1);
         }
         return name;
+    };
+
+    // ── Checklist 读取器 ────────────────────────────────────────────
+    // 存储由 QML 端 Rating.saveString("checklist:<filePath>", JSON.stringify(keys))
+    // 写入 QSettings；这里读回来解析成 keys 列表，逗号连接后作为 CSV 的 checklist 列。
+    // 空、格式错误、或非数组 → 输出空字符串（该文件未勾选任何检查项）。
+    auto readChecklistCsvCell = [](const QString& filePath) -> QString {
+        if (filePath.isEmpty()) return QString();
+        QSettings s;
+        const QString raw = s.value(QStringLiteral("checklist:") + filePath).toString();
+        if (raw.isEmpty()) return QString();
+        QJsonParseError err{};
+        const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+        if (err.error != QJsonParseError::NoError || !doc.isArray()) return QString();
+        const QJsonArray arr = doc.array();
+        QStringList keys;
+        keys.reserve(arr.size());
+        for (const auto& v : arr) {
+            const QString k = v.toString();
+            if (!k.isEmpty()) keys.push_back(k);
+        }
+        return keys.join(QLatin1Char(','));
     };
 
     const QList<QVariantMap> rows = readAll();
@@ -735,7 +757,8 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
            << csvEscape(folder)                            << ","
            << csvEscape(fileName)                          << ","
            << r.value("stars").toInt()                     << ","
-           << csvEscape(r.value("slide_type").toString())  << "\n";
+           << csvEscape(r.value("slide_type").toString())  << ","
+           << csvEscape(readChecklistCsvCell(fp))          << "\n";
     }
     ts.flush();
     return buf;
@@ -813,7 +836,7 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
     QTextStream ts(&buf, QIODevice::WriteOnly);
     ts.setEncoding(QStringConverter::Utf8);
     ts.setGenerateByteOrderMark(true);
-    ts << "updated_at,rater,folder,file_name,stars,slide_type\n";
+    ts << "updated_at,rater,folder,file_name,stars,slide_type,checklist\n";
 
     auto stripChannelPrefix = [](const QString& name) -> QString {
         int i = 0;
@@ -822,6 +845,58 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
             return name.mid(i + 1);
         }
         return name;
+    };
+
+    // ── Checklist 数据源（归档场景）──────────────────────────────────
+    // 优先从批次目录下的 checklist.json（QML 归档时写入的 snapshot）读，
+    // 结构：{"<file_path>": ["key1","key2", ...], ...}
+    // 若该 file_path 在 snapshot 里没有条目 → 回退到 QSettings 现值
+    // （用户可能归档后又勾选/取消了本地的同名文件，snapshot 优先能保证与归档瞬间一致）。
+    QHash<QString, QString> checklistSnapshot;
+    {
+        const QString ckJsonPath = QDir(QDir(QDir(m_baseDir).filePath(QStringLiteral("archive")))
+                                            .filePath(mode))
+                                       .filePath(batchName)
+                                   + QStringLiteral("/checklist.json");
+        QFile jf(ckJsonPath);
+        if (jf.exists() && jf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QJsonParseError je{};
+            const QJsonDocument doc = QJsonDocument::fromJson(jf.readAll(), &je);
+            if (je.error == QJsonParseError::NoError && doc.isObject()) {
+                const QJsonObject obj = doc.object();
+                for (auto it = obj.begin(); it != obj.end(); ++it) {
+                    if (!it.value().isArray()) continue;
+                    QStringList keys;
+                    const QJsonArray arr = it.value().toArray();
+                    keys.reserve(arr.size());
+                    for (const auto& v : arr) {
+                        const QString k = v.toString();
+                        if (!k.isEmpty()) keys.push_back(k);
+                    }
+                    checklistSnapshot.insert(it.key(), keys.join(QLatin1Char(',')));
+                }
+            }
+        }
+    }
+    auto readChecklistCsvCell = [&](const QString& filePath) -> QString {
+        if (filePath.isEmpty()) return QString();
+        auto it = checklistSnapshot.constFind(filePath);
+        if (it != checklistSnapshot.constEnd()) return it.value();
+        // 回退：QSettings 现值
+        QSettings s;
+        const QString raw = s.value(QStringLiteral("checklist:") + filePath).toString();
+        if (raw.isEmpty()) return QString();
+        QJsonParseError err{};
+        const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+        if (err.error != QJsonParseError::NoError || !doc.isArray()) return QString();
+        const QJsonArray arr = doc.array();
+        QStringList keys;
+        keys.reserve(arr.size());
+        for (const auto& v : arr) {
+            const QString k = v.toString();
+            if (!k.isEmpty()) keys.push_back(k);
+        }
+        return keys.join(QLatin1Char(','));
     };
 
     for (const auto& r : rows) {
@@ -849,7 +924,8 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
            << csvEscape(folder)                            << ","
            << csvEscape(fileName)                          << ","
            << r.value("stars").toInt()                     << ","
-           << csvEscape(r.value("slide_type").toString())  << "\n";
+           << csvEscape(r.value("slide_type").toString())  << ","
+           << csvEscape(readChecklistCsvCell(fp))          << "\n";
     }
     ts.flush();
     return buf;

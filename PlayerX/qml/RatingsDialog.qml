@@ -115,6 +115,9 @@ Window {
     // 用来区分同 CSV 里的滑动打分（slide_type == "multi_<slideDimKey>" 或旧值 "slide"）
     // 和第一维度普通打分（slide_type == "multi_<其他key>"），便于分组显示。
     property string slideDimKey: ""
+    // 当前模式的 checklist 配置（items 数组：[{key, label, definition, ...}]）。
+    // 由 Main.qml 注入。空数组 = 该模式没有 checklist，本 Dialog 完全不做 checklist 校验。
+    property var reviewChecklist: []
 
     // 从 file_path 中提取所属目录（兼容 / 与 \）
     function _dirOf(fp) {
@@ -256,7 +259,33 @@ Window {
                 if (n2 > tot2) tot2 = n2
             }
             d.totalVideos = tot2
-            d.fullyRated = (d.totalVideos > 0) && (d.ratedCount >= d.totalVideos)
+            // ── Checklist 未勾选统计 ────────────────────────────────
+            // 当模式配置了 checklist 时，逐文件读取 Rating.loadString("checklist:"+fp)
+            // 若为空（未勾选任何检查项）则计数。ckMissing > 0 时该文件夹算未评完，
+            // 会在 fullyRated 上体现、参与上传前拦截。
+            // 无 checklist 配置或 Rating 未定义 → ckMissing 恒为 0，行为与旧版完全一致。
+            var ckCfg = root.reviewChecklist
+            var hasCkCfg = ckCfg && typeof ckCfg.length === "number" && ckCfg.length > 0
+            var ckMiss = 0
+            if (hasCkCfg && typeof Rating !== "undefined") {
+                for (var cf = 0; cf < d.files.length; ++cf) {
+                    var cfp = d.files[cf].path || ""
+                    if (!cfp) continue
+                    var craw = Rating.loadString("checklist:" + cfp, "")
+                    var cok = false
+                    if (craw && craw.length > 0) {
+                        try {
+                            var carr = JSON.parse(craw)
+                            if (carr && typeof carr.length === "number" && carr.length > 0) cok = true
+                        } catch (e) { cok = false }
+                    }
+                    if (!cok) ++ckMiss
+                }
+            }
+            d.ckMissing = ckMiss
+            d.fullyRated = (d.totalVideos > 0)
+                && (d.ratedCount >= d.totalVideos)
+                && (ckMiss === 0)
             folders.push(d)
         }
         folders.sort(function(a, b) {
@@ -454,12 +483,16 @@ Window {
                 if (!d.path || d.path.length === 0) continue
                 var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
                 var total = (d.totalVideos === undefined ? rated : d.totalVideos)
-                if (total > 0 && rated < total) {
+                var ckMiss = (d.ckMissing === undefined ? 0 : d.ckMissing)
+                var starIncomplete = (total > 0 && rated < total)
+                var ckIncomplete = (ckMiss > 0)
+                if (starIncomplete || ckIncomplete) {
                     out.push({
                         name: d.name,
                         path: d.path,
                         ratedCount: rated,
-                        totalVideos: total
+                        totalVideos: total,
+                        ckMissing: ckMiss
                     })
                 }
             }
@@ -1306,39 +1339,57 @@ Window {
                             var d = folderRoot.d
                             var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
                             var total = (d.totalVideos === undefined ? rated : d.totalVideos)
+                            var ckMiss = d.ckMissing || 0
                             var head = (d.fullyRated ? "✓ " : "⚠ ") + rated + "/" + total
                             var tail = " · " + d.totalItems + "条"
                                 + (d.avg > 0 ? " · " + d.avg + "★" : "")
+                            if (ckMiss > 0) tail += " · ☐" + ckMiss  // checklist 未勾选文件数
                             return head + tail
                         }
+                        // 【颜色规则】fullyRated=true（可上传）统一显示绿色，
+                        // 让"可上传状态"一眼可辨；未完成用橙红提醒。
                         color: folderRoot.d
-                                ? (folderRoot.d.fullyRated
-                                    ? (folderRoot.d.avg > 0 ? "#f5c518" : "#5fd17a")
-                                    : "#ffb05c")
+                                ? (folderRoot.d.fullyRated ? "#5fd17a" : "#ffb05c")
                                 : "#cfcfd4"
                         font.pixelSize: 11
                         elide: Text.ElideRight
-                        // 鼠标悬浮看完整解释（按列宽收窄时被 elide 截断）
+                        // 鼠标悬浮看完整解释（按列宽收窄时被 elide 截断）；
+                        // 不完整时额外列出缺项（未评分文件数 / 未勾选 checklist 文件数），
+                        // 让用户直接从悬浮提示里知道差在哪里。
                         ToolTip.visible: _sumMA.containsMouse && folderRoot.d !== null
                         ToolTip.delay: 600
                         ToolTip.timeout: 8000
-                        ToolTip.text: folderRoot.d
-                                ? qsTr("已评分视频：%1 / %2\n评分记录：%3 条\n平均：%4")
-                                    .arg(folderRoot.d.ratedCount === undefined
-                                            ? folderRoot.d.files.length
-                                            : folderRoot.d.ratedCount)
-                                    .arg(folderRoot.d.totalVideos === undefined
-                                            ? folderRoot.d.files.length
-                                            : folderRoot.d.totalVideos)
-                                    .arg(folderRoot.d.totalItems)
-                                    .arg(folderRoot.d.avg > 0 ? folderRoot.d.avg + " ★" : "—")
-                                : ""
+                        ToolTip.text: {
+                            var d = folderRoot.d
+                            if (!d) return ""
+                            var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
+                            var total = (d.totalVideos === undefined ? d.files.length : d.totalVideos)
+                            var ckMiss = d.ckMissing || 0
+                            var base = qsTr("已评分视频：%1 / %2\n评分记录：%3 条\n平均：%4")
+                                .arg(rated).arg(total).arg(d.totalItems)
+                                .arg(d.avg > 0 ? d.avg + " ★" : "—")
+                            if (d.fullyRated) return base
+                            // ── 不完整：追加缺项明细 ──
+                            var missing = []
+                            var starLeft = total - rated
+                            if (starLeft > 0)
+                                missing.push(qsTr("• 还有 %1 个视频未评分").arg(starLeft))
+                            if (ckMiss > 0)
+                                missing.push(qsTr("• 还有 %1 个视频未勾选检查项").arg(ckMiss))
+                            if (missing.length === 0) return base
+                            return base + "\n\n" + qsTr("⚠ 未完成，无法上传：")
+                                    + "\n" + missing.join("\n")
+                        }
+                        // 汇总列自己接管本区域的 hover + click，避免和整行的 folderMA
+                        // 的"文件夹路径 ToolTip"抢占：整行的 folderMA 已把汇总列宽度
+                        // 让出（anchors.rightMargin: 90），本 MouseArea 覆盖汇总列区域，
+                        // 悬浮显示"评分/checklist 完成度"tooltip；点击则同样展开/收起。
                         MouseArea {
                             id: _sumMA
                             anchors.fill: parent
                             hoverEnabled: true
-                            // 不要吃点击：让父容器 folderMA 继续负责展开/收起
-                            acceptedButtons: Qt.NoButton
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { if (folderRoot.d) root._toggleKey(folderRoot.d.key) }
                         }
                     }
 
@@ -1358,6 +1409,10 @@ Window {
                         anchors.left: parent.left
                         anchors.leftMargin: 32
                         anchors.right: parent.right
+                        // 让出右侧"汇总列"（宽 90），避免本 MouseArea 的"文件夹路径 ToolTip"
+                        // 抢占汇总列的"完成度 ToolTip"。汇总列区域由内层 _sumMA 独立处理
+                        // hover + click（点击同样展开/收起，行为一致）。
+                        anchors.rightMargin: 90
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
                         z: 0
@@ -1686,8 +1741,14 @@ Window {
                         // 列出未评完的文件夹（最多 3 个，超出 …）
                         var lines = []
                         for (var i = 0; i < inc.length && i < 3; ++i) {
-                            lines.push("• " + inc[i].name
-                                       + " （" + inc[i].ratedCount + "/" + inc[i].totalVideos + "）")
+                            var it = inc[i]
+                            var starLeft = (it.totalVideos - it.ratedCount)
+                            var reasons = []
+                            if (starLeft > 0)
+                                reasons.push(it.ratedCount + "/" + it.totalVideos + " 已评分")
+                            if (it.ckMissing > 0)
+                                reasons.push(it.ckMissing + " 个文件未勾选检查项")
+                            lines.push("• " + it.name + "（" + reasons.join("，") + "）")
                         }
                         if (inc.length > 3) lines.push("…还有 " + (inc.length - 3) + " 个")
                         var leadHint = root._isArchiveView
@@ -2962,10 +3023,19 @@ Window {
                                 }
                             }
                             Text {
-                                text: qsTr("已评 %1 / %2（缺 %3）")
-                                        .arg(modelData.ratedCount)
-                                        .arg(modelData.totalVideos)
-                                        .arg(modelData.totalVideos - modelData.ratedCount)
+                                text: {
+                                    var starLeft = (modelData.totalVideos || 0) - (modelData.ratedCount || 0)
+                                    var ckMiss = modelData.ckMissing || 0
+                                    var parts = []
+                                    if (starLeft > 0)
+                                        parts.push(qsTr("已评 %1/%2（缺 %3）")
+                                            .arg(modelData.ratedCount)
+                                            .arg(modelData.totalVideos)
+                                            .arg(starLeft))
+                                    if (ckMiss > 0)
+                                        parts.push(qsTr("%1 个文件未勾选检查项").arg(ckMiss))
+                                    return parts.join("，")
+                                }
                                 color: "#ffb05c"
                                 font.pixelSize: 12
                                 font.bold: true
