@@ -872,12 +872,12 @@
         }
         const admin = isLoggedIn();
         const metaItems = [];
-        if (obj.type)  metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
+        if (obj.type)  metaItems.push(`<span class="dim-meta-item dim-meta-type"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
         // 评测任务：可内联编辑
-        metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val dim-meta-editable" data-field="task" title="点击编辑">${escHtml(obj.task || '（未填写，点击添加）')}</span></span>`);
-        if (obj.scale) metaItems.push(`<span class="dim-meta-item dim-meta-muted"><span class="dim-meta-icon">📏</span>${escHtml(obj.scale)}</span>`);
+        metaItems.push(`<span class="dim-meta-item dim-meta-task"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val dim-meta-editable" data-field="task" title="点击编辑">${escHtml(obj.task || '（未填写，点击添加）')}</span></span>`);
+        if (obj.scale) metaItems.push(`<span class="dim-meta-item dim-meta-muted dim-meta-scale"><span class="dim-meta-icon">📏</span>${escHtml(obj.scale)}</span>`);
         // 备注 tag：可内联编辑
-        metaItems.push(`<span class="dim-meta-item"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val dim-meta-editable" data-field="tag" title="点击编辑">${escHtml(obj.tag || '（未填写，点击添加）')}</span></span>`);
+        metaItems.push(`<span class="dim-meta-item dim-meta-tag"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val dim-meta-editable" data-field="tag" title="点击编辑">${escHtml(obj.tag || '（未填写，点击添加）')}</span></span>`);
         const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';
 
         // 渲染后绑定内联编辑事件（延迟到 innerHTML 写入后）
@@ -928,7 +928,7 @@
                 ? `<span class="dim-lv-drag-handle" title="左右拖动调整顺序">⠿</span>`
                 : '';
 
-            return `<div class="dim-level${admin ? ' dim-level-admin' : ''}" data-dim="${idx}" data-lv="${lvIdx}"${admin ? ' draggable="true"' : ''}>
+            return `<div class="dim-level${admin ? ' dim-level-admin' : ''}" data-dim="${idx}" data-lv="${lvIdx}" data-score="${escHtml(String(score))}"${admin ? ' draggable="true"' : ''}>
                 ${delBtn}
                 ${lvDragHandle}
                 <div class="dim-level-score">
@@ -1003,18 +1003,18 @@
                 ? `<span class="${defCls}" data-cl-idx="${idx}" data-cl-field="definition" title="点击编辑悬浮说明">${escHtml(item.definition || '点击添加悬浮说明')}</span>`
                 : (item.definition ? `<span class="dim-cl-def">${escHtml(item.definition)}</span>` : '');
 
-            const fieldLabel = (text) => `<span class="dim-cl-fname">${text}</span>`;
+            const fieldLabel = (text, type) => `<span class="dim-cl-fname dim-cl-fname-${type}">${text}</span>`;
             return `<div class="dim-cl-row" data-idx="${idx}">
                 ${admin ? `<div class="dim-cl-cell dim-cl-cell-key">
-                    ${fieldLabel('标签键')}
+                    ${fieldLabel('标签键', 'key')}
                     ${keyHtml}
                 </div>` : ''}
                 <div class="dim-cl-cell dim-cl-cell-label">
-                    ${admin ? fieldLabel('标签值') : ''}
+                    ${admin ? fieldLabel('标签值', 'label') : ''}
                     ${labelHtml}
                 </div>
                 <div class="dim-cl-cell dim-cl-cell-def">
-                    ${admin ? fieldLabel('描述') : ''}
+                    ${admin ? fieldLabel('描述', 'def') : ''}
                     ${defHtml}
                 </div>
                 ${exclusiveBadge}

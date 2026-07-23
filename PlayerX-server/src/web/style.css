@@ -1468,16 +1468,20 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 16px;
+    gap: 8px;
+    margin-bottom: 18px;
 }
 .dim-meta-item {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     font-size: 13px;
     color: var(--text, #ecedf3);
     white-space: nowrap;
+    padding: 4px 10px 4px 6px;
+    border-radius: 999px;
+    background: var(--bg-elev-1, #16171c);
+    border: 1px solid var(--border-soft, #1f2027);
 }
 .dim-meta-item.dim-meta-muted {
     color: var(--muted, #86868b);
@@ -1485,20 +1489,27 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 .dim-meta-label {
     flex-shrink: 0;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     letter-spacing: .06em;
+    padding: 2px 8px;
+    border-radius: 999px;
     color: var(--primary, #0071e3);
     background: rgba(0, 113, 227, .12);
-    padding: 1px 7px;
-    border-radius: 20px;
 }
 .dim-meta-val {
     font-size: 13px;
     font-weight: 600;
     color: var(--text, #ecedf3);
 }
+
+/* 按字段类型分色 */
+.dim-meta-type    .dim-meta-label { color: #8e5cf7; background: rgba(142, 92, 247, .14); }
+.dim-meta-task    .dim-meta-label { color: #0a84ff; background: rgba(10, 132, 255, .14); }
+.dim-meta-tag     .dim-meta-label { color: #17a2b8; background: rgba(23, 162, 184, .16); }
+.dim-meta-scale               { background: transparent; border-color: transparent; padding: 0 4px; }
+
 .dim-meta-sep {
-    color: var(--muted, #86868b);
+    color: var(--border, #d3d5dc);
     font-size: 14px;
     padding: 0 2px;
     user-select: none;
@@ -1646,6 +1657,55 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     font-size: 15px;
     color: var(--muted, #86868b);
     line-height: 1.6;
+}
+
+/* ── 等级按分数分色（顶部指示条 + 数字徽章） ── */
+.dim-level {
+    position: relative;
+}
+.dim-level::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 3px;
+    background: var(--border-soft, #eef0f5);
+    transition: background .15s;
+}
+/* 5 分：绿 */
+.dim-level[data-score="5"]::before { background: linear-gradient(90deg, #30d158, #34c759); }
+.dim-level[data-score="5"] .dim-level-num { background: rgba(48, 209, 88, .18); color: #22a447; border-color: rgba(48, 209, 88, .45); }
+.dim-level[data-score="5"]:hover { background: rgba(48, 209, 88, .06); }
+/* 4 分：蓝 */
+.dim-level[data-score="4"]::before { background: linear-gradient(90deg, #0a84ff, #5e9bff); }
+.dim-level[data-score="4"] .dim-level-num { background: rgba(10, 132, 255, .18); color: #0a64d4; border-color: rgba(10, 132, 255, .45); }
+.dim-level[data-score="4"]:hover { background: rgba(10, 132, 255, .06); }
+/* 3 分：黄 */
+.dim-level[data-score="3"]::before { background: linear-gradient(90deg, #ffd60a, #ffbe0b); }
+.dim-level[data-score="3"] .dim-level-num { background: rgba(255, 190, 11, .22); color: #b17600; border-color: rgba(255, 190, 11, .55); }
+.dim-level[data-score="3"]:hover { background: rgba(255, 190, 11, .08); }
+/* 2 分：橙 */
+.dim-level[data-score="2"]::before { background: linear-gradient(90deg, #ff9f0a, #ff7f0a); }
+.dim-level[data-score="2"] .dim-level-num { background: rgba(255, 159, 10, .22); color: #cf7300; border-color: rgba(255, 159, 10, .55); }
+.dim-level[data-score="2"]:hover { background: rgba(255, 159, 10, .08); }
+/* 1 分：红 */
+.dim-level[data-score="1"]::before { background: linear-gradient(90deg, #ff453a, #ff6b6b); }
+.dim-level[data-score="1"] .dim-level-num { background: rgba(255, 69, 58, .18); color: #c93027; border-color: rgba(255, 69, 58, .45); }
+.dim-level[data-score="1"]:hover { background: rgba(255, 69, 58, .06); }
+
+/* 维度卡片左侧信息区：主题渐变背景，突出"总分/维度名" */
+.dim-card-left {
+    background: linear-gradient(135deg, rgba(10, 132, 255, .10), rgba(10, 132, 255, .02));
+}
+.dim-card-index {
+    box-shadow: 0 2px 8px rgba(10, 132, 255, .35);
+}
+
+/* 卡片 hover 更精致的浮起 */
+.dim-card {
+    transition: box-shadow .18s, transform .18s;
+}
+.dim-card:hover {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .06);
 }
 
 /* 编辑器区域（管理员登录后） */
@@ -1910,20 +1970,25 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     border: 1px solid var(--border, #2a2b33);
     border-radius: var(--radius-lg, 14px);
     overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .03);
 }
 .dim-cl-header {
     display: flex;
     align-items: center;
     gap: 12px;
     padding: 14px 20px;
-    background: var(--bg-elev-2, #1c1d23);
+    background: linear-gradient(90deg, rgba(23, 162, 184, .10), rgba(10, 132, 255, .08));
     border-bottom: 1px solid var(--border-soft, #1f2027);
 }
 .dim-cl-title {
     font-size: 15px;
-    font-weight: 600;
-    color: var(--text, #ecedf3);
-    letter-spacing: 0.2px;
+    font-weight: 700;
+    color: #17a2b8;
+    letter-spacing: 0.3px;
+    padding: 4px 10px;
+    background: rgba(23, 162, 184, .12);
+    border: 1px solid rgba(23, 162, 184, .28);
+    border-radius: 999px;
 }
 .dim-cl-subtitle {
     font-size: 13px;
@@ -1951,16 +2016,36 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 12px 20px;
+    padding: 12px 20px 12px 24px;
     border-bottom: 1px solid var(--border-soft, #1f2027);
     transition: background .12s;
     min-height: 48px;
+    position: relative;
+}
+.dim-cl-row::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 8px; bottom: 8px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: rgba(10, 132, 255, .25);
+    transition: background .15s;
+}
+/* 互斥项：左侧红条更醒目（用 :has 自动识别） */
+.dim-cl-row:has(.dim-cl-excl-badge.is-on)::before {
+    background: var(--warning, #ff9f0a);
 }
 .dim-cl-row:last-child {
     border-bottom: none;
 }
 .dim-cl-row:hover {
     background: var(--bg-hover, #21222a);
+}
+.dim-cl-row:hover::before {
+    background: rgba(10, 132, 255, .55);
+}
+.dim-cl-row:has(.dim-cl-excl-badge.is-on):hover::before {
+    background: var(--warning, #ff9f0a);
 }
 
 /* 每个字段的容器 cell：字段名标签 + 值 上下/左右组合 */
@@ -1974,19 +2059,24 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 .dim-cl-cell-key   { width: 180px; flex-shrink: 0; }
 .dim-cl-cell-def   { flex: 1; min-width: 120px; }
 
-/* 字段名前缀标签（"名称"/"key"/"说明"） */
+/* 字段名前缀标签（"标签键"/"标签值"/"描述"） */
 .dim-cl-fname {
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 600;
     color: var(--text-dim, #6f707a);
-    background: transparent;
-    border: 1px solid var(--border-soft, #1f2027);
-    border-radius: 4px;
-    padding: 2px 7px;
-    letter-spacing: 0.3px;
+    background: var(--bg-elev-2, #f6f7fb);
+    border: 1px solid var(--border-soft, #eef0f5);
+    border-radius: 999px;
+    padding: 3px 9px;
+    letter-spacing: 0.4px;
     flex-shrink: 0;
     user-select: none;
-    line-height: 1.5;
+    line-height: 1.4;
 }
+/* 按字段类型分色 */
+.dim-cl-fname-key   { color: #8e5cf7; background: rgba(142, 92, 247, .12); border-color: rgba(142, 92, 247, .28); }
+.dim-cl-fname-label { color: #0a84ff; background: rgba(10, 132, 255, .12); border-color: rgba(10, 132, 255, .28); }
+.dim-cl-fname-def   { color: #17a2b8; background: rgba(23, 162, 184, .14); border-color: rgba(23, 162, 184, .30); }
 
 /* label：主要显示字段 */
 .dim-cl-label {
