@@ -34,6 +34,12 @@ Window {
     color: "#1a1a1d"
     modality: Qt.WindowModal
 
+    // ESC 关闭本面板
+    Shortcut {
+        sequence: "Escape"
+        onActivated: root.close()
+    }
+
     // 当前用户名输入的临时缓冲（防止每按一键都触发 setCurrentUser）
     property string _userBuffer: ""
 
@@ -64,10 +70,15 @@ Window {
     // archive：浏览某个归档批次（只读账本，仅支持导出 / 行级删除 / 删整批）
     // 切换 Tab 时会重置 _checkedFolders、清空选择，避免跨 Tab 误操作。
     property string _viewMode: "current"
-    // 弹窗内独立的「当前查看模式」，与全局 Rating.currentMode 解耦：
-    // 切换弹窗 tab 只改本属性，不修改全局状态，避免触发主界面 cellRatings 重建。
-    // 打开弹窗时从 Rating.currentMode 初始化；外部模式切换时也同步更新。
+    // 弹窗内的「当前查看模式」：
+    // 由于底层 Rating.getAllRatings() / Rating.dataFilePath 都只按全局 currentMode 读写
+    // （每 mode 一个 ratings_<mode>.csv），弹窗内切胶囊必须同步切全局 currentMode
+    // 才能真正切到对应文件；为避免打断外部评分流程，打开时记录 _origMode，
+    // 关闭时恢复到原来的全局模式（方案 B：查看期临时切换 + 关闭还原）。
     property string _selectedMode: (typeof Rating !== "undefined") ? Rating.currentMode : "subjective"
+    // 打开弹窗那一刻的全局模式快照；关闭时回滚 Rating.currentMode 到此值。
+    // 空串表示当前不需要回滚（例如尚未打开过、或已回滚完毕）。
+    property string _origMode: ""
     // 归档 Tab 当前选中的批次名（首次打开自动取最新一批）
     property string _archiveBatch: ""
     // 归档 Tab 缓存的批次列表（[{name, count, latest, raters, modifiedAt, path}]）
@@ -832,8 +843,19 @@ Window {
         if (visible) {
             _userBuffer = (typeof Rating !== "undefined") ? Rating.currentUser : ""
             // 每次打开时从全局同步查看模式，避免上次关闭后全局模式已变
-            if (typeof Rating !== "undefined") _selectedMode = Rating.currentMode
+            if (typeof Rating !== "undefined") {
+                _selectedMode = Rating.currentMode
+                // 记录打开时的全局模式，供关闭时回滚（若已在回滚流程中则不覆盖）
+                _origMode = Rating.currentMode
+            }
             _refresh()
+        } else {
+            // 关闭弹窗：把打开期间可能被胶囊改动过的全局模式还原回去，
+            // 保证外部评分流程使用的模式不被弹窗内切换污染。
+            if (typeof Rating !== "undefined" && _origMode && Rating.currentMode !== _origMode) {
+                Rating.currentMode = _origMode
+            }
+            _origMode = ""
         }
     }
 
@@ -889,7 +911,12 @@ Window {
                             spacing: 6
                             Text {
                                 id: modeLabel
-                                text: modeData.label + "  ·  " + modeData.maxStars + "星"
+                                text: {
+                                    var t = modeData.label || ""
+                                    var p = t.indexOf("（")
+                                    if (p >= 0) t = t.substring(0, p)
+                                    return t.trim()
+                                }
                                 color: selected ? "#ffffff" : "#cfcfd4"
                                 font.pixelSize: 12
                                 font.bold: selected
@@ -904,7 +931,14 @@ Window {
                             onClicked: {
                                 if (root._selectedMode !== modeData.id) {
                                     root._selectedMode = modeData.id
-                                    root._refresh()
+                                    // 同步切换全局 currentMode，使 Rating.getAllRatings()
+                                    // 与 Rating.dataFilePath 都指向该 mode 的 CSV；
+                                    // onCurrentModeChanged 会触发 _refresh，无需重复调用。
+                                    if (typeof Rating !== "undefined" && Rating.currentMode !== modeData.id) {
+                                        Rating.currentMode = modeData.id
+                                    } else {
+                                        root._refresh()
+                                    }
                                 }
                             }
                         }
