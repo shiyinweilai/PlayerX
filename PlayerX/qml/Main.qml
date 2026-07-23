@@ -9442,14 +9442,33 @@ ApplicationWindow {
             _viewUrl = m ? m[1] + "/#results" : ""
             _fillContextFromConfirm()
             open()
+            // 成功后自动关闭并跳转「查看结果」；用户也可以在此之前手动点击。
+            _autoCloseTimer.restart()
         }
         function showFailure(message) {
             _ok = false
             _msg = message || qsTr("上传失败")
             _viewUrl = ""
             _fillContextFromConfirm()
+            // 失败弹窗不自动关闭，等用户看清错误信息
+            _autoCloseTimer.stop()
             open()
         }
+
+        // 自动关闭定时器：仅上传成功时启用，超时后关闭弹窗并跳转结果页
+        Timer {
+            id: _autoCloseTimer
+            interval: 2000
+            repeat: false
+            onTriggered: {
+                if (!quickUploadResultDialog._ok) return
+                var url = quickUploadResultDialog._viewUrl
+                quickUploadResultDialog.close()
+                if (url && url.length > 0) Qt.openUrlExternally(url)
+            }
+        }
+        // 用户主动关闭（点"确定"、Esc、点外部）时终止定时器，避免二次触发跳转
+        onClosed: _autoCloseTimer.stop()
 
         Overlay.modal: Rectangle { color: "#aa000000" }
         background: Rectangle {
