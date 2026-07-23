@@ -888,13 +888,12 @@
 
         const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
         const addDimBtn = admin ? `<button class="dim-add-dim-btn ghost-btn">＋ 添加维度</button>` : '';
-        const editChecklistBtn = admin ? `<button class="dim-edit-checklist-btn ghost-btn" style="margin-left:8px">📋 编辑 checklist</button>` : '';
 
         // 渲染 checklist 预览区域
         const checklistHtml = renderChecklistPreview(obj.checklists, obj.checklist_config, admin);
 
         dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`
-            + `<div class="dim-bottom-actions" style="display:flex;align-items:center;padding:0 28px;gap:0">${addDimBtn}${editChecklistBtn}</div>`
+            + `<div class="dim-bottom-actions" style="display:flex;align-items:center;padding:0 28px;gap:0">${addDimBtn}</div>`
             + checklistHtml;
     }
 
@@ -978,31 +977,68 @@
         </div>`;
     }
 
-    /** 渲染 checklist 预览区域 */
+    /** 渲染 checklist 预览区域（admin 下所有字段原地可编辑） */
     function renderChecklistPreview(checklists, checklistConfig, admin) {
         const items = Array.isArray(checklists) ? checklists : [];
         if (items.length === 0 && !admin) return '';
         const exclusiveKey = (checklistConfig && checklistConfig.exclusive_key) || '';
         const rowsHtml = items.map((item, idx) => {
             const isExclusive = item.key === exclusiveKey || item.exclusive;
-            const exclusiveBadge = isExclusive ? `<span style="font-size:11px;color:#f0a040;margin-left:6px;border:1px solid #f0a040;border-radius:3px;padding:0 4px">互斥</span>` : '';
-            const delBtn = admin ? `<button class="dim-del-checklist-btn ghost-btn" data-idx="${idx}" title="删除" style="margin-left:auto;font-size:12px;opacity:0.6">✕</button>` : '';
-            return `<div class="dim-checklist-row" data-idx="${idx}" style="display:flex;align-items:flex-start;padding:6px 12px;border-bottom:1px solid #eee;gap:8px">
-                <span style="font-size:13px;font-weight:500;min-width:80px">${escHtml(item.label || item.key)}</span>
+            const exclusiveBadge = admin
+                ? `<span class="dim-cl-excl-badge ${isExclusive ? 'is-on' : 'is-off'}" data-cl-idx="${idx}" title="点击切换互斥">互斥</span>`
+                : (isExclusive ? `<span class="dim-cl-excl-badge is-on">互斥</span>` : '');
+            const delBtn = admin ? `<button class="dim-cl-del-btn" data-idx="${idx}" title="删除">✕</button>` : '';
+
+            const labelCls = 'dim-cl-editable dim-cl-label' + (item.label ? '' : ' dim-card-placeholder');
+            const keyCls   = 'dim-cl-editable dim-cl-key'   + (item.key ? '' : ' dim-card-placeholder');
+            const defCls   = 'dim-cl-editable dim-cl-def'   + (item.definition ? '' : ' dim-card-placeholder');
+
+            const labelHtml = admin
+                ? `<span class="${labelCls}" data-cl-idx="${idx}" data-cl-field="label" title="点击编辑名称">${escHtml(item.label || '点击填写名称')}</span>`
+                : `<span class="dim-cl-label">${escHtml(item.label || item.key)}</span>`;
+            const keyHtml = admin
+                ? `<span class="${keyCls}" data-cl-idx="${idx}" data-cl-field="key" title="点击编辑 key（英文标识）">${escHtml(item.key || 'key')}</span>`
+                : '';
+            const defHtml = admin
+                ? `<span class="${defCls}" data-cl-idx="${idx}" data-cl-field="definition" title="点击编辑悬浮说明">${escHtml(item.definition || '点击添加悬浮说明')}</span>`
+                : (item.definition ? `<span class="dim-cl-def">${escHtml(item.definition)}</span>` : '');
+
+            const fieldLabel = (text) => `<span class="dim-cl-fname">${text}</span>`;
+            return `<div class="dim-cl-row" data-idx="${idx}">
+                <div class="dim-cl-cell dim-cl-cell-label">
+                    ${admin ? fieldLabel('名称') : ''}
+                    ${labelHtml}
+                </div>
+                ${admin ? `<div class="dim-cl-cell dim-cl-cell-key">
+                    ${fieldLabel('key')}
+                    ${keyHtml}
+                </div>` : ''}
                 ${exclusiveBadge}
-                <span style="font-size:12px;color:#888;flex:1">${escHtml(item.definition || '')}</span>
+                <div class="dim-cl-cell dim-cl-cell-def">
+                    ${admin ? fieldLabel('说明') : ''}
+                    ${defHtml}
+                </div>
                 ${delBtn}
             </div>`;
         }).join('');
-        const addRowBtn = admin ? `<button class="dim-add-checklist-btn ghost-btn" style="margin:8px 12px;font-size:13px">＋ 添加选项</button>` : '';
-        const exclusiveHint = exclusiveKey ? `<span style="font-size:12px;color:#888;margin-left:12px">互斥 key: <code>${escHtml(exclusiveKey)}</code></span>` : '';
-        return `<div class="dim-checklist-section" style="margin:16px 28px 0;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden">
-            <div style="display:flex;align-items:center;padding:8px 12px;background:#f8f8f8;border-bottom:1px solid #e0e0e0">
-                <span style="font-weight:600;font-size:13px">📋 Checklist（打分后弹出的问题标记）</span>
+        const addRowBtn = admin ? `<button class="dim-cl-add-btn">＋ 添加选项</button>` : '';
+        const exclusiveHint = exclusiveKey
+            ? `<span class="dim-cl-hint">互斥 key: <code>${escHtml(exclusiveKey)}</code></span>`
+            : '';
+        const emptyHtml = items.length === 0
+            ? '<div class="dim-cl-empty">暂无选项，点击下方添加</div>'
+            : '';
+        return `<div class="dim-checklist-section">
+            <div class="dim-cl-header">
+                <span class="dim-cl-title">📋 Checklist</span>
+                <span class="dim-cl-subtitle">打分后弹出的问题标记</span>
                 ${exclusiveHint}
             </div>
-            ${rowsHtml || '<div style="padding:12px;color:#aaa;font-size:13px">暂无选项，点击下方添加</div>'}
-            ${addRowBtn}
+            <div class="dim-cl-body">
+                ${rowsHtml}
+                ${emptyHtml}
+                ${addRowBtn}
+            </div>
         </div>`;
     }
 
@@ -1109,25 +1145,51 @@
             });
         }
 
-        // 编辑 checklist（弹出 modal）
-        const editChecklistBtn = dimView.querySelector('.dim-edit-checklist-btn');
-        if (editChecklistBtn) {
-            editChecklistBtn.addEventListener('click', () => openChecklistModal());
-        }
+        // 编辑 checklist 单项：直接对 DOM 元素挂 click，跟 .dim-card-editable 一致
+        // 行内编辑：label / key / definition
+        dimView.querySelectorAll('.dim-cl-editable').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                startChecklistFieldEdit(el);
+            });
+        });
 
-        // 添加 checklist 选项
-        const addChecklistBtn = dimView.querySelector('.dim-add-checklist-btn');
-        if (addChecklistBtn) {
-            addChecklistBtn.addEventListener('click', () => openChecklistItemModal(null, -1));
-        }
+        // 互斥徽章：点击切换
+        dimView.querySelectorAll('.dim-cl-excl-badge[data-cl-idx]').forEach(badge => {
+            badge.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const idx = +badge.dataset.clIdx;
+                patchDimData(data => {
+                    if (!Array.isArray(data.checklists) || !data.checklists[idx]) return;
+                    const item = data.checklists[idx];
+                    const cfg = data.checklist_config = data.checklist_config || { multiple: true };
+                    const isNowExcl = (cfg.exclusive_key === item.key) || !!item.exclusive;
+                    if (isNowExcl) {
+                        delete item.exclusive;
+                        if (cfg.exclusive_key === item.key) delete cfg.exclusive_key;
+                    } else {
+                        // 单一互斥：清除其他项 exclusive 标志
+                        data.checklists.forEach(x => { delete x.exclusive; });
+                        item.exclusive = true;
+                        cfg.exclusive_key = item.key;
+                    }
+                    renderDimCards(data);
+                });
+            });
+        });
 
-        // 删除 checklist 选项
-        dimView.querySelectorAll('.dim-del-checklist-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
+        // 删除按钮
+        dimView.querySelectorAll('.dim-cl-del-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
                 const idx = +btn.dataset.idx;
                 patchDimData(data => {
                     if (Array.isArray(data.checklists)) {
+                        const removedKey = (data.checklists[idx] || {}).key;
                         data.checklists.splice(idx, 1);
+                        if (data.checklist_config && data.checklist_config.exclusive_key === removedKey) {
+                            delete data.checklist_config.exclusive_key;
+                        }
                         if (data.checklists.length === 0) delete data.checklists;
                     }
                     renderDimCards(data);
@@ -1135,17 +1197,155 @@
             });
         });
 
-        // 点击 checklist 行（非删除按钮）→ 编辑该项
-        dimView.querySelectorAll('.dim-checklist-row').forEach(row => {
-            row.addEventListener('click', (e) => {
-                if (e.target.classList.contains('dim-del-checklist-btn')) return;
-                const idx = +row.dataset.idx;
+        // 添加选项按钮
+        const addChecklistBtn = dimView.querySelector('.dim-cl-add-btn');
+        if (addChecklistBtn) {
+            addChecklistBtn.addEventListener('click', () => {
                 let data;
                 try { data = JSON.parse(dimRawData); } catch (_) { return; }
-                const item = (data.checklists || [])[idx];
-                if (item) openChecklistItemModal(item, idx);
+                if (!Array.isArray(data.checklists)) data.checklists = [];
+                const existing = new Set(data.checklists.map(x => x.key));
+                let n = data.checklists.length + 1;
+                let k = 'item_' + n;
+                while (existing.has(k)) { n += 1; k = 'item_' + n; }
+                // 服务端校验要求 key 和 label 都非空，给一个默认 label 避免 400
+                data.checklists.push({ key: k, label: '新选项', definition: '' });
+                const newIdx = data.checklists.length - 1;
+                persistDimData(data).then(() => {
+                    renderDimCards(data);
+                    setTimeout(() => {
+                        const el = dimView.querySelector(`.dim-cl-editable[data-cl-idx="${newIdx}"][data-cl-field="label"]`);
+                        if (el) startChecklistFieldEdit(el);
+                    }, 50);
+                });
             });
-        });
+        }
+    }
+
+    /** Checklist 单字段行内编辑（label / key / definition） */
+    function startChecklistFieldEdit(el) {
+        if (el.querySelector('input,textarea')) return;
+        const idx   = +el.dataset.clIdx;
+        const field = el.dataset.clField; // 'label' | 'key' | 'definition'
+        const isMultiline = (field === 'definition');
+
+        let data;
+        try { data = JSON.parse(dimRawData); } catch (_) { return; }
+        const item = (data.checklists || [])[idx];
+        if (!item) return;
+        const currentVal = item[field] || '';
+        const origHtml = el.innerHTML;
+        const placeholders = { key: 'key', label: '点击填写名称', definition: '点击添加悬浮说明' };
+
+        const commit = async (rawVal) => {
+            let newVal = (rawVal || '').trim();
+            // key 空值回退到旧值，避免破坏数据结构
+            if (field === 'key' && !newVal) newVal = item.key;
+            // label 空值回退（服务端要求 label 非空）
+            if (field === 'label' && !newVal) newVal = item.label || '新选项';
+
+            // 读取最新的 dimRawData 再改（避免中间被别的编辑覆盖）
+            let latest;
+            try { latest = JSON.parse(dimRawData); } catch (_) { return; }
+            if (!latest.checklists || !latest.checklists[idx]) return;
+            const target = latest.checklists[idx];
+
+            if (field === 'key') {
+                const oldKey = target.key;
+                target.key = newVal;
+                if (latest.checklist_config && latest.checklist_config.exclusive_key === oldKey) {
+                    latest.checklist_config.exclusive_key = newVal;
+                }
+            } else if (newVal) {
+                target[field] = newVal;
+            } else {
+                delete target[field];
+            }
+            await persistDimData(latest);
+
+            // 只更新当前节点，不整体重刷（避免打断其他字段的编辑焦点）
+            const showVal = (field === 'key' ? newVal : (newVal || ''));
+            if (showVal) {
+                el.classList.remove('dim-card-placeholder');
+                el.innerHTML = escHtml(showVal);
+            } else {
+                el.classList.add('dim-card-placeholder');
+                el.innerHTML = escHtml(placeholders[field] || '');
+            }
+        };
+
+        // 【关键】进入编辑前锁定宿主 span 的实测宽高，编辑结束时释放
+        // 这样 input width:100% 完全等于点击前的实际宽度，绝对不跳变
+        const rect = el.getBoundingClientRect();
+        const lockedWidth  = rect.width;
+        const lockedHeight = rect.height;
+        const prevStyle = {
+            width:     el.style.width,
+            height:    el.style.height,
+            minWidth:  el.style.minWidth,
+            maxWidth:  el.style.maxWidth,
+            padding:   el.style.padding,
+            boxSizing: el.style.boxSizing,
+        };
+        el.style.width     = lockedWidth + 'px';
+        el.style.height    = lockedHeight + 'px';
+        el.style.minWidth  = lockedWidth + 'px';
+        el.style.maxWidth  = lockedWidth + 'px';
+        el.style.padding   = '0';
+        el.style.boxSizing = 'border-box';
+        const releaseLock = () => {
+            el.style.width     = prevStyle.width;
+            el.style.height    = prevStyle.height;
+            el.style.minWidth  = prevStyle.minWidth;
+            el.style.maxWidth  = prevStyle.maxWidth;
+            el.style.padding   = prevStyle.padding;
+            el.style.boxSizing = prevStyle.boxSizing;
+        };
+
+        // 编辑态输入框附带 field 类型 class（用于 CSS 精确控制宽度/字体，避免宽度突变）
+        const fieldCls = 'dim-cl-inline-' + field; // -label / -key / -definition
+
+        if (isMultiline) {
+            const ta = document.createElement('textarea');
+            ta.className = 'dim-cl-inline-input dim-cl-inline-textarea ' + fieldCls;
+            ta.value = currentVal;
+            ta.rows = 1;
+            el.innerHTML = '';
+            el.appendChild(ta);
+            ta.focus();
+            ta.select();
+            let done = false;
+            ta.addEventListener('blur', async () => {
+                if (done) return;
+                done = true;
+                await commit(ta.value);
+                releaseLock();
+            });
+            ta.addEventListener('keydown', e => {
+                if (e.key === 'Escape') { done = true; el.innerHTML = origHtml; releaseLock(); }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ta.blur(); }
+            });
+        } else {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'dim-cl-inline-input ' + fieldCls;
+            input.value = currentVal;
+            el.innerHTML = '';
+            el.appendChild(input);
+            input.focus();
+            input.select();
+            let done = false;
+            input.addEventListener('blur', async () => {
+                if (done) return;
+                done = true;
+                await commit(input.value);
+                releaseLock();
+            });
+            input.addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                if (e.key === 'Escape') { done = true; el.innerHTML = origHtml; releaseLock(); }
+            });
+        }
     }
 
     /** 打开 checklist 整体 JSON 编辑 modal */
