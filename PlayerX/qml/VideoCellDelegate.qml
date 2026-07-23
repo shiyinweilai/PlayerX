@@ -677,10 +677,42 @@ Rectangle {
                                     onEntered: dimRow.dimHover = dimStarItem.starIdx
                                     onExited:  dimRow.dimHover = 0
                                     onClicked: function(mouse) {
-                                        if (mouse.button === Qt.RightButton)
+                                        if (mouse.button === Qt.RightButton) {
                                             viewRoot._writeRating(cell.playerIdx, 0, dimRow.dimKey)
-                                        else
+                                        } else {
                                             viewRoot._writeRating(cell.playerIdx, dimStarItem.starIdx, dimRow.dimKey)
+                                            // 打完任意维度后弹出 checklist（有 checklist 配置即弹，不限评分模式）
+                                            console.log("[Checklist] 星星点击 dimKey=" + dimRow.dimKey
+                                                + " starIdx=" + dimStarItem.starIdx
+                                                + " reviewChecklist=" + JSON.stringify(viewRoot.reviewChecklist)
+                                                + " length=" + (viewRoot.reviewChecklist ? viewRoot.reviewChecklist.length : "null"))
+                                            if (viewRoot.reviewChecklist
+                                                    && viewRoot.reviewChecklist.length > 0) {
+                                                var fp = Engine.filePathAt(cell.playerIdx)
+                                                console.log("[Checklist] 准备弹窗 fp=" + fp
+                                                    + " popup.parent=" + checklistPopup.parent
+                                                    + " popup.visible=" + checklistPopup.visible)
+                                                checklistPopup._filePath = fp || ""
+                                                checklistPopup._loadChecked()
+                                                // 定位到 dimRow 左侧，避免遮挡星星
+                                                var mapped = dimRow.mapToItem(cell, 0, 0)
+                                                var popH = checklistPopup.implicitHeight
+                                                var popW = checklistPopup.width
+                                                // 优先显示在左侧；若左侧空间不足则显示在右侧
+                                                var px = mapped.x - popW - 6
+                                                if (px < 0) px = mapped.x + dimRow.width + 6
+                                                // 垂直居中对齐 dimRow
+                                                var py = mapped.y + (dimRow.height - popH) / 2
+                                                py = Math.max(4, Math.min(py, cell.height - popH - 4))
+                                                checklistPopup.x = px
+                                                checklistPopup.y = py
+                                                checklistPopup.open()
+                                                console.log("[Checklist] open() 已调用 popup.visible=" + checklistPopup.visible)
+                                            } else {
+                                                console.warn("[Checklist] 条件不满足，不弹窗：reviewChecklist=",
+                                                    JSON.stringify(viewRoot.reviewChecklist))
+                                            }
+                                        }
                                         dimRow.dimHover = 0
                                     }
                                 }
@@ -690,6 +722,201 @@ Rectangle {
                 }
             }
         }   // ← end of channelCol（ColumnLayout 三行布局）
+    }
+
+    // ─── Checklist Popup（打完总分后弹出，多维评分模式专用）──────────────
+    Popup {
+        id: checklistPopup
+        width: 160
+        padding: 0
+        modal: false
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        z: 210
+
+        property string _filePath: ""
+        // 当前勾选的 key 集合（JS 对象当 Set 用）
+        property var _checked: ({})
+
+        // 从持久化读取已勾选项
+        function _loadChecked() {
+            var key = "checklist:" + _filePath
+            if (_filePath.length === 0 || typeof Rating === "undefined") {
+                _checked = {}
+                return
+            }
+            var raw = Rating.loadString(key, "")
+            if (raw.length === 0) { _checked = {}; return }
+            try {
+                var arr = JSON.parse(raw)
+                var obj = {}
+                for (var i = 0; i < arr.length; i++) obj[arr[i]] = true
+                _checked = obj
+            } catch(e) { _checked = {} }
+        }
+
+        // 保存勾选项到持久化
+        function _saveChecked() {
+            if (_filePath.length === 0 || typeof Rating === "undefined") return
+            var key = "checklist:" + _filePath
+            var arr = Object.keys(_checked).filter(function(k){ return _checked[k] })
+            Rating.saveString(key, JSON.stringify(arr))
+        }
+
+        // 切换某个 key 的勾选状态（含互斥逻辑）
+        function _toggle(key) {
+            var excl = viewRoot.reviewChecklistExclusiveKey
+            var newChecked = Object.assign({}, _checked)
+            if (newChecked[key]) {
+                // 已勾选 → 取消
+                delete newChecked[key]
+            } else {
+                if (key === excl) {
+                    // 勾选互斥项 → 清空其他所有
+                    newChecked = {}
+                    newChecked[key] = true
+                } else {
+                    // 勾选普通项 → 取消互斥项
+                    delete newChecked[excl]
+                    newChecked[key] = true
+                }
+            }
+            _checked = newChecked
+            _saveChecked()
+        }
+
+        background: Rectangle {
+            color: "#cc1a1a1f"
+            border.color: "#33ffffff"
+            border.width: 1
+            radius: 6
+        }
+
+        Column {
+            id: checklistCol
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 0 }
+            spacing: 0
+
+            // 标题
+            Item {
+                width: parent.width
+                height: 28
+                Text {
+                    anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter }
+                    text: "问题标记"
+                    color: "#e8e8ec"
+                    font.pixelSize: 12
+                    font.bold: true
+                }
+                // 关闭按钮
+                Text {
+                    anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                    text: "✕"
+                    color: "#888"
+                    font.pixelSize: 11
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: checklistPopup.close()
+                    }
+                }
+                // 分隔线
+                Rectangle {
+                    anchors { bottom: parent.bottom; left: parent.left; right: parent.right }
+                    height: 1
+                    color: "#33ffffff"
+                }
+            }
+
+            // checklist 列表
+            Repeater {
+                model: viewRoot.reviewChecklist || []
+                delegate: Item {
+                    id: clItem
+                    width: checklistCol.width
+                    height: 28
+                    readonly property var clData: modelData || {}
+                    readonly property string clKey: clData.key || ""
+                    readonly property bool clChecked: checklistPopup._checked[clKey] === true
+
+                    // hover 背景
+                    Rectangle {
+                        anchors.fill: parent
+                        color: clHover.containsMouse ? "#0a64f0" : "transparent"
+                        Behavior on color { ColorAnimation { duration: 80 } }
+                    }
+
+                    // 勾选框
+                    Rectangle {
+                        id: clCheckBox
+                        anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter }
+                        width: 13; height: 13
+                        radius: 3
+                        color: clItem.clChecked ? "#0a64f0" : "transparent"
+                        border.color: clItem.clChecked ? "#0a64f0" : "#888888"
+                        border.width: 1
+                        Behavior on color { ColorAnimation { duration: 80 } }
+                        Text {
+                            anchors.centerIn: parent
+                            text: "✓"
+                            color: "white"
+                            font.pixelSize: 9
+                            font.bold: true
+                            visible: clItem.clChecked
+                        }
+                    }
+
+                    // label 文字
+                    Text {
+                        anchors { left: clCheckBox.right; leftMargin: 6; right: parent.right; rightMargin: 6; verticalCenter: parent.verticalCenter }
+                        text: clItem.clData.label || clItem.clKey
+                        color: "#e8e8ec"
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                    }
+
+                    // 点击区域
+                    MouseArea {
+                        id: clHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: checklistPopup._toggle(clItem.clKey)
+                    }
+
+                    // 悬浮 definition 提示（自定义 Popup，限宽换行，避免横跨屏幕）
+                    Popup {
+                        id: defTip
+                        visible: clHover.containsMouse && (clItem.clData.definition || "").length > 0
+                        width: 220
+                        padding: 8
+                        modal: false
+                        closePolicy: Popup.NoAutoClose
+                        x: -width - 6
+                        y: (clItem.height - implicitHeight) / 2
+                        z: 300
+                        background: Rectangle {
+                            color: "#cc1a1a1f"
+                            border.color: "#33ffffff"
+                            border.width: 1
+                            radius: 6
+                        }
+                        Text {
+                            width: 204
+                            text: clItem.clData.definition || ""
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
+            }
+
+            // 底部留白
+            Item { width: 1; height: 6 }
+        }
+
+        // 动态高度：标题28 + 每行28 + 底部6
+        implicitHeight: 28 + (viewRoot.reviewChecklist ? viewRoot.reviewChecklist.length * 28 : 0) + 6
     }
 
     // ─── 主交互层：左键选中/双击暂停 + 右键拖拽平移/单击信息面板 ──────────

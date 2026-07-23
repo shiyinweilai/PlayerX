@@ -1600,6 +1600,25 @@ ApplicationWindow {
                 && typeof Rating.removeByFolders === "function") {
             try { Rating.removeByFolders(folders) } catch (e) { /* 安全降级 */ }
         }
+        // ③ 同步清空每个文件对应的 checklist 勾选记录（saveString 写空串即为清除）
+        //    checklist key 格式：「checklist:<filePath>」，由 VideoCellDelegate 写入。
+        if (typeof Rating !== "undefined" && typeof Rating.saveString === "function") {
+            try {
+                for (var ci = 0; ci < _rowsModel.count; ++ci) {
+                    var cl = _rowsModel.get(ci)
+                    if (!cl || !cl.selected) continue
+                    var crt = _laneRuntime[ci]
+                    if (!crt) continue
+                    var cFiles = crt.allFiles || crt.visibleFiles || []
+                    for (var cfi = 0; cfi < cFiles.length; ++cfi) {
+                        var cfp = cFiles[cfi] || ""
+                        if (cfp.length > 0) {
+                            Rating.saveString("checklist:" + cfp, "")
+                        }
+                    }
+                }
+            } catch (e) { /* 安全降级 */ }
+        }
         // ③ 把每条勾选路的进度归零（row + model 双写，保证 row 内部 property 也立即生效）
         for (var i = 0; i < _rowsModel.count; ++i) {
             var l = _rowsModel.get(i)

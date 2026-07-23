@@ -227,6 +227,44 @@ ApplicationWindow {
             }
         }
 
+        // 【checklist 按 mode 独立缓存 - 同步读取】与 tagByMode.json 完全平行
+        if (typeof Fs !== "undefined" && typeof Fs.readTextFile === "function") {
+            try {
+                var ckPath = (Qt.platform.os === "osx")
+                        ? (contentsDir + "/Resources/checklistByMode.json")
+                        : (binDir + "/checklistByMode.json")
+                console.log("[ChecklistLoad-Sync] 尝试读取路径:", ckPath)
+                var ckText = Fs.readTextFile(ckPath) || ""
+                console.log("[ChecklistLoad-Sync] 文件内容长度:", ckText.length, "内容前100字符:", ckText.substring(0, 100))
+                if (ckText.length > 0) {
+                    var ckCache = JSON.parse(ckText)
+                    console.log("[ChecklistLoad-Sync] 解析成功，keys:", Object.keys(ckCache).join(","))
+                    if (ckCache && typeof ckCache === "object") {
+                        root._checklistByMode = ckCache
+                        var curModeCk = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                        console.log("[ChecklistLoad-Sync] 当前 mode:", curModeCk)
+                        if (curModeCk && curModeCk !== "off") {
+                            var ckForCur = ckCache[curModeCk]
+                            console.log("[ChecklistLoad-Sync] mode对应checklist:", JSON.stringify(ckForCur))
+                            if (ckForCur && Array.isArray(ckForCur.items) && ckForCur.items.length > 0) {
+                                root.reviewChecklist = ckForCur.items
+                                root.reviewChecklistExclusiveKey = ckForCur.exclusiveKey || ""
+                                console.log("[ChecklistLoad-Sync] ✅ 同步读取完成，mode=", curModeCk, "条数:", ckForCur.items.length)
+                            } else {
+                                root.reviewChecklist = []
+                                root.reviewChecklistExclusiveKey = ""
+                                console.log("[ChecklistLoad-Sync] ⚠️ mode存在但items为空或格式不对:", JSON.stringify(ckForCur))
+                            }
+                        }
+                    }
+                } else {
+                    console.log("[ChecklistLoad-Sync] ⚠️ 文件不存在或为空，checklistByMode.json 尚未生成")
+                }
+            } catch (e) {
+                console.warn("[ChecklistLoad-Sync] 同步解析 checklistByMode.json 失败：", e)
+            }
+        }
+
         if (syncLoaded) {
             // 同步已装载成功：只在极端情况（同步读到了但 curMode 对应无维度）
             // 才补跑 _loadDimensions 老路径作为兜底；正常情况完全不再走异步 XHR。
@@ -2011,6 +2049,10 @@ ApplicationWindow {
     property var reviewDimensions: []
     // 每次维度更新时递增，供 VideoCellDelegate 内层 Repeater 强制重新求值
     property int reviewDimensionsVersion: 0
+    // checklist 列表（来自配置 checklists 字段，多维评分模式下打完总分后弹出）
+    property var reviewChecklist: []
+    // checklist 互斥 key（exclusive_key 字段，勾选后自动取消其他选项）
+    property string reviewChecklistExclusiveKey: ""
     // 【启动钝感排查】记录 QML Component.onCompleted 起点时间戳（毫秒），
     // 后续各阶段用 (Date.now() - _bootT0) 打印相对耗时。排查完可整块删除。
     property real _bootT0: 0
@@ -2029,6 +2071,9 @@ ApplicationWindow {
     }
     // 按 mode 缓存各自的维度列表，避免多 mode 应用时互相覆盖
     property var _dimsByMode: ({})
+    // 按 mode 缓存各自的 checklist（checklists + checklist_config），模式切换时同步更新 reviewChecklist
+    // 没有 checklist 的模式存 null，切换时会清空 reviewChecklist，避免旧模式数据残留
+    property var _checklistByMode: ({})
 
     // 【按 mode 独立持久化】把 _dimsByMode 整体写入 Resources/dimsByMode.json，
     // 供下次启动加载。这是保证多 mode 配置互不覆盖的关键落盘。
@@ -2040,6 +2085,20 @@ ApplicationWindow {
             }
         } catch (e) {
             console.warn("[DimSave] 保存 dimsByMode.json 失败：", e)
+        }
+        // 同步持久化 checklistByMode.json
+        _saveChecklistByMode()
+    }
+
+    // 【按 mode 独立持久化 checklist】与 tagByMode.json 完全平行
+    function _saveChecklistByMode() {
+        try {
+            var path = root._resourcesDir() + "/checklistByMode.json"
+            if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
+                EngineBridge.writeTextFile(path, JSON.stringify(root._checklistByMode || {}))
+            }
+        } catch (e) {
+            console.warn("[ChecklistSave] 保存 checklistByMode.json 失败：", e)
         }
     }
 
@@ -2217,9 +2276,26 @@ ApplicationWindow {
             if (root._applyingConfig) return
             var mode = Rating.currentMode
             if (!mode || mode === "off") return
+            // 【checklist 跟随 mode 切换】从 _checklistByMode 读取新 mode 的 checklist，
+            // 没有配置（null / 空数组）则清空，避免旧模式的 checklist 残留导致所有模式都弹窗。
+            // 【QML 陷阱】property var 里的数组读出来 Array.isArray() 返回 false，必须用 length duck-typing
+            var _ckForMode = root._checklistByMode ? root._checklistByMode[mode] : undefined
+            var _hasCkMode = _ckForMode && _ckForMode.items
+                    && typeof _ckForMode.items.length === "number"
+                    && _ckForMode.items.length > 0
+            if (_hasCkMode) {
+                var _plainCkMode = []
+                for (var _cki = 0; _cki < _ckForMode.items.length; _cki++) _plainCkMode.push(_ckForMode.items[_cki])
+                root.reviewChecklist = _plainCkMode
+                root.reviewChecklistExclusiveKey = _ckForMode.exclusiveKey || ""
+                console.log("[ChecklistModeChange] mode=", mode, "同步 checklist 条数:", _plainCkMode.length)
+            } else {
+                root.reviewChecklist = []
+                root.reviewChecklistExclusiveKey = ""
+                console.log("[ChecklistModeChange] mode=", mode, "无 checklist，已清空")
+            }
             // 【tag 跟随 mode 切换】先把该 mode 对应的 tag 灌回 _remoteTag + Rating.uploadTag，
-            // 这样 RatingsDialog 显示的备注 tag、上传时的 tag 都能正确反映"当前 mode"的配置。
-            // 若该 mode 还没缓存 tag（历史遗留 / 未同步过），沿用旧 _remoteTag 兜底，避免误清空。
+            // 这样 RatingsDialog 显示的备注 tag、上传时的 tag 都能正确反映            // 若该 mode 还没缓存 tag（历史遗留 / 未同步过），沿用旧 _remoteTag 兜底，避免误清空。
             var tagForMode = (root._tagByMode && root._tagByMode[mode] !== undefined)
                     ? root._tagByMode[mode] : null
             if (tagForMode !== null) {
@@ -2331,6 +2407,33 @@ ApplicationWindow {
                                 root.reviewDimensionsVersion++
                                 console.log("[ConfigCheck] 首次启动静默加载 mode=", curMode, "维度数:", curDims.length)
                             }
+                            // 【修复】同步 reviewChecklist：_checklistByMode 在首次启动时已按 mode 填充，
+                            // 但 reviewChecklist 属性没有在 onAllDone 里更新，导致点星星时为空
+                            // 【QML 陷阱】property var 里存的数组读出来是 QJSValue/QVariantList，
+                            // Array.isArray() 返回 false，必须用 length duck-typing 判断，并转纯 JS 数组
+                            var ckForCurMode = root._checklistByMode ? root._checklistByMode[curMode] : undefined
+                            console.log("[ChecklistDebug] onAllDone curMode=", curMode,
+                                " _checklistByMode keys=", Object.keys(root._checklistByMode || {}).join(","),
+                                " ckForCurMode=", JSON.stringify(ckForCurMode),
+                                " isArray(items)=", (ckForCurMode ? Array.isArray(ckForCurMode.items) : "N/A"),
+                                " items.length=", (ckForCurMode && ckForCurMode.items ? ckForCurMode.items.length : "N/A"))
+                            var _hasCkItems = ckForCurMode && ckForCurMode.items
+                                    && typeof ckForCurMode.items.length === "number"
+                                    && ckForCurMode.items.length > 0
+                            if (_hasCkItems) {
+                                // 转成纯 JS 数组，避免 QJSValue 类型问题
+                                var _plainItems = []
+                                for (var _ci = 0; _ci < ckForCurMode.items.length; _ci++) {
+                                    _plainItems.push(ckForCurMode.items[_ci])
+                                }
+                                root.reviewChecklist = _plainItems
+                                root.reviewChecklistExclusiveKey = ckForCurMode.exclusiveKey || ""
+                                console.log("[ConfigCheck] 首次启动同步 checklist mode=", curMode, "条数:", _plainItems.length)
+                            } else {
+                                root.reviewChecklist = []
+                                root.reviewChecklistExclusiveKey = ""
+                                console.log("[ConfigCheck] 首次启动 checklist 为空 mode=", curMode)
+                            }
                         }
                         // 回调通知调用方
                         if (typeof onNoUpdate === "function") onNoUpdate()
@@ -2422,6 +2525,27 @@ ApplicationWindow {
                                         var dimsCacheInit = root._dimsByMode || {}
                                         dimsCacheInit[mode] = _dimsInit
                                         root._dimsByMode = dimsCacheInit
+                                        // 同步缓存该 mode 的 checklist
+                                        // 【多配置合并策略】同一 mode 可能绑定多个配置，有 checklists 的优先，
+                                        // 后续无 checklists 的配置不覆盖已有值。
+                                        // 【竞态修复】每次都从 root._checklistByMode 读最新值，避免并发 xhr 使用陈旧快照
+                                        if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
+                                            var _ckCacheInit = root._checklistByMode || {}
+                                            _ckCacheInit[mode] = { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                            root._checklistByMode = _ckCacheInit
+                                            console.log("[ChecklistInit] mode=", mode, "写入 checklist 条数:", obj.checklists.length,
+                                                " 当前 keys:", Object.keys(_ckCacheInit).join(","))
+                                        } else {
+                                            // 本次无 checklists：只在该 mode 完全没有 items 时才写 null（往已存在的有值 items 不覆盖）
+                                            var _ckCacheInitEmpty = root._checklistByMode || {}
+                                            var _existingCk = _ckCacheInitEmpty[mode]
+                                            var _hasItems = _existingCk && _existingCk.items && _existingCk.items.length > 0
+                                            console.log("[ChecklistInit] mode=", mode, "无 checklists。已有数据=", _hasItems, " existing=", JSON.stringify(_existingCk))
+                                            if (!_hasItems) {
+                                                _ckCacheInitEmpty[mode] = null
+                                                root._checklistByMode = _ckCacheInitEmpty
+                                            }
+                                        }
                                         // 【关键】按 mode 独立持久化
                                         root._saveDimsByMode()
                                         // 【tag 按 mode 独立缓存】无论当前 mode 是不是这个 mode，
@@ -2458,6 +2582,24 @@ ApplicationWindow {
                                         var dimsCacheNew = root._dimsByMode || {}
                                         dimsCacheNew[mode] = _dimsNew
                                         root._dimsByMode = dimsCacheNew
+                                        // 同步缓存该 mode 的 checklist（多配置合并策略：有 checklists 的优先）
+                                        // 【竞态修复】每次都从 root._checklistByMode 读最新值
+                                        if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
+                                            var _ckCacheNew = root._checklistByMode || {}
+                                            _ckCacheNew[mode] = { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                            root._checklistByMode = _ckCacheNew
+                                            console.log("[ChecklistInit] mode=", mode, "写入 checklist 条数:", obj.checklists.length,
+                                                " 当前 keys:", Object.keys(_ckCacheNew).join(","))
+                                        } else {
+                                            var _ckCacheNewEmpty = root._checklistByMode || {}
+                                            var _existingCkN = _ckCacheNewEmpty[mode]
+                                            var _hasItemsN = _existingCkN && _existingCkN.items && _existingCkN.items.length > 0
+                                            console.log("[ChecklistInit] mode=", mode, "无 checklists。已有数据=", _hasItemsN)
+                                            if (!_hasItemsN) {
+                                                _ckCacheNewEmpty[mode] = null
+                                                root._checklistByMode = _ckCacheNewEmpty
+                                            }
+                                        }
                                         // 【关键】按 mode 独立持久化
                                         root._saveDimsByMode()
                                         // 【tag 按 mode 独立缓存】
@@ -2482,6 +2624,45 @@ ApplicationWindow {
                                     } else if (remoteFp !== localFp) {
                                         // 同一绑定，内容发生了变化
                                         pending.push({ mode: mode, obj: obj, configName: configName, rawText: rawText, fpKey: fpKey, bindingsFp: bindingsFp })
+                                    } else {
+                                        // 指纹相同（无需弹通知），但仍需同步 checklist 到内存缓存
+                                        // 因为 _checklistByMode 是纯内存属性，重启后为空，必须在每次拉取时补齐
+                                        // 【多配置合并策略】有 checklists 的优先，无 checklists 的不覆盖已有值
+                                        if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
+                                            var _ckSame = root._checklistByMode || {}
+                                            _ckSame[mode] = { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                            root._checklistByMode = _ckSame
+                                            console.log("[ChecklistSame] mode=", mode, "写入 checklist 条数:", obj.checklists.length)
+                                        } else {
+                                            var _ckSameEmpty = root._checklistByMode || {}
+                                            var _existingSame = _ckSameEmpty[mode]
+                                            var _hasItemsSame = _existingSame && _existingSame.items
+                                                    && typeof _existingSame.items.length === "number"
+                                                    && _existingSame.items.length > 0
+                                            if (!_hasItemsSame) {
+                                                _ckSameEmpty[mode] = null
+                                                root._checklistByMode = _ckSameEmpty
+                                            } else {
+                                                console.log("[ChecklistSame] mode=", mode, "无 checklists 但已有值，不覆盖")
+                                            }
+                                        }
+                                        // 如果当前就是这个 mode，立即更新 reviewChecklist（duck-typing 避免 QJSValue 陷阱）
+                                        var _curModeSame = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                                        if (mode === _curModeSame) {
+                                            var _ckCur = root._checklistByMode ? root._checklistByMode[_curModeSame] : null
+                                            var _hasCkCur = _ckCur && _ckCur.items
+                                                    && typeof _ckCur.items.length === "number"
+                                                    && _ckCur.items.length > 0
+                                            if (_hasCkCur) {
+                                                var _plainCkCur = []
+                                                for (var _pi = 0; _pi < _ckCur.items.length; _pi++) _plainCkCur.push(_ckCur.items[_pi])
+                                                root.reviewChecklist = _plainCkCur
+                                                root.reviewChecklistExclusiveKey = _ckCur.exclusiveKey || ""
+                                            } else {
+                                                root.reviewChecklist = []
+                                                root.reviewChecklistExclusiveKey = ""
+                                            }
+                                        }
                                     }
                                 }
                             } catch (e) {
@@ -2558,6 +2739,12 @@ ApplicationWindow {
                 var dimsCacheUpd = root._dimsByMode || {}
                 dimsCacheUpd[mode] = _dims
                 root._dimsByMode = dimsCacheUpd
+                // 同步缓存该 mode 的 checklist
+                var _ckCacheUpd = root._checklistByMode || {}
+                _ckCacheUpd[mode] = Array.isArray(obj.checklists) && obj.checklists.length > 0
+                    ? { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                    : null
+                root._checklistByMode = _ckCacheUpd
                 // 【关键】立即按 mode 独立持久化，避免多 mode 通过共享 dimensions.json 相互覆盖
                 root._saveDimsByMode()
                 // 【tag 按 mode 独立缓存】同步记录该 mode 的 tag（不管是不是当前 mode），
@@ -2578,6 +2765,26 @@ ApplicationWindow {
                 if (mode === currentMode) {
                     // 只有被应用的 mode 恰好就是用户当前所在 mode 时，才热更新 UI
                     root._forceApplyDimensions(_dims, obj.tag || "", mode, "applyItem")
+                    // 同步 checklist（仅当前 mode 热更新）
+                    if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
+                        root.reviewChecklist = obj.checklists
+                        var _ck2 = obj.checklist_config
+                        root.reviewChecklistExclusiveKey = (_ck2 && _ck2.exclusive_key) ? _ck2.exclusive_key : ""
+                        // 【修复】同步写入 _checklistByMode 并持久化，否则重启后丢失
+                        var _ckApplyCache = root._checklistByMode || {}
+                        _ckApplyCache[mode] = { items: obj.checklists, exclusiveKey: root.reviewChecklistExclusiveKey }
+                        root._checklistByMode = _ckApplyCache
+                        _saveChecklistByMode()
+                        console.log("[ChecklistApply] ✅ 单条应用写入 _checklistByMode mode=", mode, "条数:", obj.checklists.length)
+                    } else {
+                        var _ckApplyCacheClear = root._checklistByMode || {}
+                        _ckApplyCacheClear[mode] = null
+                        root._checklistByMode = _ckApplyCacheClear
+                        _saveChecklistByMode()
+                        root.reviewChecklist = []
+                        root.reviewChecklistExclusiveKey = ""
+                        console.log("[ChecklistApply] mode=", mode, "无 checklists，已清空")
+                    }
 
                     // 持久化到本地缓存文件（只在与当前 mode 匹配时写，保持"当前 mode 的最新配置"语义）
                     var localPath = root._resourcesDir() + "/dimensions.json"
@@ -2675,6 +2882,7 @@ ApplicationWindow {
             // 深拷贝后修改再赋值，确保 QML property var binding 触发更新
             var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
             var dimsCache = JSON.parse(JSON.stringify(root._dimsByMode || {}))
+            var ckCache = JSON.parse(JSON.stringify(root._checklistByMode || {}))
             // 【tag 按 mode 独立缓存】批量应用时同步更新，避免多 mode 共享单一 tag 造成相互覆盖
             var tagCache = JSON.parse(JSON.stringify(root._tagByMode || {}))
 
@@ -2694,12 +2902,24 @@ ApplicationWindow {
                     return Object.assign({}, d, { starCount: sc })
                 })
                 dimsCache[item.mode] = _dims
+                // 同步存入该 mode 的 checklist
+                ckCache[item.mode] = Array.isArray(obj.checklists) && obj.checklists.length > 0
+                    ? { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                    : null
                 // 同步存入该 mode 的 tag（无论当前 mode 是否匹配）
                 tagCache[item.mode] = obj.tag || ""
 
                 if (item.mode === currentMode) {
                     // 【强制两阶段刷新】先清空 → Timer 触发 → 赋新数组
                     root._forceApplyDimensions(_dims, obj.tag || "", item.mode, "applyPending")
+                    // 同步热更新 checklist（仅当前 mode）
+                    if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
+                        root.reviewChecklist = obj.checklists
+                        root.reviewChecklistExclusiveKey = (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : ""
+                    } else {
+                        root.reviewChecklist = []
+                        root.reviewChecklistExclusiveKey = ""
+                    }
                     // 持久化到本地缓存文件
                     var localPath = root._resourcesDir() + "/dimensions.json"
                     if (typeof EngineBridge !== "undefined" && typeof EngineBridge.writeTextFile === "function") {
@@ -2721,6 +2941,7 @@ ApplicationWindow {
             })
 
             root._dimsByMode = dimsCache
+            root._checklistByMode = ckCache
             // 【关键】立即按 mode 独立持久化，保证多 mode 独立存储不互相覆盖
             root._saveDimsByMode()
             root._tagByMode = tagCache
@@ -2925,6 +3146,12 @@ ApplicationWindow {
                             _dimsUpd0[_fm] = _dims1
                             root._dimsByMode = _dimsUpd0
                             root._saveDimsByMode()
+                            // 同步缓存该 mode 的 checklist
+                            var _ckUpd0 = root._checklistByMode || {}
+                            _ckUpd0[_fm] = Array.isArray(obj.checklists) && obj.checklists.length > 0
+                                ? { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                : null
+                            root._checklistByMode = _ckUpd0
                             // 【tag 按 mode 独立缓存】写缓存时同步写 _tagByMode[_fm]，不碰 Rating.uploadTag
                             root._setTagForMode(_fm, obj.tag || "")
                             if (typeof callback === "function") callback(true)
@@ -2940,6 +3167,12 @@ ApplicationWindow {
                             var _dimsUpd = JSON.parse(JSON.stringify(root._dimsByMode || {}))
                             _dimsUpd[_curMode] = _dims1
                             root._dimsByMode = _dimsUpd
+                            // 同步缓存该 mode 的 checklist
+                            var _ckUpd = root._checklistByMode || {}
+                            _ckUpd[_curMode] = Array.isArray(obj.checklists) && obj.checklists.length > 0
+                                ? { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                : null
+                            root._checklistByMode = _ckUpd
                             // 【关键】按 mode 独立持久化
                             root._saveDimsByMode()
                             // 【tag 按 mode 独立缓存】与维度缓存保持同步，当前 mode 的 tag 也落盘

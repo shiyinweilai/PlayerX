@@ -888,8 +888,14 @@
 
         const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
         const addDimBtn = admin ? `<button class="dim-add-dim-btn ghost-btn">＋ 添加维度</button>` : '';
+        const editChecklistBtn = admin ? `<button class="dim-edit-checklist-btn ghost-btn" style="margin-left:8px">📋 编辑 checklist</button>` : '';
 
-        dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>` + addDimBtn;
+        // 渲染 checklist 预览区域
+        const checklistHtml = renderChecklistPreview(obj.checklists, obj.checklist_config, admin);
+
+        dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`
+            + `<div class="dim-bottom-actions" style="display:flex;align-items:center;padding:0 28px;gap:0">${addDimBtn}${editChecklistBtn}</div>`
+            + checklistHtml;
     }
 
     /** 渲染单张维度卡片 HTML（纯字符串，不绑定事件） */
@@ -969,6 +975,34 @@
                 ${levelsHtml}
                 ${addLvBtn}
             </div>
+        </div>`;
+    }
+
+    /** 渲染 checklist 预览区域 */
+    function renderChecklistPreview(checklists, checklistConfig, admin) {
+        const items = Array.isArray(checklists) ? checklists : [];
+        if (items.length === 0 && !admin) return '';
+        const exclusiveKey = (checklistConfig && checklistConfig.exclusive_key) || '';
+        const rowsHtml = items.map((item, idx) => {
+            const isExclusive = item.key === exclusiveKey || item.exclusive;
+            const exclusiveBadge = isExclusive ? `<span style="font-size:11px;color:#f0a040;margin-left:6px;border:1px solid #f0a040;border-radius:3px;padding:0 4px">互斥</span>` : '';
+            const delBtn = admin ? `<button class="dim-del-checklist-btn ghost-btn" data-idx="${idx}" title="删除" style="margin-left:auto;font-size:12px;opacity:0.6">✕</button>` : '';
+            return `<div class="dim-checklist-row" data-idx="${idx}" style="display:flex;align-items:flex-start;padding:6px 12px;border-bottom:1px solid #eee;gap:8px">
+                <span style="font-size:13px;font-weight:500;min-width:80px">${escHtml(item.label || item.key)}</span>
+                ${exclusiveBadge}
+                <span style="font-size:12px;color:#888;flex:1">${escHtml(item.definition || '')}</span>
+                ${delBtn}
+            </div>`;
+        }).join('');
+        const addRowBtn = admin ? `<button class="dim-add-checklist-btn ghost-btn" style="margin:8px 12px;font-size:13px">＋ 添加选项</button>` : '';
+        const exclusiveHint = exclusiveKey ? `<span style="font-size:12px;color:#888;margin-left:12px">互斥 key: <code>${escHtml(exclusiveKey)}</code></span>` : '';
+        return `<div class="dim-checklist-section" style="margin:16px 28px 0;border:1px solid #e0e0e0;border-radius:6px;overflow:hidden">
+            <div style="display:flex;align-items:center;padding:8px 12px;background:#f8f8f8;border-bottom:1px solid #e0e0e0">
+                <span style="font-weight:600;font-size:13px">📋 Checklist（打分后弹出的问题标记）</span>
+                ${exclusiveHint}
+            </div>
+            ${rowsHtml || '<div style="padding:12px;color:#aaa;font-size:13px">暂无选项，点击下方添加</div>'}
+            ${addRowBtn}
         </div>`;
     }
 
@@ -1070,12 +1104,166 @@
                         ]
                     });
                     renderDimCards(data);
-                    // 滚动到底部
                     setTimeout(() => dimView.scrollTo({ top: dimView.scrollHeight, behavior: 'smooth' }), 50);
                 });
             });
         }
+
+        // 编辑 checklist（弹出 modal）
+        const editChecklistBtn = dimView.querySelector('.dim-edit-checklist-btn');
+        if (editChecklistBtn) {
+            editChecklistBtn.addEventListener('click', () => openChecklistModal());
+        }
+
+        // 添加 checklist 选项
+        const addChecklistBtn = dimView.querySelector('.dim-add-checklist-btn');
+        if (addChecklistBtn) {
+            addChecklistBtn.addEventListener('click', () => openChecklistItemModal(null, -1));
+        }
+
+        // 删除 checklist 选项
+        dimView.querySelectorAll('.dim-del-checklist-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = +btn.dataset.idx;
+                patchDimData(data => {
+                    if (Array.isArray(data.checklists)) {
+                        data.checklists.splice(idx, 1);
+                        if (data.checklists.length === 0) delete data.checklists;
+                    }
+                    renderDimCards(data);
+                });
+            });
+        });
+
+        // 点击 checklist 行（非删除按钮）→ 编辑该项
+        dimView.querySelectorAll('.dim-checklist-row').forEach(row => {
+            row.addEventListener('click', (e) => {
+                if (e.target.classList.contains('dim-del-checklist-btn')) return;
+                const idx = +row.dataset.idx;
+                let data;
+                try { data = JSON.parse(dimRawData); } catch (_) { return; }
+                const item = (data.checklists || [])[idx];
+                if (item) openChecklistItemModal(item, idx);
+            });
+        });
     }
+
+    /** 打开 checklist 整体 JSON 编辑 modal */
+    function openChecklistModal() {
+        let data;
+        try { data = JSON.parse(dimRawData); } catch (_) { return; }
+        const current = {
+            checklists: data.checklists || [],
+            checklist_config: data.checklist_config || { multiple: true, exclusive_key: '' }
+        };
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+        modal.innerHTML = `
+            <div style="background:#fff;border-radius:8px;padding:24px;width:560px;max-height:80vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+                <div style="display:flex;align-items:center;margin-bottom:16px">
+                    <span style="font-size:16px;font-weight:600;flex:1">编辑 Checklist JSON</span>
+                    <button id="ck-modal-close" style="background:none;border:none;font-size:18px;cursor:pointer;color:#888">✕</button>
+                </div>
+                <div style="font-size:12px;color:#888;margin-bottom:8px">直接编辑 checklists 数组和 checklist_config，保存后立即生效</div>
+                <textarea id="ck-modal-editor" style="width:100%;height:320px;font-family:monospace;font-size:13px;border:1px solid #ddd;border-radius:4px;padding:8px;box-sizing:border-box;resize:vertical">${escHtml(JSON.stringify(current, null, 2))}</textarea>
+                <div id="ck-modal-err" style="color:#e44;font-size:12px;margin-top:6px;display:none"></div>
+                <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+                    <button id="ck-modal-cancel" class="ghost-btn">取消</button>
+                    <button id="ck-modal-save" style="background:#0a64f0;color:#fff;border:none;border-radius:4px;padding:6px 18px;cursor:pointer;font-size:14px">保存</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        const editor = modal.querySelector('#ck-modal-editor');
+        const errEl  = modal.querySelector('#ck-modal-err');
+        const close  = () => document.body.removeChild(modal);
+        modal.querySelector('#ck-modal-close').addEventListener('click', close);
+        modal.querySelector('#ck-modal-cancel').addEventListener('click', close);
+        modal.querySelector('#ck-modal-save').addEventListener('click', () => {
+            let parsed;
+            try { parsed = JSON.parse(editor.value); }
+            catch (e) { errEl.textContent = 'JSON 格式错误：' + e.message; errEl.style.display = ''; return; }
+            if (!Array.isArray(parsed.checklists)) { errEl.textContent = '缺少 checklists 数组'; errEl.style.display = ''; return; }
+            for (const item of parsed.checklists) {
+                if (!item.key || !item.label) { errEl.textContent = '每项必须包含 key 和 label'; errEl.style.display = ''; return; }
+            }
+            patchDimData(d => {
+                d.checklists = parsed.checklists;
+                if (parsed.checklist_config) d.checklist_config = parsed.checklist_config;
+                renderDimCards(d);
+            });
+            close();
+        });
+        modal.addEventListener('click', e => { if (e.target === modal) close(); });
+        setTimeout(() => editor.focus(), 30);
+    }
+
+    /** 打开单条 checklist 选项编辑 modal（新增 idx=-1，编辑 idx>=0） */
+    function openChecklistItemModal(item, idx) {
+        let data;
+        try { data = JSON.parse(dimRawData); } catch (_) { return; }
+        const isNew = idx < 0;
+        const cur = item || { key: '', label: '', definition: '', exclusive: false };
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center';
+        modal.innerHTML = `
+            <div style="background:#fff;border-radius:8px;padding:24px;width:420px;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+                <div style="display:flex;align-items:center;margin-bottom:16px">
+                    <span style="font-size:15px;font-weight:600;flex:1">${isNew ? '添加 Checklist 选项' : '编辑 Checklist 选项'}</span>
+                    <button id="cki-close" style="background:none;border:none;font-size:18px;cursor:pointer;color:#888">✕</button>
+                </div>
+                <label style="font-size:13px;color:#555">Key（英文标识）</label>
+                <input id="cki-key" value="${escHtml(cur.key)}" style="width:100%;margin:4px 0 12px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box" placeholder="如 action_issue" />
+                <label style="font-size:13px;color:#555">Label（显示名称）</label>
+                <input id="cki-label" value="${escHtml(cur.label)}" style="width:100%;margin:4px 0 12px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box" placeholder="如 动作有问题" />
+                <label style="font-size:13px;color:#555">Definition（悬浮说明，可选）</label>
+                <textarea id="cki-def" style="width:100%;margin:4px 0 12px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box;height:72px;resize:vertical" placeholder="详细说明...">${escHtml(cur.definition || '')}</textarea>
+                <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#555;margin-bottom:16px">
+                    <input id="cki-exclusive" type="checkbox" ${cur.exclusive ? 'checked' : ''} />
+                    互斥项（勾选后自动取消其他选项）
+                </label>
+                <div id="cki-err" style="color:#e44;font-size:12px;margin-bottom:8px;display:none"></div>
+                <div style="display:flex;justify-content:flex-end;gap:8px">
+                    <button id="cki-cancel" class="ghost-btn">取消</button>
+                    <button id="cki-save" style="background:#0a64f0;color:#fff;border:none;border-radius:4px;padding:6px 18px;cursor:pointer;font-size:14px">保存</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+        const errEl = modal.querySelector('#cki-err');
+        const close = () => document.body.removeChild(modal);
+        modal.querySelector('#cki-close').addEventListener('click', close);
+        modal.querySelector('#cki-cancel').addEventListener('click', close);
+        modal.querySelector('#cki-save').addEventListener('click', () => {
+            const key   = modal.querySelector('#cki-key').value.trim();
+            const label = modal.querySelector('#cki-label').value.trim();
+            const def   = modal.querySelector('#cki-def').value.trim();
+            const excl  = modal.querySelector('#cki-exclusive').checked;
+            if (!key)   { errEl.textContent = 'Key 不能为空'; errEl.style.display = ''; return; }
+            if (!label) { errEl.textContent = 'Label 不能为空'; errEl.style.display = ''; return; }
+            const newItem = { key, label };
+            if (def)  newItem.definition = def;
+            if (excl) newItem.exclusive  = true;
+            patchDimData(d => {
+                if (!Array.isArray(d.checklists)) d.checklists = [];
+                if (isNew) {
+                    d.checklists.push(newItem);
+                } else {
+                    d.checklists[idx] = newItem;
+                }
+                // 如果有互斥项，自动更新 checklist_config.exclusive_key
+                if (excl) {
+                    d.checklist_config = d.checklist_config || { multiple: true };
+                    d.checklist_config.exclusive_key = key;
+                }
+                renderDimCards(d);
+            });
+            close();
+        });
+        modal.addEventListener('click', e => { if (e.target === modal) close(); });
+        setTimeout(() => modal.querySelector('#cki-key').focus(), 30);
+    }
+
+    // ── 原 bindCardEdit 结束标记（勿删）──
+    function _bindCardEditEnd() {}
 
     /** 拖拽排序：绑定 dim-card 的 drag & drop 事件 */
     function _bindDimDragSort() {

@@ -2327,10 +2327,63 @@ Window {
                 return
             }
             var batch = (confirmArchiveDialog._batchName || "").trim()
+
+            // ── 归档前：先收集这些文件夹下所有文件的 checklist 数据 ──
+            // archiveByFolders 会把主 CSV 里的记录移走，所以必须在调用前收集
+            var checklistSnapshot = {}
+            try {
+                var allRows = Rating.getAllRatings() || []
+                var pickedSet = {}
+                for (var pi = 0; pi < picked.length; ++pi) {
+                    // 规整路径（去掉末尾斜杠）
+                    var pf = picked[pi].replace(/\/+$/, "")
+                    pickedSet[pf] = true
+                }
+                for (var ri = 0; ri < allRows.length; ++ri) {
+                    var row = allRows[ri] || {}
+                    var fp = row["file_path"] || ""
+                    if (!fp) continue
+                    // 判断是否属于被归档的文件夹
+                    var dir = fp.substring(0, fp.lastIndexOf("/"))
+                    if (!pickedSet[dir]) continue
+                    // 读取该文件的 checklist
+                    var ckRaw = Rating.loadString("checklist:" + fp, "")
+                    if (ckRaw && ckRaw.length > 0) {
+                        try {
+                            checklistSnapshot[fp] = JSON.parse(ckRaw)
+                        } catch(e) {}
+                    }
+                }
+            } catch(e) { checklistSnapshot = {} }
+
             var ok = Rating.archiveByFolders(picked, batch)
             if (ok) {
                 actionToast.show(true, qsTr("已归档 %1 个文件夹的评分").arg(picked.length))
                 root._checkedFolders = ({})        // 归档后清掉勾选，避免误操作再删一次
+
+                // ── 归档后：把 checklist 数据写入批次目录下的 checklist.json ──
+                try {
+                    if (Object.keys(checklistSnapshot).length > 0
+                            && typeof Fs !== "undefined"
+                            && typeof Fs.writeTextFile === "function") {
+                        // 从 dataFilePath 推导 baseDir：<baseDir>/ratings_<mode>.csv
+                        var dfp = Rating.dataFilePath || ""
+                        var baseDir = dfp.substring(0, dfp.lastIndexOf("/"))
+                        var mode = Rating.currentMode || ""
+                        // 拿最新批次名（listArchiveBatches 按时间倒序，第一个就是刚归档的）
+                        var batches = Rating.listArchiveBatches(mode) || []
+                        var batchName = (batches.length > 0) ? (batches[0]["name"] || "") : ""
+                        if (baseDir && mode && batchName) {
+                            var ckPath = baseDir + "/archive/" + mode + "/" + batchName + "/checklist.json"
+                            Fs.writeTextFile(ckPath, JSON.stringify(checklistSnapshot, null, 2))
+                            console.log("[Archive] checklist.json 已写入:", ckPath,
+                                "条数:", Object.keys(checklistSnapshot).length)
+                        }
+                    }
+                } catch(e) {
+                    console.warn("[Archive] 写入 checklist.json 失败：", e)
+                }
+
                 // 让用户能立刻在"归档"Tab 看到这一批
                 root._refreshArchiveList(false)
             } else {

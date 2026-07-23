@@ -263,6 +263,17 @@ function handlePutOne(req, res) {
     if (!parsed.dimensions || !Array.isArray(parsed.dimensions) || parsed.dimensions.length === 0) {
         return res.status(400).json({ ok: false, error: '缺少 dimensions 数组或为空' });
     }
+    // checklists 字段可选，若存在则校验格式
+    if (parsed.checklists !== undefined) {
+        if (!Array.isArray(parsed.checklists)) {
+            return res.status(400).json({ ok: false, error: 'checklists 必须是数组' });
+        }
+        for (const item of parsed.checklists) {
+            if (!item.key || !item.label) {
+                return res.status(400).json({ ok: false, error: 'checklists 每项必须包含 key 和 label 字段' });
+            }
+        }
+    }
 
     try {
         fs.writeFileSync(path.join(CONFIGS_DIR, name + '.json'), JSON.stringify(parsed, null, 2), 'utf8');
