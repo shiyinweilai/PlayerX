@@ -1424,12 +1424,20 @@ ApplicationWindow {
                     Layout.alignment: Qt.AlignVCenter
                 }
                 Text {
-                    text: "远程有新任务配置"
+                    text: root._remoteHasUpdate ? "远程有新任务配置" : "远程任务配置"
                     color: "#e8e8ec"
                     font.pixelSize: 13
                     font.bold: true
                     Layout.alignment: Qt.AlignVCenter
                     Layout.fillWidth: true
+                }
+                // 无更新时的小说明：表明这些是远程当前绑定、可手动应用
+                Text {
+                    visible: !root._remoteHasUpdate
+                    text: "可手动应用为启动项"
+                    color: "#6a6a7c"
+                    font.pixelSize: 10
+                    Layout.alignment: Qt.AlignVCenter
                 }
                 // 关闭按钮（只隐藏，不清空数据，可通过常驻按钮再次打开）
                 Text {
@@ -1459,45 +1467,79 @@ ApplicationWindow {
             // anchors 只用单向引用链（applyBtn→parent.right、ignoreBtn→applyBtn.left、
             // infoWrap.right→ignoreBtn.left），绝无回环 → Popup 一定能算出尺寸。
             Repeater {
-                model: Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+                model: root._remoteConfigCardList
                 delegate: Item {
                     id: rowItem
                     width: 320
-                    // 高度 = 两行 11px 文字 + spacing 4 + 上下各 8px 边距 ≈ 42
-                    height: 44
-
-                    // 模式显示文字：去掉中英文括号及其内容
-                    //   例："质量比较 2（含滑动对比）" → "质量比较 2"
-                    readonly property string _modeText: {
-                        var ml = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList : []
-                        var raw = modelData.mode
-                        for (var i = 0; i < ml.length; i++) {
-                            if (ml[i].id === modelData.mode) { raw = ml[i].label; break }
+                    // 高度 = 两行 11px 文字 + 1×spacing(4) + 上下各 8px 边距 ≈ 38
+                    height: 38
+                    // 该项是否"有更新"（在 _pendingRemoteConfig 中）：有→显示忽略+应用；无→仅应用
+                    readonly property bool _isPending: {
+                        var k = (modelData.mode || "") + ":" + (modelData.configName || "")
+                        var pend = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+                        for (var i = 0; i < pend.length; i++) {
+                            if ((pend[i].mode || "") + ":" + (pend[i].configName || "") === k) return true
                         }
-                        return String(raw).replace(/[（(][^）)]*[）)]/g, "").trim()
+                        return false
                     }
-                    readonly property string _typeText: {
-                        var obj = modelData.obj || {}
-                        return obj.type || "—"
-                    }
+
                     readonly property string _tagText: {
                         var obj = modelData.obj || {}
                         return obj.tag || "—"
                     }
+                    // 评测类型：取远程配置本身的 type 字段（友好名，如"配置2 (副本)"），
+                    // 与本地/后台列表展示一致；远程 JSON 无 name 字段，故不用 configName（那是文件名带时间戳）。
+                    readonly property string _nameText: {
+                        var obj = modelData.obj || {}
+                        return obj.type || modelData.configName || "—"
+                    }
+                    // 按"评测类型"（即 obj.type，如"配置1"/"配置2 (副本)"）取一个简约低饱和的区分色（无更新时用）。
+                    //   不同评测类型 → 不同颜色，一眼可分。
+                    readonly property string _modeColor: {
+                        var nm = (modelData.obj && modelData.obj.type) || modelData.configName || ""
+                        var pal = {
+                            "配置1": "#6f9c8a",
+                            "配置2": "#7d8aa8",
+                            "配置3": "#a8927d",
+                            "配置4": "#9a7da8",
+                            "配置5": "#8aa07d",
+                            "配置6": "#a88a7d"
+                        }
+                        if (pal[nm]) return pal[nm]
+                        // 未命中的配置名：用名字做个稳定哈希，落到一组简约色里
+                        var pool = ["#6f9c8a", "#7d8aa8", "#a8927d", "#9a7da8", "#8aa07d", "#a88a7d", "#7da8a0", "#a87d8a"]
+                        var h = 0
+                        for (var i = 0; i < nm.length; i++) h = (h * 31 + nm.charCodeAt(i)) >>> 0
+                        return pool[h % pool.length]
+                    }
 
-                    // 悬停背景
+                    // 左侧色条：有更新→明显红色加粗；无更新→按 mode 的简约区分色
+                    Rectangle {
+                        id: modeBar
+                        anchors.left: parent.left
+                        anchors.leftMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: rowItem._isPending ? 4 : 3
+                        height: rowItem._isPending ? parent.height - 12 : parent.height - 20
+                        radius: 2
+                        color: rowItem._isPending ? "#f5c518" : rowItem._modeColor
+                    }
+
+                    // 悬停背景 / 有更新红底高亮
                     Rectangle {
                         anchors.fill: parent
                         anchors.leftMargin: 1
                         anchors.rightMargin: 1
-                        color: rowHover.containsMouse ? "#14ffffff" : "transparent"
+                        color: rowItem._isPending
+                              ? (rowHover.containsMouse ? "#3a3216" : "#2e2810")
+                              : (rowHover.containsMouse ? "#14ffffff" : "transparent")
                         radius: 3
                     }
                     HoverHandler { id: rowHover }
 
                     // 列 3：应用按钮（最右）
                     //   先声明按钮再声明信息区，让 infoWrap.anchors.right 引用
-                    //   ignoreBtn.left 时不会出现"未定义 id"警告。
+                    //   ignoreBtn.left（当忽略显示时）或 applyBtn.left（忽略隐藏时）不会出现"未定义 id"警告。
                     Rectangle {
                         id: applyBtn
                         anchors.right: parent.right
@@ -1526,9 +1568,10 @@ ApplicationWindow {
                         }
                     }
 
-                    // 列 2：忽略按钮
+                    // 列 2：忽略按钮（仅"有更新"的项显示；无更新的手动应用项不显示）
                     Rectangle {
                         id: ignoreBtn
+                        visible: rowItem._isPending
                         anchors.right: applyBtn.left
                         anchors.rightMargin: 6
                         anchors.verticalCenter: parent.verticalCenter
@@ -1580,8 +1623,8 @@ ApplicationWindow {
                     Item {
                         id: infoWrap
                         anchors.left: parent.left
-                        anchors.leftMargin: 12
-                        anchors.right: ignoreBtn.left
+                        anchors.leftMargin: 16
+                        anchors.right: rowItem._isPending ? ignoreBtn.left : applyBtn.left
                         anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
                         height: infoCol.implicitHeight
@@ -1591,43 +1634,31 @@ ApplicationWindow {
                             width: parent.width
                             spacing: 4
 
-                            // 上行：类型 + 模式（同一行）
+                            // 行 1：评测类型（配置名，如"配置1"）
                             Row {
                                 spacing: 4
                                 width: parent.width
                                 Text {
-                                    text: "类型："
+                                    text: "评测类型 "
                                     color: "#6a6a7c"
                                     font.pixelSize: 11
                                 }
                                 Text {
-                                    text: rowItem._typeText
+                                    text: rowItem._nameText
                                     color: "#e8e8ec"
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
-                                    // 类型最多占 70px，剩下留给模式
-                                    width: Math.min(implicitWidth, 70)
-                                }
-                                Text {
-                                    text: "  模式："
-                                    color: "#6a6a7c"
-                                    font.pixelSize: 11
-                                }
-                                Text {
-                                    text: rowItem._modeText
-                                    color: "#e8e8ec"
-                                    font.pixelSize: 11
-                                    elide: Text.ElideRight
+                                    width: parent.width - 56
+                                    wrapMode: Text.NoWrap
                                 }
                             }
 
-                            // 下行：tag（独占整行，超长 elide）
+                            // 行 2：备注 tag
                             Row {
                                 spacing: 4
                                 width: parent.width
                                 Text {
-                                    id: tagLabel
-                                    text: "tag："
+                                    text: "备注 tag "
                                     color: "#6a6a7c"
                                     font.pixelSize: 11
                                 }
@@ -1635,8 +1666,8 @@ ApplicationWindow {
                                     text: rowItem._tagText
                                     color: "#e8e8ec"
                                     font.pixelSize: 11
-                                    width: parent.width - tagLabel.width - 4
                                     elide: Text.ElideRight
+                                    width: parent.width - 56
                                     wrapMode: Text.NoWrap
                                 }
                             }
@@ -1652,7 +1683,7 @@ ApplicationWindow {
                         anchors.rightMargin: 12
                         height: 1
                         color: "#22ffffff"
-                        visible: index < (Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length - 1 : 0)
+                        visible: index < (root._remoteConfigCardList.length - 1)
                     }
                 }
             }
@@ -2365,6 +2396,29 @@ ApplicationWindow {
     // 待应用的远程配置列表（检测到差异时暂存，等用户点击通知卡片后才应用）
     // 每项：{ mode, obj, configName }
     property var    _pendingRemoteConfig: null
+    // 【手动应用】远程当前绑定的全部配置（含已是最新的），结构同 _pendingRemoteConfig。
+    // 由 _checkRemoteConfigUpdate 在 onAllDone 里填充（无论有无差异）；
+    // 卡片用它展示完整列表，每条带"应用"按钮，让用户能主动选远程配置作为启动项。
+    property var    _remoteAllConfigs: []
+    // 卡片标题状态标志：true=有更新（"远程有新任务配置"），false=无更新但展示全部（"远程任务配置"）
+    property bool   _remoteHasUpdate: false
+    // 【手动应用】卡片真正展示的合并列表：
+    //   · 优先放 _pendingRemoteConfig（有差异的，标注"有更新"）；
+    //   · 再把 _remoteAllConfigs 里有、但不在 pending 的配置补进来（标注"当前最新"）。
+    //   用 mode:configName 去重，避免同一条显示两次。
+    readonly property var _remoteConfigCardList: {
+        var pending = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+        var all = Array.isArray(root._remoteAllConfigs) ? root._remoteAllConfigs : []
+        var out = []
+        var seen = {}
+        function _key(it) { return (it.mode || "") + ":" + (it.configName || "") }
+        pending.forEach(function(it) { var k = _key(it); seen[k] = true; out.push(it) })
+        all.forEach(function(it) {
+            var k = _key(it)
+            if (!seen[k]) { seen[k] = true; out.push(it) }
+        })
+        return out
+    }
     // 通知卡片是否可见
     property bool   _taskUpdateVisible: false
 
@@ -2379,7 +2433,10 @@ ApplicationWindow {
     // 后台静默检测所有模式的远程配置是否有更新（不影响当前已加载的配置）
     // 流程：先拉 /api/active-config 获取所有模式绑定，再并发请求每个配置内容，
     //       任意一个模式与本地指纹不同，就弹出通知卡片。
-    function _checkRemoteConfigUpdate(onNoUpdate) {
+    // openCardOnNoUpdate：无差异时是否打开卡片展示全部远程配置。
+    //   · 后台静默轮询/启动装载：默认 false（不打扰用户，仅静默刷新 _remoteAllConfigs 数据）
+    //   · 用户手动点 🔔 按钮检测：传 true（弹出卡片展示完整列表 + 应用按钮）
+    function _checkRemoteConfigUpdate(onNoUpdate, openCardOnNoUpdate) {
         var base = root._dimApiUrl()
         if (base.length === 0) return  // 未配置服务器，跳过
         // 【启动钝感排查】T3：xhr0 发起
@@ -2416,6 +2473,9 @@ ApplicationWindow {
                 // 第二步：展开为 (mode, configName) 对，并发请求每个绑定配置的内容
                 var configBase = base.replace(/\/api\/dimensions.*$/, '') + "/api/configs/"
                 var pending = []   // 收集有差异的 { mode, obj, configName }
+                // 【手动应用】收集"远程当前绑定的全部配置"（含已是最新的），
+                // 供"无更新时"也让用户能主动应用任意远程配置作为启动项。
+                var allFetched = []
                 // 展开所有 (mode, configName) 对
                 var allPairs = []
                 modes.forEach(function(m) {
@@ -2427,6 +2487,9 @@ ApplicationWindow {
                 var finished = 0
 
                 function onAllDone() {
+                    // 【手动应用】无论有无差异，都把"远程当前绑定的全部配置"存下来，
+                    // 供卡片在无更新时也展示完整列表、每条带"应用"按钮。
+                    root._remoteAllConfigs = allFetched.slice()
                     if (pending.length === 0) {
                         // 无更新（含首次启动静默应用完毕）：把当前 mode 的维度同步到 reviewDimensions
                         // 这样首次启动时用户无需手动应用，打开评分规则面板就能看到配置
@@ -2466,7 +2529,13 @@ ApplicationWindow {
                                 console.log("[ConfigCheck] 首次启动 checklist 为空 mode=", curMode)
                             }
                         }
-                        // 回调通知调用方
+                        // 回调通知调用方（用于🔔按钮的 tooltip "没有更新"提示）
+                        // 【手动应用】无差异时把卡片打开（仅当用户主动检测时，
+                        // openCardOnNoUpdate=true；后台静默轮询保持不打扰）。
+                        // 卡片展示远程当前绑定的全部配置 + 每条"应用"按钮，
+                        // 让用户能主动选择远程配置作为启动项。
+                        root._remoteHasUpdate = false
+                        if (openCardOnNoUpdate) root._taskUpdateVisible = true
                         if (typeof onNoUpdate === "function") onNoUpdate()
                         return
                     }
@@ -2485,6 +2554,7 @@ ApplicationWindow {
                     })
                     root._pendingRemoteConfig = merged
                     root._taskUpdateVisible = true
+                    root._remoteHasUpdate = true
                     console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新，当前待应用", merged.length, "个")
                 }
 
@@ -2533,6 +2603,18 @@ ApplicationWindow {
                                         root._saveFingerprintToFile()
                                         console.log("[ConfigCheck] 远端已变化，忽略快照自动失效：", fpKey)
                                     }
+
+                                    // 【手动应用】把"远程当前绑定的这份配置"收集到 allFetched。
+                                    // 注意：被忽略快照命中的项已经在上面 return 跳过，不会进这里，
+                                    // 因此 allFetched 不含用户明确忽略过的版本，符合预期。
+                                    allFetched.push({
+                                        mode: mode,
+                                        obj: obj,
+                                        configName: configName,
+                                        rawText: rawText,
+                                        fpKey: fpKey,
+                                        bindingsFp: bindingsFp
+                                    })
 
                                     // 判断是否为绑定切换：绑定关系指纹变了，且该 mode 的 configName 发生了变化
                                     var bindingChanged = (localBindingsFp.length > 0) && (bindingsFp !== localBindingsFp) &&
@@ -4303,42 +4385,32 @@ ApplicationWindow {
                 Layout.alignment: Qt.AlignVCenter
                 hoverEnabled: true
 
-                // 有待更新：切换面板；无待更新：主动抓取一次，无变化则提示
+                // 有待更新：切换面板；无待更新：主动抓取一次并打开卡片展示全部配置
                 property bool _checking: false
-                property bool _showNoUpdate: false
 
                 onClicked: {
+                    // 卡片已展开 → 再次点击直接收起（无论有无更新）
+                    if (root._taskUpdateVisible) {
+                        root._taskUpdateVisible = false
+                        return
+                    }
+                    // 卡片未展开 → 展开：有更新直接开；无更新则主动检测并打开卡片
                     var hasPending = Array.isArray(root._pendingRemoteConfig) && root._pendingRemoteConfig.length > 0
                     if (hasPending) {
-                        root._taskUpdateVisible = !root._taskUpdateVisible
+                        root._taskUpdateVisible = true
                     } else {
                         if (_checking) return
                         _checking = true
-                        _showNoUpdate = false
                         root._checkRemoteConfigUpdate(function() {
-                            // 检测完毕，仍无更新
                             taskUpdateEntryBtn._checking = false
-                            taskUpdateEntryBtn._showNoUpdate = true
-                            noUpdateHideTimer.restart()
-                        })
-                        // 请求发出后重置 _checking（网络回调里再置 false）
-                        // 用一个保底定时器防止卡住
+                        }, true)  // openCardOnNoUpdate=true：无更新也打开卡片展示全部配置 + 应用按钮
                         Qt.callLater(function() { taskUpdateEntryBtn._checking = false })
                     }
                 }
 
-                // 无更新提示自动消失
-                Timer {
-                    id: noUpdateHideTimer
-                    interval: 2500
-                    repeat: false
-                    onTriggered: taskUpdateEntryBtn._showNoUpdate = false
-                }
-
-                ToolTip.visible: hovered || _showNoUpdate
-                ToolTip.delay: hovered ? 400 : 0
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
                 ToolTip.text: {
-                    if (_showNoUpdate) return "✅ 远程没有任务配置更新"
                     var cnt = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length : 0
                     return cnt > 0 ? "远程有 " + cnt + " 个任务配置更新（点击查看）" : "点击检测远程任务配置更新"
                 }
