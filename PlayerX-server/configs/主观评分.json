@@ -1,5 +1,5 @@
 {
-  "task": "主观评测任务1",
+  "task": "主观任务",
   "scale": "1-5 Likert 整数",
   "dimensions": [
     {
@@ -35,5 +35,6 @@
     }
   ],
   "type": "主观评分",
-  "tag": "多维评分"
+  "tag": "主观tag",
+  "testSourceUrl": ""
 }

@@ -1,7 +1,7 @@
 {
   "type": "质量模式",
-  "tag": "",
-  "task": "",
+  "tag": "质量tag",
+  "task": "质量任务",
   "scale": "1-5 Likert 整数",
   "dimensions": [
     {
