@@ -102,6 +102,8 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/qt/SliderCompareItem.cpp
     # 多组对比模式辅助工具（仅供 QML 配置面板使用，不触达播放内核）
     src/qt/FsUtils.cpp
+    # 异步文件下载器（供 QML 测试源下载使用，不阻塞 UI 线程）
+    src/qt/FileDownloader.cpp
     # 平台原生多选文件夹对话框：仅 macOS 走 NSOpenPanel。
     # Windows / Linux 走 FsUtils.cpp 内部的 Qt 自绘 QFileDialog 兜底实现。
     $<$<PLATFORM_ID:Darwin>:src/qt/FsUtils_mac.mm>
