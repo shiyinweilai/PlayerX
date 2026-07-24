@@ -550,7 +550,9 @@ ApplicationWindow {
             var rec = arr[i] || {}
             var folder = rec.folderPath || ""
             var kw     = rec.keyword || ""
-            var sel    = rec.selected !== false   // 默认 true
+            // 恢复历史一律不勾选：重启后不应出现任何"自动勾上"的路，
+            // 是否参与启动完全由用户每次手动勾选决定（持久化的 selected 字段忽略）
+            var sel    = false
             var savedIdx = (typeof rec.currentIndex === "number") ? rec.currentIndex : -1
 
             // 重新扫描文件夹（仅当为非空路径时）
@@ -1278,10 +1280,10 @@ ApplicationWindow {
 
     // ─── 带「重复目录确认」的批量加路入口 ───────────────────────────
     // 把 urls 拆为 freshUrls / dupUrls：
-    //   · freshUrls 立刻走 addFoldersToHistory 正常追加；
+    //   · freshUrls 立刻走 addFoldersToHistory 正常追加（新增路默认不勾选）；
     //   · dupUrls 非空 → 弹 dupConfirmDialog：
     //       - 用户「再开一路」  → 走强制版 addFoldersToHistory(dupUrls,{allowDuplicate:true})；
-    //       - 用户「取消」      → 沿用旧行为，仅把已存在路 selected=true（拖拽零反馈不友好）。
+    //       - 用户「取消」      → 纯 no-op（不勾选已有路 —— 任何时候不替用户勾选）。
     function addFoldersWithConfirm(urls) {
         if (!urls || urls.length === 0) return []
         // 当前 lanes 中已存在的 folderPath 集
@@ -1468,7 +1470,8 @@ ApplicationWindow {
         if (idx === 0) defaultKw = ""
         else defaultKw = ""   // 不预填，避免用户没改导致命中为 0
         _rowsModel.append({
-            selected: true,
+            // 默认不勾选：任何场景都不替用户做勾选决定
+            selected: false,
             folderPath: "",
             keyword: defaultKw,
             currentPath: "",
@@ -1862,7 +1865,8 @@ ApplicationWindow {
 
     // ─── 把若干文件夹路径「追加合并」进 lanes 历史（仅写入，不启动）──
     //   · 已存在同路径的 lane → 跳过（不重复添加）
-    //   · 不在历史中且能扫出视频 → 追加为新 lane（默认 selected=true）
+    //   · 不在历史中且能扫出视频 → 追加为新 lane（默认 selected=false：
+    //     打开/导入不再自动勾选，由用户手动勾选要参与启动的路）
     //   · 总数受 kMaxLanes 限制（满则停止追加）
     //   · 调用 _persistLanes() 持久化
     //   · 同时把所有有效文件夹路径写入独立的「文件夹历史」持久化（_appendToFolderHistory），
@@ -1928,29 +1932,22 @@ ApplicationWindow {
             }
 
             // 已在 lanes 中：
-            //   · 默认行为：强制把 selected 置为 true（用户刚拖了一次，意图明确：要使用它），
-            //     其余字段（keyword / currentIndex / currentPath）保留，避免打断当前播放/筛选状态。
+            //   · 默认行为：直接跳过，不再强制 selected=true ——
+            //     "任何时候不替用户勾选"原则：重复拖入/选择也不自动勾上已有路，
+            //     其余字段（keyword / currentIndex / currentPath）保留不动。
             //   · allowDuplicate=true：跳过该分支，继续走下方的「新增一路」逻辑，
             //     让用户得到一条与已有路同目录的新路（典型场景：刻意做同源对比）。
             if (existing[folderPath] && !allowDup) {
-                for (var ei = 0; ei < _rowsModel.count; ++ei) {
-                    var el = _rowsModel.get(ei)
-                    if (el && el.folderPath === folderPath) {
-                        if (!el.selected) {
-                            _rowsModel.setProperty(ei, "selected", true)
-                        }
-                        break
-                    }
-                }
                 if (hitPaths.indexOf(folderPath) < 0) hitPaths.push(folderPath)
                 continue
             }
 
             // 新增 lane（与 addLane / loadFlatFiles 注入格式一致）
+            // 默认不勾选：打开/导入文件夹只把路加进列表，是否参与启动由用户手动勾选决定
             var visible = _filterAndSort(files, "")
             _laneRuntime.push({ allFiles: files, visibleFiles: visible })
             _rowsModel.append({
-                selected:     true,
+                selected:     false,
                 folderPath:   folderPath,
                 keyword:      "",
                 currentPath:  visible.length > 0 ? visible[0] : "",
@@ -2043,8 +2040,8 @@ ApplicationWindow {
     // ─── 拖入文件夹的统一入口 ─────────────────────────────────────
     // 行为（与"点击打开文件夹"统一）：
     //   1) 先把全部「文件夹历史」合并进 lanes —— 历史路径默认 **不勾选**；
-    //   2) 再把本次拖入的文件夹追加为新 lane / 命中已有 lane —— 强制 selected=true
-    //      （这正是"刚刚拖入的"那几路 → 默认勾选）；
+    //   2) 再把本次拖入的文件夹追加为新 lane / 命中已有 lane —— 新增路默认 **不勾选**
+    //      （是否参与启动完全由用户手动勾选决定）；
     //   3) 显示并置顶 Dialog，等同用户点击工具栏「打开文件夹」入口。
     // 调用方：dropZone / liveDropZone 在拖入时调用此方法，**不**再静默改播放队列。
     // 参数：urls —— QUrl 数组或字符串数组（file:// URL 或本地路径均可）。
@@ -2054,7 +2051,7 @@ ApplicationWindow {
         try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
         _folderHistMerged = true
 
-        // 2) 本次拖入：新增的默认勾选；已存在的会触发"重复目录"确认
+        // 2) 本次拖入：新增的默认不勾选；已存在的会触发"重复目录"确认
         //    （让用户决定再开一路还是仅勾选已有）。
         var hits = []
         try { hits = addFoldersWithConfirm(urls) || [] } catch (e) { hits = [] }
