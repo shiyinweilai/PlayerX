@@ -3312,8 +3312,8 @@ ApplicationWindow {
     //   "testSource": {
     //     "url":          "https://.../bench_xxx.zip",  // 必填：测试源压缩包地址
     //     "workDir":      "~/Downloads",                 // 可选：下载+解压目录（默认系统 Downloads；支持 ~ 开头）
-    //     "rootDir":      "bench_xxx",                   // 可选：内容根目录（相对解压目录，"/" 开头
-    //                                                    //   视为绝对路径；zip 内含单层顶层目录时填它）
+    //     "rootDir":      "bench_xxx",                   // 可选：内容根目录（相对 workDir，"/" 开头
+    //                                                    //   视为绝对路径；即 zip 内的顶层目录名）
     //     "laneDirs":     ["A", "B"],                    // 必填：参与对比的子目录（按顺序对应第 1..N 路）
     //     "referenceDir": "first_frames",                // 可选：参考图目录（相对内容根；跟随对比组）
     //     "promptCsv":    "prompt.csv"                   // 可选：提示词 CSV（相对内容根）
@@ -3342,13 +3342,15 @@ ApplicationWindow {
         var workDir = root._tsExpandHome(String(ts.workDir || "").trim())
         if (!workDir) workDir = (typeof Fs !== "undefined" ? Fs.downloadsDir() : "")
         var zipPath = workDir + "/" + fileName
-        var baseName = fileName.replace(/\.zip$/i, "")
-        var extractDir = workDir + "/" + baseName
+        // 解压目标 = workDir 本身（与 Finder 双击解压行为一致：
+        // zip 内顶层目录 test_auto/ 解压后落在 workDir/test_auto，
+        // 不再额外多套一层与 zip 同名的目录）
+        var extractTarget = workDir
         root._tsAuto = {
             ts: ts, configName: configName,
-            zipPath: zipPath, extractDir: extractDir
+            zipPath: zipPath, extractTarget: extractTarget
         }
-        console.log("[TestSource] 自动化启动:", url, "→ 解压到", extractDir)
+        console.log("[TestSource] 自动化启动:", url, "→ 解压到", extractTarget)
         // 直接驱动下载（不走 startDownload：它内部写死 ~/Downloads，会无视 workDir 配置）
         var d = testSourceDownloadDialog
         d._url        = url
@@ -3364,7 +3366,7 @@ ApplicationWindow {
 
     // 解压完成后：定位测试源根目录 → 绑定参考图/提示词 → 导入多路并启动。
     // 返回 "" 表示成功；非空为错误描述（显示在下载弹窗上）。
-    function _tsImportAndStart(st, extractDir) {
+    function _tsImportAndStart(st, extractTarget) {
         var ts = st.ts
         var laneDirs = []
         if (ts.laneDirs && typeof ts.laneDirs.length === "number") {
@@ -3376,11 +3378,11 @@ ApplicationWindow {
         if (laneDirs.length === 0) return "testSource 配置缺少 laneDirs（参与对比的子目录）"
 
         // 定位内容根：完全由配置决定，不做任何目录探测。
-        // rootDir 相对解压目录（"/" 开头视为绝对路径）；缺省 = 解压目录本身。
+        // rootDir 相对解压目标目录 workDir（"/" 开头视为绝对路径）；缺省 = workDir 本身。
         var rootRel = String(ts.rootDir || "").trim()
         var rootDir = rootRel.length > 0
-            ? (rootRel.charAt(0) === "/" ? rootRel : extractDir + "/" + rootRel)
-            : extractDir
+            ? (rootRel.charAt(0) === "/" ? rootRel : extractTarget + "/" + rootRel)
+            : extractTarget
         if (!Fs.isDirectoryPath(rootDir))
             return "内容根目录不存在：" + rootDir + "\n（请检查 testSource.rootDir 配置）"
 
@@ -3406,9 +3408,10 @@ ApplicationWindow {
         console.log("[TestSource] 根目录:", rootDir, " 路:", lanes.join(" | "),
             " 参考图:", bindRef ? refAbs : "(无)", " CSV:", bindCsv ? csvAbs : "(无)")
 
-        // 导入并直接启动（loadFolders：仅勾选本次导入的路 → start → 进入打分界面）
+        // 导入并直接启动（loadFolders：仅勾选本次导入的路 → start → 进入打分界面；
+        // 路满时会先自动清理"文件夹已不存在"的死路再重试）
         if (!multiGroupDialog.loadFolders(lanes))
-            return "导入失败：对比目录里没有可播放的视频"
+            return "导入失败：目录里没有可播放的视频，或路数已达 9 路上限"
         return ""
     }
 
@@ -3428,7 +3431,7 @@ ApplicationWindow {
             testSourceDownloadDialog._progress = 1.0
             testSourceDownloadDialog._status = "downloading"   // 保持进度条满格可见
             testSourceDownloadDialog._statusText = "下载完成，正在解压…"
-            Fs.extractZipAsync(st.zipPath, st.extractDir)
+            Fs.extractZipAsync(st.zipPath, st.extractTarget)
         }
     }
 

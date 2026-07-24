@@ -1842,11 +1842,36 @@ ApplicationWindow {
     // 入参 urls 元素可以是 file:// QUrl，也可以是本地路径字符串；
     // 仅扫描出至少 1 个视频的文件夹会被纳入。
     // 返回：true=已成功启动；false=没有有效文件夹。
+    // 清理"文件夹已不存在于磁盘"的死路（历史残留），为新导入腾出位置。
+    // 典型来源：测试源目录被删除/移动后，旧 lane 仍占着 kMaxLanes 名额。
+    function _pruneStaleLanes() {
+        var removed = 0
+        for (var i = _rowsModel.count - 1; i >= 0; --i) {
+            var l = _rowsModel.get(i)
+            if (!l) continue
+            var fp = l.folderPath || ""
+            if (fp.length > 0 && !Fs.isDirectoryPath(fp)) {
+                removeLane(i)   // removeLane 会同步从文件夹历史里清除
+                ++removed
+            }
+        }
+        if (removed > 0) console.log("[MGD] _pruneStaleLanes 清理死路:", removed, "条")
+        return removed
+    }
+
     function loadFolders(urls) {
         if (!urls || urls.length === 0) return false
 
         // 1) 先把这一批文件夹追加到历史 lanes（去重 + 持久化）
         var addedPaths = addFoldersToHistory(urls)
+        // 路数撞上限（kMaxLanes）时：先清掉"文件夹已不存在"的死路，再重试一次。
+        // 否则旧残留（如已删除的测试源目录）会永久堵死新导入，
+        // 且报出的"没有可播放的视频"极具误导性。
+        if ((!addedPaths || addedPaths.length === 0) && _rowsModel.count >= kMaxLanes) {
+            console.log("[MGD] loadFolders: 路数已满，先清理死路后重试")
+            _pruneStaleLanes()
+            addedPaths = addFoldersToHistory(urls)
+        }
         if (!addedPaths || addedPaths.length === 0) return false
 
         // 2) 启动：仅勾选「本次拖入」的那几路；其它历史路设为未勾选（保留但不参与启动）
