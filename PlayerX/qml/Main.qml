@@ -1383,7 +1383,7 @@ ApplicationWindow {
         }
     }
 
-    // ─── 任务配置更新通知卡片 ─────────────────────────────────────────────
+    // ─── 任务更新通知卡片 ─────────────────────────────────────────────
     // 后台检测到远程配置有更新时浮现，用户点击后逐条应用，不阻塞任何操作。
     // 位置：左下角，常驻按钮上方。
     Popup {
@@ -1424,7 +1424,7 @@ ApplicationWindow {
                     Layout.alignment: Qt.AlignVCenter
                 }
                 Text {
-                    text: root._remoteHasUpdate ? "远程有新任务配置" : "远程任务配置"
+                    text: root._remoteHasUpdate ? "远程有新任务" : "远程任务"
                     color: "#e8e8ec"
                     font.pixelSize: 13
                     font.bold: true
@@ -1553,7 +1553,7 @@ ApplicationWindow {
 
                         Text {
                             anchors.centerIn: parent
-                            text: "应用"
+                            text: "接受"
                             color: "#ffffff"
                             font.pixelSize: 11
                             font.bold: true
@@ -2386,7 +2386,7 @@ ApplicationWindow {
         }
     }
 
-    // ── 任务配置后台差异检测 ──────────────────────────────────────────────
+    // ── 任务后台差异检测 ──────────────────────────────────────────────
     // 设计：启动时先用本地缓存初始化（零延迟），后台静默拉取远程配置做指纹对比。
     // 有差异时弹出通知卡片，用户主动点击后才应用远程配置，不阻塞任何操作。
     // 轮询间隔：5 分钟（软件运行期间持续检测）。
@@ -2400,7 +2400,7 @@ ApplicationWindow {
     // 由 _checkRemoteConfigUpdate 在 onAllDone 里填充（无论有无差异）；
     // 卡片用它展示完整列表，每条带"应用"按钮，让用户能主动选远程配置作为启动项。
     property var    _remoteAllConfigs: []
-    // 卡片标题状态标志：true=有更新（"远程有新任务配置"），false=无更新但展示全部（"远程任务配置"）
+    // 卡片标题状态标志：true=有更新（"远程有新任务"），false=无更新但展示全部（"远程任务"）
     property bool   _remoteHasUpdate: false
     // 【手动应用】卡片真正展示的合并列表：
     //   · 优先放 _pendingRemoteConfig（有差异的，标注"有更新"）；
@@ -4375,7 +4375,7 @@ ApplicationWindow {
             // 打开 / 多组对比 入口已统一收纳到顶部系统菜单栏【文件】。
             // 这里只保留一个 fillWidth 的 spacer，把后面的播放控制组推到工具栏右端。
 
-            // ── 任务配置更新常驻入口按钮（🔔）紧贴 📱 按钮左侧 ──────────
+            // ── 任务更新常驻入口按钮（🔔）紧贴 📱 按钮左侧 ──────────
             Button {
                 id: taskUpdateEntryBtn
                 // 始终常驻显示
@@ -4412,7 +4412,7 @@ ApplicationWindow {
                 ToolTip.delay: 400
                 ToolTip.text: {
                     var cnt = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length : 0
-                    return cnt > 0 ? "远程有 " + cnt + " 个任务配置更新（点击查看）" : "点击检测远程任务配置更新"
+                    return cnt > 0 ? "远程有 " + cnt + " 个任务更新（点击查看）" : "点击检测远程任务更新"
                 }
 
                 background: Rectangle {
