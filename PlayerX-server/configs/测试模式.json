@@ -90,5 +90,16 @@
       "exclusive": true
     }
   ],
-  "testSourceUrl": ""
+  "testSourceUrl": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/test_auto.zip",
+  "testSource": {
+    "url": "",
+    "workDir": "~/Downloads",
+    "rootDir": "test_auto",
+    "laneDirs": [
+      "A",
+      "B"
+    ],
+    "referenceDir": "first_frames",
+    "promptCsv": "prompt.csv"
+  }
 }

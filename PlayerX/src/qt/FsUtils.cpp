@@ -339,4 +339,70 @@ QStringList FsUtils::pickMultipleFolders(const QString& title,
 #endif
 }
 
+// ── ZIP 解压（异步，平台命令实现）────────────────────────────────────────
+void FsUtils::extractZipAsync(const QString& zipPath, const QString& destDir) {
+    if (m_zipProc) {
+        emit zipExtracted(false, destDir, QStringLiteral("已有解压任务进行中"));
+        return;
+    }
+    if (zipPath.isEmpty() || !QFileInfo::exists(zipPath)) {
+        emit zipExtracted(false, destDir, QStringLiteral("zip 文件不存在：%1").arg(zipPath));
+        return;
+    }
+    if (destDir.isEmpty()) {
+        emit zipExtracted(false, destDir, QStringLiteral("解压目标目录为空"));
+        return;
+    }
+    QDir().mkpath(destDir);
+
+    QString program;
+    QStringList args;
+#if defined(Q_OS_MACOS)
+    // ditto 是 macOS 自带工具，-x -k 解压 pkzip，自动处理资源叉/隔离属性
+    program = QStringLiteral("ditto");
+    args << QStringLiteral("-x") << QStringLiteral("-k") << zipPath << destDir;
+#elif defined(Q_OS_WIN)
+    program = QStringLiteral("powershell");
+    args << QStringLiteral("-NoProfile") << QStringLiteral("-NonInteractive")
+         << QStringLiteral("-Command")
+         << QStringLiteral("Expand-Archive -LiteralPath '%1' -DestinationPath '%2' -Force")
+                .arg(QString(zipPath).replace(QLatin1Char('\''), QStringLiteral("''")),
+                     QString(destDir).replace(QLatin1Char('\''), QStringLiteral("''")));
+#else
+    program = QStringLiteral("unzip");
+    args << QStringLiteral("-o") << zipPath << QStringLiteral("-d") << destDir;
+#endif
+
+    m_zipProc = new QProcess(this);
+    QProcess* proc = m_zipProc;
+    QObject::connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                     this, [this, proc, destDir](int exitCode, QProcess::ExitStatus) {
+        const QString errOut = QString::fromLocal8Bit(proc->readAllStandardError()).trimmed();
+        proc->deleteLater();
+        if (m_zipProc == proc) m_zipProc = nullptr;
+        if (exitCode == 0) {
+            emit zipExtracted(true, destDir, QString());
+        } else {
+            emit zipExtracted(false, destDir,
+                errOut.isEmpty() ? QStringLiteral("解压命令退出码 %1").arg(exitCode) : errOut);
+        }
+    });
+    proc->start(program, args);
+}
+
+QStringList FsUtils::listSubDirs(const QString& dirPath) const {
+    QStringList out;
+    if (dirPath.isEmpty()) return out;
+    QDir d(dirPath);
+    if (!d.exists()) return out;
+    const auto entries = d.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    out.reserve(entries.size());
+    for (const auto& e : entries) out << e.absoluteFilePath();
+    return out;
+}
+
+QString FsUtils::homeDir() const {
+    return QDir::homePath();
+}
+
 } // namespace rbqt

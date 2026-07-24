@@ -1707,6 +1707,9 @@ ApplicationWindow {
                 testSourceDownloadDialog._statusText = "正在下载… " + mb + totalMb + " MB"
             }
             function onFinished(ok, savePath, errorMsg) {
+                // 自动化流水线（root._tsAuto 非空）由 root 侧的 Connections 接管后续状态
+                //（解压 → 导入 → 启动），这里直接让路，避免状态文本互相覆盖。
+                if (root._tsAuto) return
                 if (testSourceDownloadDialog._status !== "downloading") return
                 if (ok) {
                     testSourceDownloadDialog._savePath   = savePath
@@ -3304,6 +3307,164 @@ ApplicationWindow {
         testSourceDownloadDialog.startDownload(url, fileName, configName)
     }
 
+    // ─── 测试源全自动流水线（点「接受」后一键就绪）────────────────────────────
+    // 评分配置 JSON 中新增 testSource 对象字段：
+    //   "testSource": {
+    //     "url":          "https://.../bench_xxx.zip",  // 必填：测试源压缩包地址
+    //     "workDir":      "~/Downloads",                 // 可选：下载+解压目录（默认系统 Downloads；支持 ~ 开头）
+    //     "rootDir":      "bench_xxx",                   // 可选：内容根目录（相对解压目录，"/" 开头
+    //                                                    //   视为绝对路径；zip 内含单层顶层目录时填它）
+    //     "laneDirs":     ["A", "B"],                    // 必填：参与对比的子目录（按顺序对应第 1..N 路）
+    //     "referenceDir": "first_frames",                // 可选：参考图目录（相对内容根；跟随对比组）
+    //     "promptCsv":    "prompt.csv"                   // 可选：提示词 CSV（相对内容根）
+    //   }
+    // 流水线：下载（复用下载弹窗显示进度）→ 解压（Fs.extractZipAsync）→
+    //         按配置定位内容根（纯配置驱动，不做目录探测）→ 绑定参考图/提示词 →
+    //         multiGroupDialog.loadFolders 导入并直接启动 → 进入打分界面。
+    // _tsAuto 非空表示流水线进行中（同时是下面两组 Connections 的使能开关）。
+    property var _tsAuto: null
+
+    function _tsExpandHome(p) {
+        if (!p) return p
+        if (p === "~" || p.indexOf("~/") === 0)
+            return (typeof Fs !== "undefined" ? Fs.homeDir() : "") + p.substring(1)
+        return p
+    }
+
+    function _startTestSourceAutomation(ts, configName) {
+        if (root._tsAuto) {
+            console.warn("[TestSource] 已有自动化任务进行中，忽略本次触发")
+            return
+        }
+        var url = String(ts.url || "").trim()
+        if (url.length === 0) return
+        var fileName = url.split("/").pop().split("?")[0] || "test-source.zip"
+        var workDir = root._tsExpandHome(String(ts.workDir || "").trim())
+        if (!workDir) workDir = (typeof Fs !== "undefined" ? Fs.downloadsDir() : "")
+        var zipPath = workDir + "/" + fileName
+        var baseName = fileName.replace(/\.zip$/i, "")
+        var extractDir = workDir + "/" + baseName
+        root._tsAuto = {
+            ts: ts, configName: configName,
+            zipPath: zipPath, extractDir: extractDir
+        }
+        console.log("[TestSource] 自动化启动:", url, "→ 解压到", extractDir)
+        // 直接驱动下载（不走 startDownload：它内部写死 ~/Downloads，会无视 workDir 配置）
+        var d = testSourceDownloadDialog
+        d._url        = url
+        d._fileName   = fileName
+        d._configName = configName
+        d._savePath   = ""
+        d._progress   = 0
+        d._status     = "downloading"
+        d._statusText = "正在下载…"
+        d.open()
+        Downloader.download(url, zipPath)
+    }
+
+    // 解压完成后：定位测试源根目录 → 绑定参考图/提示词 → 导入多路并启动。
+    // 返回 "" 表示成功；非空为错误描述（显示在下载弹窗上）。
+    function _tsImportAndStart(st, extractDir) {
+        var ts = st.ts
+        var laneDirs = []
+        if (ts.laneDirs && typeof ts.laneDirs.length === "number") {
+            for (var i = 0; i < ts.laneDirs.length; ++i) {
+                var s = String(ts.laneDirs[i] || "").trim()
+                if (s.length > 0) laneDirs.push(s)
+            }
+        }
+        if (laneDirs.length === 0) return "testSource 配置缺少 laneDirs（参与对比的子目录）"
+
+        // 定位内容根：完全由配置决定，不做任何目录探测。
+        // rootDir 相对解压目录（"/" 开头视为绝对路径）；缺省 = 解压目录本身。
+        var rootRel = String(ts.rootDir || "").trim()
+        var rootDir = rootRel.length > 0
+            ? (rootRel.charAt(0) === "/" ? rootRel : extractDir + "/" + rootRel)
+            : extractDir
+        if (!Fs.isDirectoryPath(rootDir))
+            return "内容根目录不存在：" + rootDir + "\n（请检查 testSource.rootDir 配置）"
+
+        // 收集 lane 绝对路径并校验存在性
+        var lanes = []
+        for (var j = 0; j < laneDirs.length; ++j) {
+            var p = rootDir + "/" + laneDirs[j]
+            if (!Fs.isDirectoryPath(p)) return "缺少对比目录：" + p
+            lanes.push(p)
+        }
+
+        // 绑定参考图（跟随对比组）与提示词 CSV —— 绑定键是每路自己的文件夹
+        var refRel = String(ts.referenceDir || "").trim()
+        var csvRel = String(ts.promptCsv || "").trim()
+        var refAbs = refRel.length > 0 ? rootDir + "/" + refRel : ""
+        var csvAbs = csvRel.length > 0 ? rootDir + "/" + csvRel : ""
+        var bindRef = refAbs.length > 0 && Fs.isDirectoryPath(refAbs)
+        var bindCsv = csvAbs.length > 0 && Fs.fileExists(csvAbs)
+        for (var k = 0; k < lanes.length; ++k) {
+            if (bindRef) Reference.setReferenceFolder(lanes[k], refAbs)
+            if (bindCsv) Reference.setReferenceCsv(lanes[k], csvAbs)
+        }
+        console.log("[TestSource] 根目录:", rootDir, " 路:", lanes.join(" | "),
+            " 参考图:", bindRef ? refAbs : "(无)", " CSV:", bindCsv ? csvAbs : "(无)")
+
+        // 导入并直接启动（loadFolders：仅勾选本次导入的路 → start → 进入打分界面）
+        if (!multiGroupDialog.loadFolders(lanes))
+            return "导入失败：对比目录里没有可播放的视频"
+        return ""
+    }
+
+    // ── 测试源自动化：下载完成 → 解压 ──
+    Connections {
+        target: (typeof Downloader !== "undefined") ? Downloader : null
+        enabled: root._tsAuto !== null
+        function onFinished(ok, savePath, errorMsg) {
+            var st = root._tsAuto
+            if (!st) return
+            if (!ok) {
+                testSourceDownloadDialog._status = "error"
+                testSourceDownloadDialog._statusText = "下载失败：" + (errorMsg || "网络错误")
+                root._tsAuto = null
+                return
+            }
+            testSourceDownloadDialog._progress = 1.0
+            testSourceDownloadDialog._status = "downloading"   // 保持进度条满格可见
+            testSourceDownloadDialog._statusText = "下载完成，正在解压…"
+            Fs.extractZipAsync(st.zipPath, st.extractDir)
+        }
+    }
+
+    // ── 测试源自动化：解压完成 → 导入 + 绑定 + 启动 ──
+    Connections {
+        target: (typeof Fs !== "undefined") ? Fs : null
+        enabled: root._tsAuto !== null
+        function onZipExtracted(ok, destDir, errorMsg) {
+            var st = root._tsAuto
+            if (!st) return
+            root._tsAuto = null
+            if (!ok) {
+                testSourceDownloadDialog._status = "error"
+                testSourceDownloadDialog._statusText = "解压失败：" + (errorMsg || "无法解压 zip")
+                return
+            }
+            testSourceDownloadDialog._statusText = "解压完成，正在导入…"
+            var err = root._tsImportAndStart(st, destDir)
+            if (err.length > 0) {
+                testSourceDownloadDialog._status = "error"
+                testSourceDownloadDialog._statusText = err
+                return
+            }
+            testSourceDownloadDialog._status = "done"
+            testSourceDownloadDialog._statusText = "已就绪，进入打分"
+            tsAutoCloseTimer.restart()
+        }
+    }
+
+    // 自动化成功后短暂展示"已就绪"再自动收起下载弹窗
+    Timer {
+        id: tsAutoCloseTimer
+        interval: 800
+        onTriggered: testSourceDownloadDialog.close()
+    }
+
     // 用户点击通知卡片后，应用所有待更新的远程配置
     // 应用单条远程配置，并自动切换到对应评分模式
     // 【关键】用户点应用时【现拉一次】远程最新数据，用最新 obj 而不是差异检测阶段缓存的 item.obj
@@ -3433,9 +3594,29 @@ ApplicationWindow {
                 root._pendingRemoteConfig = remaining.length > 0 ? remaining : null
                 if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
 
-                // 【测试源下载】若配置携带 testSourceUrl，应用后自动触发下载
-                console.log("[TestSource] obj.testSourceUrl =", obj.testSourceUrl, "configName =", configName)
-                if (obj.testSourceUrl && typeof obj.testSourceUrl === "string" && obj.testSourceUrl.trim().length > 0) {
+                // 【测试源】两种配置形态（testSource 对象优先）：
+                //   testSource（对象，推荐）→ 全自动流水线：下载 → 解压 → 绑定参考图/提示词
+                //                             → 导入多路 → 直接启动进入打分界面
+                //   testSourceUrl（字符串，旧）→ 仅下载 zip 到 Downloads，手动导入
+                // 兼容：testSource.url 留空时回退使用 testSourceUrl 作为下载地址，
+                //       这样 url 只需维护一处（testSource 其余字段仍生效）。
+                var _tsObj = obj.testSource
+                var _tsUrl = ""
+                if (_tsObj && typeof _tsObj === "object") {
+                    if (typeof _tsObj.url === "string" && _tsObj.url.trim().length > 0) {
+                        _tsUrl = _tsObj.url.trim()
+                    } else if (typeof obj.testSourceUrl === "string" && obj.testSourceUrl.trim().length > 0) {
+                        _tsUrl = obj.testSourceUrl.trim()
+                    }
+                }
+                if (_tsUrl.length > 0) {
+                    console.log("[TestSource] 命中 testSource 自动化配置, configName =", configName)
+                    var _tsMerged = {}
+                    for (var _tk in _tsObj) _tsMerged[_tk] = _tsObj[_tk]
+                    _tsMerged.url = _tsUrl
+                    root._startTestSourceAutomation(_tsMerged, configName)
+                } else if (obj.testSourceUrl && typeof obj.testSourceUrl === "string" && obj.testSourceUrl.trim().length > 0) {
+                    console.log("[TestSource] 命中旧版 testSourceUrl（仅下载）, configName =", configName)
                     root._downloadTestSource(obj.testSourceUrl.trim(), configName)
                 }
             } catch (e) {

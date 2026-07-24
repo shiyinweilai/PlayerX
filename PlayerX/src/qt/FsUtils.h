@@ -15,6 +15,8 @@
 #include <QStringList>
 #include <QUrl>
 
+class QProcess;
+
 namespace rbqt {
 
 class FsUtils : public QObject {
@@ -107,6 +109,28 @@ public:
     //   · startPath 为空 / 路径不存在时回退到 HOME 目录。
     Q_INVOKABLE QStringList pickMultipleFolders(const QString& title = QString(),
                                                  const QString& startPath = QString()) const;
+
+    // ── ZIP 解压（异步）────────────────────────────────────────────
+    // 用途：测试源自动化流水线（接受远程配置 → 下载 zip → 解压 → 自动导入打分）。
+    // 平台实现：macOS 用 ditto -x -k；Windows 用 PowerShell Expand-Archive；
+    // Linux 用 unzip -o。destDir 会自动创建。
+    // 完成后发出 zipExtracted(ok, destDir, errorMsg)；同一时刻只允许一个解压任务，
+    // 重复调用直接以 false 回调。
+    Q_INVOKABLE void extractZipAsync(const QString& zipPath, const QString& destDir);
+
+    // 列出目录的直接子目录（绝对路径，按名称升序）。目录不存在返回空表。
+    // 用途：测试源解压后定位真正的内容根目录（zip 内常含单层顶层目录）。
+    Q_INVOKABLE QStringList listSubDirs(const QString& dirPath) const;
+
+    // 用户主目录绝对路径（QML 端展开 "~/..." 形式的配置路径用）。
+    Q_INVOKABLE QString homeDir() const;
+
+signals:
+    // 解压完成。ok=true 时 destDir 为解压目标目录；ok=false 时 errorMsg 有描述。
+    void zipExtracted(bool ok, const QString& destDir, const QString& errorMsg);
+
+private:
+    QProcess* m_zipProc = nullptr;   // 进行中的解压进程（最多一个）
 };
 
 } // namespace rbqt
