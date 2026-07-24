@@ -1,0 +1,24 @@
+{
+  "type": "质量模式",
+  "tag": "质量tag",
+  "task": "质量任务",
+  "scale": "1-5 Likert 整数",
+  "dimensions": [
+    {
+      "key": "总分",
+      "definition": "视频A质量和视频B相当都打1分",
+      "levels": [
+        {
+          "score": 2,
+          "label": "好",
+          "description": "视频A质量优于视频B"
+        },
+        {
+          "score": 1,
+          "label": "差",
+          "description": "视频A质量差于视频B"
+        }
+      ]
+    }
+  ]
+}

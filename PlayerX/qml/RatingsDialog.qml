@@ -139,6 +139,18 @@ Window {
     property string _lastUploadArchiveBatch: ""
     // 远程激活配置的 tag（由 Main.qml 注入），用于上传前校验
     property string remoteTag: ""
+    // 开发者模式（由 Main.qml 注入）：勾选时模式切换 Tab 显示「测试模式」
+    property bool developerMode: false
+    // 模式切换 Tab 实际展示的列表：开发者模式未勾选时过滤掉「测试模式」
+    readonly property var _visibleModeList: {
+        var ml = (typeof Rating !== "undefined") ? Rating.modeList : []
+        if (root.developerMode) return ml
+        var out = []
+        for (var i = 0; i < ml.length; ++i) {
+            if (ml[i].id !== "test") out.push(ml[i])
+        }
+        return out
+    }
     // quality_slide 模式下第二维度的 key（由 Main.qml 注入，例如 "滑动"）。
     // 用来区分同 CSV 里的滑动打分（slide_type == "multi_<slideDimKey>" 或旧值 "slide"）
     // 和第一维度普通打分（slide_type == "multi_<其他key>"），便于分组显示。
@@ -918,10 +930,11 @@ Window {
             }
             Item { Layout.fillWidth: true }
             // 模式切换器：Repeater 生成一组互斥胶囊开关
+            //（用过滤后的可见列表：开发者模式关闭时不含「测试模式」）
             Row {
                 spacing: 6
                 Repeater {
-                    model: (typeof Rating !== "undefined") ? Rating.modeList : []
+                    model: root._visibleModeList
                     delegate: Rectangle {
                         property var modeData: modelData
                         property bool selected: root._selectedMode === modeData.id

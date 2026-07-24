@@ -264,6 +264,27 @@ else()
     )
 endif()
 
+# ─── default_configs/ 内置默认评分配置（出厂配置，跟随软件发布）──
+# 每模式一份 <mode>.json（subjective / quality / quality_slide / multi_dim / test），
+# 运行时从 Resources/default_configs/ 读取。远程"接受"只写覆盖层
+# （dimsByMode.json / checklistByMode.json / tagByMode.json），永不改写本目录，
+# 因此任何时刻都能"恢复默认配置"；用户升级软件即拿到最新内置默认。
+if(APPLE)
+    add_custom_command(TARGET PlayerX POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/doc/default_configs"
+            "$<TARGET_BUNDLE_DIR:PlayerX>/Contents/Resources/default_configs"
+        COMMENT "Copying default_configs/ to app bundle Resources"
+    )
+else()
+    add_custom_command(TARGET PlayerX POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/doc/default_configs"
+            "$<TARGET_FILE_DIR:PlayerX>/default_configs"
+        COMMENT "Copying default_configs/ next to executable"
+    )
+endif()
+
 # ─── 安装 ─────────────────────────────────────────────────────────────────────
 install(TARGETS PlayerX
     BUNDLE  DESTINATION .
@@ -276,6 +297,16 @@ if(APPLE)
     )
 else()
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/doc/dimensions.json"
+        DESTINATION bin
+    )
+endif()
+# 安装时同步带上内置默认评分配置目录（跟随软件的出厂配置）
+if(APPLE)
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/doc/default_configs"
+        DESTINATION "PlayerX.app/Contents/Resources"
+    )
+else()
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/doc/default_configs"
         DESTINATION bin
     )
 endif()

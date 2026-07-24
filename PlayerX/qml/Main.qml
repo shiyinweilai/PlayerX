@@ -58,50 +58,13 @@ ApplicationWindow {
         // 导出/上传就已经处于"过滤为空"状态，避免残留旧勾选被写入 CSV）。
         _syncChecklistWhitelist()
 
+        // 恢复开发者模式开关（持久化）：默认不勾选（隐藏测试模式）；勾选后显示「测试模式」
+        try { root.developerMode = (Rating.loadString("ui/developerMode", "0") === "1") } catch (e) {}
+
         // 加载多维度评分配置
-        // 策略：优先从本地缓存文件加载（零延迟，不阻塞启动），
-        //       加载完成后立即后台静默检测远程配置是否有更新。
-        //       有更新时弹出通知卡片，用户主动点击后才应用，不阻塞任何操作。
-        // macOS: PlayerX.app/Contents/Resources/dimensions.json
-        // 其他:  可执行文件同级目录 dimensions.json
-        function _loadDimensions(url, fallbackUrl) {
-            var xhr2 = new XMLHttpRequest()
-            xhr2.onreadystatechange = function() {
-                if (xhr2.readyState !== XMLHttpRequest.DONE) return
-                if (xhr2.status === 200 || xhr2.status === 0) {
-                    try {
-                        var obj = JSON.parse(xhr2.responseText)
-                        if (obj && Array.isArray(obj.dimensions) && obj.dimensions.length > 0) {
-                            // 预注入 starCount，避免 Repeater delegate 依赖深层 levels.length 动态计算
-                            var _dims0 = obj.dimensions.map(function(d) {
-                                var sc = (d.levels && Array.isArray(d.levels) && d.levels.length > 0) ? d.levels.length : 5
-                                return Object.assign({}, d, { starCount: sc })
-                            })
-                            root.reviewDimensions = _dims0
-                            root.reviewDimensionsVersion++
-                            console.log("[DimLoad-A] _loadDimensions 直写 reviewDimensions，维度数:", _dims0.length,
-                                "（理论上只在启动/fallback 时调用）")
-                            // 同步 tag
-                            if (obj.tag && typeof Rating !== "undefined") {
-                                Rating.uploadTag = obj.tag
-                            }
-                            root._remoteTag = obj.tag || ""
-                            // 【tag 按 mode 独立缓存】把当前 mode 的 tag 记入 _tagByMode
-                            var _curModeA = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
-                            if (_curModeA && _curModeA !== "off") {
-                                root._setTagForMode(_curModeA, obj.tag || "")
-                            }
-                            return
-                        }
-                    } catch (e) {}
-                }
-                // 加载失败且还有 fallback，尝试 fallback
-                if (fallbackUrl) _loadDimensions(fallbackUrl, null)
-                // 本地无缓存，configInitCheckTimer 会在 1.5s 后触发首次检测
-            }
-            xhr2.open("GET", url)
-            xhr2.send()
-        }
+        // 新策略：内置默认配置（Resources/default_configs/<mode>.json，跟随软件发布）为底，
+        //       远程"接受"来的配置只是临时覆盖层（dimsByMode.json 等）；
+        //       启动不再主动拉取远程，覆盖层优先、内置兜底，任何模式启动即有配置。
         // 【按 mode 独立缓存】读取 dimsByMode.json → 填充 root._dimsByMode，
         // 并按当前 Rating.currentMode 装载对应维度到 UI。
         // 这是解决"多 mode 配置串扰"的关键：每个 mode 的维度独立保存，不再共用 dimensions.json。
@@ -136,21 +99,22 @@ ApplicationWindow {
         }
         // 构建 bundle Resources 路径
         var exePath = Qt.application.arguments[0]  // 如 .../PlayerX.app/Contents/MacOS/PlayerX
-        var resourcesUrl = ""
         var dimsByModeUrl = ""
         var dimsByModeLocalPath = ""   // 无 file:// 前缀，用于 Fs.readTextFile 同步读
         if (Qt.platform.os === "osx") {
             var macosDir = exePath.substring(0, exePath.lastIndexOf("/"))  // .../Contents/MacOS
             var contentsDir = macosDir.substring(0, macosDir.lastIndexOf("/"))  // .../Contents
-            resourcesUrl = "file://" + contentsDir + "/Resources/dimensions.json"
             dimsByModeUrl = "file://" + contentsDir + "/Resources/dimsByMode.json"
             dimsByModeLocalPath = contentsDir + "/Resources/dimsByMode.json"
         } else {
             var binDir = exePath.substring(0, exePath.lastIndexOf("/"))
-            resourcesUrl = "file://" + binDir + "/dimensions.json"
             dimsByModeUrl = "file://" + binDir + "/dimsByMode.json"
             dimsByModeLocalPath = binDir + "/dimsByMode.json"
         }
+
+        // 【内置默认配置】最先加载出厂配置（跟随软件，永远在），
+        // 之后读的 dimsByMode.json 等只是远程"接受"留下的临时覆盖层。
+        root._loadBuiltinDefaultConfigs()
 
         // 【无感启动优化】优先用 Fs.readTextFile 同步读取本地 dimsByMode.json，
         //   这样 Component.onCompleted 一返回，reviewDimensions 就已就绪。
@@ -174,7 +138,7 @@ ApplicationWindow {
                                 && cache[curMode0] && Array.isArray(cache[curMode0])
                                 && cache[curMode0].length > 0) {
                             // 预注入 starCount，避免 Repeater delegate 依赖深层
-                            // levels.length 动态计算（与 _loadDimensions 保持一致）
+                            // levels.length 动态计算（与 _applyModeConfigToUI 保持一致）
                             var _dimsSync = cache[curMode0].map(function(d) {
                                 var sc = (d && d.levels && Array.isArray(d.levels) && d.levels.length > 0)
                                             ? d.levels.length : 5
@@ -270,19 +234,17 @@ ApplicationWindow {
         }
 
         if (syncLoaded) {
-            // 同步已装载成功：只在极端情况（同步读到了但 curMode 对应无维度）
-            // 才补跑 _loadDimensions 老路径作为兜底；正常情况完全不再走异步 XHR。
-            if (!root.reviewDimensions || root.reviewDimensions.length === 0) {
-                console.log("[BootTrace] T1c=" + (Date.now() - root._bootT0) + "ms  syncLoaded 但 reviewDimensions 为空 → 走 _loadDimensions 兜底")
-                _loadDimensions(resourcesUrl, null)
-            }
+            // 同步装载完成：覆盖层优先、内置兜底，当前模式立即生效（不再走任何远程/legacy 拉取）。
+            var _bootMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+            if (_bootMode && _bootMode !== "off") root._applyModeConfigToUI(_bootMode)
+            root._pruneOverridesEqualToBuiltin()
         } else {
-            // 同步读失败（首次启动 / 文件缺失 / 平台无 Fs）：保底走原异步流程，行为与之前完全一致。
+            // 同步读失败（极端：平台无 Fs）：保底走异步 XHR 读覆盖层缓存，内置默认已在上面同步就绪。
             console.log("[BootTrace] T1d=" + (Date.now() - root._bootT0) + "ms  同步预加载失败 → 走异步 XHR 兜底")
             _loadDimsByModeCache(dimsByModeUrl, function(loaded) {
-                if (!loaded || !root.reviewDimensions || root.reviewDimensions.length === 0) {
-                    _loadDimensions(resourcesUrl, null)
-                }
+                var _m2 = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+                if (_m2 && _m2 !== "off") root._applyModeConfigToUI(_m2)
+                root._pruneOverridesEqualToBuiltin()
             })
         }
     }
@@ -295,9 +257,7 @@ ApplicationWindow {
     // 仅作为系统级入口，与现有 ToolBar 上的"打开 ▾ / ⚙ 设置 ▾"按钮共存。
     // macOS：自动适配为顶部全局菜单栏（系统原生样式，不接受自定义 background）。
     // Windows / Linux：在窗口标题栏下方显示一行经典菜单栏。
-    // 设计原则：MenuBar 仅承担高频常用入口（打开/退出/设置/关于），
-    //            完整的细粒度设置仍由现有 settingsMenu 自定义弹窗承担，
-    //            "偏好设置…"会直接弹出现有的 settingsMenu，零功能影响。
+    // 设计原则：MenuBar 承担全部高频入口（打开/退出/设置/关于）。
     menuBar: MenuBar {
         id: appMenuBar
 
@@ -385,6 +345,12 @@ ApplicationWindow {
                 onTriggered: ratingsDialog.open()
             }
             DarkMenuSeparator {}
+            // 打开日志目录（排查问题用：每次启动在 <CacheLocation>/logs/ 下生成日志）
+            DarkMenuItem {
+                text: qsTr("打开日志目录")
+                onTriggered: Fs.revealInFileManager(Fs.appLogDir())
+            }
+            DarkMenuSeparator {}
             DarkMenuItem {
                 id: miQuit
                 text: qsTr("退出 PlayerX")
@@ -393,11 +359,10 @@ ApplicationWindow {
         }
 
         // 【设置】顶层菜单（macOS / Windows 系统菜单）
-        //  · 直接镜像下方自绘 settingsMenu 的全部子项：布局 ▶ / 播放速度 ▶ /
-        //    滑动对比 / 通道信息 / 视频信息；行为与状态完全等价（共享 Engine / root 属性）。
+        //  · 布局 ▶ / 播放速度 ▶ / 测试配置 ▶ / 滑动对比 / 通道信息 / 视频信息 /
+        //    单路悬停控制条 / 自动重播。
         //  · 系统菜单为原生 NSMenu / Win32 菜单渲染，不接受自定义深色 delegate —— 这是
         //    macOS 标准外观，与系统其他应用一致。
-        //  · "偏好设置…"作为兜底入口，仍能弹出原深色自绘面板（与右键面板/快捷键一致）。
         DarkMenu {
             id: settingsTopMenu
             title: qsTr("设置")
@@ -490,6 +455,24 @@ ApplicationWindow {
                 }
             }
 
+            // ── 测试配置 ▶ ──（评分测试相关配置）
+            //  · 自定义：功能待定，先占位（置灰不可点）；
+            //  · 恢复默认：把当前模式远程"接受"来的临时覆盖清掉，
+            //    回到跟随软件的内置默认配置（Resources/default_configs/<mode>.json），
+            //    带二次确认对话框，确认后右下角 toast 反馈。
+            DarkMenu {
+                title: qsTr("测试配置")
+                DarkMenuItem {
+                    text: qsTr("自定义")
+                    enabled: false   // 功能待定义，先占位
+                }
+                DarkMenuItem {
+                    text: qsTr("恢复默认")
+                    enabled: (typeof Rating !== "undefined") && Rating.currentMode && Rating.currentMode !== "off"
+                    onTriggered: restoreDefaultConfirmDialog.open()
+                }
+            }
+
             DarkMenuSeparator {}
 
             // ── 滑动对比（仅 2 路视频可用，B 快捷键联动）──
@@ -539,7 +522,7 @@ ApplicationWindow {
                 onTriggered: root.singleControlsHoverEnabled = !root.singleControlsHoverEnabled
             }
 
-            // ── 自动重播（播放结束后无缝从头继续，与下方自绘菜单同步）──
+            // ── 自动重播（播放结束后无缝从头继续）──
             // 默认开启；关闭时回退到旧行为：播放结束停在最后一帧。
             DarkMenuItem {
                 text: qsTr("自动重播")
@@ -550,16 +533,14 @@ ApplicationWindow {
 
             DarkMenuSeparator {}
 
-            // ── 打开日志目录 ──（与下方自绘菜单同名条目联动；调用同一个 Fs API）
+            // ── 开发者模式 ──（默认不勾选）
+            // 勾选后：模式选择菜单 / 评分数据面板 Tab 中显示「测试模式」；
+            // 不勾选（默认）：测试模式隐藏。状态持久化到 QSettings，重启保持。
             DarkMenuItem {
-                text: qsTr("打开日志目录")
-                onTriggered: Fs.revealInFileManager(Fs.appLogDir())
-            }
-
-            // 兜底：弹出原深色自绘设置面板（与快捷键 ⌘, 一致）
-            DarkMenuItem {
-                text: qsTr("偏好设置…")
-                onTriggered: root._popupSettingsMenu()
+                text: qsTr("开发者模式")
+                checkable: true
+                checked: root.developerMode
+                onTriggered: root._setDeveloperMode(!root.developerMode)
             }
         }
 
@@ -683,12 +664,16 @@ ApplicationWindow {
     //（QtQuick 的 Shortcut 会自动把 Ctrl 在 mac 映射为 ⌘）。
     readonly property string _modKey: Qt.platform.os === "osx" ? "⌘" : "Ctrl+"
 
-    // 统一的"弹出设置菜单"入口：把原来锚到 settingsBtn 的逻辑收敛到一处。
-    // 因为 settingsBtn 已被移除，这里改为锚到窗口右上角（与原 ⚙ 按钮位置近似）。
-    function _popupSettingsMenu() {
-        var menuW = settingsMenu.width > 0 ? settingsMenu.width : 180
-        // x = 距窗口右边 10px；y = 工具栏下方一点（菜单栏 + ToolBar 大约 64px，留余量到 56）
-        settingsMenu.popup(root, root.width - menuW - 10, 56)
+    // ── 开发者模式（默认不勾选）──────────────────────────────────────
+    // 勾选后：模式选择菜单 / 评分数据面板 Tab 中显示「测试模式」；
+    // 不勾选（默认）：测试模式隐藏。
+    // 状态持久化到 QSettings（ui/developerMode），重启保持。
+    property bool developerMode: false
+    function _setDeveloperMode(on) {
+        if (root.developerMode === on) return
+        root.developerMode = on
+        try { Rating.saveString("ui/developerMode", on ? "1" : "0") } catch (e) {}
+        console.log("[DevMode] 开发者模式:", on ? "勾选（显示测试模式）" : "未勾选（隐藏测试模式）")
     }
 
     // ─── 顶层快捷键（与 MenuBar 解耦） ────────────────────────────────
@@ -716,11 +701,6 @@ ApplicationWindow {
         context: Qt.ApplicationShortcut
         enabled: Engine.fileCount > 0
         onActivated: confirmCloseAllDialog.open()
-    }
-    Shortcut {
-        sequences: [StandardKey.Preferences]          // macOS: ⌘,
-        context: Qt.ApplicationShortcut
-        onActivated: root._popupSettingsMenu()
     }
     Shortcut {
         sequences: [StandardKey.Quit]                 // macOS: ⌘Q / Win: Ctrl+Q
@@ -1979,6 +1959,136 @@ ApplicationWindow {
         }
     }
 
+    // ─── 恢复默认配置确认对话框 ─────────────────────────────────────────
+    // 触发源：顶部菜单【设置 ▸ 测试配置 ▸ 恢复默认】。
+    // 确认后清掉当前模式的远程临时覆盖（dimsByMode / checklistByMode /
+    // tagByMode 中该模式条目），回到跟随软件的内置默认配置
+    // （Resources/default_configs/<mode>.json）；成功后右下角 toast 轻量反馈。
+    Dialog {
+        id: restoreDefaultConfirmDialog
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        implicitWidth: 400
+
+        // 打开时解析当前模式的中文名，避免文案里出现 mode id
+        property string _modeLabel: ""
+        onOpened: {
+            _modeLabel = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+            try {
+                var ml = Rating.modeList
+                for (var i = 0; i < ml.length; ++i) {
+                    if (ml[i].id === Rating.currentMode) { _modeLabel = ml[i].label; break }
+                }
+            } catch (e) {}
+        }
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+            // 双层外阴影（与 confirmCloseAllDialog 一致）
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -8
+                radius: parent.radius + 4
+                color: "transparent"
+                border.color: "#80000000"
+                border.width: 1
+                opacity: 0.45
+            }
+            Rectangle {
+                z: -1
+                anchors.fill: parent
+                anchors.margins: -4
+                radius: parent.radius + 2
+                color: "transparent"
+                border.color: "#a0000000"
+                border.width: 1
+                opacity: 0.55
+            }
+        }
+
+        header: Rectangle {
+            color: "transparent"
+            implicitHeight: 40
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("恢复默认配置？")
+                color: "#e8e8ec"
+                font.pixelSize: 15
+                font.bold: true
+            }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: "#2a2a32"
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("将清除「%1」当前远程接受的临时配置，恢复为跟随软件的内置默认配置。\n如需远程配置，之后可重新点 🔔 检测并接受。")
+                       .arg(restoreDefaultConfirmDialog._modeLabel)
+                color: "#c8c8cc"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 56
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: "#2a2a32"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                anchors.topMargin: 12
+                anchors.bottomMargin: 12
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                FlatButton {
+                    implicitWidth: 88
+                    implicitHeight: 30
+                    text: qsTr("取消")
+                    onClicked: restoreDefaultConfirmDialog.close()
+                }
+                FlatButton {
+                    implicitWidth: 110
+                    implicitHeight: 30
+                    text: qsTr("恢复默认")
+                    textColor: "#e8b339"
+                    onClicked: {
+                        restoreDefaultConfirmDialog.close()
+                        var ok = root._restoreDefaultConfig(Rating.currentMode)
+                        updateToast.text = ok ? ("已恢复「" + restoreDefaultConfirmDialog._modeLabel + "」的内置默认配置")
+                                              : "恢复失败：没有内置默认配置"
+                        updateToast.open()
+                    }
+                }
+            }
+        }
+    }
+
     // ─── 统一的扁平按钮 / 工具按钮 ──────────────────────────────────────
     // 完全用 Rectangle + MouseArea 自绘，不依赖 Qt Quick Controls 的全局
     // 风格设置（macOS 上 setStyle("Basic") 在某些 Qt 版本下不生效，会
@@ -2329,6 +2439,194 @@ ApplicationWindow {
     // 没有 checklist 的模式存 null，切换时会清空 reviewChecklist，避免旧模式数据残留
     property var _checklistByMode: ({})
 
+    // ── 内置默认配置（出厂配置，跟随软件发布，永远在）────────────────────
+    // 每模式一份 JSON：Resources/default_configs/<mode>.json，结构与服务端配置一致
+    // （{ type, tag, task, scale, dimensions, checklists, checklist_config }）。
+    // 运行时拆成三张内置表；查询配置统一走 _dimsForMode/_checklistForMode/_tagForMode，
+    // 规则是"远程覆盖层优先、内置默认兜底"：
+    //   - _dimsByMode/_checklistByMode/_tagByMode 是【覆盖层】，只存远程"接受"来的
+    //     临时配置（持久化在 dimsByMode.json / checklistByMode.json / tagByMode.json）；
+    //   - 内置表只读、永不落盘 → 任何时刻都能 _restoreDefaultConfig 回到出厂状态；
+    //   - 升级软件即拿到最新内置默认（启动时 _pruneOverridesEqualToBuiltin 会把
+    //     覆盖层里"内容等于旧默认"的僵尸条目清掉，避免遮蔽新默认）。
+    property var _builtinDimsByMode: ({})
+    property var _builtinChecklistByMode: ({})
+    property var _builtinTagByMode: ({})
+
+    function _loadBuiltinDefaultConfigs() {
+        var modes = ["subjective", "quality", "quality_slide", "multi_dim", "test"]
+        var bd = {}, bc = {}, bt = {}
+        if (typeof Fs === "undefined" || typeof Fs.readTextFile !== "function") return
+        for (var i = 0; i < modes.length; ++i) {
+            var mode = modes[i]
+            try {
+                var text = Fs.readTextFile(root._resourcesDir() + "/default_configs/" + mode + ".json") || ""
+                if (text.length === 0) continue
+                var obj = JSON.parse(text)
+                if (!obj) continue
+                if (obj.dimensions && typeof obj.dimensions.length === "number" && obj.dimensions.length > 0)
+                    bd[mode] = obj.dimensions
+                if (obj.checklists && typeof obj.checklists.length === "number" && obj.checklists.length > 0)
+                    bc[mode] = { items: obj.checklists, exclusiveKey: root._parseChecklistExclusiveKey(obj) }
+                if (typeof obj.tag === "string" && obj.tag.length > 0)
+                    bt[mode] = obj.tag
+            } catch (e) {
+                console.warn("[DefaultCfg] 内置默认读取失败 mode=", mode, e)
+            }
+        }
+        root._builtinDimsByMode = bd
+        root._builtinChecklistByMode = bc
+        root._builtinTagByMode = bt
+        console.log("[DefaultCfg] 内置默认配置加载完成：dims=", Object.keys(bd).join(","),
+            " checklist=", Object.keys(bc).join(","), " tag=", Object.keys(bt).join(","))
+    }
+
+    // 生效配置查询：覆盖层优先、内置默认兜底
+    function _dimsForMode(mode) {
+        var ov = (root._dimsByMode && mode) ? root._dimsByMode[mode] : null
+        if (ov && typeof ov.length === "number" && ov.length > 0) return ov
+        return root._builtinDimsByMode[mode] || null
+    }
+    function _checklistForMode(mode) {
+        var ov = (root._checklistByMode && mode) ? root._checklistByMode[mode] : null
+        if (ov && ov.items && typeof ov.items.length === "number" && ov.items.length > 0) return ov
+        return root._builtinChecklistByMode[mode] || null
+    }
+    function _tagForMode(mode) {
+        if (root._tagByMode && typeof root._tagByMode[mode] === "string" && root._tagByMode[mode].length > 0)
+            return root._tagByMode[mode]
+        return root._builtinTagByMode[mode] || ""
+    }
+
+    // 把某模式的生效配置（覆盖层优先、内置兜底）应用到当前 UI。
+    // 仅在 mode === Rating.currentMode 的场景调用（启动恢复 / 恢复默认）。
+    function _applyModeConfigToUI(mode) {
+        if (!mode || mode === "off") return
+        var dimsRaw = root._dimsForMode(mode)
+        if (dimsRaw && typeof dimsRaw.length === "number" && dimsRaw.length > 0) {
+            var dims = []
+            for (var _i = 0; _i < dimsRaw.length; _i++) {
+                var d = dimsRaw[_i]
+                var sc = (d && d.levels && typeof d.levels.length === "number" && d.levels.length > 0) ? d.levels.length : 5
+                dims.push(Object.assign({}, d, { starCount: sc }))
+            }
+            root._forceApplyDimensions(dims, root._tagForMode(mode), mode, "applyModeConfig")
+        }
+        var ck = root._checklistForMode(mode)
+        if (ck && ck.items && typeof ck.items.length === "number" && ck.items.length > 0) {
+            var items = []
+            for (var _j = 0; _j < ck.items.length; _j++) items.push(ck.items[_j])
+            root.reviewChecklist = items
+            root.reviewChecklistExclusiveKey = ck.exclusiveKey || ""
+        } else {
+            root.reviewChecklist = []
+            root.reviewChecklistExclusiveKey = ""
+        }
+        var tag = root._tagForMode(mode)
+        if (tag.length > 0) {
+            root._remoteTag = tag
+            if (typeof Rating !== "undefined" && Rating.uploadTag !== tag) Rating.uploadTag = tag
+        }
+    }
+
+    // 恢复某模式为内置默认配置：清掉远程"接受"留下的临时覆盖层并立即生效。
+    // 覆盖层文件里只保留真正的远程覆盖，因此恢复后重启也依旧是默认配置。
+    function _restoreDefaultConfig(mode) {
+        if (!mode || mode === "off") return false
+        var label = mode
+        try {
+            var ml = Rating.modeList
+            for (var i = 0; i < ml.length; ++i) if (ml[i].id === mode) { label = ml[i].label; break }
+        } catch (e) {}
+        if (!root._builtinDimsByMode[mode] && !root._builtinChecklistByMode[mode] && !root._builtinTagByMode[mode]) {
+            root._configCheckSummary = "「" + label + "」没有内置默认配置"
+            return false
+        }
+        var changed = false
+        if (root._dimsByMode && root._dimsByMode[mode] !== undefined) {
+            var dm = {}
+            for (var k1 in root._dimsByMode) if (k1 !== mode) dm[k1] = root._dimsByMode[k1]
+            root._dimsByMode = dm
+            _saveDimsByMode()
+            changed = true
+        }
+        if (root._checklistByMode && root._checklistByMode[mode] !== undefined) {
+            var cm = {}
+            for (var k2 in root._checklistByMode) if (k2 !== mode) cm[k2] = root._checklistByMode[k2]
+            root._checklistByMode = cm
+            _saveChecklistByMode()
+            changed = true
+        }
+        if (root._tagByMode && root._tagByMode[mode] !== undefined) {
+            var tm = {}
+            for (var k3 in root._tagByMode) if (k3 !== mode) tm[k3] = root._tagByMode[k3]
+            root._tagByMode = tm
+            _saveTagByMode()
+            changed = true
+        }
+        // 当前模式立即生效（覆盖层已清，查询会命中内置默认）
+        var curMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
+        if (curMode === mode) root._applyModeConfigToUI(mode)
+        root._configCheckSummary = changed
+                ? ("已恢复「" + label + "」的内置默认配置（远程覆盖已清除）")
+                : ("「" + label + "」当前就是内置默认配置")
+        console.log("[DefaultCfg] 恢复默认 mode=", mode, "清掉覆盖:", changed)
+        return true
+    }
+
+    // 规范化序列化（忽略 starCount 等运行时注入字段），用于判断覆盖层条目与内置默认是否内容一致
+    function _canonicalDimsJson(dims) {
+        if (!dims || typeof dims.length !== "number") return ""
+        var out = []
+        for (var i = 0; i < dims.length; ++i) {
+            var d = dims[i] || {}
+            var lv = []
+            var levels = d.levels || []
+            for (var j = 0; j < levels.length; ++j) {
+                var l = levels[j] || {}
+                lv.push({ score: l.score, label: l.label, description: l.description })
+            }
+            out.push({ key: d.key, definition: d.definition, levels: lv })
+        }
+        return JSON.stringify(out)
+    }
+    function _canonicalChecklistJson(entry) {
+        if (!entry) return ""
+        var items = []
+        var arr = entry.items || []
+        for (var i = 0; i < arr.length; ++i) {
+            var it = arr[i] || {}
+            items.push({ key: it.key, label: it.label, definition: it.definition, exclusive: !!it.exclusive })
+        }
+        return JSON.stringify({ items: items, exclusiveKey: entry.exclusiveKey || "" })
+    }
+
+    // 启动时清理：覆盖层里与内置默认内容完全一致的条目（历史版本落盘的旧默认）直接删除，
+    // 否则旧默认会永远遮蔽新版本软件携带的新内置默认。
+    function _pruneOverridesEqualToBuiltin() {
+        var dm = {}, dimsChanged = false
+        for (var k1 in (root._dimsByMode || {})) {
+            var ov = root._dimsByMode[k1], bd = root._builtinDimsByMode[k1]
+            if (bd && _canonicalDimsJson(ov) === _canonicalDimsJson(bd)) { dimsChanged = true; continue }
+            dm[k1] = ov
+        }
+        if (dimsChanged) { root._dimsByMode = dm; _saveDimsByMode(); console.log("[DefaultCfg] 清理与内置一致的 dims 覆盖") }
+        var cm = {}, ckChanged = false
+        for (var k2 in (root._checklistByMode || {})) {
+            var oc = root._checklistByMode[k2], bc = root._builtinChecklistByMode[k2]
+            if (bc && _canonicalChecklistJson(oc) === _canonicalChecklistJson(bc)) { ckChanged = true; continue }
+            cm[k2] = oc
+        }
+        if (ckChanged) { root._checklistByMode = cm; _saveChecklistByMode(); console.log("[DefaultCfg] 清理与内置一致的 checklist 覆盖") }
+        var tm = {}, tagChanged = false
+        for (var k3 in (root._tagByMode || {})) {
+            var ot = root._tagByMode[k3], bt = root._builtinTagByMode[k3]
+            if (bt && ot === bt) { tagChanged = true; continue }
+            tm[k3] = ot
+        }
+        if (tagChanged) { root._tagByMode = tm; _saveTagByMode(); console.log("[DefaultCfg] 清理与内置一致的 tag 覆盖") }
+    }
+
     // 【按 mode 独立持久化】把 _dimsByMode 整体写入 Resources/dimsByMode.json，
     // 供下次启动加载。这是保证多 mode 配置互不覆盖的关键落盘。
     function _saveDimsByMode() {
@@ -2533,7 +2831,7 @@ ApplicationWindow {
             // 【checklist 跟随 mode 切换】从 _checklistByMode 读取新 mode 的 checklist，
             // 没有配置（null / 空数组）则清空，避免旧模式的 checklist 残留导致所有模式都弹窗。
             // 【QML 陷阱】property var 里的数组读出来 Array.isArray() 返回 false，必须用 length duck-typing
-            var _ckForMode = root._checklistByMode ? root._checklistByMode[mode] : undefined
+            var _ckForMode = root._checklistForMode(mode)
             var _hasCkMode = _ckForMode && _ckForMode.items
                     && typeof _ckForMode.items.length === "number"
                     && _ckForMode.items.length > 0
@@ -2550,15 +2848,14 @@ ApplicationWindow {
             }
             // 【tag 跟随 mode 切换】先把该 mode 对应的 tag 灌回 _remoteTag + Rating.uploadTag，
             // 这样 RatingsDialog 显示的备注 tag、上传时的 tag 都能正确反映            // 若该 mode 还没缓存 tag（历史遗留 / 未同步过），沿用旧 _remoteTag 兜底，避免误清空。
-            var tagForMode = (root._tagByMode && root._tagByMode[mode] !== undefined)
-                    ? root._tagByMode[mode] : null
-            if (tagForMode !== null) {
+            var tagForMode = root._tagForMode(mode)
+            if (tagForMode.length > 0) {
                 root._remoteTag = tagForMode
                 if (typeof Rating !== "undefined" && Rating.uploadTag !== tagForMode) {
                     Rating.uploadTag = tagForMode
                 }
             }
-            var cachedRaw = root._dimsByMode[mode]
+            var cachedRaw = root._dimsForMode(mode)
             // 【关键】QML property var 里的数组读出来可能是 QJSValue/QVariantList，Array.isArray=false。
             // 用 length 做 duck-typing 判断，并转成纯 JS 数组再传给 _forceApplyDimensions，
             // 避免函数入口的 Array.isArray 校验静默拒绝。
@@ -2687,7 +2984,7 @@ ApplicationWindow {
                         // 这样首次启动时用户无需手动应用，打开评分规则面板就能看到配置
                         var curMode = (typeof Rating !== "undefined") ? Rating.currentMode : ""
                         if (curMode && curMode !== "off") {
-                            var curDims = root._dimsByMode[curMode]
+                            var curDims = root._dimsForMode(curMode)
                             if (curDims && curDims.length > 0 && root.reviewDimensions.length === 0) {
                                 root.reviewDimensions = curDims
                                 root.reviewDimensionsVersion++
@@ -2697,7 +2994,7 @@ ApplicationWindow {
                             // 但 reviewChecklist 属性没有在 onAllDone 里更新，导致点星星时为空
                             // 【QML 陷阱】property var 里存的数组读出来是 QJSValue/QVariantList，
                             // Array.isArray() 返回 false，必须用 length duck-typing 判断，并转纯 JS 数组
-                            var ckForCurMode = root._checklistByMode ? root._checklistByMode[curMode] : undefined
+                            var ckForCurMode = root._checklistForMode(curMode)
                             console.log("[ChecklistDebug] onAllDone curMode=", curMode,
                                 " _checklistByMode keys=", Object.keys(root._checklistByMode || {}).join(","),
                                 " ckForCurMode=", JSON.stringify(ckForCurMode),
@@ -2954,7 +3251,7 @@ ApplicationWindow {
                                         // 如果当前就是这个 mode，立即更新 reviewChecklist（duck-typing 避免 QJSValue 陷阱）
                                         var _curModeSame = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
                                         if (mode === _curModeSame) {
-                                            var _ckCur = root._checklistByMode ? root._checklistByMode[_curModeSame] : null
+                                            var _ckCur = root._checklistForMode(_curModeSame)
                                             var _hasCkCur = _ckCur && _ckCur.items
                                                     && typeof _ckCur.items.length === "number"
                                                     && _ckCur.items.length > 0
@@ -3295,28 +3592,30 @@ ApplicationWindow {
     // _checkRemoteConfigUpdate 内部对 _dimApiUrl() 为空也做了 return 守护，
     // 即便极端时序下 Rating.uploadServerUrl 尚未就绪，也只是这一次跳过，
     // 后续 5s 的 configPollTimer 会自然把它补回来，不会破坏功能。
+    // 【启动不再主动拉取远程配置】
+    // 新模型：内置默认配置（Resources/default_configs/）跟随软件、永远在；
+    // 远程配置只在用户手动点 🔔 检测、并在通知卡片上点"接受"时才临时覆盖本地。
+    // 因此启动时这里只加载本地持久化指纹（供手动检测时做差异对比），不发起网络请求。
     Timer {
         id: configInitCheckTimer
         interval: 0
         repeat: false
         running: true
         onTriggered: {
-            // 【启动钝感排查】T2：启动首拉入口触发
-            console.log("[BootTrace] T2=" + (Date.now() - root._bootT0) + "ms  configInitCheckTimer 触发 → 发起启动首拉")
-            // 先加载本地持久化指纹，再做差异检测，确保重启后绑定切换能被检测到
+            console.log("[BootTrace] T2=" + (Date.now() - root._bootT0) + "ms  configInitCheckTimer 触发 → 仅加载本地指纹（不拉远程）")
             root._loadFingerprintFromFile(function() {
-                console.log("[BootTrace] T2b=" + (Date.now() - root._bootT0) + "ms  _loadFingerprintFromFile 完成 → 调 _checkRemoteConfigUpdate")
-                root._checkRemoteConfigUpdate()
+                console.log("[BootTrace] T2b=" + (Date.now() - root._bootT0) + "ms  _loadFingerprintFromFile 完成（启动不拉远程）")
             })
         }
     }
 
-    // 后台轮询定时器（调试：5 秒检测一次）
+    // 【后台轮询已停用】与"启动不主动拉取"同一策略：远程配置不再自动弹卡片打扰，
+    // 完全由用户手动点 🔔 触发 _checkRemoteConfigUpdate。保留定时器定义便于以后需要时打开。
     Timer {
         id: configPollTimer
         interval: 5 * 1000
         repeat: true
-        running: typeof Rating !== "undefined" && Rating.uploadServerUrl && Rating.uploadServerUrl.trim().length > 0
+        running: false
         onTriggered: root._checkRemoteConfigUpdate()
     }
 
@@ -3412,7 +3711,7 @@ ApplicationWindow {
         // 不再走网络（否则服务端返回可能与用户预期不一致，并会反覆盖已确认的缓存）
         // 【关键】QML property var 里存的数组读回来常常不是纯 JS Array（会被包成 QJSValue/QVariantList），
         // Array.isArray 会返回 false 导致这里错过缓存分支。改用 length 做 duck-typing，并转成纯数组。
-        var _rawCache = (_fm && root._dimsByMode) ? root._dimsByMode[_fm] : null
+        var _rawCache = _fm ? root._dimsForMode(_fm) : null
         if (_rawCache && typeof _rawCache.length === "number" && _rawCache.length > 0) {
             var cachedDims = []
             for (var _ci = 0; _ci < _rawCache.length; _ci++) cachedDims.push(_rawCache[_ci])
@@ -5843,530 +6142,6 @@ ApplicationWindow {
             // 现已被工具栏左侧常驻的 speedToolbarBtn 完全替代——后者始终显示当前倍速，
             // 且提供档位下拉，语义/交互更完整。为避免右下重复展示同一信息，此处移除。
 
-            // 设置按钮已收纳到顶部系统菜单栏【设置】▸ 偏好设置…
-            // 这里保留 settingsMenu 的定义，由顶部菜单触发其 popup（锚到窗口右上角）。
-
-            // ── 设置一级菜单（深色，自绘）──
-            //  ▸ 仍由顶部菜单栏【设置】▸ 偏好设置… 弹出（锚点改为窗口右上角）。
-            //  ▸ 内部保留所有原有自绘 delegate / 子菜单（布局、播放速度、滑动对比、通道信息…），
-            //    与之前的体验完全一致；macOS 上 popup() 走 Qt Quick 自绘菜单，深色样式生效。
-            Menu {
-                id: settingsMenu
-                padding: 4
-                width: 180
-                // 之前依赖 ToolBar 上 settingsBtn._menuClosedAtMs 来吃掉「再点同一按钮收起」的二次点击；
-                // 现在按钮已删除，触发源是顶部 MenuBar 的 MenuItem（Qt 内部已保证不会有这种二次抖动），
-                // 因此 onClosed 不再需要做额外处理。
-
-                background: Rectangle {
-                    color: "#1e1e22"
-                    border.color: "#3a3a42"
-                    border.width: 1
-                    radius: 6
-                }
-
-                // 自绘统一的菜单项 delegate（深色 + 悬停灰底，不会出现 macOS 默认白底）
-                delegate: MenuItem {
-                    id: settingsItem
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: settingsItem.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text {
-                            leftPadding: 10
-                            text: settingsItem.checkable && settingsItem.checked ? "✓" : ""
-                            color: "#6a9fd8"
-                            font.pixelSize: 12
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.minimumWidth: 22
-                        }
-                        Text {
-                            text: settingsItem.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                        // 子菜单箭头：当此项是子菜单入口时显示 ▶
-                        Text {
-                            text: (settingsItem.text === "布局" || settingsItem.text.indexOf("播放速度") === 0) ? "▶" : ""
-                            color: "#888"
-                            font.pixelSize: 11
-                            verticalAlignment: Text.AlignVCenter
-                            rightPadding: 10
-                        }
-                    }
-                }
-
-                // ── 二级菜单：布局（Qt 原生嵌套 Menu，悬停自动展开）──
-                Menu {
-                    id: layoutSubMenu
-                    title: "布局"
-                    padding: 4
-                    width: 140
-
-                    background: Rectangle {
-                        color: "#1e1e22"
-                        border.color: "#3a3a42"
-                        border.width: 1
-                        radius: 6
-                    }
-
-                    delegate: MenuItem {
-                        id: layoutItem
-                        implicitHeight: 30
-                        background: Rectangle {
-                            radius: 4
-                            color: layoutItem.highlighted ? "#33333a" : "transparent"
-                        }
-                        contentItem: RowLayout {
-                            spacing: 0
-                            Text {
-                                leftPadding: 10
-                                text: layoutItem.checked ? "✓" : ""
-                                color: "#6a9fd8"
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                                Layout.minimumWidth: 22
-                            }
-                            Text {
-                                text: layoutItem.text
-                                color: "#e8e8ec"
-                                font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                                Layout.fillWidth: true
-                            }
-                        }
-                    }
-
-                    Repeater {
-                        model: root.multiLayoutNames
-                        MenuItem {
-                            id: layoutRepItem
-                            required property string modelData
-                            required property int index
-                            text: modelData
-                            checkable: true
-                            checked: Engine.layoutMode === root.multiLayoutValues[index]
-                            onTriggered: {
-                                var v = root.multiLayoutValues[index]
-                                Engine.layoutMode = v
-                                root.lastMultiLayout = v
-                            }
-                            implicitHeight: 30
-                            background: Rectangle {
-                                radius: 4
-                                color: layoutRepItem.highlighted ? "#33333a" : "transparent"
-                            }
-                            contentItem: RowLayout {
-                                spacing: 0
-                                Text {
-                                    leftPadding: 10
-                                    text: layoutRepItem.checked ? "✓" : ""
-                                    color: "#6a9fd8"
-                                    font.pixelSize: 12
-                                    verticalAlignment: Text.AlignVCenter
-                                    Layout.minimumWidth: 22
-                                }
-                                Text {
-                                    text: layoutRepItem.text
-                                    color: "#e8e8ec"
-                                    font.pixelSize: 13
-                                    verticalAlignment: Text.AlignVCenter
-                                    Layout.fillWidth: true
-                                }
-                            }
-                        }
-                    }
-                }
-
-                MenuSeparator {
-                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
-                }
-
-                // ── 二级菜单：播放速度（参考 video-compare：每档 2^(1/6)，约 1.122x）──
-                // 列出常用档位 + 减速/加速/重置三项；快捷键 - = 0 仍然全局可用。
-                Menu {
-                    id: speedSubMenu
-                    title: "播放速度"
-                    padding: 4
-                    width: 170
-
-                    background: Rectangle {
-                        color: "#1e1e22"
-                        border.color: "#3a3a42"
-                        border.width: 1
-                        radius: 6
-                    }
-
-                    delegate: MenuItem {
-                        id: speedItem
-                        implicitHeight: 30
-                        background: Rectangle {
-                            radius: 4
-                            color: speedItem.highlighted ? "#33333a" : "transparent"
-                        }
-                        contentItem: RowLayout {
-                            spacing: 0
-                            Text {
-                                leftPadding: 10
-                                text: speedItem.checked ? "✓" : ""
-                                color: "#6a9fd8"
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                                Layout.minimumWidth: 22
-                            }
-                            Text {
-                                text: speedItem.text
-                                color: speedItem.enabled ? "#e8e8ec" : "#666"
-                                font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                                Layout.fillWidth: true
-                            }
-                        }
-                    }
-
-                    // 常用档位（直接 setSpeed；checked 用近似比较，避免按 - = 落到非常用档时全部不亮）
-                    Repeater {
-                        model: [0.25, 0.5, 1.0, 1.5, 2.0]
-                        MenuItem {
-                            id: presetItem
-                            required property real modelData
-                            text: {
-                                var v = modelData
-                                if (Math.abs(v - 1.0) < 1e-6) return "1.0x （正常）"
-                                return (v < 1.0 ? v.toFixed(2).replace(/0+$/,"").replace(/\.$/,"")
-                                                : v.toFixed(v >= 10 ? 0 : 1).replace(/\.0$/,"")) + "x"
-                            }
-                            checkable: true
-                            checked: Math.abs(Engine.speed - modelData) < 1e-3
-                            enabled: Engine.fileCount > 0
-                            onTriggered: Engine.setSpeed(modelData)
-                            implicitHeight: 30
-                            background: Rectangle {
-                                radius: 4
-                                color: presetItem.highlighted ? "#33333a" : "transparent"
-                            }
-                            contentItem: RowLayout {
-                                spacing: 0
-                                Text {
-                                    leftPadding: 10
-                                    text: presetItem.checked ? "✓" : ""
-                                    color: "#6a9fd8"
-                                    font.pixelSize: 12
-                                    verticalAlignment: Text.AlignVCenter
-                                    Layout.minimumWidth: 22
-                                }
-                                Text {
-                                    text: presetItem.text
-                                    color: presetItem.enabled ? "#e8e8ec" : "#666"
-                                    font.pixelSize: 13
-                                    verticalAlignment: Text.AlignVCenter
-                                    Layout.fillWidth: true
-                                }
-                            }
-                        }
-                    }
-
-                    MenuSeparator {
-                        contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
-                    }
-
-                    // 步进式（与快捷键 - / = / 0 对齐）
-                    // 注意：必须给 contentItem/background 用与上面档位项一致的深色 delegate，
-                    // 否则会落到系统默认（白底 + 浅灰禁用色），在深色面板里几乎看不见。
-                    MenuItem {
-                        id: speedDecItem
-                        text: "减速 ( - )"
-                        enabled: Engine.fileCount > 0
-                        onTriggered: Engine.adjustSpeed(-1)
-                        implicitHeight: 30
-                        background: Rectangle {
-                            radius: 4
-                            color: speedDecItem.highlighted ? "#33333a" : "transparent"
-                        }
-                        contentItem: RowLayout {
-                            spacing: 0
-                            Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                            Text {
-                                text: speedDecItem.text
-                                color: speedDecItem.enabled ? "#e8e8ec" : "#666"
-                                font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                                Layout.fillWidth: true
-                            }
-                        }
-                    }
-                    MenuItem {
-                        id: speedIncItem
-                        text: "加速 ( = )"
-                        enabled: Engine.fileCount > 0
-                        onTriggered: Engine.adjustSpeed(+1)
-                        implicitHeight: 30
-                        background: Rectangle {
-                            radius: 4
-                            color: speedIncItem.highlighted ? "#33333a" : "transparent"
-                        }
-                        contentItem: RowLayout {
-                            spacing: 0
-                            Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                            Text {
-                                text: speedIncItem.text
-                                color: speedIncItem.enabled ? "#e8e8ec" : "#666"
-                                font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                                Layout.fillWidth: true
-                            }
-                        }
-                    }
-                    MenuItem {
-                        id: speedResetItem
-                        text: "重置为 1.0x ( 0 )"
-                        enabled: Engine.fileCount > 0
-                        onTriggered: Engine.resetSpeed()
-                        implicitHeight: 30
-                        background: Rectangle {
-                            radius: 4
-                            color: speedResetItem.highlighted ? "#33333a" : "transparent"
-                        }
-                        contentItem: RowLayout {
-                            spacing: 0
-                            Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                            Text {
-                                text: speedResetItem.text
-                                color: speedResetItem.enabled ? "#e8e8ec" : "#666"
-                                font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                                Layout.fillWidth: true
-                            }
-                        }
-                    }
-                }
-
-                // ── 滑动对比（仅 2 路视频可用，B 快捷键联动）──
-                MenuItem {
-                    id: compareItem
-                    text: "滑动对比 (B)"
-                    checkable: true
-                    checked: root.compareSliderActive
-                    enabled: root.compareSliderAvailable || root.compareSliderActive
-                    onTriggered: root._toggleCompareSlider()
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: compareItem.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text {
-                            leftPadding: 10
-                            text: compareItem.checked ? "✓" : ""
-                            color: "#6a9fd8"
-                            font.pixelSize: 12
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.minimumWidth: 22
-                        }
-                        Text {
-                            text: compareItem.text
-                            color: compareItem.enabled ? "#e8e8ec" : "#666"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-
-                MenuSeparator {
-                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
-                }
-
-                // ── 通道信息显示（全局开关，快捷键 C，默认开启）──
-                // 控制每个窗口的左上角序号徽标 + 右上角文件名 Label。
-                MenuItem {
-                    id: channelItem
-                    text: "通道信息 (C)"
-                    checkable: true
-                    checked: root.globalChannelVisible
-                    onTriggered: {
-                        // 处于全屏抑制态时：先清掉抑制并强制显示
-                        if (root.fullscreenSuppressChannel) {
-                            root.fullscreenSuppressChannel = false
-                            root.globalChannelVisible = true
-                        } else {
-                            root.globalChannelVisible = !root.globalChannelVisible
-                        }
-                    }
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: channelItem.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text {
-                            leftPadding: 10
-                            text: channelItem.checked ? "✓" : ""
-                            color: "#6a9fd8"
-                            font.pixelSize: 12
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.minimumWidth: 22
-                        }
-                        Text {
-                            text: channelItem.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-
-                // ── 视频信息显示（全局开关，快捷键 V）──
-                MenuItem {
-                    id: infoItem
-                    text: "视频信息 (V)"
-                    checkable: true
-                    checked: root.globalInfoVisible
-                    onTriggered: {
-                        if (root.fullscreenSuppressInfo) {
-                            root.fullscreenSuppressInfo = false
-                            root.globalInfoVisible = true
-                        } else {
-                            root.globalInfoVisible = !root.globalInfoVisible
-                        }
-                    }
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: infoItem.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text {
-                            leftPadding: 10
-                            text: infoItem.checked ? "✓" : ""
-                            color: "#6a9fd8"
-                            font.pixelSize: 12
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.minimumWidth: 22
-                        }
-                        Text {
-                            text: infoItem.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-
-                // ── 单路悬停控制条（全局开关，无快捷键，默认关闭）──
-                // 关闭：鼠标悬停在某路视频上时不显示该路的播放控制条，
-                //       视野更纯净，专注画面对比。底部全局控制条不受影响。
-                // 开启：鼠标悬停时该路浮现进度条 + 帧步 / 重置按钮，
-                //       便于对单路做精细控制。
-                MenuItem {
-                    id: singleControlsHoverItem
-                    text: "单路悬停控制条"
-                    checkable: true
-                    checked: root.singleControlsHoverEnabled
-                    onTriggered: root.singleControlsHoverEnabled = !root.singleControlsHoverEnabled
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: singleControlsHoverItem.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text {
-                            leftPadding: 10
-                            text: singleControlsHoverItem.checked ? "✓" : ""
-                            color: "#6a9fd8"
-                            font.pixelSize: 12
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.minimumWidth: 22
-                        }
-                        Text {
-                            text: singleControlsHoverItem.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-
-                // ── 自动重播（默认开启）──
-                // 开启：播放到末尾后无缝 seek 回 0 继续播放，画面不停顿。
-                // 关闭：保留旧行为，播放结束停在最后一帧（用户可主动按
-                //       空格触发 replay）。两套策略共存、互不影响。
-                MenuItem {
-                    id: autoLoopItem
-                    text: "自动重播"
-                    checkable: true
-                    checked: Engine.loopEnabled
-                    onTriggered: Engine.loopEnabled = !Engine.loopEnabled
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: autoLoopItem.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text {
-                            leftPadding: 10
-                            text: autoLoopItem.checked ? "✓" : ""
-                            color: "#6a9fd8"
-                            font.pixelSize: 12
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.minimumWidth: 22
-                        }
-                        Text {
-                            text: autoLoopItem.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-
-                MenuSeparator {
-                    contentItem: Rectangle { implicitHeight: 1; color: "#3a3a42" }
-                }
-
-                // ── 打开日志目录 ──
-                // 用于排查问题：每次启动都会在 <CacheLocation>/logs/ 下生成
-                //   playerx_YYYYMMDD_HHmmss.log
-                // 包含 fprintf(stderr,...) 与所有 qDebug/qInfo/qWarning/... 输出。
-                // 点击此项调用 Fs.revealInFileManager 直接在系统文件管理器里
-                // 打开该目录（macOS Finder / Windows Explorer / Linux Files），
-                // 用户可手动复制/查看。
-                MenuItem {
-                    id: openLogDirItem
-                    text: "打开日志目录"
-                    onTriggered: Fs.revealInFileManager(Fs.appLogDir())
-                    implicitHeight: 30
-                    background: Rectangle {
-                        radius: 4
-                        color: openLogDirItem.highlighted ? "#33333a" : "transparent"
-                    }
-                    contentItem: RowLayout {
-                        spacing: 0
-                        Text { leftPadding: 10; text: ""; Layout.minimumWidth: 22 }
-                        Text {
-                            text: openLogDirItem.text
-                            color: "#e8e8ec"
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-            }
 
         }
     }
@@ -9148,6 +8923,8 @@ ApplicationWindow {
         visible: false
         // 作为给 root 的子窗口，关闭主窗时一起退出
         transientParent: root
+        // 开发者模式：勾选时模式选择菜单显示「测试模式」
+        developerMode: root.developerMode
 
         // ── 评分模式回调注入 ───────────────────────────────────
         // 由 dlg 内部在 reviewMode=true 时调用，决定当前组未评分的通道索引列表。
@@ -9276,6 +9053,8 @@ ApplicationWindow {
         visible: false
         transientParent: root
         remoteTag: root._remoteTag
+        // 开发者模式：勾选时模式切换 Tab 显示「测试模式」
+        developerMode: root.developerMode
         // 让 RatingsDialog 能区分"哪个 slide_type 属于滑动打分（第二维度）"，
         // 从而正确分到"滑动对比打分"分组。非 quality_slide 模式或维度不足时为 ""。
         slideDimKey: (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""

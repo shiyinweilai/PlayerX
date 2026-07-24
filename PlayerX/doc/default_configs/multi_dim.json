@@ -1,7 +1,7 @@
 {
-  "type": "测试模式",
-  "tag": "测试tag",
-  "task": "测试任务",
+  "type": "多维评分",
+  "tag": "多维tag",
+  "task": "多维任务",
   "scale": "1-5 Likert 整数",
   "dimensions": [
     {
@@ -32,32 +32,6 @@
           "score": 1,
           "label": "失败",
           "description": "商品严重损坏（消失/被替换/大面积融化）；或根本没做 prompt 要求的交互；或物理彻底崩坏。"
-        }
-      ]
-    },
-    {
-      "key": "新维度",
-      "definition": "",
-      "levels": [
-        {
-          "score": 4,
-          "label": "优秀",
-          "description": ""
-        },
-        {
-          "score": 3,
-          "label": "良好",
-          "description": ""
-        },
-        {
-          "score": 2,
-          "label": "一般",
-          "description": ""
-        },
-        {
-          "score": 1,
-          "label": "较差",
-          "description": ""
         }
       ]
     }

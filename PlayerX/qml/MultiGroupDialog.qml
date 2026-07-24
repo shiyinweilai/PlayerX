@@ -671,6 +671,18 @@ ApplicationWindow {
     property var  getCellLabel: null
     property var  onGoToRate: null
     property var  setRatingAt: null
+    // 开发者模式（由 Main.qml 注入）：勾选时模式选择菜单显示「测试模式」
+    property bool developerMode: false
+    // 模式选择菜单实际展示的列表：开发者模式未勾选时过滤掉「测试模式」
+    readonly property var _visibleModeList: {
+        var ml = (typeof Rating !== "undefined") ? Rating.modeList : []
+        if (dlg.developerMode) return ml
+        var out = []
+        for (var i = 0; i < ml.length; ++i) {
+            if (ml[i].id !== "test") out.push(ml[i])
+        }
+        return out
+    }
     // 获取指定通道当前评分（由 Main.qml 注入）：function(idx) -> number | object
     // 多维模式返回 {key: stars, ...}，单维模式返回 number；未注入时返回 null
     property var  getCellRating: null
@@ -2758,7 +2770,8 @@ ApplicationWindow {
         // 保证最长项"质量比较（差/相当/好）"能完整显示而不被截断。
         width: 210
         height: {
-            var n = (typeof Rating !== "undefined" && Rating.modeList) ? Rating.modeList.length : 2
+            // 用过滤后的可见列表（开发者模式关闭时不含「测试模式」）
+            var n = dlg._visibleModeList.length
             return (n + 1) * 32 + 8
         }
         flags: Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
@@ -2817,9 +2830,9 @@ ApplicationWindow {
                     }
                 }
 
-                // 从 Rating.modeList 生成各评分模式项
+                // 从可见模式列表生成各评分模式项（开发者模式关闭时已过滤「测试模式」）
                 Repeater {
-                    model: (typeof Rating !== "undefined") ? Rating.modeList : []
+                    model: dlg._visibleModeList
                     delegate: Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 28
@@ -2864,6 +2877,7 @@ ApplicationWindow {
                         }
                     }
                 }
+
             }
         }
     }
