@@ -2260,6 +2260,27 @@ ApplicationWindow {
     // checklist 互斥 key（exclusive_key 字段，勾选后自动取消其他选项）
     property string reviewChecklistExclusiveKey: ""
 
+    // ── checklist 互斥 key 解析（兼容两种配置落盘形态）────────────────
+    // 现行管理端（"互斥"徽标 / 选项编辑弹窗）会同时写
+    //   checklist_config.exclusive_key = "<key>" 和 checklists[i].exclusive = true；
+    // 但旧版管理端 / 手工编辑的 JSON 只会在选项上标 exclusive: true，
+    // 此时 checklist_config 整个缺失，若只认 exclusive_key 就会导致
+    // "后台明配置了互斥，弹窗里却能全部勾选"。因此两种形态都认：
+    // 优先 exclusive_key，缺省时取 checklists 里第一个 exclusive === true 的选项。
+    function _parseChecklistExclusiveKey(obj) {
+        if (!obj) return ""
+        if (obj.checklist_config && obj.checklist_config.exclusive_key)
+            return String(obj.checklist_config.exclusive_key)
+        var items = obj.checklists
+        if (items && typeof items.length === "number") {
+            for (var i = 0; i < items.length; ++i) {
+                if (items[i] && items[i].exclusive === true && items[i].key)
+                    return String(items[i].key)
+            }
+        }
+        return ""
+    }
+
     // ── 同步"当前模式合法 checklist keys"到 C++（用于导出/上传 CSV 时按白名单过滤）──
     // 【问题背景】checklist 勾选数据存 QSettings 的 "checklist:<filePath>" key，
     //   跨模式共享（不带 mode 前缀）。用户先在 A 模式勾选后切到 B 模式重新评分，
@@ -2815,7 +2836,7 @@ ApplicationWindow {
                                         // 【竞态修复】每次都从 root._checklistByMode 读最新值，避免并发 xhr 使用陈旧快照
                                         if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
                                             var _ckCacheInit = root._checklistByMode || {}
-                                            _ckCacheInit[mode] = { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                            _ckCacheInit[mode] = { items: obj.checklists, exclusiveKey: root._parseChecklistExclusiveKey(obj) }
                                             root._checklistByMode = _ckCacheInit
                                             console.log("[ChecklistInit] mode=", mode, "写入 checklist 条数:", obj.checklists.length,
                                                 " 当前 keys:", Object.keys(_ckCacheInit).join(","))
@@ -2870,7 +2891,7 @@ ApplicationWindow {
                                         // 【竞态修复】每次都从 root._checklistByMode 读最新值
                                         if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
                                             var _ckCacheNew = root._checklistByMode || {}
-                                            _ckCacheNew[mode] = { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                            _ckCacheNew[mode] = { items: obj.checklists, exclusiveKey: root._parseChecklistExclusiveKey(obj) }
                                             root._checklistByMode = _ckCacheNew
                                             console.log("[ChecklistInit] mode=", mode, "写入 checklist 条数:", obj.checklists.length,
                                                 " 当前 keys:", Object.keys(_ckCacheNew).join(","))
@@ -2914,7 +2935,7 @@ ApplicationWindow {
                                         // 【多配置合并策略】有 checklists 的优先，无 checklists 的不覆盖已有值
                                         if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
                                             var _ckSame = root._checklistByMode || {}
-                                            _ckSame[mode] = { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                            _ckSame[mode] = { items: obj.checklists, exclusiveKey: root._parseChecklistExclusiveKey(obj) }
                                             root._checklistByMode = _ckSame
                                             console.log("[ChecklistSame] mode=", mode, "写入 checklist 条数:", obj.checklists.length)
                                         } else {
@@ -3035,7 +3056,7 @@ ApplicationWindow {
                 // 同步缓存该 mode 的 checklist
                 var _ckCacheUpd = root._checklistByMode || {}
                 _ckCacheUpd[mode] = Array.isArray(obj.checklists) && obj.checklists.length > 0
-                    ? { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                    ? { items: obj.checklists, exclusiveKey: root._parseChecklistExclusiveKey(obj) }
                     : null
                 root._checklistByMode = _ckCacheUpd
                 // 【关键】立即按 mode 独立持久化，避免多 mode 通过共享 dimensions.json 相互覆盖
@@ -3061,8 +3082,7 @@ ApplicationWindow {
                     // 同步 checklist（仅当前 mode 热更新）
                     if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
                         root.reviewChecklist = obj.checklists
-                        var _ck2 = obj.checklist_config
-                        root.reviewChecklistExclusiveKey = (_ck2 && _ck2.exclusive_key) ? _ck2.exclusive_key : ""
+                        root.reviewChecklistExclusiveKey = root._parseChecklistExclusiveKey(obj)
                         // 【修复】同步写入 _checklistByMode 并持久化，否则重启后丢失
                         var _ckApplyCache = root._checklistByMode || {}
                         _ckApplyCache[mode] = { items: obj.checklists, exclusiveKey: root.reviewChecklistExclusiveKey }
@@ -3203,7 +3223,7 @@ ApplicationWindow {
                 dimsCache[item.mode] = _dims
                 // 同步存入该 mode 的 checklist
                 ckCache[item.mode] = Array.isArray(obj.checklists) && obj.checklists.length > 0
-                    ? { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                    ? { items: obj.checklists, exclusiveKey: root._parseChecklistExclusiveKey(obj) }
                     : null
                 // 同步存入该 mode 的 tag（无论当前 mode 是否匹配）
                 tagCache[item.mode] = obj.tag || ""
@@ -3214,7 +3234,7 @@ ApplicationWindow {
                     // 同步热更新 checklist（仅当前 mode）
                     if (Array.isArray(obj.checklists) && obj.checklists.length > 0) {
                         root.reviewChecklist = obj.checklists
-                        root.reviewChecklistExclusiveKey = (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : ""
+                        root.reviewChecklistExclusiveKey = root._parseChecklistExclusiveKey(obj)
                     } else {
                         root.reviewChecklist = []
                         root.reviewChecklistExclusiveKey = ""
@@ -3448,7 +3468,7 @@ ApplicationWindow {
                             // 同步缓存该 mode 的 checklist
                             var _ckUpd0 = root._checklistByMode || {}
                             _ckUpd0[_fm] = Array.isArray(obj.checklists) && obj.checklists.length > 0
-                                ? { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                ? { items: obj.checklists, exclusiveKey: root._parseChecklistExclusiveKey(obj) }
                                 : null
                             root._checklistByMode = _ckUpd0
                             // 【tag 按 mode 独立缓存】写缓存时同步写 _tagByMode[_fm]，不碰 Rating.uploadTag
@@ -3469,7 +3489,7 @@ ApplicationWindow {
                             // 同步缓存该 mode 的 checklist
                             var _ckUpd = root._checklistByMode || {}
                             _ckUpd[_curMode] = Array.isArray(obj.checklists) && obj.checklists.length > 0
-                                ? { items: obj.checklists, exclusiveKey: (obj.checklist_config && obj.checklist_config.exclusive_key) ? obj.checklist_config.exclusive_key : "" }
+                                ? { items: obj.checklists, exclusiveKey: root._parseChecklistExclusiveKey(obj) }
                                 : null
                             root._checklistByMode = _ckUpd
                             // 【关键】按 mode 独立持久化
