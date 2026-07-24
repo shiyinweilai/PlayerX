@@ -42,6 +42,7 @@ PlayerX build.py — Qt + QML 版本构建脚本（macOS 原生 / macOS→Window
 
 import os
 import sys
+import re
 import shutil
 import subprocess
 import argparse
@@ -604,6 +605,29 @@ def post_build(target: str, qt_dir: str, deploy_qt: bool = False):
                               "请确认 Qt6 安装完整（brew install qt 或设置 QT6_DIR）")
                         sys.exit(1)
 
+                    # ── 关键修补：给主可执行文件临时补一条 brew Qt 的 rpath ──
+                    # CMake install 默认策略会把 build tree 里的 brew Qt rpath 全部剥掉，
+                    # 只留 @executable_path/../Frameworks。此时 Contents/Frameworks 里
+                    # 还没有任何 Qt.framework，macdeployqt 打开 binary 解析依赖时会报：
+                    #     ERROR: Cannot resolve rpath "@rpath/QtCore.framework/..."
+                    # 解决办法：跑 macdeployqt 之前先 install_name_tool -add_rpath 把
+                    # brew Qt 的 lib 目录塞回去，让 macdeployqt 顺利找到源 framework；
+                    # 内嵌完成后再 -delete_rpath 把这条临时 rpath 抹掉，保持产物干净。
+                    exe_inside = os.path.join(app_path, "Contents", "MacOS", "PlayerX")
+                    qt_lib_dir = os.path.join(qt_dir, "lib") if qt_dir else ""
+                    added_rpath = False
+                    if qt_lib_dir and os.path.isdir(qt_lib_dir) and os.path.isfile(exe_inside):
+                        rr = subprocess.run(
+                            ["install_name_tool", "-add_rpath", qt_lib_dir, exe_inside],
+                            capture_output=True, text=True,
+                        )
+                        if rr.returncode == 0:
+                            added_rpath = True
+                            info(f"临时追加 rpath 供 macdeployqt 解析: {qt_lib_dir}")
+                        else:
+                            # 已存在同名 rpath 时 install_name_tool 会失败，视为已可用即可。
+                            warn(f"add_rpath 失败（可能已存在同路径）: {rr.stderr.strip()}")
+
                     qml_src = os.path.join(SOURCE_DIR, "qml")
                     info(f"运行 macdeployqt 内嵌 Qt 运行时: {entry}")
                     deploy_cmd = [
@@ -611,15 +635,306 @@ def post_build(target: str, qt_dir: str, deploy_qt: bool = False):
                         "-always-overwrite",
                         "-verbose=1",
                     ]
+                    # ── 关键：告诉 macdeployqt 到 brew Qt 的 lib 目录去查 framework ──
+                    # 主可执行文件的 rpath 补丁只对"解析主 exe 自身依赖"这一步有效；
+                    # macdeployqt 后续还会打开 QML 插件 dylib（例如 labsmodelsplugin、
+                    # qmlfolderlistmodelplugin 等），这些插件自身没有 LC_RPATH，
+                    # 也不会继承主 exe 的 rpath —— 它们的 @rpath/QtQml.framework/... 会
+                    # 落到 macdeployqt 内部的 libraryPaths 列表里查找。之前只加主 exe
+                    # rpath 时，QML 插件那一环仍会报：
+                    #   ERROR: Cannot resolve rpath "@rpath/QtQmlModels.framework/..."
+                    # 传 -libpath=<brew_qt>/lib 后，macdeployqt 处理任意 dylib 时都能
+                    # 命中，从而顺利内嵌 QtQml / QtLabs* 等次级 framework。
+                    if qt_lib_dir and os.path.isdir(qt_lib_dir):
+                        deploy_cmd.append(f"-libpath={qt_lib_dir}")
                     # 项目使用了大量 QtQuick.Controls / 自定义 QML，
                     # 必须显式 -qmldir 让 macdeployqt 扫到所有 import 并打包对应 QML 模块。
                     if os.path.isdir(qml_src):
                         deploy_cmd.append(f"-qmldir={qml_src}")
+
+                    # macdeployqt 的输出直接透传。brew Qt 会打印一些
+                    # "Cannot resolve rpath @rpath/Qt....framework/..." 的错误，
+                    # 里面混着真问题（例如 QtGui 依赖 QtDBus 却漏拷）和假警报
+                    # （qml 插件 @loader_path 层数不对），单纯用正则区分不安全，
+                    # 之前压掉一次导致 QtDBus 未被内嵌、分发包启动 SIGABRT。
+                    # 因此这里全部透传给用户看，是否有问题以下面的产物校验为准。
                     r = subprocess.run(deploy_cmd)
-                    if r.returncode != 0:
-                        error("macdeployqt 失败，生成的 .app 在其他机器上无法启动")
+
+                    # ── 补漏：macdeployqt 有时会漏拷 Qt framework 的间接依赖 ──
+                    # 典型案例：brew Qt 的 QtGui 依赖 @rpath/QtDBus.framework/...
+                    # 但 macdeployqt 有时不会跟进复制 QtDBus。启动期 dyld 找不到
+                    # 就直接 SIGABRT。
+                    #
+                    # 算法：从"dyld 真正会加载的种子二进制"出发做 BFS 展开，只沿
+                    # @rpath/Qt*.framework 依赖走。种子 = 主 exe + Contents/Plugins
+                    # 下的插件 dylib + Contents/Resources/qml 下的 QML 插件 dylib。
+                    # 这样能把 QtDBus 之类真正被引用但没被拷进来的 framework 补上，
+                    # 而不会把 QtWidgets / Qt3D* / QtVirtualKeyboard 之类主 exe
+                    # 完全没引用、只是被其他 framework 内部弱链接提到的 module
+                    # 也拽进来（那会白白让分发包膨胀到 180MB+）。
+                    fw_dir = os.path.join(app_path, "Contents", "Frameworks")
+
+                    def _fw_binary(fw_root: str) -> str:
+                        base = os.path.basename(fw_root)
+                        name = base[:-len(".framework")] if base.endswith(".framework") else base
+                        return os.path.join(fw_root, "Versions", "A", name)
+
+                    _qt_dep_re = re.compile(
+                        r'@rpath/(Qt[A-Za-z0-9]+)\.framework/Versions/A/\1'
+                    )
+
+                    def _seed_binaries(root_app: str):
+                        """dyld 启动/懒加载真正会打开的种子 Mach-O。"""
+                        yield os.path.join(root_app, "Contents", "MacOS", "PlayerX")
+                        for sub in ("Plugins", "PlugIns"):
+                            plug_root = os.path.join(root_app, "Contents", sub)
+                            if os.path.isdir(plug_root):
+                                for dpath, _, files in os.walk(plug_root):
+                                    for f in files:
+                                        if f.endswith(".dylib"):
+                                            yield os.path.join(dpath, f)
+                        qml_root = os.path.join(root_app, "Contents", "Resources", "qml")
+                        if os.path.isdir(qml_root):
+                            for dpath, _, files in os.walk(qml_root):
+                                for f in files:
+                                    if f.endswith(".dylib"):
+                                        yield os.path.join(dpath, f)
+
+                    def _otool_qt_deps(binp: str) -> set:
+                        try:
+                            out = subprocess.run(
+                                ["otool", "-L", binp],
+                                capture_output=True, text=True, check=False,
+                            ).stdout
+                        except Exception:
+                            return set()
+                        return {m.group(1) for m in _qt_dep_re.finditer(out)}
+
+                    def _compute_needed_qt_framework_closure(root_app: str) -> set:
+                        """从种子二进制出发 BFS，返回被真正引用到的 Qt framework 名集合。"""
+                        needed: set = set()
+                        queue: list = []
+                        # 先把种子的 Qt 依赖入队
+                        for binp in _seed_binaries(root_app):
+                            if not os.path.isfile(binp):
+                                continue
+                            for name in _otool_qt_deps(binp):
+                                if name not in needed:
+                                    needed.add(name)
+                                    queue.append(name)
+                        # 沿闭包扩展：只跟进"已在 Frameworks/ 或即将被我们拷进来"的 framework
+                        while queue:
+                            name = queue.pop()
+                            fw_bin = os.path.join(fw_dir, name + ".framework",
+                                                  "Versions", "A", name)
+                            src_bin = (os.path.join(qt_lib_dir, name + ".framework",
+                                                    "Versions", "A", name)
+                                       if qt_lib_dir else "")
+                            # 优先扫已内嵌产物，缺失就退化到 brew Qt 里同名 framework
+                            probe = fw_bin if os.path.isfile(fw_bin) else src_bin
+                            if not probe or not os.path.isfile(probe):
+                                continue
+                            for dep in _otool_qt_deps(probe):
+                                if dep not in needed:
+                                    needed.add(dep)
+                                    queue.append(dep)
+                        return needed
+
+                    def _copy_qt_framework(name: str) -> bool:
+                        """从 brew Qt lib 目录拷贝一个 Qt framework 到 .app，
+                        保留 Versions/A + Resources + 顶层软链，改写 install_name 为 @rpath。"""
+                        if not qt_lib_dir:
+                            return False
+                        src_fw = os.path.join(qt_lib_dir, name + ".framework")
+                        if not os.path.isdir(src_fw):
+                            return False
+                        dst_fw = os.path.join(fw_dir, name + ".framework")
+                        if os.path.isdir(dst_fw):
+                            shutil.rmtree(dst_fw, ignore_errors=True)
+                        os.makedirs(dst_fw, exist_ok=True)
+                        src_verA = os.path.join(src_fw, "Versions", "A")
+                        dst_verA = os.path.join(dst_fw, "Versions", "A")
+                        if not os.path.isdir(src_verA):
+                            return False
+                        os.makedirs(dst_verA, exist_ok=True)
+                        src_bin = os.path.join(src_verA, name)
+                        dst_bin = os.path.join(dst_verA, name)
+                        if os.path.islink(src_bin):
+                            real = os.path.realpath(src_bin)
+                            shutil.copy2(real, dst_bin, follow_symlinks=True)
+                        else:
+                            shutil.copy2(src_bin, dst_bin, follow_symlinks=True)
+                        os.chmod(dst_bin, 0o755)
+                        src_res = os.path.join(src_verA, "Resources")
+                        if os.path.isdir(src_res):
+                            shutil.copytree(src_res, os.path.join(dst_verA, "Resources"),
+                                            symlinks=True, dirs_exist_ok=True)
+                        cur = os.path.join(dst_fw, "Versions", "Current")
+                        if not os.path.exists(cur):
+                            os.symlink("A", cur)
+                        top_bin = os.path.join(dst_fw, name)
+                        if not os.path.exists(top_bin):
+                            os.symlink(os.path.join("Versions", "Current", name), top_bin)
+                        top_res = os.path.join(dst_fw, "Resources")
+                        if not os.path.exists(top_res) and os.path.isdir(
+                                os.path.join(dst_verA, "Resources")):
+                            os.symlink(os.path.join("Versions", "Current", "Resources"), top_res)
+                        rpath_id = f"@rpath/{name}.framework/Versions/A/{name}"
+                        subprocess.run(
+                            ["install_name_tool", "-id", rpath_id, dst_bin],
+                            check=False, capture_output=True,
+                        )
+                        # 把该 framework 自身依赖的 /opt/homebrew/... Qt* 改为 @rpath
+                        try:
+                            deps = subprocess.run(
+                                ["otool", "-L", dst_bin],
+                                capture_output=True, text=True, check=False,
+                            ).stdout
+                        except Exception:
+                            deps = ""
+                        for line in deps.splitlines():
+                            line = line.strip()
+                            m = re.match(
+                                r'^(/opt/homebrew\S*?/(Qt[A-Za-z0-9]+)\.framework/'
+                                r'Versions/A/\2)\s',
+                                line,
+                            )
+                            if m:
+                                old = m.group(1)
+                                dep_name = m.group(2)
+                                new = f"@rpath/{dep_name}.framework/Versions/A/{dep_name}"
+                                subprocess.run(
+                                    ["install_name_tool", "-change", old, new, dst_bin],
+                                    check=False, capture_output=True,
+                                )
+                        return True
+
+                    # 计算真正需要的 Qt framework 闭包，再对照 Frameworks/ 找缺失并补拷
+                    needed_names = _compute_needed_qt_framework_closure(app_path)
+                    patched_names: list[str] = []
+                    for name in sorted(needed_names):
+                        fw_bin_path = os.path.join(
+                            fw_dir, name + ".framework", "Versions", "A", name)
+                        if os.path.isfile(fw_bin_path):
+                            continue
+                        if _copy_qt_framework(name):
+                            patched_names.append(name)
+                        else:
+                            error(f"补拷 Qt framework 失败: {name}"
+                                  f"（brew Qt 目录 {qt_lib_dir} 中未找到）")
+                            sys.exit(1)
+
+                    # 拷完后再算一遍闭包，确保新拷进来的 framework 引入的新依赖也齐全
+                    for _ in range(5):
+                        need2 = _compute_needed_qt_framework_closure(app_path)
+                        still_missing = [
+                            n for n in sorted(need2)
+                            if not os.path.isfile(os.path.join(
+                                fw_dir, n + ".framework", "Versions", "A", n))
+                        ]
+                        if not still_missing:
+                            break
+                        for name in still_missing:
+                            if _copy_qt_framework(name):
+                                patched_names.append(name)
+                            else:
+                                error(f"补拷 Qt framework 失败: {name}")
+                                sys.exit(1)
+
+                    if patched_names:
+                        info(f"macdeployqt 漏拷、已手动补齐 Qt framework: "
+                             f"{sorted(set(patched_names))}")
+
+                    # ── 补漏：非 Qt 的 brew 第三方 dylib ──
+                    # 典型案例：QtPdf→libpng、QtDBus→libdbus-1、
+                    # QtHunspellInputMethod→libhunspell。这类依赖以
+                    # /opt/homebrew/...（Intel 为 /usr/local/...）绝对路径写死在
+                    # framework 里，只存在于构建机；上面 _copy_qt_framework 的
+                    # 正则只改写 Qt*.framework 引用，管不到这些第三方 dylib。
+                    # 不分发就会在用户机上 dyld
+                    #   "Library not loaded: /opt/homebrew/opt/dbus/..."
+                    # 启动即崩（QtDBus 随 QtGui 启动期加载，必崩）。
+                    # 策略：扫 .app 内所有 Mach-O，凡引用 brew 绝对路径 .dylib，
+                    # 一律拷进 Contents/Frameworks 并把引用改写为 @rpath/<basename>
+                    # （主 exe 的 @executable_path/../Frameworks rpath 会覆盖解析），
+                    # 新拷进来的 dylib 可能再级联引用别的 brew dylib，循环到收敛。
+                    _brew_dep_re = re.compile(
+                        r'^(/(?:opt/homebrew|usr/local)\S+?\.dylib)\s')
+
+                    def _otool_brew_deps(binp: str) -> set:
+                        try:
+                            out = subprocess.run(
+                                ["otool", "-L", binp],
+                                capture_output=True, text=True, check=False,
+                            ).stdout
+                        except Exception:
+                            return set()
+                        return {m.group(1) for line in out.splitlines()
+                                if (m := _brew_dep_re.match(line.strip()))}
+
+                    def _bundle_machos(root_app: str):
+                        """遍历可能含 Mach-O 的目录；otool 会自动跳过非 Mach-O 文件。"""
+                        for sub in ("Contents/MacOS", "Contents/Frameworks",
+                                    "Contents/Plugins", "Contents/PlugIns",
+                                    "Contents/Resources/qml"):
+                            root = os.path.join(root_app, sub)
+                            if not os.path.isdir(root):
+                                continue
+                            for dpath, _, files in os.walk(root):
+                                for f in files:
+                                    yield os.path.join(dpath, f)
+
+                    patched_dylibs: list[str] = []
+                    for _ in range(8):
+                        pending: dict = {}   # brew 源 dylib 路径 -> {引用它的二进制}
+                        for binp in _bundle_machos(app_path):
+                            for dep in _otool_brew_deps(binp):
+                                pending.setdefault(dep, set()).add(binp)
+                        if not pending:
+                            break
+                        for src, users in pending.items():
+                            base = os.path.basename(src)
+                            dst = os.path.join(fw_dir, base)
+                            # brew 的 .dylib 常是软链，拷真实文件但保留被引用名
+                            if os.path.isfile(src) and not os.path.isfile(dst):
+                                shutil.copy2(os.path.realpath(src), dst)
+                                os.chmod(dst, 0o755)
+                                subprocess.run(
+                                    ["install_name_tool", "-id",
+                                     f"@rpath/{base}", dst],
+                                    check=False, capture_output=True)
+                                patched_dylibs.append(base)
+                            for binp in users:
+                                subprocess.run(
+                                    ["install_name_tool", "-change", src,
+                                     f"@rpath/{base}", binp],
+                                    check=False, capture_output=True)
+                    else:
+                        error("brew 第三方 dylib 补拷未收敛（8 轮后仍有绝对路径依赖残留）")
                         sys.exit(1)
+                    if patched_dylibs:
+                        info(f"已补齐 brew 第三方 dylib: {sorted(set(patched_dylibs))}")
+
+                    # 完整性校验（现在已含补漏后的结果）：核心 framework 必须齐全
+                    required_fw = ["QtCore.framework", "QtGui.framework",
+                                   "QtQml.framework", "QtQuick.framework"]
+                    missing = [fw for fw in required_fw
+                               if not os.path.isdir(os.path.join(fw_dir, fw))]
+                    if missing:
+                        error(f"macdeployqt 失败，Contents/Frameworks 缺少必需 framework: "
+                              f"{missing}；生成的 .app 在其他机器上无法启动")
+                        sys.exit(1)
+                    if r.returncode != 0 and not patched_names:
+                        warn("macdeployqt 退出码非零，但核心 framework 已齐全；"
+                             "请检查上方 stderr 是否有陌生错误。")
                     success("macdeployqt 完成（Qt 已内嵌到 .app）")
+
+                    # 清理刚刚临时补上的 brew Qt rpath，避免把构建机路径带进分发包。
+                    if added_rpath and os.path.isfile(exe_inside):
+                        subprocess.run(
+                            ["install_name_tool", "-delete_rpath", qt_lib_dir, exe_inside],
+                            check=False,
+                        )
 
                     # macdeployqt 会改写大量二进制依赖，旧的 ad-hoc 签名随之失效，
                     # 必须重新整体签一次（--deep 覆盖所有内嵌 framework / dylib / 插件）。
