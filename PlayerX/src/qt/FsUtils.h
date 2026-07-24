@@ -58,6 +58,16 @@ public:
     // 成功返回 true；filePath 为空或写入失败返回 false。
     Q_INVOKABLE bool writeTextFile(const QString& filePath, const QString& text) const;
 
+    // 写入二进制文件（base64 编码数据，覆盖式）。父目录会自动创建。
+    // base64Data 为标准 Base64 字符串（QML XMLHttpRequest arraybuffer 转换后传入）。
+    // 成功返回 true；filePath/base64Data 为空或写入失败返回 false。
+    Q_INVOKABLE bool writeBinaryFile(const QString& filePath, const QString& base64Data) const;
+
+    // 返回系统 Downloads 目录的绝对路径（末尾不带斜杠）。
+    //   macOS/Linux: ~/Downloads
+    //   Windows:     %USERPROFILE%\Downloads
+    Q_INVOKABLE QString downloadsDir() const;
+
     // 读取文本文件（按 UTF-8 解码）。文件不存在或读失败时返回空字符串。
     Q_INVOKABLE QString readTextFile(const QString& filePath) const;
 

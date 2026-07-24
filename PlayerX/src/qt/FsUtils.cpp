@@ -184,6 +184,29 @@ bool FsUtils::writeTextFile(const QString& filePath, const QString& text) const 
     return n == bytes.size();
 }
 
+bool FsUtils::writeBinaryFile(const QString& filePath, const QString& base64Data) const {
+    if (filePath.isEmpty() || base64Data.isEmpty()) return false;
+    QFileInfo fi(filePath);
+    QDir parent = fi.absoluteDir();
+    if (!parent.exists()) {
+        if (!parent.mkpath(".")) return false;
+    }
+    const QByteArray bytes = QByteArray::fromBase64(base64Data.toLatin1());
+    if (bytes.isEmpty()) return false;
+    QFile f(filePath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    qint64 n = f.write(bytes);
+    f.close();
+    return n == bytes.size();
+}
+
+QString FsUtils::downloadsDir() const {
+    // QStandardPaths::DownloadLocation 在 Qt6 各平台均有正确实现
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    if (dir.isEmpty()) dir = QDir::homePath() + "/Downloads";
+    return dir;
+}
+
 QString FsUtils::readTextFile(const QString& filePath) const {
     if (filePath.isEmpty()) return {};
     QFile f(filePath);

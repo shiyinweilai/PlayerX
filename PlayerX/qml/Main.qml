@@ -1713,7 +1713,32 @@ ApplicationWindow {
         property string _status: "idle"     // idle | downloading | done | error
         property string _statusText: ""
         property real   _progress: 0        // 0.0 ~ 1.0
-        property var    _xhr: null
+
+        // 监听 C++ Downloader 信号
+        Connections {
+            target: (typeof Downloader !== "undefined") ? Downloader : null
+            function onProgress(ratio, received, total) {
+                if (testSourceDownloadDialog._status !== "downloading") return
+                if (ratio >= 0)
+                    testSourceDownloadDialog._progress = ratio
+                // 显示已下载大小
+                var mb = (received / 1048576).toFixed(1)
+                var totalMb = total > 0 ? " / " + (total / 1048576).toFixed(1) + " MB" : ""
+                testSourceDownloadDialog._statusText = "正在下载… " + mb + totalMb + " MB"
+            }
+            function onFinished(ok, savePath, errorMsg) {
+                if (testSourceDownloadDialog._status !== "downloading") return
+                if (ok) {
+                    testSourceDownloadDialog._savePath   = savePath
+                    testSourceDownloadDialog._progress   = 1.0
+                    testSourceDownloadDialog._status     = "done"
+                    testSourceDownloadDialog._statusText = "下载完成，已保存到 Downloads 目录"
+                } else {
+                    testSourceDownloadDialog._status     = "error"
+                    testSourceDownloadDialog._statusText = errorMsg.length > 0 ? errorMsg : "下载失败"
+                }
+            }
+        }
 
         function startDownload(url, fileName, configName) {
             _url        = url
@@ -1724,43 +1749,12 @@ ApplicationWindow {
             _progress   = 0
             _savePath   = ""
             open()
-            _doDownload()
+            // 用 C++ Downloader 异步下载，不阻塞 UI 线程
+            var savePath = (typeof Fs !== "undefined" ? Fs.downloadsDir() : "") + "/" + fileName
+            console.log("[TestSource] 开始下载:", url, "→", savePath)
+            if (typeof Downloader !== "undefined")
+                Downloader.download(url, savePath)
         }
-
-        function _doDownload() {
-            // 用 Timer 延迟一帧，确保弹窗已渲染完再调系统浏览器
-            var t = Qt.createQmlObject('import QtQuick 2.0; Timer { interval: 80; repeat: false }', testSourceDownloadDialog)
-            t.triggered.connect(function() {
-                console.log("[TestSource] 调用 Qt.openUrlExternally:", testSourceDownloadDialog._url)
-                var ok = Qt.openUrlExternally(testSourceDownloadDialog._url)
-                console.log("[TestSource] openUrlExternally 返回:", ok)
-                testSourceDownloadDialog._progress = 1.0
-                testSourceDownloadDialog._status = "done"
-                testSourceDownloadDialog._statusText = ok
-                    ? "已在浏览器/下载器中打开，文件将下载到浏览器默认下载目录"
-                    : "系统无法打开链接，请手动复制 URL 下载"
-                t.destroy()
-            })
-            t.start()
-        }
-
-        function _getSavePath(fileName) {
-            if (Qt.platform.os === "osx") {
-                var exe = Qt.application.arguments[0]
-                var macosDir = exe.substring(0, exe.lastIndexOf("/"))
-                var contentsDir = macosDir.substring(0, macosDir.lastIndexOf("/"))
-                var appDir = contentsDir.substring(0, contentsDir.lastIndexOf("/"))
-                var appBundle = appDir.substring(0, appDir.lastIndexOf("/"))
-                // ~/Downloads
-                return appBundle.substring(0, appBundle.lastIndexOf("/")) + "/Downloads/" + fileName
-            } else {
-                // Windows: %USERPROFILE%\Downloads
-                var exe2 = Qt.application.arguments[0]
-                var exeDir = exe2.substring(0, exe2.lastIndexOf("\\"))
-                return exeDir + "\\..\\..\\..\\..\\..\\" + "Downloads\\" + fileName
-            }
-        }
-
         Overlay.modal: Rectangle { color: "#aa000000" }
 
         background: Rectangle {
@@ -1831,6 +1825,24 @@ ApplicationWindow {
             Row {
                 spacing: 8
                 anchors.right: parent.right
+
+                // 打开文件夹按钮（下载完成后显示）
+                Rectangle {
+                    width: 96; height: 28; radius: 4
+                    visible: testSourceDownloadDialog._status === "done" && testSourceDownloadDialog._savePath.length > 0
+                    color: openFolderMouse.containsMouse ? "#1a5cd4" : "#0a64f0"
+                    Text { anchors.centerIn: parent; text: "打开文件夹"; color: "#ffffff"; font.pixelSize: 12 }
+                    MouseArea {
+                        id: openFolderMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (typeof Fs !== "undefined")
+                                Fs.revealInFileManager(testSourceDownloadDialog._savePath)
+                        }
+                    }
+                }
 
                 // 关闭按钮
                 Rectangle {
