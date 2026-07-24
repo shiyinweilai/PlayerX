@@ -106,7 +106,9 @@ Window {
     property var _visibleRows: []
 
     // 上传勾选：key = folder.key（如 "dir:/Users/x/a"），value = bool。
-    // 默认全选；新增文件夹自动补 true，已删除的文件夹自动清理，避免脏 key 残留。
+    // 默认不勾选；刷新时保留已勾选状态、自动清理已消失的文件夹，避免脏 key 残留。
+    // 外部一键上传（previewCurrentUpload）只自动勾选「当前打开的视频通路」所在文件夹，
+    // 历史文件夹需用户在面板里手动勾选（全选 / 反选 / 单个勾选均可）。
     // 仅用于"按文件夹勾选上传"功能，不影响导出 / 渲染。
     property var _checkedFolders: ({})
 
@@ -471,6 +473,30 @@ Window {
         for (var i = 0; i < _folders.length; ++i) c[_folders[i].key] = !!flag
         _checkedFolders = c
     }
+    // 只勾选「当前打开的视频通路」所在的文件夹，其余一律置为不勾选。
+    // 供外部一键上传（previewCurrentUpload）使用：用户诉求是"上传本次评的这几路视频"，
+    // 历史评分过的其他文件夹不应被自动带上（需要时可在面板里手动补勾）。
+    // 路径比对复用 _dirOf，与 _buildFoldersFromRows 生成文件夹 path 的规则完全一致，
+    // 因此只要视频确实评分过，目录字符串必然能逐字节命中对应文件夹。
+    function _setCheckedToCurrentVideoFolders() {
+        var dirs = {}
+        if (typeof Engine !== "undefined") {
+            var n = 0
+            try { n = Engine.fileCount || 0 } catch (e) { n = 0 }
+            for (var i = 0; i < n; ++i) {
+                var fp = ""
+                try { fp = Engine.filePathAt(i) || "" } catch (e2) { fp = "" }
+                var dir = _dirOf(fp)
+                if (dir.length > 0) dirs[dir] = true
+            }
+        }
+        var c = {}
+        for (var j = 0; j < _folders.length; ++j) {
+            var d = _folders[j]
+            c[d.key] = (d.path && dirs[d.path] === true) ? true : false
+        }
+        _checkedFolders = c
+    }
     function _invertFolderChecked() {
         var c = {}
         for (var i = 0; i < _folders.length; ++i) {
@@ -537,7 +563,8 @@ Window {
 
     // ── 外部"一键上传"入口所需的预览接口 ─────────────────────────────
     // 场景：Main.qml 的"📤 评分数据"按钮不再打开评分数据面板，而是
-    //   直接选中"当前正在评分的所有文件夹"，弹一个二次确认框。
+    //   自动勾选"当前打开的视频通路"所在的文件夹（历史文件夹不自动勾选），
+    //   弹一个二次确认框。
     // 本函数不依赖面板 UI 是否已打开：内部会强制刷新一次数据（_refresh），
     //   然后基于最新 _folders 计算返回预览信息。
     //
@@ -558,25 +585,28 @@ Window {
         // （用户可能之前打开过面板并切到"归档"Tab，这里我们要的是"当前正在评分"）
         if (root._viewMode !== "current") root._viewMode = "current"
         _refresh()
-        // 全选所有可上传文件夹，供后续 triggerQuickUploadForCurrentTab 直接使用
-        _setAllFoldersChecked(true)
+        // 只自动勾选「当前打开的视频通路」所在的文件夹（而非历史全部），
+        // 供后续 triggerQuickUploadForCurrentTab 直接使用；
+        // 用户仍可在面板里通过「全选 / 反选 / 单个勾选」手动调整上传范围。
+        _setCheckedToCurrentVideoFolders()
 
         var picked = _collectCheckedFolderPaths()
         var incomplete = _collectCheckedIncomplete()
 
-        // 累计评分条数：这些文件夹里所有 file 的评分记录数之和
+        // 累计评分条数：仅统计本次勾选文件夹里的评分记录数之和
         var recordCount = 0
         for (var i = 0; i < _folders.length; ++i) {
             var d = _folders[i]
-            if (!d) continue
+            if (!d || !_isFolderChecked(d.key)) continue
             if (typeof d.totalItems === "number") recordCount += d.totalItems
         }
 
-        // 组装 folders 明细（用 name / path / 完整度）
+        // 组装 folders 明细（仅本次勾选的文件夹，用 name / path / 完整度）
         var foldersOut = []
         for (var j = 0; j < _folders.length; ++j) {
             var fd = _folders[j]
             if (!fd || !fd.path || fd.path.length === 0) continue
+            if (!_isFolderChecked(fd.key)) continue
             var rated = (fd.ratedCount === undefined ? fd.files.length : fd.ratedCount)
             var total = (fd.totalVideos === undefined ? rated : fd.totalVideos)
             foldersOut.push({
@@ -607,7 +637,7 @@ Window {
         var blockReason = ""
         if (picked.length === 0) {
             canUpload = false
-            blockReason = qsTr("当前没有可上传的评分记录，请先完成评分。")
+            blockReason = qsTr("当前打开的视频所在文件夹没有可上传的评分记录。\n可点「去修改」在评分数据面板里手动勾选要上传的文件夹。")
         } else if (raterText.length === 0) {
             canUpload = false
             blockReason = qsTr("评分人未填写，请先在评分数据面板顶部填写「评分人 *」。")
@@ -633,7 +663,7 @@ Window {
     }
 
     // 外部"一键上传"入口的执行函数：
-    // 已经由 previewCurrentUpload() 全选并校验过；这里直接触发上传主流程
+    // 已经由 previewCurrentUpload() 勾选当前视频文件夹并校验过；这里直接触发上传主流程
     // （复用所有既有拦截、tag 校验、成功回调、自动归档等）。
     //
     // 【路由说明】本 RatingsDialog 是独立 Window，其内部子对话框
