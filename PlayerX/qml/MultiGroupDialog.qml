@@ -1842,20 +1842,25 @@ ApplicationWindow {
     // 入参 urls 元素可以是 file:// QUrl，也可以是本地路径字符串；
     // 仅扫描出至少 1 个视频的文件夹会被纳入。
     // 返回：true=已成功启动；false=没有有效文件夹。
-    // 清理"文件夹已不存在于磁盘"的死路（历史残留），为新导入腾出位置。
-    // 典型来源：测试源目录被删除/移动后，旧 lane 仍占着 kMaxLanes 名额。
+    // 清理占位/失效 lane，为新导入腾出位置：
+    //   1) 空槽位：「未导入」占位行（folderPath 为空，从未选过文件夹）——
+    //      多为「➕ 新增一路」后未使用的残留，没有任何有效内容；
+    //   2) 死路：folderPath 指向的目录已不存在于磁盘（如测试源被删除/移动）。
+    // 它们会占满 kMaxLanes 名额，导致新导入失败。
     function _pruneStaleLanes() {
         var removed = 0
         for (var i = _rowsModel.count - 1; i >= 0; --i) {
             var l = _rowsModel.get(i)
             if (!l) continue
             var fp = l.folderPath || ""
-            if (fp.length > 0 && !Fs.isDirectoryPath(fp)) {
+            var isEmptySlot = (fp.length === 0)
+            var isDead = (fp.length > 0 && !Fs.isDirectoryPath(fp))
+            if (isEmptySlot || isDead) {
                 removeLane(i)   // removeLane 会同步从文件夹历史里清除
                 ++removed
             }
         }
-        if (removed > 0) console.log("[MGD] _pruneStaleLanes 清理死路:", removed, "条")
+        if (removed > 0) console.log("[MGD] _pruneStaleLanes 清理空槽/死路:", removed, "条")
         return removed
     }
 
@@ -2057,6 +2062,9 @@ ApplicationWindow {
     function showAndRefresh() {
         try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
         _folderHistMerged = true
+        // 每次打开自动清理空槽位（未导入的占位行）与死路（目录已失效），
+        // 避免它们长期占用 kMaxLanes 名额堵死新导入
+        _pruneStaleLanes()
         show()
         raise()
         requestActivate()
