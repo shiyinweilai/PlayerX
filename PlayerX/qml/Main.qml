@@ -1694,6 +1694,165 @@ ApplicationWindow {
     }
 
 
+    // ─── 测试源下载弹窗 ──────────────────────────────────────────────────────
+    //  · 应用配置后若携带 testSourceUrl，自动弹出此弹窗并开始下载
+    //  · 下载到系统 Downloads 目录，完成后自动解压并打开文件夹
+    Popup {
+        id: testSourceDownloadDialog
+        modal: true
+        anchors.centerIn: parent
+        closePolicy: Popup.NoAutoClose
+        implicitWidth: 380
+        implicitHeight: contentCol.implicitHeight + 48
+
+        // 内部状态
+        property string _url: ""
+        property string _fileName: ""
+        property string _configName: ""
+        property string _savePath: ""       // 最终保存路径（下载完成后设置）
+        property string _status: "idle"     // idle | downloading | done | error
+        property string _statusText: ""
+        property real   _progress: 0        // 0.0 ~ 1.0
+        property var    _xhr: null
+
+        function startDownload(url, fileName, configName) {
+            _url        = url
+            _fileName   = fileName
+            _configName = configName
+            _status     = "downloading"
+            _statusText = "正在下载…"
+            _progress   = 0
+            _savePath   = ""
+            open()
+            _doDownload()
+        }
+
+        function _doDownload() {
+            // 用 Timer 延迟一帧，确保弹窗已渲染完再调系统浏览器
+            var t = Qt.createQmlObject('import QtQuick 2.0; Timer { interval: 80; repeat: false }', testSourceDownloadDialog)
+            t.triggered.connect(function() {
+                console.log("[TestSource] 调用 Qt.openUrlExternally:", testSourceDownloadDialog._url)
+                var ok = Qt.openUrlExternally(testSourceDownloadDialog._url)
+                console.log("[TestSource] openUrlExternally 返回:", ok)
+                testSourceDownloadDialog._progress = 1.0
+                testSourceDownloadDialog._status = "done"
+                testSourceDownloadDialog._statusText = ok
+                    ? "已在浏览器/下载器中打开，文件将下载到浏览器默认下载目录"
+                    : "系统无法打开链接，请手动复制 URL 下载"
+                t.destroy()
+            })
+            t.start()
+        }
+
+        function _getSavePath(fileName) {
+            if (Qt.platform.os === "osx") {
+                var exe = Qt.application.arguments[0]
+                var macosDir = exe.substring(0, exe.lastIndexOf("/"))
+                var contentsDir = macosDir.substring(0, macosDir.lastIndexOf("/"))
+                var appDir = contentsDir.substring(0, contentsDir.lastIndexOf("/"))
+                var appBundle = appDir.substring(0, appDir.lastIndexOf("/"))
+                // ~/Downloads
+                return appBundle.substring(0, appBundle.lastIndexOf("/")) + "/Downloads/" + fileName
+            } else {
+                // Windows: %USERPROFILE%\Downloads
+                var exe2 = Qt.application.arguments[0]
+                var exeDir = exe2.substring(0, exe2.lastIndexOf("\\"))
+                return exeDir + "\\..\\..\\..\\..\\..\\" + "Downloads\\" + fileName
+            }
+        }
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 8
+        }
+
+        Column {
+            id: contentCol
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 24 }
+            spacing: 14
+
+            // 标题
+            Text {
+                text: "📦 下载测试源"
+                color: "#e8e8ec"
+                font.pixelSize: 15
+                font.bold: true
+            }
+
+            // 配置名
+            Text {
+                text: testSourceDownloadDialog._configName ? ("配置：" + testSourceDownloadDialog._configName) : ""
+                color: "#9aa0a6"
+                font.pixelSize: 12
+                visible: testSourceDownloadDialog._configName.length > 0
+            }
+
+            // 文件名
+            Text {
+                text: "文件：" + testSourceDownloadDialog._fileName
+                color: "#9aa0a6"
+                font.pixelSize: 12
+                elide: Text.ElideMiddle
+                width: parent.width
+            }
+
+            // 状态文字
+            Text {
+                text: testSourceDownloadDialog._statusText
+                color: testSourceDownloadDialog._status === "error" ? "#f5222d"
+                     : testSourceDownloadDialog._status === "done"  ? "#52c41a"
+                     : "#e8e8ec"
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
+
+            // 进度条（下载中显示）
+            Rectangle {
+                width: parent.width
+                height: 4
+                radius: 2
+                color: "#2a2a34"
+                visible: testSourceDownloadDialog._status === "downloading"
+                Rectangle {
+                    width: parent.width * testSourceDownloadDialog._progress
+                    height: parent.height
+                    radius: parent.radius
+                    color: "#0a64f0"
+                    Behavior on width { NumberAnimation { duration: 120 } }
+                }
+            }
+
+            // 底部按钮
+            Row {
+                spacing: 8
+                anchors.right: parent.right
+
+                // 关闭按钮
+                Rectangle {
+                    width: 72; height: 28; radius: 4
+                    color: closeMouse2.containsMouse ? "#3a3a44" : "#2a2a34"
+                    border.color: "#44ffffff"; border.width: 1
+                    Text { anchors.centerIn: parent; text: "关闭"; color: "#aaaabc"; font.pixelSize: 12 }
+                    MouseArea {
+                        id: closeMouse2
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: testSourceDownloadDialog.close()
+                    }
+                }
+            }
+
+            Item { height: 4; width: 1 }
+        }
+    }
+
+
     // ─── 关闭全部视频：二次确认（深色，与 about/shortcuts 风格一致）──
     //  · 触发源：工具栏【✕ 全部】、菜单【文件 ▸ 关闭所有视频】、快捷键 ⌘W/Ctrl+W
     //  · 设计：modal + 深色面板 + 阴影 + 自绘 footer（取消/确认清空），避免误触
@@ -2806,6 +2965,15 @@ ApplicationWindow {
         xhr0.send()
     }
 
+    // ─── 测试源下载 ──────────────────────────────────────────────────────────
+    // 应用配置后若携带 testSourceUrl，自动下载到系统 Downloads 目录并解压
+    function _downloadTestSource(url, configName) {
+        // 从 URL 中提取文件名
+        var fileName = url.split("/").pop().split("?")[0] || "test-source.zip"
+        // 弹出下载进度弹窗
+        testSourceDownloadDialog.startDownload(url, fileName, configName)
+    }
+
     // 用户点击通知卡片后，应用所有待更新的远程配置
     // 应用单条远程配置，并自动切换到对应评分模式
     // 【关键】用户点应用时【现拉一次】远程最新数据，用最新 obj 而不是差异检测阶段缓存的 item.obj
@@ -2935,6 +3103,12 @@ ApplicationWindow {
                 })
                 root._pendingRemoteConfig = remaining.length > 0 ? remaining : null
                 if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
+
+                // 【测试源下载】若配置携带 testSourceUrl，应用后自动触发下载
+                console.log("[TestSource] obj.testSourceUrl =", obj.testSourceUrl, "configName =", configName)
+                if (obj.testSourceUrl && typeof obj.testSourceUrl === "string" && obj.testSourceUrl.trim().length > 0) {
+                    root._downloadTestSource(obj.testSourceUrl.trim(), configName)
+                }
             } catch (e) {
                 console.warn("[ConfigCheck] 应用单条配置失败：", e)
             }

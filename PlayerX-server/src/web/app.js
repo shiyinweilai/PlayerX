@@ -879,6 +879,8 @@
         if (obj.scale) metaItems.push(`<span class="dim-meta-item dim-meta-muted dim-meta-scale"><span class="dim-meta-icon">📏</span>${escHtml(obj.scale)}</span>`);
         // 备注 tag：可内联编辑
         metaItems.push(`<span class="dim-meta-item dim-meta-tag"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val dim-meta-editable" data-field="tag" title="点击编辑">${escHtml(obj.tag || '（未填写，点击添加）')}</span></span>`);
+        // 测试源 URL：可内联编辑（管理员专属）
+        if (admin) metaItems.push(`<span class="dim-meta-item dim-meta-test-source"><span class="dim-meta-label">🔗 测试源</span><span class="dim-meta-val dim-meta-editable" data-field="testSourceUrl" title="点击编辑测试源下载地址">${escHtml(obj.testSourceUrl || '（未填写，点击添加）')}</span></span>`);
         const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';
 
         // 渲染后绑定内联编辑事件（延迟到 innerHTML 写入后）
@@ -1801,7 +1803,7 @@
         input.type = 'text';
         input.className = 'dim-meta-inline-input';
         input.value = currentVal;
-        input.placeholder = field === 'tag' ? '例如 test1 / 终评' : '请输入评测任务名称';
+        input.placeholder = field === 'tag' ? '例如 test1 / 终评' : field === 'testSourceUrl' ? 'https://your-cdn.com/test-source.zip' : '请输入评测任务名称';
         span.innerHTML = '';
         span.appendChild(input);
         input.focus();
@@ -1810,7 +1812,7 @@
         async function commit() {
             const newVal = input.value.trim();
             // 还原显示
-            span.innerHTML = escHtml(newVal || (field === 'tag' ? '（未填写，点击添加）' : '（未填写，点击添加）'));
+            span.innerHTML = escHtml(newVal || '（未填写，点击添加）');
             if (!dimRawData) return;
             let obj;
             try { obj = JSON.parse(dimRawData); } catch (_) { return; }
@@ -1827,7 +1829,7 @@
                 const j = await r.json().catch(() => ({}));
                 if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '保存失败'), 'err'); return; }
                 dimRawData = newRaw;
-                showToast(`✅ 已更新${field === 'tag' ? '备注 tag' : '评测任务'}`, 'ok');
+                showToast(`✅ 已更新${field === 'tag' ? '备注 tag' : field === 'testSourceUrl' ? '测试源 URL' : '评测任务'}`, 'ok');
                 loadConfigList(); // 刷新侧边栏（任务名可能显示在侧边栏）
             } catch (e) {
                 showToast('❌ 网络错误：' + e.message, 'err');
@@ -1840,6 +1842,7 @@
             if (e.key === 'Escape') {
                 // 取消：还原原始值
                 span.innerHTML = escHtml(currentVal || '（未填写，点击添加）');
+                input.removeEventListener('blur', commit);
                 input.removeEventListener('blur', commit);
             }
         });
