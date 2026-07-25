@@ -1864,17 +1864,55 @@ ApplicationWindow {
         return removed
     }
 
+    // 为"路数上限"腾位置：按优先级清理占位 lane，返回被移除的路名列表。
+    //   ① 空槽位 / 死路（复用 _pruneStaleLanes）；
+    //   ② 最旧的【未勾选】有效路（从下标 0 即最早添加的开始）。
+    // 绝不自动删除【勾选中的有效路】——那是用户明确在用的工作区；
+    // 清理结果通过 _evictNotice 在状态栏明确提示（非静默删除）。
+    property string _evictNotice: ""
+    function _evictForCapacity(needCount) {
+        var evicted = []
+        // ① 空槽 + 死路
+        var before = _rowsModel.count
+        _pruneStaleLanes()
+        var pruned = before - _rowsModel.count
+        for (var j = 0; j < pruned; ++j) evicted.push("（空槽/死路）")
+        // ② 最旧未勾选有效路，直到腾出 needCount 个名额
+        var target = Math.max(0, kMaxLanes - Math.min(needCount, kMaxLanes))
+        while (_rowsModel.count > target) {
+            var idx = -1
+            for (var i = 0; i < _rowsModel.count; ++i) {
+                var l = _rowsModel.get(i)
+                if (l && !l.selected) { idx = i; break }
+            }
+            if (idx < 0) break   // 全是勾选中的路，绝不动
+            var lane = _rowsModel.get(idx)
+            evicted.push(lane.folderPath || "（空）")
+            removeLane(idx)
+        }
+        if (evicted.length > 0) {
+            console.log("[MGD] 为腾出上限名额自动移除:", evicted.join(" | "))
+            _evictNotice = "⚠ 路数已满，已自动移除 " + evicted.length + " 条占位路"
+            _evictNoticeTimer.restart()
+        }
+        return evicted
+    }
+    Timer {
+        id: _evictNoticeTimer
+        interval: 6000
+        onTriggered: dlg._evictNotice = ""
+    }
+
     function loadFolders(urls) {
         if (!urls || urls.length === 0) return false
 
         // 1) 先把这一批文件夹追加到历史 lanes（去重 + 持久化）
         var addedPaths = addFoldersToHistory(urls)
-        // 路数撞上限（kMaxLanes）时：先清掉"文件夹已不存在"的死路，再重试一次。
-        // 否则旧残留（如已删除的测试源目录）会永久堵死新导入，
-        // 且报出的"没有可播放的视频"极具误导性。
+        // 路数撞上限（kMaxLanes）时：按优先级腾位置（空槽 → 死路 → 最旧未勾选），
+        // 再重试一次。勾选中的路绝不动——若 9 路全在勾选，返回 false 让用户手动删。
         if ((!addedPaths || addedPaths.length === 0) && _rowsModel.count >= kMaxLanes) {
-            console.log("[MGD] loadFolders: 路数已满，先清理死路后重试")
-            _pruneStaleLanes()
+            console.log("[MGD] loadFolders: 路数已满，按优先级腾位置后重试")
+            _evictForCapacity(urls.length)
             addedPaths = addFoldersToHistory(urls)
         }
         if (!addedPaths || addedPaths.length === 0) return false
@@ -2717,6 +2755,8 @@ ApplicationWindow {
                 color: "#9a9aa8"
                 font.pixelSize: 11
                 text: {
+                    // 腾位置提示优先显示（几秒后由 _evictNoticeTimer 自动清空恢复）
+                    if (dlg._evictNotice.length > 0) return dlg._evictNotice
                     if (active) return "已启动 · 当前组 " + (groupIndex() + 1) + " / " + groupCount()
                     if (canStart) {
                         if (effectiveCount === 1) return "✓ 已就绪：将打开当前选中视频，可用上一组/下一组循环切换"
