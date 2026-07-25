@@ -2225,6 +2225,130 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     text-align: center;
 }
 
+/* ─── 测试源自动化配置区（testSource）─── */
+.dim-ts-header {
+    background: linear-gradient(90deg, rgba(255, 159, 10, .10), rgba(10, 132, 255, .08));
+}
+.dim-ts-delcfg-btn {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-dim, #6f707a);
+}
+.dim-ts-delcfg-btn:hover {
+    color: var(--danger, #ff453a);
+}
+.dim-ts-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px 10px 24px;
+    border-bottom: 1px solid var(--border-soft, #1f2027);
+    min-height: 44px;
+    transition: background .12s;
+}
+.dim-ts-row:last-child {
+    border-bottom: none;
+}
+.dim-ts-row:hover {
+    background: var(--bg-hover, #21222a);
+}
+.dim-ts-fname {
+    flex-shrink: 0;
+    min-width: 96px;
+    text-align: center;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: #17a2b8;
+    background: rgba(23, 162, 184, .12);
+    border: 1px solid rgba(23, 162, 184, .30);
+    border-radius: 999px;
+    padding: 3px 10px;
+    cursor: help;
+}
+.dim-ts-val {
+    font-size: 13px;
+    color: var(--text, #ecedf3);
+    word-break: break-all;
+    min-width: 0;
+}
+.dim-ts-editable {
+    cursor: text;
+    border-bottom: 1px dashed transparent;
+    transition: color .12s, border-color .12s;
+}
+.dim-ts-editable:hover {
+    color: #0a84ff;
+    border-bottom-color: rgba(10, 132, 255, .5);
+}
+.dim-ts-lanes {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.dim-ts-lane-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #ecedf3);
+    background: rgba(10, 132, 255, .12);
+    border: 1px solid rgba(10, 132, 255, .30);
+    border-radius: 999px;
+    padding: 4px 8px 4px 12px;
+}
+.dim-ts-lane-del {
+    border: none;
+    background: transparent;
+    color: var(--text-dim, #6f707a);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 4px;
+    border-radius: 50%;
+    line-height: 1;
+}
+.dim-ts-lane-del:hover {
+    color: var(--danger, #ff453a);
+    background: rgba(255, 69, 58, .15);
+}
+.dim-ts-lane-input {
+    width: 130px;
+    font-size: 13px;
+    padding: 5px 10px;
+    color: var(--text, #ecedf3);
+    background: var(--bg-elev-2, #1c1d24);
+    border: 1px solid var(--border, #2a2b33);
+    border-radius: 8px;
+    outline: none;
+}
+.dim-ts-lane-input:focus {
+    border-color: var(--primary, #0071e3);
+}
+.dim-ts-lane-add {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px dashed rgba(0, 113, 227, .4);
+    background: transparent;
+    color: var(--primary, #0071e3);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+.dim-ts-lane-add:hover {
+    border-color: var(--primary, #0071e3);
+    background: rgba(0, 113, 227, .08);
+}
+.dim-ts-empty {
+    padding: 18px 24px;
+    color: var(--text-dim, #6f707a);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
 /* ─── Checklist 行内编辑输入框：宽高完全占满 JS 锁定的宿主 span ─── */
 .dim-cl-inline-input {
     font-family: inherit;

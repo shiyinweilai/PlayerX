@@ -36,5 +36,16 @@
         }
       ]
     }
-  ]
+  ],
+  "testSource": {
+    "url": "",
+    "workDir": "~/Downloads",
+    "rootDir": "",
+    "laneDirs": [
+      "A",
+      "B"
+    ],
+    "referenceDir": "first_frames",
+    "promptCsv": "prompt.csv"
+  }
 }

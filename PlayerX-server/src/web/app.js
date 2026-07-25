@@ -867,7 +867,8 @@
         if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
             const admin = isLoggedIn();
             dimView.innerHTML = `<div class="dim-view-loading">暂无维度配置${admin ? '' : ''}</div>`
-                + (admin ? `<div style="padding:0 28px"><button class="dim-add-dim-btn ghost-btn" style="margin-top:8px">＋ 添加维度</button></div>` : '');
+                + (admin ? `<div style="padding:0 28px"><button class="dim-add-dim-btn ghost-btn" style="margin-top:8px">＋ 添加维度</button></div>` : '')
+                + renderTestSourceSection(obj, admin);
             if (admin) setTimeout(() => bindCardEdit(obj || { dimensions: [] }), 0);
             return;
         }
@@ -894,10 +895,12 @@
 
         // 渲染 checklist 预览区域
         const checklistHtml = renderChecklistPreview(obj.checklists, obj.checklist_config, admin);
+        // 渲染测试源自动化配置区
+        const testSourceHtml = renderTestSourceSection(obj, admin);
 
         dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`
             + `<div class="dim-bottom-actions" style="display:flex;align-items:center;padding:0 28px;gap:0">${addDimBtn}</div>`
-            + checklistHtml;
+            + checklistHtml + testSourceHtml;
     }
 
     /** 渲染单张维度卡片 HTML（纯字符串，不绑定事件） */
@@ -1045,6 +1048,180 @@
         </div>`;
     }
 
+    // ── 测试源自动化配置区（testSource 对象）──────────────────────────────
+    // 客户端点「接受」后按此配置全自动执行：下载 → 解压 → 按 laneDirs 导入对比
+    // → 绑定参考图/提示词 → 进入打分界面。结构见 PlayerX 端 _startTestSourceAutomation。
+    function renderTestSourceSection(obj, admin) {
+        const ts = (obj && obj.testSource && typeof obj.testSource === 'object') ? obj.testSource : null;
+        if (!ts && !admin) return '';
+
+        const delCfgBtn = (admin && ts)
+            ? `<button class="dim-ts-delcfg-btn ghost-btn" title="移除整个 testSource 配置（客户端将回退为仅下载或不动）">移除配置</button>`
+            : '';
+
+        let bodyHtml = '';
+        if (!ts) {
+            bodyHtml = `<div class="dim-ts-empty">未配置测试源自动化：客户端点「接受」后仅应用评分配置（可配合上方「🔗 测试源」URL 做纯下载）。</div>`
+                + `<button class="dim-cl-add-btn dim-ts-add-btn">＋ 添加测试源配置</button>`;
+        } else {
+            const fields = [
+                ['url',          'zip 下载地址；留空则回退使用上方 testSourceUrl'],
+                ['workDir',      '下载 + 解压目录（支持 ~ 开头，默认系统 Downloads）'],
+                ['rootDir',      '内容根目录 = zip 内顶层目录名（相对 workDir；"/" 开头视为绝对路径）'],
+                ['referenceDir', '参考图目录（相对内容根；留空则不绑定）'],
+                ['promptCsv',    '提示词 CSV（相对内容根；留空则不绑定）'],
+            ];
+            const rowsHtml = fields.map(([f, tip]) => {
+                const v = ts[f] || '';
+                const valHtml = admin
+                    ? `<span class="dim-ts-val dim-ts-editable${v ? '' : ' dim-card-placeholder'}" data-ts-field="${f}" title="${escHtml(tip)}；点击编辑">${escHtml(v || '（未填写）')}</span>`
+                    : `<span class="dim-ts-val${v ? '' : ' dim-card-placeholder'}">${escHtml(v || '—')}</span>`;
+                return `<div class="dim-ts-row"><span class="dim-ts-fname" title="${escHtml(tip)}">${f}</span>${valHtml}</div>`;
+            }).join('');
+
+            const lanes = Array.isArray(ts.laneDirs) ? ts.laneDirs : [];
+            const laneChips = lanes.map((d, i) =>
+                `<span class="dim-ts-lane-chip">${escHtml(d)}${admin ? `<button class="dim-ts-lane-del" data-lane-idx="${i}" title="移除该路">✕</button>` : ''}</span>`
+            ).join('');
+            const laneAddHtml = admin
+                ? `<input class="dim-ts-lane-input" placeholder="目录名，如 C" title="回车或点 ＋ 添加一路"><button class="dim-ts-lane-add" title="添加一路">＋</button>`
+                : '';
+            const lanesRow = `<div class="dim-ts-row">
+                <span class="dim-ts-fname" title="参与对比的子目录（相对内容根），按顺序对应客户端第 1..N 路">laneDirs</span>
+                <span class="dim-ts-lanes">${laneChips}${laneAddHtml}</span>
+            </div>`;
+
+            bodyHtml = rowsHtml + lanesRow;
+        }
+
+        return `<div class="dim-ts-section dim-checklist-section">
+            <div class="dim-cl-header dim-ts-header">
+                <span class="dim-cl-title">📦 测试源</span>
+                <span class="dim-cl-subtitle">客户端点「接受」后自动：下载 → 解压 → 导入对比 → 绑定参考图/提示词 → 进入打分</span>
+                ${delCfgBtn}
+            </div>
+            <div class="dim-cl-body dim-ts-body">
+                ${bodyHtml}
+            </div>
+        </div>`;
+    }
+
+    /** 就地重渲染测试源分区（避免整页刷新打断其他编辑焦点） */
+    function refreshTestSourceSection() {
+        let data;
+        try { data = JSON.parse(dimRawData); } catch (_) { return; }
+        const sec = dimView.querySelector('.dim-ts-section');
+        if (!sec) return;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = renderTestSourceSection(data, isLoggedIn());
+        sec.replaceWith(tmp.firstElementChild);
+        bindTestSourceEvents();
+    }
+
+    /** 修改 testSource 并持久化 + 就地刷新分区 */
+    async function mutateTestSource(mutator) {
+        let latest;
+        try { latest = JSON.parse(dimRawData); } catch (_) { return; }
+        if (!latest.testSource || typeof latest.testSource !== 'object') latest.testSource = {};
+        mutator(latest.testSource, latest);
+        await persistDimData(latest);
+        refreshTestSourceSection();
+    }
+
+    /** testSource 单字段行内编辑（url / workDir / rootDir / referenceDir / promptCsv） */
+    function startTsFieldEdit(el) {
+        if (el.querySelector('input')) return;
+        const field = el.dataset.tsField;
+        let data;
+        try { data = JSON.parse(dimRawData); } catch (_) { return; }
+        const ts = data.testSource || {};
+        const currentVal = ts[field] || '';
+        const placeholders = {
+            url:          'https://.../bench_xxx.zip（留空回退 testSourceUrl）',
+            workDir:      '~/Downloads',
+            rootDir:      'bench_xxx（zip 内顶层目录名）',
+            referenceDir: 'first_frames',
+            promptCsv:    'prompt.csv',
+        };
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'dim-meta-inline-input';
+        input.value = currentVal;
+        input.placeholder = placeholders[field] || '';
+        el.innerHTML = '';
+        el.appendChild(input);
+        input.focus();
+        input.select();
+        input.addEventListener('blur', () => {
+            const newVal = input.value.trim();
+            if ((currentVal || '') === newVal) { refreshTestSourceSection(); return; }
+            mutateTestSource(ts2 => {
+                if (newVal) ts2[field] = newVal; else delete ts2[field];
+            });
+        });
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') { refreshTestSourceSection(); }
+        });
+    }
+
+    /** 测试源分区事件绑定（管理员） */
+    function bindTestSourceEvents() {
+        if (!isLoggedIn()) return;
+        // 字段行内编辑
+        dimView.querySelectorAll('.dim-ts-editable').forEach(el => {
+            el.addEventListener('click', (e) => { e.stopPropagation(); startTsFieldEdit(el); });
+        });
+        // 添加配置（带与客户端一致的默认结构）
+        const addBtn = dimView.querySelector('.dim-ts-add-btn');
+        if (addBtn) addBtn.addEventListener('click', () => {
+            mutateTestSource(ts => {
+                ts.url = ts.url || '';
+                ts.workDir = ts.workDir || '~/Downloads';
+                ts.rootDir = ts.rootDir || '';
+                ts.laneDirs = Array.isArray(ts.laneDirs) ? ts.laneDirs : ['A', 'B'];
+                ts.referenceDir = ts.referenceDir || 'first_frames';
+                ts.promptCsv = ts.promptCsv || 'prompt.csv';
+            });
+        });
+        // 移除整个配置
+        const delCfg = dimView.querySelector('.dim-ts-delcfg-btn');
+        if (delCfg) delCfg.addEventListener('click', async () => {
+            if (!confirm('确定移除测试源配置？客户端点「接受」后将不再自动下载/导入。')) return;
+            let latest;
+            try { latest = JSON.parse(dimRawData); } catch (_) { return; }
+            delete latest.testSource;
+            await persistDimData(latest);
+            refreshTestSourceSection();
+        });
+        // lane 删除
+        dimView.querySelectorAll('.dim-ts-lane-del').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const i = +btn.dataset.laneIdx;
+                mutateTestSource(ts => {
+                    if (Array.isArray(ts.laneDirs)) ts.laneDirs.splice(i, 1);
+                });
+            });
+        });
+        // lane 添加（按钮 / 回车）
+        const laneInput = dimView.querySelector('.dim-ts-lane-input');
+        const laneAdd = dimView.querySelector('.dim-ts-lane-add');
+        const commitLane = () => {
+            if (!laneInput) return;
+            const v = (laneInput.value || '').trim().replace(/^\/+|\/+$/g, '');
+            if (!v) return;
+            mutateTestSource(ts => {
+                if (!Array.isArray(ts.laneDirs)) ts.laneDirs = [];
+                if (!ts.laneDirs.includes(v)) ts.laneDirs.push(v);
+            });
+        };
+        if (laneAdd) laneAdd.addEventListener('click', commitLane);
+        if (laneInput) laneInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); commitLane(); }
+        });
+    }
+
     // ── 卡片可视化编辑：事件绑定 ──
     function bindCardEdit(obj) {
         if (!isLoggedIn()) return;
@@ -1125,6 +1302,9 @@
 
         // 等级列左右拖拽排序
         _bindLevelDragSort(null);
+
+        // 测试源自动化配置区事件绑定
+        bindTestSourceEvents();
 
         // 添加维度
         const addDimBtn = dimView.querySelector('.dim-add-dim-btn');
