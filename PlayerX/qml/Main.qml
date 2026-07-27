@@ -1797,23 +1797,6 @@ ApplicationWindow {
                 anchors.right: parent.right
 
                 // 打开文件夹按钮（下载完成后显示）
-                Rectangle {
-                    width: 96; height: 28; radius: 4
-                    visible: testSourceDownloadDialog._status === "done" && testSourceDownloadDialog._savePath.length > 0
-                    color: openFolderMouse.containsMouse ? "#1a5cd4" : "#0a64f0"
-                    Text { anchors.centerIn: parent; text: "打开文件夹"; color: "#ffffff"; font.pixelSize: 12 }
-                    MouseArea {
-                        id: openFolderMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (typeof Fs !== "undefined")
-                                Fs.revealInFileManager(testSourceDownloadDialog._savePath)
-                        }
-                    }
-                }
-
                 // 关闭按钮
                 Rectangle {
                     width: 72; height: 28; radius: 4
@@ -3310,6 +3293,66 @@ ApplicationWindow {
         return p
     }
 
+    // ── 重复下载检测 ──
+    // 判重依据（三重条件同时满足才允许"跳过下载"）：
+    //   ① 归一化后的 testSource 配置与上次完全一致（url/workDir/rootDir/laneDirs/referenceDirs/promptCsv）；
+    //   ② 上次的 zip 仍在磁盘上；
+    //   ③ 上次解压出的内容根目录仍在。
+    // 满足则弹「直接开始 / 重新下载 / 取消」；任一不满足（配置变了 / 产物被删）→ 静默走完整下载。
+    function _tsCanonical(ts) {
+        var refDirs = []
+        if (ts.referenceDirs && typeof ts.referenceDirs.length === "number") {
+            for (var i = 0; i < ts.referenceDirs.length; ++i) {
+                var s = String(ts.referenceDirs[i] || "").trim()
+                if (s.length > 0) refDirs.push(s)
+            }
+        } else {
+            var lr = String(ts.referenceDir || "").trim()
+            if (lr.length > 0) refDirs.push(lr)
+        }
+        var lanes = []
+        if (ts.laneDirs && typeof ts.laneDirs.length === "number") {
+            for (var j = 0; j < ts.laneDirs.length; ++j) {
+                var l = String(ts.laneDirs[j] || "").trim()
+                if (l.length > 0) lanes.push(l)
+            }
+        }
+        var workDir = root._tsExpandHome(String(ts.workDir || "").trim())
+        if (!workDir) workDir = (typeof Fs !== "undefined" ? Fs.downloadsDir() : "")
+        return JSON.stringify({
+            url: String(ts.url || "").trim(),
+            workDir: workDir,
+            rootDir: String(ts.rootDir || "").trim(),
+            laneDirs: lanes,
+            referenceDirs: refDirs,
+            promptCsv: String(ts.promptCsv || "").trim()
+        })
+    }
+
+    function _tsSaveLastAuto(st) {
+        try {
+            Rating.saveString("testSource/lastAuto", JSON.stringify({
+                canon: root._tsCanonical(st.ts),
+                zipPath: st.zipPath,
+                extractTarget: st.extractTarget
+            }))
+        } catch (e) {}
+    }
+    function _tsLoadLastAuto() {
+        try {
+            var raw = Rating.loadString("testSource/lastAuto", "")
+            return raw ? JSON.parse(raw) : null
+        } catch (e) { return null }
+    }
+
+    // 内容根绝对路径（与 _tsImportAndStart 的解析规则一致）
+    function _tsRootDirFor(ts, extractTarget) {
+        var rootRel = String(ts.rootDir || "").trim()
+        return rootRel.length > 0
+            ? (rootRel.charAt(0) === "/" ? rootRel : extractTarget + "/" + rootRel)
+            : extractTarget
+    }
+
     function _startTestSourceAutomation(ts, configName) {
         if (root._tsAuto) {
             console.warn("[TestSource] 已有自动化任务进行中，忽略本次触发")
@@ -3325,6 +3368,28 @@ ApplicationWindow {
         // zip 内顶层目录 test_auto/ 解压后落在 workDir/test_auto，
         // 不再额外多套一层与 zip 同名的目录）
         var extractTarget = workDir
+
+        // ── 重复下载检测：同配置 + zip 在 + 解压根在 → 弹「直接开始/重新下载」──
+        var canon = root._tsCanonical(ts)
+        var last = root._tsLoadLastAuto()
+        if (last && last.canon === canon
+                && Fs.fileExists(last.zipPath)
+                && Fs.isDirectoryPath(root._tsRootDirFor(ts, last.extractTarget))) {
+            console.log("[TestSource] 命中重复下载检测，询问用户:", fileName)
+            testSourceRedownloadDialog.openWith({
+                ts: ts, configName: configName,
+                fileName: fileName, zipPath: last.zipPath,
+                extractTarget: last.extractTarget
+            })
+            return
+        }
+
+        root._tsBeginDownload(ts, configName, fileName, zipPath, extractTarget)
+    }
+
+    // 真正开始下载（普通路径与「重新下载」强制路径共用）
+    function _tsBeginDownload(ts, configName, fileName, zipPath, extractTarget) {
+        var url = String(ts.url || "").trim()
         root._tsAuto = {
             ts: ts, configName: configName,
             zipPath: zipPath, extractTarget: extractTarget
@@ -3453,17 +3518,263 @@ ApplicationWindow {
                 testSourceDownloadDialog._statusText = err
                 return
             }
-            testSourceDownloadDialog._status = "done"
-            testSourceDownloadDialog._statusText = "已就绪，进入打分"
-            tsAutoCloseTimer.restart()
+            // 记录本次产物（配置指纹 + zip 路径 + 解压目标），供下次「跳过下载」判重
+            root._tsSaveLastAuto(st)
+            // 成功：静默关闭下载弹窗（直接进入打分界面），用轻 toast 代替"已就绪"弹窗；
+            // 弹窗只保留给下载/解压/导入过程和失败场景。
+            testSourceDownloadDialog.close()
+            updateToast.text = "✅ 测试源就绪，已进入打分"
+            updateToast.open()
         }
     }
 
-    // 自动化成功后短暂展示"已就绪"再自动收起下载弹窗
-    Timer {
-        id: tsAutoCloseTimer
-        interval: 800
-        onTriggered: testSourceDownloadDialog.close()
+    // ─── 测试源重复下载确认对话框 ─────────────────────────────────────
+    // 同一份 testSource 配置且 zip/解压产物都在时弹出：
+    //   [直接开始] 跳过下载/解压，直接绑定 + 导入 + 进入打分；
+    //   [重新下载] 强制走完整流水线（服务端内容更新时用）；
+    //   [取消]     什么都不做。
+    // 打开后启动 5 秒倒计时：期间点「重新下载」/「取消」中断；
+    // 倒计时归零自动走「直接开始」（不打断用户的连续工作流）。
+    Dialog {
+        id: testSourceRedownloadDialog
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        implicitWidth: 560
+
+        property var _pending: null
+        property int _countdown: 0
+        // 自动跳过时长（秒）
+        readonly property int autoSkipSeconds: 5
+
+        function openWith(data) {
+            _pending = data
+            _countdown = autoSkipSeconds
+            tsRedlSkipTimer.restart()
+            cdPulse.restart()
+            open()
+        }
+        onOpened: {
+            // 进度条需在布局完成后才有宽度：打开后再启动平滑缩减动画
+            cdProgressAnim.from = cdProgress.parent.width
+            cdProgressAnim.restart()
+        }
+        onClosed: {
+            tsRedlSkipTimer.stop()
+            cdPulse.stop()
+            cdProgressAnim.stop()
+        }
+
+        // 「直接开始」的实际动作（按钮点击与倒计时归零共用）
+        function startNow() {
+            tsRedlSkipTimer.stop()
+            close()
+            var st = _pending
+            if (!st) return
+            console.log("[TestSource] 跳过下载，直接导入:", st.fileName)
+            var d = testSourceDownloadDialog
+            d._url        = ""
+            d._fileName   = st.fileName
+            d._configName = st.configName
+            d._savePath   = st.zipPath
+            d._progress   = 1.0
+            d._status     = "downloading"
+            d._statusText = "跳过下载，正在导入…"
+            d.open()
+            var err = root._tsImportAndStart({ ts: st.ts }, st.extractTarget)
+            if (err.length > 0) {
+                d._status = "error"
+                d._statusText = err
+                return
+            }
+            // 跳过下载成功：同样静默关闭，轻提示代替"已就绪"弹窗
+            d.close()
+            updateToast.text = "✅ 测试源就绪，已进入打分"
+            updateToast.open()
+        }
+
+        // 倒计时：每秒 -1，归零自动「直接开始」
+        Timer {
+            id: tsRedlSkipTimer
+            interval: 1000
+            repeat: true
+            onTriggered: {
+                if (testSourceRedownloadDialog._countdown <= 1) {
+                    testSourceRedownloadDialog.startNow()
+                } else {
+                    testSourceRedownloadDialog._countdown -= 1
+                }
+            }
+        }
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+            Rectangle { z: -1; anchors.fill: parent; anchors.margins: -8; radius: parent.radius + 4; color: "transparent"; border.color: "#80000000"; border.width: 1; opacity: 0.45 }
+            Rectangle { z: -1; anchors.fill: parent; anchors.margins: -4; radius: parent.radius + 2; color: "transparent"; border.color: "#a0000000"; border.width: 1; opacity: 0.55 }
+        }
+
+        header: Rectangle {
+            color: "#26e8b339"          // 琥珀 15% 底，与倒计时卡片同色系
+            implicitHeight: 48
+            // 左侧琥珀强调条：让"已下载过"这个关键状态一眼可辨
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 4
+                color: "#e8b339"
+            }
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 18
+                anchors.verticalCenter: parent.verticalCenter
+                text: "📦 " + qsTr("测试源已下载过")
+                color: "#f5b83d"          // 琥珀强调色（重点信息）
+                font.pixelSize: 18
+                font.bold: true
+            }
+            Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 1; color: "#66e8b339" }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 14
+            Text {
+                Layout.fillWidth: true
+                text: testSourceRedownloadDialog._pending
+                      ? qsTr("「%1」此前已下载并解压完成，配置未变化。\n可直接开始（跳过下载）；若服务端内容已更新，请选「重新下载」。")
+                        .arg(testSourceRedownloadDialog._pending.fileName)
+                      : ""
+                color: "#c8c8cc"
+                font.pixelSize: 15
+                wrapMode: Text.WordWrap
+                lineHeight: 1.35
+            }
+            Text {
+                Layout.fillWidth: true
+                visible: testSourceRedownloadDialog._pending !== null
+                text: testSourceRedownloadDialog._pending ? testSourceRedownloadDialog._pending.zipPath : ""
+                color: "#7a7a84"
+                font.pixelSize: 12
+                elide: Text.ElideMiddle
+            }
+
+            // ── 动态倒计时提醒：大号跳秒（脉冲缩放）+ 平滑缩减进度条 ──
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: 74
+                radius: 8
+                color: "#26e8b339"          // 琥珀色 15% 底
+                border.color: "#66e8b339"
+                border.width: 1
+
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 12
+                    Text {
+                        id: cdNum
+                        text: testSourceRedownloadDialog._countdown
+                        color: "#e8b339"
+                        font.pixelSize: 34
+                        font.bold: true
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: qsTr("秒后将自动「直接开始」\n需要更新内容请点「重新下载」")
+                        color: "#e8c98a"
+                        font.pixelSize: 14
+                        lineHeight: 1.25
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                // 底部进度条：autoSkipSeconds 秒内从满格平滑缩减到 0
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 1
+                    height: 4
+                    radius: 2
+                    color: "transparent"
+                    clip: true
+                    Rectangle {
+                        id: cdProgress
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        color: "#e8b339"
+                        width: 0
+                    }
+                }
+            }
+
+            // 大号秒数脉冲动画（随倒计时循环）
+            SequentialAnimation {
+                id: cdPulse
+                loops: Animation.Infinite
+                NumberAnimation { target: cdNum; property: "scale"; to: 1.25; duration: 140; easing.type: Easing.OutCubic }
+                NumberAnimation { target: cdNum; property: "scale"; to: 1.0;  duration: 160; easing.type: Easing.InCubic }
+                PauseAnimation { duration: 700 }
+            }
+            // 进度条平滑缩减动画（时长 = 倒计时总秒数）
+            NumberAnimation {
+                id: cdProgressAnim
+                target: cdProgress
+                property: "width"
+                to: 0
+                duration: testSourceRedownloadDialog.autoSkipSeconds * 1000
+            }
+        }
+
+        footer: Rectangle {
+            color: "transparent"
+            implicitHeight: 64
+            Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 1; color: "#2a2a32" }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                anchors.topMargin: 14
+                anchors.bottomMargin: 14
+                spacing: 10
+                Item { Layout.fillWidth: true }
+                FlatButton {
+                    implicitWidth: 88
+                    implicitHeight: 34
+                    text: qsTr("取消")
+                    font.pixelSize: 14
+                    onClicked: testSourceRedownloadDialog.close()
+                }
+                FlatButton {
+                    implicitWidth: 108
+                    implicitHeight: 34
+                    text: qsTr("重新下载")
+                    textColor: "#e8b339"
+                    font.pixelSize: 14
+                    onClicked: {
+                        testSourceRedownloadDialog.close()
+                        var st = testSourceRedownloadDialog._pending
+                        if (!st) return
+                        console.log("[TestSource] 用户选择强制重新下载:", st.fileName)
+                        root._tsBeginDownload(st.ts, st.configName, st.fileName, st.zipPath, st.extractTarget)
+                    }
+                }
+                FlatButton {
+                    implicitWidth: 124
+                    implicitHeight: 34
+                    text: qsTr("直接开始 (%1s)").arg(testSourceRedownloadDialog._countdown)
+                    textColor: "#3fb950"   // 推荐动作 → 绿色文字
+                    font.pixelSize: 14
+                    onClicked: testSourceRedownloadDialog.startNow()
+                }
+            }
+        }
     }
 
     // 用户点击通知卡片后，应用所有待更新的远程配置
