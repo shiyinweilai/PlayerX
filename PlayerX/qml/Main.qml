@@ -1377,6 +1377,22 @@ ApplicationWindow {
     // ─── 任务更新通知卡片 ─────────────────────────────────────────────
     // 后台检测到远程配置有更新时浮现，用户点击后逐条应用，不阻塞任何操作。
     // 位置：左下角，常驻按钮上方。
+
+    // 全窗透明遮罩：卡片展开时点击卡片外任意位置即收起。
+    // 实现说明：Popup 在 overlay 层渲染，永远高于普通内容；该 MouseArea 以高 z
+    // 盖住窗口内其它元素（含铃铛按钮，避免"按下关闭→onClicked 又重开"的打架），
+    // 但始终位于 Popup 之下——点卡片内部正常交互，点外部任意处关闭。
+    // 滚轮事件 MouseArea 不处理，自然穿透到下层。
+    MouseArea {
+        id: taskUpdateDismissArea
+        anchors.fill: parent
+        z: 9999
+        visible: root._taskUpdateVisible
+        hoverEnabled: false
+        cursorShape: Qt.ArrowCursor
+        onClicked: root._taskUpdateVisible = false
+    }
+
     Popup {
         id: taskUpdateCard
         visible: root._taskUpdateVisible
