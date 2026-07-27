@@ -24,6 +24,39 @@ ApplicationWindow {
     title: "PlayerX"
     color: "#101012"
 
+    // 【Windows 标题栏一体化】无边框全自绘（FramelessWindowHint，VS Code 在 Windows 同款路线）。
+    // 注：曾尝试 Qt 6.9 ExpandedClientAreaHint，但 Windows QPA 把标题栏条内输入
+    // 全部按 HTCAPTION（拖拽）处理，菜单等交互控件收不到鼠标事件 → 改全自绘：
+    // 图标 / 菜单 / 自绘三键 / 拖拽 / 边缘缩放全在 QML（见 menuBar 块与下方），
+    // DWM 阴影与 Win11 圆角在 WinTitleBar.cpp 补回。macOS / Linux 不加此 flag。
+    flags: Qt.Window | (Qt.platform.os === "windows" ? Qt.FramelessWindowHint : 0)
+
+    // ─── Windows 无边框：边缘/角落缩放条（按下即进入系统原生缩放） ───
+    component ResizeEdge: MouseArea {
+        property int edges: 0
+        hoverEnabled: true
+        cursorShape: {
+            switch (edges) {
+            case Qt.LeftEdge:
+            case Qt.RightEdge:  return Qt.SizeHorCursor
+            case Qt.TopEdge:
+            case Qt.BottomEdge: return Qt.SizeVerCursor
+            case Qt.TopEdge | Qt.LeftEdge:
+            case Qt.BottomEdge | Qt.RightEdge: return Qt.SizeFDiagCursor
+            default:            return Qt.SizeBDiagCursor
+            }
+        }
+        onPressed: root.startSystemResize(edges)
+    }
+
+    // Windows 无边框：窗口左 / 右 / 下边缘 + 底部两角的缩放条
+    //（顶边与顶部两角在 menuBar 背景里，因为 menuBar 占据窗口 y=0 区域）
+    ResizeEdge { edges: Qt.LeftEdge;   anchors.left: parent.left;   anchors.top: parent.top; anchors.bottom: parent.bottom; width: 5;  z: 998 }
+    ResizeEdge { edges: Qt.RightEdge;  anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 5;  z: 998 }
+    ResizeEdge { edges: Qt.BottomEdge; anchors.left: parent.left;   anchors.right: parent.right; anchors.bottom: parent.bottom; height: 5; z: 998 }
+    ResizeEdge { edges: Qt.BottomEdge | Qt.LeftEdge;  anchors.left: parent.left;  anchors.bottom: parent.bottom; width: 12; height: 12; z: 999 }
+    ResizeEdge { edges: Qt.BottomEdge | Qt.RightEdge; anchors.right: parent.right; anchors.bottom: parent.bottom; width: 12; height: 12; z: 999 }
+
     // ─── 全局 ToolTip 主题（深色半透明 + 浅字 + 圆角，统一观感）──────────────
     // Qt 的 ToolTip.attached 共享同一个全局 popup 实例（QQuickToolTipAttached.sharedTip）。
     // 因此只要在窗口创建时一次性修改其 background.color 与 contentItem.color，
@@ -267,6 +300,26 @@ ApplicationWindow {
     menuBar: MenuBar {
         id: appMenuBar
 
+        // ─── Windows 标题栏模式 ────────────────────────────────────────
+        // 窗口已设 ExpandedClientAreaHint：menuBar 被布局在窗口 y=0，
+        // 即标题栏条内。把它撑满标题栏高度（32px，与 Qt 自绘的三枚
+        // 系统按钮等高），右侧 140px 留给系统按钮，菜单项垂直居中。
+        // macOS / Linux 保持原 26px 经典菜单栏。
+        readonly property bool inTitleBar: Qt.platform.os === "windows"
+        // 显式 height（不用 implicitHeight）：实测 implicitHeight 赋值在某些
+        // 场景下不生效（menuBar 高度变 0 → 子项居中错位/不可见），显式 height 最稳。
+        height: inTitleBar ? 32 : 26
+        topPadding: inTitleBar ? 3 : 0       // (32 - 26) / 2，菜单项与系统按钮垂直对齐
+        leftPadding: inTitleBar ? 36 : 0     // 让开 Qt 自绘标题栏左侧的窗口图标区
+        rightPadding: inTitleBar ? 140 : 0   // 给右侧系统三键留位
+
+        Component.onCompleted: {
+            // 标题栏模式：内部 ListView 不再拦截空白区鼠标事件，
+            // 让事件穿透到 background 上的拖拽 / 双击处理器
+            if (inTitleBar && contentItem && contentItem.interactive !== undefined)
+                contentItem.interactive = false
+        }
+
         // ─── MenuBar 下拉菜单样式 ───────────────────────────────────────
         // Windows/Linux：使用同目录下的 DarkMenu / DarkMenuItem / DarkMenuSeparator
         // 三件套，呈现半透明深色 + 白字 + 蓝底 hover，与全局 ToolTip / 通知
@@ -280,7 +333,88 @@ ApplicationWindow {
 
         background: Rectangle {
             implicitHeight: 26
-            color: "#1a1a1d"
+            // 标题栏模式与窗口底色一致，系统三键浮在上面看不出接缝
+            color: appMenuBar.inTitleBar ? "#101012" : "#1a1a1d"
+
+            // ─── 标题栏模式（Windows 无边框）：空白处按住拖动窗口、双击最大化/还原 ───
+            // 事件来源：菜单项以外的空白（内部 ListView 已设 interactive:false，
+            // 事件穿透到这里）；自绘三键区域有各自 MouseArea，不会误触拖拽。
+            DragHandler {
+                enabled: appMenuBar.inTitleBar
+                target: null
+                onActiveChanged: if (active) root.startSystemMove()
+            }
+            TapHandler {
+                enabled: appMenuBar.inTitleBar
+                onDoubleTapped: {
+                    root.visibility = (root.visibility === Window.Maximized)
+                                      ? Window.Windowed : Window.Maximized
+                }
+            }
+
+            // ─── 无边框标题栏内容（仅 Windows）：窗口图标在 menuBar 块外，
+            //     以 parent: appMenuBar 挂载（见下方），不放在 background 延迟组件里 ───
+
+            // ─── 无边框标题栏内容（仅 Windows）：自绘窗口控制三键（右侧） ───
+            Row {
+                visible: appMenuBar.inTitleBar
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                z: 10
+
+                // 最小化
+                Rectangle {
+                    id: capMinBtn
+                    width: 46
+                    height: parent.height
+                    color: capMinMa.containsMouse ? "#2a2a32" : "transparent"
+                    Rectangle { width: 10; height: 1.5; anchors.centerIn: parent; color: "#cfcfd2" }
+                    MouseArea { id: capMinMa; anchors.fill: parent; hoverEnabled: true; onClicked: root.showMinimized() }
+                }
+                // 最大化 / 还原
+                Rectangle {
+                    id: capMaxBtn
+                    width: 46
+                    height: parent.height
+                    color: capMaxMa.containsMouse ? "#2a2a32" : "transparent"
+                    // 最大化图标：单方框
+                    Rectangle {
+                        visible: root.visibility !== Window.Maximized
+                        width: 10; height: 10; anchors.centerIn: parent
+                        color: "transparent"; border.color: "#cfcfd2"; border.width: 1.2
+                    }
+                    // 还原图标：前后双方框（后框右上、前框左下）
+                    Rectangle {
+                        visible: root.visibility === Window.Maximized
+                        x: 21; y: 8; width: 9; height: 9
+                        color: capMaxBtn.color; border.color: "#cfcfd2"; border.width: 1.2
+                    }
+                    Rectangle {
+                        visible: root.visibility === Window.Maximized
+                        x: 17; y: 13; width: 9; height: 9
+                        color: capMaxBtn.color; border.color: "#cfcfd2"; border.width: 1.2
+                    }
+                    MouseArea { id: capMaxMa; anchors.fill: parent; hoverEnabled: true
+                        onClicked: root.visibility = (root.visibility === Window.Maximized) ? Window.Windowed : Window.Maximized }
+                }
+                // 关闭
+                Rectangle {
+                    id: capCloseBtn
+                    width: 46
+                    height: parent.height
+                    color: capCloseMa.containsMouse ? "#e81123" : "transparent"
+                    Rectangle { width: 12; height: 1.5; anchors.centerIn: parent; rotation: 45;  color: capCloseMa.containsMouse ? "#ffffff" : "#cfcfd2" }
+                    Rectangle { width: 12; height: 1.5; anchors.centerIn: parent; rotation: -45; color: capCloseMa.containsMouse ? "#ffffff" : "#cfcfd2" }
+                    MouseArea { id: capCloseMa; anchors.fill: parent; hoverEnabled: true; onClicked: root.close() }
+                }
+            }
+
+            // ─── 无边框：窗口顶边 + 顶部左右角的缩放条（其余边在 root 层） ───
+            ResizeEdge { edges: Qt.TopEdge; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.leftMargin: 10; anchors.rightMargin: 10; height: 5; z: 20; visible: appMenuBar.inTitleBar }
+            ResizeEdge { edges: Qt.TopEdge | Qt.LeftEdge;  anchors.left: parent.left;  anchors.top: parent.top; width: 10; height: 10; z: 21; visible: appMenuBar.inTitleBar }
+            ResizeEdge { edges: Qt.TopEdge | Qt.RightEdge; anchors.right: parent.right; anchors.top: parent.top; width: 10; height: 10; z: 21; visible: appMenuBar.inTitleBar }
+
             // 底部 1px 细分隔线，与下方内容区过渡
             Rectangle {
                 anchors.left: parent.left
@@ -295,6 +429,8 @@ ApplicationWindow {
             id: mbItem
             implicitHeight: 26
             padding: 0
+            // 调试：标题栏菜单输入可达性（Windows 无边框排查用）
+            onPressed: console.log("[TitleBar] 菜单按钮按下:", mbItem.text)
             leftPadding: 10
             rightPadding: 10
             topPadding: 0
@@ -587,6 +723,36 @@ ApplicationWindow {
                 text: qsTr("关于 PlayerX")
                 onTriggered: aboutDialog.open()
             }
+        }
+    }
+
+    // ─── 无边框标题栏窗口图标（仅 Windows，左上角） ───────────────────
+    // 挂载到 root.contentItem（窗口级坐标系），不放 MenuBar 里：
+    // 实测 MenuBar 在菜单被原生接管时会被框架剔除为 height=0（mac 实锤），
+    // 挂在它里面的元素会错位/不可见；挂窗口级 contentItem 与 menuBar 内部
+    // 状态完全解耦，x/y 即窗口坐标（y=6 落在 32px 标题栏条内）。
+    // MenuBar 的 leftPadding(36) 已为图标留位，互不重叠。
+    Image {
+        parent: root.contentItem
+        visible: Qt.platform.os === "windows"
+        x: 10
+        y: 6
+        width: 20
+        height: 20
+        z: 100
+        // 诊断（Windows 图标排查，定位后删除）：
+        // onStatusChanged 故意声明在 source 之前，qrc 同步加载也能捕获状态变化
+        onStatusChanged: console.log("[IconDbg] status:", status, "(0=Null 1=Ready 3=Error)")
+        source: ":/icon/app.png"
+        // 1024px 源图按 64px 解码：避免弱 GPU 大纹理问题，缩放质量更好
+        sourceSize: Qt.size(64, 64)
+        fillMode: Image.PreserveAspectFit
+        Component.onCompleted: {
+            var g = mapToGlobal(0, 0)
+            console.log("[IconDbg] created: visible=" + visible
+                        + " global=(" + g.x + "," + g.y + ")"
+                        + " menuBar h=" + appMenuBar.height
+                        + " menuBar visible=" + appMenuBar.visible)
         }
     }
 
@@ -1480,6 +1646,9 @@ ApplicationWindow {
                     width: 320
                     // 高度 = 两行 11px 文字 + 1×spacing(4) + 上下各 8px 边距 ≈ 38
                     height: 38
+                    // 点「接受」后的即时反馈状态：按钮变 … 并禁用，
+                    // 用于区分"点击没注册"与"网络拉取中"，应用完成后复位
+                    property bool _applying: false
                     // 该项是否"有更新"（在 _pendingRemoteConfig 中）：有→显示忽略+应用；无→仅应用
                     readonly property bool _isPending: {
                         var k = (modelData.mode || "") + ":" + (modelData.configName || "")
@@ -1556,11 +1725,12 @@ ApplicationWindow {
                         // 高度 = 两行文字（11+11）+ spacing 4 ≈ 28，稍加余量到 28
                         height: 28
                         radius: 4
-                        color: applyMouse.containsMouse ? "#0db092" : "#0fa085"
+                        color: rowItem._applying ? "#1d6b5c"
+                              : (applyMouse.containsMouse ? "#0db092" : "#0fa085")
 
                         Text {
                             anchors.centerIn: parent
-                            text: "接受"
+                            text: rowItem._applying ? "…" : "接受"
                             color: "#ffffff"
                             font.pixelSize: 11
                             font.bold: true
@@ -1569,9 +1739,16 @@ ApplicationWindow {
                         MouseArea {
                             id: applyMouse
                             anchors.fill: parent
+                            enabled: !rowItem._applying
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root._applyRemoteConfigItem(modelData)
+                            onPressed: console.log("[ApplyDebug] 接受按钮 onPressed（输入事件已到达按钮）")
+                            onClicked: {
+                                rowItem._applying = true
+                                root._applyRemoteConfigItem(modelData, function() {
+                                    rowItem._applying = false
+                                })
+                            }
                         }
                     }
 
@@ -3811,8 +3988,9 @@ ApplicationWindow {
     // 应用单条远程配置，并自动切换到对应评分模式
     // 【关键】用户点应用时【现拉一次】远程最新数据，用最新 obj 而不是差异检测阶段缓存的 item.obj
     // 保证"远程是啥，本地就是啥"
-    function _applyRemoteConfigItem(item) {
-        if (!item) return
+    // onDone：应用流程结束（成功/失败/兜底）后的回调，用于复位按钮的"应用中"状态
+    function _applyRemoteConfigItem(item, onDone) {
+        if (!item) { if (onDone) onDone(); return }
         var configName = item.configName || ""
         var mode = item.mode || ""
         console.log("[ApplyDebug] 点击应用 → mode:", mode, "configName:", configName,
@@ -3828,6 +4006,8 @@ ApplicationWindow {
             try {
                 if (!obj || !Array.isArray(obj.dimensions)) {
                     console.warn("[ConfigCheck] 应用失败：配置内容无效")
+                    root._showRatingWarn("应用失败：配置内容无效", 2200)
+                    if (onDone) onDone()
                     return
                 }
                 console.log("[ApplyDebug] _doApply → mode:", mode, "configName:", configName,
@@ -3943,9 +4123,16 @@ ApplicationWindow {
                 if (_tsObj && typeof _tsObj === "object" && typeof _tsObj.url === "string" && _tsObj.url.trim().length > 0) {
                     console.log("[TestSource] 命中 testSource 自动化配置, configName =", configName)
                     root._startTestSourceAutomation(_tsObj, configName)
+                } else {
+                    // 无测试源配置：不会自动下载/导入/跳转 —— 中央大浮层明确告知，
+                    // 引导手动导入（否则用户会以为"接受没反应"，Windows 实测反馈）。
+                    root._showRatingWarn("已应用配置「" + (configName || mode) + "」", 3600, 18,
+                                         "未配置测试源，请手动导入视频/文件夹开始评分")
                 }
+                if (onDone) onDone()
             } catch (e) {
                 console.warn("[ConfigCheck] 应用单条配置失败：", e)
+                if (onDone) onDone()
             }
         }
 
@@ -5102,6 +5289,8 @@ ApplicationWindow {
     //   - ratingToastKind  : "score" / "clear" / "warn"，决定背景 & 边框色
     //   - ratingToastScore : 1～5（kind=="score" 时有意义），决定主色调
     property string ratingToastText: ""
+    // 可选第二行（与第一行异色：第一行白、第二行用 kind 主色），空串=单行
+    property string ratingToastText2: ""
     property string ratingToastKind: "score"
     property int    ratingToastScore: 0
     function _showRatingToast(idx, score) {
@@ -5110,15 +5299,20 @@ ApplicationWindow {
         var cleared = (score === 0)
         ratingToastText = (cleared ? "已清除评分" : stars)
                           + "  \u00b7  \u901a\u9053 " + (idx + 1)
+        ratingToastText2 = ""   // 单行打分快闪，清掉可能残留的第二行
         ratingToastKind  = cleared ? "clear" : "score"
         ratingToastScore = score
         ratingToast.show()
     }
-    function _showRatingWarn(text) {
+    // durationMs：可选显示时长（默认快闪 880ms；长文案提示传入更长时长）
+    // fontPx：可选字号（默认 22；两行提示建议 18）
+    // text2：可选第二行（与第一行异色：第一行浅白、第二行警示橙）
+    function _showRatingWarn(text, durationMs, fontPx, text2) {
         ratingToastText  = text
+        ratingToastText2 = (typeof text2 === "string") ? text2 : ""
         ratingToastKind  = "warn"
         ratingToastScore = 0
-        ratingToast.show()
+        ratingToast.show(durationMs, fontPx)
     }
 
     function ratingAt(idx, dimKey) {
@@ -5402,6 +5596,8 @@ ApplicationWindow {
 
                 // 有待更新：切换面板；无待更新：主动抓取一次并打开卡片展示全部配置
                 property bool _checking: false
+
+                onPressed: console.log("[TaskUpdate] 铃铛按钮按下（输入事件已到达按钮）")
 
                 onClicked: {
                     // 卡片已展开 → 再次点击直接收起（无论有无更新）
@@ -9353,7 +9549,14 @@ ApplicationWindow {
             visible: opacity > 0.01
             z: 999
 
-            function show() {
+            // 字号：默认 22（打分快闪）；长文案提示由 show() 第二参数调小
+            property int toastFontPx: 22
+
+            // durationMs：可选显示时长（默认 880ms 快闪；重要提示可传更长）
+            // fontPx：可选字号（默认 22；两行长文案建议 16，更精致不撑满屏）
+            function show(durationMs, fontPx) {
+                hideTimer.interval = (typeof durationMs === "number" && durationMs > 0) ? durationMs : 880
+                toastFontPx = (typeof fontPx === "number" && fontPx > 0) ? fontPx : 22
                 hideTimer.restart()
                 fadeIn.restart()
             }
@@ -9381,8 +9584,8 @@ ApplicationWindow {
                 color: "#e61b1b22"
                 border.color: ratingToast._accent
                 border.width: 2
-                implicitWidth:  toastLabel.implicitWidth + 40
-                implicitHeight: toastLabel.implicitHeight + 24
+                implicitWidth:  toastContent.implicitWidth + 40
+                implicitHeight: toastContent.implicitHeight + 24
 
                 // 内部柔和色晕：用与边框同色、低透明度的 Rectangle 模拟染色背景。
                 Rectangle {
@@ -9393,16 +9596,36 @@ ApplicationWindow {
                     opacity: 0.16
                 }
 
-                Label {
-                    id: toastLabel
+                Column {
+                    id: toastContent
                     anchors.centerIn: parent
-                    text: root.ratingToastText
-                    color: ratingToast._accent
-                    font.pixelSize: 22
-                    font.bold: true
-                    // 轻微阴影让彩色文字在染色背景上仍足够锐利
-                    style: Text.Raised
-                    styleColor: "#000000"
+                    spacing: 7   // 两行间隔稍大，阅读更舒适
+
+                    Label {
+                        id: toastLabel
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: root.ratingToastText
+                        // 有两行时第一行用浅色（标题感）；单行保持 kind 主色（打分快闪原样）
+                        color: root.ratingToastText2.length > 0 ? "#f0f0f3" : ratingToast._accent
+                        font.pixelSize: ratingToast.toastFontPx
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        // 轻微阴影让彩色文字在染色背景上仍足够锐利
+                        style: Text.Raised
+                        styleColor: "#000000"
+                    }
+                    Label {
+                        id: toastLabel2
+                        visible: text.length > 0
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: root.ratingToastText2
+                        color: ratingToast._accent   // 第二行用 kind 主色（warn=橙）
+                        font.pixelSize: ratingToast.toastFontPx
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        style: Text.Raised
+                        styleColor: "#000000"
+                    }
                 }
             }
             NumberAnimation on opacity {

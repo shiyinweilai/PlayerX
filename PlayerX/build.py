@@ -1036,6 +1036,9 @@ def deploy_qt_for_windows(qt_dir: str, install_dir: str):
         # networkinformation 提供 "在线/离线" 检测，Qt 6.6+ 上 Network 模块
         # 在某些路径会去 load 这些后端；带上以防万一（仅当目录存在时拷贝）
         "networkinformation": ["*"],
+        # QML LocalStorage（车道缓存兜底 KV）走 QSQLITE 驱动；
+        # 漏部署会报 "can not load requested driver 'QSQLITE'"
+        "sqldrivers": ["qsqlite.dll"],
     }
     for group, dlls in plugin_groups.items():
         sg = os.path.join(plugins_src, group)

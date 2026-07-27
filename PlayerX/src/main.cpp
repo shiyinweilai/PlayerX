@@ -24,6 +24,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
+#include <QQuickWindow>
 #include <QIcon>
 #include <QDateTime>
 #include <QDir>
@@ -52,6 +53,12 @@ extern "C" {
 // 实现在 src/qt/MacAppearance.mm（Objective-C++）：
 // 强制 NSApp 深色外观，让系统标题栏 / 原生菜单 / 原生对话框渲染为深色。
 void applyMacDarkAppearance();
+#endif
+
+#if defined(Q_OS_WIN)
+// 实现在 src/qt/WinTitleBar.cpp：
+// DWM 沉浸式深色标题栏 + Win11 精确配色（#101012 底色 / 浅色文字）。
+void applyWindowsDarkTitleBar(QQuickWindow* win);
 #endif
 
 namespace {
@@ -225,6 +232,14 @@ int main(int argc, char* argv[]) {
         []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
 
     engine.loadFromModule("PlayerX", "Main");
+
+#if defined(Q_OS_WIN)
+    // QML 窗口 visible:true，load 返回时原生句柄已存在，立即深色化标题栏。
+    const QObjectList rootObjs = engine.rootObjects();
+    if (!rootObjs.isEmpty()) {
+        applyWindowsDarkTitleBar(qobject_cast<QQuickWindow*>(rootObjs.first()));
+    }
+#endif
 
     int rc = app.exec();
     avformat_network_deinit();

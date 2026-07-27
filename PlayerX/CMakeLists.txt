@@ -120,6 +120,8 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     $<$<NOT:$<PLATFORM_ID:Darwin>>:src/qt/ScreenProbe.cpp>
     # macOS 外观定制（强制 Dark Aqua：系统标题栏 / 原生菜单深色化）
     $<$<PLATFORM_ID:Darwin>:src/qt/MacAppearance.mm>
+    # Windows 标题栏深色化（DWM 沉浸式深色 + Win11 精确配色）
+    $<$<PLATFORM_ID:Windows>:src/qt/WinTitleBar.cpp>
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
@@ -218,6 +220,8 @@ elseif(WIN32)
     target_link_options(PlayerX PRIVATE "-lmingw32")
     target_link_libraries(PlayerX PRIVATE
         ws2_32 bcrypt secur32 crypt32 ncrypt winmm
+        # DwmSetWindowAttribute（WinTitleBar.cpp 深色标题栏）
+        dwmapi
     )
 endif()
 
