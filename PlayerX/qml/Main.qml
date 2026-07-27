@@ -3293,7 +3293,8 @@ ApplicationWindow {
     //     "rootDir":      "bench_xxx",                   // 可选：内容根目录（相对 workDir，"/" 开头
     //                                                    //   视为绝对路径；即 zip 内的顶层目录名）
     //     "laneDirs":     ["A", "B"],                    // 必填：参与对比的子目录（按顺序对应第 1..N 路）
-    //     "referenceDir": "first_frames",                // 可选：参考图目录（相对内容根；跟随对比组）
+    //     "referenceDirs":["first_frames","second_frames"], // 可选：参考图目录（相对内容根，最多 2 个，
+    //                                                    //   按顺序对应侧栏两个参考图窗口；旧写法 referenceDir 单串仍兼容）
     //     "promptCsv":    "prompt.csv"                   // 可选：提示词 CSV（相对内容根）
     //   }
     // 流水线：下载（复用下载弹窗显示进度）→ 解压（Fs.extractZipAsync）→
@@ -3372,24 +3373,43 @@ ApplicationWindow {
             lanes.push(p)
         }
 
-        // 绑定参考图（跟随对比组）与提示词 CSV —— 绑定键是每路自己的文件夹
-        var refRel = String(ts.referenceDir || "").trim()
+        // 参考图目录列表：新写法 referenceDirs（数组，最多 2 个，对应侧栏两个参考图窗口）；
+        // 兼容旧写法 referenceDir（单字符串，视为第 1 个）。
+        var refDirs = []
+        if (ts.referenceDirs && typeof ts.referenceDirs.length === "number") {
+            for (var ri = 0; ri < ts.referenceDirs.length; ++ri) {
+                var rs = String(ts.referenceDirs[ri] || "").trim()
+                if (rs.length > 0) refDirs.push(rs)
+            }
+        } else {
+            var legacyRef = String(ts.referenceDir || "").trim()
+            if (legacyRef.length > 0) refDirs.push(legacyRef)
+        }
         var csvRel = String(ts.promptCsv || "").trim()
-        var refAbs = refRel.length > 0 ? rootDir + "/" + refRel : ""
+        var refAbs1 = refDirs.length > 0 ? rootDir + "/" + refDirs[0] : ""
+        var refAbs2 = refDirs.length > 1 ? rootDir + "/" + refDirs[1] : ""
         var csvAbs = csvRel.length > 0 ? rootDir + "/" + csvRel : ""
-        var bindRef = refAbs.length > 0 && Fs.isDirectoryPath(refAbs)
+        var bindRef1 = refAbs1.length > 0 && Fs.isDirectoryPath(refAbs1)
+        var bindRef2 = refAbs2.length > 0 && Fs.isDirectoryPath(refAbs2)
         var bindCsv = csvAbs.length > 0 && Fs.fileExists(csvAbs)
+        // 绑定参考图（槽位 1/2）与提示词 CSV —— 绑定键是每路自己的文件夹
         for (var k = 0; k < lanes.length; ++k) {
-            if (bindRef) Reference.setReferenceFolder(lanes[k], refAbs)
+            if (bindRef1) Reference.setReferenceFolder(lanes[k], refAbs1)
+            if (bindRef2) Reference.setReferenceFolder2(lanes[k], refAbs2)
             if (bindCsv) Reference.setReferenceCsv(lanes[k], csvAbs)
         }
         console.log("[TestSource] 根目录:", rootDir, " 路:", lanes.join(" | "),
-            " 参考图:", bindRef ? refAbs : "(无)", " CSV:", bindCsv ? csvAbs : "(无)")
+            " 参考图1:", bindRef1 ? refAbs1 : "(无)",
+            " 参考图2:", bindRef2 ? refAbs2 : "(无)",
+            " CSV:", bindCsv ? csvAbs : "(无)")
 
         // 导入并直接启动（loadFolders：仅勾选本次导入的路 → start → 进入打分界面；
         // 路满时会先自动清理"文件夹已不存在"的死路再重试）
         if (!multiGroupDialog.loadFolders(lanes))
             return "导入失败：目录里没有可播放的视频，或路数已达 9 路上限"
+        // 绑定到了参考图或提示词 → 自动展开左侧参考图侧栏 + 底部提示词栏
+        // （等价于用户手动点左下角「图片」按钮）
+        if (bindRef1 || bindRef2 || bindCsv) root.refSidebarVisible = true
         return ""
     }
 

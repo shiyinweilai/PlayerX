@@ -65,14 +65,17 @@
     }
   ],
   "testSource": {
-    "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/test_auto.zip",
+    "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/test_auto2.zip",
     "workDir": "~/Downloads",
-    "rootDir": "test_auto",
+    "rootDir": "test_auto2",
     "laneDirs": [
       "A",
       "B"
     ],
-    "referenceDir": "first_frames",
-    "promptCsv": "prompt.csv"
+    "promptCsv": "prompt.csv",
+    "referenceDirs": [
+      "first_frames",
+      "second_frames"
+    ]
   }
 }

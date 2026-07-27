@@ -2393,6 +2393,11 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     font-size: 13px;
     line-height: 1.6;
 }
+.dim-ts-ref-cap {
+    font-size: 12px;
+    color: var(--text-dim, #6f707a);
+    padding: 0 4px;
+}
 
 /* ─── Checklist 行内编辑输入框：宽高完全占满 JS 锁定的宿主 span ─── */
 .dim-cl-inline-input {

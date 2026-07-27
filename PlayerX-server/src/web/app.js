@@ -1097,7 +1097,6 @@
                 ['url',          'zip 下载地址（必填，点击「接受」后自动下载并解压）'],
                 ['workDir',      '下载 + 解压目录（支持 ~ 开头，默认系统 Downloads）'],
                 ['rootDir',      '内容根目录 = zip 内顶层目录名（相对 workDir；"/" 开头视为绝对路径）'],
-                ['referenceDir', '参考图目录（相对内容根；留空则不绑定）'],
                 ['promptCsv',    '提示词 CSV（相对内容根；留空则不绑定）'],
             ];
             const rowsHtml = fields.map(([f, tip]) => {
@@ -1120,7 +1119,23 @@
                 <span class="dim-ts-lanes">${laneChips}${laneAddHtml}</span>
             </div>`;
 
-            bodyHtml = rowsHtml + lanesRow;
+            // 参考图目录：新写法 referenceDirs（数组，最多 2 个，对应客户端两个参考图窗口）；
+            // 兼容展示旧写法 referenceDir（单字符串，视为第 1 个；下次编辑时自动迁移为数组）。
+            const refDirs = Array.isArray(ts.referenceDirs)
+                ? ts.referenceDirs.filter(d => typeof d === 'string' && d.trim())
+                : (ts.referenceDir && String(ts.referenceDir).trim() ? [String(ts.referenceDir).trim()] : []);
+            const refChips = refDirs.map((d, i) =>
+                `<span class="dim-ts-lane-chip dim-ts-ref-chip" title="第 ${i + 1} 张参考图窗口">${escHtml(d)}${admin ? `<button class="dim-ts-ref-del" data-ref-idx="${i}" title="移除该参考图目录">✕</button>` : ''}</span>`
+            ).join('');
+            const refAddHtml = (admin && refDirs.length < 2)
+                ? `<input class="dim-ts-ref-input" placeholder="目录名，如 second_frames" title="回车或点 ＋ 添加（最多 2 个，对应两个参考图窗口）"><button class="dim-ts-ref-add" title="添加参考图目录">＋</button>`
+                : (admin ? `<span class="dim-ts-ref-cap" title="客户端只有两个参考图窗口">（已达 2 张上限）</span>` : '');
+            const refsRow = `<div class="dim-ts-row">
+                <span class="dim-ts-fname" title="参考图目录（相对内容根），按顺序对应客户端第 1/2 个参考图窗口；留空则不绑定">referenceDirs</span>
+                <span class="dim-ts-lanes">${refChips || '<span class="dim-card-placeholder">（未配置，不绑定参考图）</span>'}${refAddHtml}</span>
+            </div>`;
+
+            bodyHtml = rowsHtml + lanesRow + refsRow;
         }
 
         return `<div class="dim-ts-section dim-checklist-section">
@@ -1209,7 +1224,7 @@
                 ts.workDir = ts.workDir || '~/Downloads';
                 ts.rootDir = ts.rootDir || '';
                 ts.laneDirs = Array.isArray(ts.laneDirs) ? ts.laneDirs : ['A', 'B'];
-                ts.referenceDir = ts.referenceDir || 'first_frames';
+                ts.referenceDirs = Array.isArray(ts.referenceDirs) ? ts.referenceDirs : ['first_frames'];
                 ts.promptCsv = ts.promptCsv || 'prompt.csv';
             });
         });
@@ -1248,6 +1263,39 @@
         if (laneAdd) laneAdd.addEventListener('click', commitLane);
         if (laneInput) laneInput.addEventListener('keydown', e => {
             if (e.key === 'Enter') { e.preventDefault(); commitLane(); }
+        });
+
+        // ── referenceDirs 芯片编辑（最多 2 个；提交时自动把旧 referenceDir 迁移为数组）──
+        const refWrite = (mutator) => {
+            mutateTestSource(ts => {
+                // 先规范化：无数组时从旧单值字段派生
+                if (!Array.isArray(ts.referenceDirs)) {
+                    ts.referenceDirs = (ts.referenceDir && String(ts.referenceDir).trim())
+                        ? [String(ts.referenceDir).trim()] : [];
+                }
+                mutator(ts.referenceDirs);
+                if (ts.referenceDirs.length === 0) delete ts.referenceDirs;
+                delete ts.referenceDir;   // 旧字段统一下线
+            });
+        };
+        dimView.querySelectorAll('.dim-ts-ref-del').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const i = +btn.dataset.refIdx;
+                refWrite(arr => arr.splice(i, 1));
+            });
+        });
+        const refInput = dimView.querySelector('.dim-ts-ref-input');
+        const refAdd = dimView.querySelector('.dim-ts-ref-add');
+        const commitRef = () => {
+            if (!refInput) return;
+            const v = (refInput.value || '').trim().replace(/^\/+|\/+$/g, '');
+            if (!v) return;
+            refWrite(arr => { if (!arr.includes(v) && arr.length < 2) arr.push(v); });
+        };
+        if (refAdd) refAdd.addEventListener('click', commitRef);
+        if (refInput) refInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); commitRef(); }
         });
     }
 
