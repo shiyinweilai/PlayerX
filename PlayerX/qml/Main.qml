@@ -60,6 +60,12 @@ ApplicationWindow {
 
         // 恢复开发者模式开关（持久化）：默认不勾选（隐藏测试模式）；勾选后显示「测试模式」
         try { root.developerMode = (Rating.loadString("ui/developerMode", "0") === "1") } catch (e) {}
+        // 开发者模式未开启时，若历史记忆（rating.mode）停留在「测试模式」，强制回退为
+        // 「关闭评分」——避免普通用户在不知情下处于测试模式（评分会写入测试 CSV）。
+        if (!root.developerMode && typeof Rating !== "undefined" && Rating.currentMode === "test") {
+            console.log("[DevMode] 开发者模式未开启，当前模式为 test → 强制回退为 off")
+            Rating.currentMode = "off"
+        }
 
         // 加载多维度评分配置
         // 新策略：内置默认配置（Resources/default_configs/<mode>.json，跟随软件发布）为底，
@@ -673,6 +679,11 @@ ApplicationWindow {
         if (root.developerMode === on) return
         root.developerMode = on
         try { Rating.saveString("ui/developerMode", on ? "1" : "0") } catch (e) {}
+        // 取消勾选开发者模式时，若当前正处于测试模式，立即回退为「关闭评分」
+        if (!on && typeof Rating !== "undefined" && Rating.currentMode === "test") {
+            console.log("[DevMode] 开发者模式关闭，当前模式为 test → 回退为 off")
+            Rating.currentMode = "off"
+        }
         console.log("[DevMode] 开发者模式:", on ? "勾选（显示测试模式）" : "未勾选（隐藏测试模式）")
     }
 
@@ -2879,6 +2890,10 @@ ApplicationWindow {
             var k = _key(it)
             if (!seen[k]) { seen[k] = true; out.push(it) }
         })
+        // 开发者模式未开启时，过滤掉「测试模式」的远程任务（测试配置仅开发者可见，避免影响用户）
+        if (!root.developerMode) {
+            out = out.filter(function(it) { return it.mode !== "test" })
+        }
         return out
     }
     // 通知卡片是否可见
@@ -3015,9 +3030,12 @@ ApplicationWindow {
                         if (!found) merged.push(newItem)
                     })
                     root._pendingRemoteConfig = merged
-                    root._taskUpdateVisible = true
-                    root._remoteHasUpdate = true
-                    console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新，当前待应用", merged.length, "个")
+                    // 开发者模式未开启时，若待应用项全是「测试模式」则不弹出卡片
+                    //（测试配置仅开发者可见）；pending 数据保留，开启开发者模式后可见。
+                    var _visiblePending = merged.filter(function(it) { return root.developerMode || it.mode !== "test" })
+                    root._taskUpdateVisible = _visiblePending.length > 0
+                    root._remoteHasUpdate = _visiblePending.length > 0
+                    console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新，当前待应用", merged.length, "个（可见", _visiblePending.length, "个）")
                 }
 
                 allPairs.forEach(function(pair) {
@@ -5392,7 +5410,10 @@ ApplicationWindow {
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: {
-                    var cnt = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length : 0
+                    var _pend = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+                    // 计数同样过滤「测试模式」（开发者模式未开启时对普通用户不可见）
+                    var cnt = root.developerMode ? _pend.length
+                                                 : _pend.filter(function(it) { return it.mode !== "test" }).length
                     return cnt > 0 ? "远程有 " + cnt + " 个任务更新（点击查看）" : "点击检测远程任务更新"
                 }
 
