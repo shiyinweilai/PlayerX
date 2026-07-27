@@ -3520,11 +3520,9 @@ ApplicationWindow {
             }
             // 记录本次产物（配置指纹 + zip 路径 + 解压目标），供下次「跳过下载」判重
             root._tsSaveLastAuto(st)
-            // 成功：静默关闭下载弹窗（直接进入打分界面），用轻 toast 代替"已就绪"弹窗；
+            // 成功：静默关闭下载弹窗（直接进入打分界面）；
             // 弹窗只保留给下载/解压/导入过程和失败场景。
             testSourceDownloadDialog.close()
-            updateToast.text = "✅ 测试源就绪，已进入打分"
-            updateToast.open()
         }
     }
 
@@ -3588,10 +3586,8 @@ ApplicationWindow {
                 d._statusText = err
                 return
             }
-            // 跳过下载成功：同样静默关闭，轻提示代替"已就绪"弹窗
+            // 跳过下载成功：同样静默关闭（直接进入打分界面）
             d.close()
-            updateToast.text = "✅ 测试源就绪，已进入打分"
-            updateToast.open()
         }
 
         // 倒计时：每秒 -1，归零自动「直接开始」
@@ -5143,6 +5139,10 @@ ApplicationWindow {
             // （注意 selectedIdx 复位不放进 _rebuildCellRatingsFromCsv：远程配置
             //  应用完成后的重跑不应该干扰用户当前选中状态。）
             root.selectedIdx = -1
+            // 全部关闭回到主界面（fileCount 归零）：自动收起参考图侧栏 + 底部提示词栏，
+            // 等价于点一次左下角「图片」按钮（两者显隐都跟随 refSidebarVisible）
+            if (Engine.fileCount <= 0 && root.refSidebarVisible)
+                root.refSidebarVisible = false
         }
     }
 
