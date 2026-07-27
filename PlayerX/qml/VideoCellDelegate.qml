@@ -627,11 +627,11 @@ Rectangle {
                         Text {
                             text: dimRow.dimKey
                             // 维度名（"总分/动作/物理/商品"等）：深色玻璃底 + 纯白 + 加粗，
-                            // 字号 10、宽度 28 保持不变，避免撑开原布局。
+                            // 字号 12、宽度 26 保持不变，避免撑开原布局。
                             color: "#ffffff"
-                            font.pixelSize: 10
+                            font.pixelSize: 12
                             font.bold: true
-                            width: 28
+                            width: 24
                             horizontalAlignment: Text.AlignRight
                             anchors.verticalCenter: parent.verticalCenter
                         }
