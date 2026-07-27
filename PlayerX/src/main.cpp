@@ -48,6 +48,12 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
+#if defined(Q_OS_MACOS)
+// 实现在 src/qt/MacAppearance.mm（Objective-C++）：
+// 强制 NSApp 深色外观，让系统标题栏 / 原生菜单 / 原生对话框渲染为深色。
+void applyMacDarkAppearance();
+#endif
+
 namespace {
 
 // ── 日志路径（启动后保持不变，菜单项「打开日志目录」从这里取目录） ──
@@ -155,6 +161,12 @@ int main(int argc, char* argv[]) {
 #endif
     app.setApplicationName("PlayerX");
     app.setOrganizationName("PlayerX");
+
+#if defined(Q_OS_MACOS)
+    // 强制深色外观（Dark Aqua）：标题栏 / 原生菜单 / 原生对话框全部深色，
+    // 与 #101012 主题协调；需在窗口创建前调用。
+    applyMacDarkAppearance();
+#endif
 
     // QStandardPaths 依赖 applicationName/organizationName，先设好再装日志。
     installLogging();

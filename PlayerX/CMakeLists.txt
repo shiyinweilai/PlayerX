@@ -118,6 +118,8 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     # 其他平台走 ScreenProbe.cpp（Qt QScreen 回退）
     $<$<PLATFORM_ID:Darwin>:src/qt/ScreenProbe.mm>
     $<$<NOT:$<PLATFORM_ID:Darwin>>:src/qt/ScreenProbe.cpp>
+    # macOS 外观定制（强制 Dark Aqua：系统标题栏 / 原生菜单深色化）
+    $<$<PLATFORM_ID:Darwin>:src/qt/MacAppearance.mm>
 )
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
