@@ -310,7 +310,7 @@ ApplicationWindow {
         // 场景下不生效（menuBar 高度变 0 → 子项居中错位/不可见），显式 height 最稳。
         height: inTitleBar ? 32 : 26
         topPadding: inTitleBar ? 3 : 0       // (32 - 26) / 2，菜单项与系统按钮垂直对齐
-        leftPadding: inTitleBar ? 36 : 0     // 让开 Qt 自绘标题栏左侧的窗口图标区
+        leftPadding: inTitleBar ? 8 : 0      // 菜单左对齐，仅避开左上角圆角
         rightPadding: inTitleBar ? 140 : 0   // 给右侧系统三键留位
 
         Component.onCompleted: {
@@ -351,9 +351,6 @@ ApplicationWindow {
                                       ? Window.Windowed : Window.Maximized
                 }
             }
-
-            // ─── 无边框标题栏内容（仅 Windows）：窗口图标在 menuBar 块外，
-            //     以 parent: appMenuBar 挂载（见下方），不放在 background 延迟组件里 ───
 
             // ─── 无边框标题栏内容（仅 Windows）：自绘窗口控制三键（右侧） ───
             Row {
@@ -726,35 +723,10 @@ ApplicationWindow {
         }
     }
 
-    // ─── 无边框标题栏窗口图标（仅 Windows，左上角） ───────────────────
-    // 挂载到 root.contentItem（窗口级坐标系），不放 MenuBar 里：
-    // 实测 MenuBar 在菜单被原生接管时会被框架剔除为 height=0（mac 实锤），
-    // 挂在它里面的元素会错位/不可见；挂窗口级 contentItem 与 menuBar 内部
-    // 状态完全解耦，x/y 即窗口坐标（y=6 落在 32px 标题栏条内）。
-    // MenuBar 的 leftPadding(36) 已为图标留位，互不重叠。
-    Image {
-        parent: root.contentItem
-        visible: Qt.platform.os === "windows"
-        x: 10
-        y: 6
-        width: 20
-        height: 20
-        z: 100
-        // 诊断（Windows 图标排查，定位后删除）：
-        // onStatusChanged 故意声明在 source 之前，qrc 同步加载也能捕获状态变化
-        onStatusChanged: console.log("[IconDbg] status:", status, "(0=Null 1=Ready 3=Error)")
-        source: ":/icon/app.png"
-        // 1024px 源图按 64px 解码：避免弱 GPU 大纹理问题，缩放质量更好
-        sourceSize: Qt.size(64, 64)
-        fillMode: Image.PreserveAspectFit
-        Component.onCompleted: {
-            var g = mapToGlobal(0, 0)
-            console.log("[IconDbg] created: visible=" + visible
-                        + " global=(" + g.x + "," + g.y + ")"
-                        + " menuBar h=" + appMenuBar.height
-                        + " menuBar visible=" + appMenuBar.visible)
-        }
-    }
+    // 注：Windows 标题栏左上角曾尝试放窗口图标（bg 内 / parent:appMenuBar /
+    // parent:root.contentItem 三种挂载），日志显示 Image 创建成功且位置正确，
+    // 但 Windows 场景图始终不发起绘制（status 永远 Null），决定放弃该图标。
+    // 菜单直接左对齐，主界面空状态本身有图标，辨识度不受影响。
 
     // ─── "更新可用"胶囊按钮已迁移到底部工具栏（参考图按钮右侧），
     //      避免浮在右上角遮挡视频画面/控制条。具体实现见 RowLayout 内 refUpdateBtn。
