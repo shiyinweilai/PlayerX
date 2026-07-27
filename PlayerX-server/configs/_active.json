@@ -1,17 +1,5 @@
 {
   "bindings": {
-    "multi_dim": [
-      "多维评分"
-    ],
-    "subjective": [
-      "主观评分"
-    ],
-    "quality": [
-      "质量模式"
-    ],
-    "quality_slide": [
-      "质量模式2"
-    ],
     "test": [
       "测试模式"
     ]

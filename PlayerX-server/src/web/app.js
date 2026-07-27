@@ -784,6 +784,7 @@
     // ── 选中某个配置，加载并展示 ──
     async function selectConfig(name) {
         dimCurrentName = name;
+        dimActiveTab = 'dims';   // 切换配置时回到「维度」Tab
         // 高亮侧边栏
         dimSidebarList.querySelectorAll('.dim-sidebar-item').forEach(el => {
             el.classList.toggle('is-active', el.dataset.name === name);
@@ -862,45 +863,73 @@
         setTimeout(() => dimEditor.focus(), 30);
     }
 
+    // ── 配置详情 Tab 状态 ──
+    // 维度卡片 / Checklist / 测试源 三大区块改为 Tab 切换展示，
+    // 避免长页从上往下滚动看不全。切换配置时重置为「维度」。
+    let dimActiveTab = 'dims';
+
     // ── 卡片渲染 ──
     function renderDimCards(obj) {
-        if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
-            const admin = isLoggedIn();
-            dimView.innerHTML = `<div class="dim-view-loading">暂无维度配置${admin ? '' : ''}</div>`
-                + (admin ? `<div style="padding:0 28px"><button class="dim-add-dim-btn ghost-btn" style="margin-top:8px">＋ 添加维度</button></div>` : '')
-                + renderTestSourceSection(obj, admin);
-            if (admin) setTimeout(() => bindCardEdit(obj || { dimensions: [] }), 0);
-            return;
-        }
         const admin = isLoggedIn();
         const metaItems = [];
-        if (obj.type)  metaItems.push(`<span class="dim-meta-item dim-meta-type"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
+        if (obj && obj.type)  metaItems.push(`<span class="dim-meta-item dim-meta-type"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
         // 评测任务：可内联编辑
-        metaItems.push(`<span class="dim-meta-item dim-meta-task"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val dim-meta-editable" data-field="task" title="点击编辑">${escHtml(obj.task || '（未填写，点击添加）')}</span></span>`);
-        if (obj.scale) metaItems.push(`<span class="dim-meta-item dim-meta-muted dim-meta-scale"><span class="dim-meta-icon">📏</span>${escHtml(obj.scale)}</span>`);
+        metaItems.push(`<span class="dim-meta-item dim-meta-task"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val dim-meta-editable" data-field="task" title="点击编辑">${escHtml((obj && obj.task) || '（未填写，点击添加）')}</span></span>`);
+        if (obj && obj.scale) metaItems.push(`<span class="dim-meta-item dim-meta-muted dim-meta-scale"><span class="dim-meta-icon">📏</span>${escHtml(obj.scale)}</span>`);
         // 备注 tag：可内联编辑
-        metaItems.push(`<span class="dim-meta-item dim-meta-tag"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val dim-meta-editable" data-field="tag" title="点击编辑">${escHtml(obj.tag || '（未填写，点击添加）')}</span></span>`);
-        // 测试源 URL：可内联编辑（管理员专属）
-        if (admin) metaItems.push(`<span class="dim-meta-item dim-meta-test-source"><span class="dim-meta-label">🔗 测试源</span><span class="dim-meta-val dim-meta-editable" data-field="testSourceUrl" title="点击编辑测试源下载地址">${escHtml(obj.testSourceUrl || '（未填写，点击添加）')}</span></span>`);
+        metaItems.push(`<span class="dim-meta-item dim-meta-tag"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val dim-meta-editable" data-field="tag" title="点击编辑">${escHtml((obj && obj.tag) || '（未填写，点击添加）')}</span></span>`);
         const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';
 
-        // 渲染后绑定内联编辑事件（延迟到 innerHTML 写入后）
+        // ── Tab 栏 ──
+        const tabs = [
+            ['dims',       '📐 维度'],
+            ['checklist',  '📋 Checklist'],
+            ['testSource', '📦 测试源'],
+        ];
+        const tabsHtml = `<div class="dim-tabbar">${tabs.map(([id, label]) =>
+            `<button class="dim-tab${dimActiveTab === id ? ' is-active' : ''}" data-tab="${id}">${label}</button>`
+        ).join('')}</div>`;
+
+        // ── Tab 内容：只渲染当前 Tab ──
+        let contentHtml = '';
+        if (dimActiveTab === 'checklist') {
+            contentHtml = renderChecklistPreview(obj ? obj.checklists : null, obj ? obj.checklist_config : null, admin);
+        } else if (dimActiveTab === 'testSource') {
+            contentHtml = renderTestSourceSection(obj, admin);
+        } else {
+            if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
+                contentHtml = `<div class="dim-view-loading">暂无维度配置</div>`
+                    + (admin ? `<div style="padding:0 28px"><button class="dim-add-dim-btn ghost-btn" style="margin-top:8px">＋ 添加维度</button></div>` : '');
+            } else {
+                const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
+                const addDimBtn = admin ? `<button class="dim-add-dim-btn ghost-btn">＋ 添加维度</button>` : '';
+                contentHtml = `<div class="dim-cards-grid">${cardsHtml}</div>`
+                    + `<div class="dim-bottom-actions" style="display:flex;align-items:center;padding:0 28px;gap:0">${addDimBtn}</div>`;
+            }
+        }
+
+        dimView.innerHTML = metaHtml + tabsHtml + contentHtml;
+
+        // 渲染后绑定事件（延迟到 innerHTML 写入后）
         setTimeout(() => {
             bindMetaInlineEdit();
-            if (admin) bindCardEdit(obj);
+            bindDimTabs();
+            if (admin) bindCardEdit(obj || { dimensions: [] });
         }, 0);
+    }
 
-        const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
-        const addDimBtn = admin ? `<button class="dim-add-dim-btn ghost-btn">＋ 添加维度</button>` : '';
-
-        // 渲染 checklist 预览区域
-        const checklistHtml = renderChecklistPreview(obj.checklists, obj.checklist_config, admin);
-        // 渲染测试源自动化配置区
-        const testSourceHtml = renderTestSourceSection(obj, admin);
-
-        dimView.innerHTML = metaHtml + `<div class="dim-cards-grid">${cardsHtml}</div>`
-            + `<div class="dim-bottom-actions" style="display:flex;align-items:center;padding:0 28px;gap:0">${addDimBtn}</div>`
-            + checklistHtml + testSourceHtml;
+    /** Tab 切换绑定：切换后整体重渲染（状态保存在 dimActiveTab） */
+    function bindDimTabs() {
+        dimView.querySelectorAll('.dim-tab').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.tab;
+                if (!tab || tab === dimActiveTab) return;
+                dimActiveTab = tab;
+                let data;
+                try { data = JSON.parse(dimRawData); } catch (_) { data = { dimensions: [] }; }
+                renderDimCards(data);
+            });
+        });
     }
 
     /** 渲染单张维度卡片 HTML（纯字符串，不绑定事件） */
@@ -1061,11 +1090,11 @@
 
         let bodyHtml = '';
         if (!ts) {
-            bodyHtml = `<div class="dim-ts-empty">未配置测试源自动化：客户端点「接受」后仅应用评分配置（可配合上方「🔗 测试源」URL 做纯下载）。</div>`
+            bodyHtml = `<div class="dim-ts-empty">未配置测试源自动化：客户端点「接受」后仅应用评分配置，不会自动下载/导入。</div>`
                 + `<button class="dim-cl-add-btn dim-ts-add-btn">＋ 添加测试源配置</button>`;
         } else {
             const fields = [
-                ['url',          'zip 下载地址；留空则回退使用上方 testSourceUrl'],
+                ['url',          'zip 下载地址（必填，点击「接受」后自动下载并解压）'],
                 ['workDir',      '下载 + 解压目录（支持 ~ 开头，默认系统 Downloads）'],
                 ['rootDir',      '内容根目录 = zip 内顶层目录名（相对 workDir；"/" 开头视为绝对路径）'],
                 ['referenceDir', '参考图目录（相对内容根；留空则不绑定）'],
@@ -1137,7 +1166,7 @@
         const ts = data.testSource || {};
         const currentVal = ts[field] || '';
         const placeholders = {
-            url:          'https://.../bench_xxx.zip（留空回退 testSourceUrl）',
+            url:          'https://.../bench_xxx.zip',
             workDir:      '~/Downloads',
             rootDir:      'bench_xxx（zip 内顶层目录名）',
             referenceDir: 'first_frames',
@@ -1983,7 +2012,7 @@
         input.type = 'text';
         input.className = 'dim-meta-inline-input';
         input.value = currentVal;
-        input.placeholder = field === 'tag' ? '例如 test1 / 终评' : field === 'testSourceUrl' ? 'https://your-cdn.com/test-source.zip' : '请输入评测任务名称';
+        input.placeholder = field === 'tag' ? '例如 test1 / 终评' : '请输入评测任务名称';
         span.innerHTML = '';
         span.appendChild(input);
         input.focus();
@@ -2009,7 +2038,7 @@
                 const j = await r.json().catch(() => ({}));
                 if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '保存失败'), 'err'); return; }
                 dimRawData = newRaw;
-                showToast(`✅ 已更新${field === 'tag' ? '备注 tag' : field === 'testSourceUrl' ? '测试源 URL' : '评测任务'}`, 'ok');
+                showToast(`✅ 已更新${field === 'tag' ? '备注 tag' : '评测任务'}`, 'ok');
                 loadConfigList(); // 刷新侧边栏（任务名可能显示在侧边栏）
             } catch (e) {
                 showToast('❌ 网络错误：' + e.message, 'err');

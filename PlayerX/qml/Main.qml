@@ -1675,8 +1675,8 @@ ApplicationWindow {
 
 
     // ─── 测试源下载弹窗 ──────────────────────────────────────────────────────
-    //  · 应用配置后若携带 testSourceUrl，自动弹出此弹窗并开始下载
-    //  · 下载到系统 Downloads 目录，完成后自动解压并打开文件夹
+    //  · 应用配置后若携带 testSource 对象，自动化流水线弹出此弹窗展示进度：
+    //    下载 → 解压 → 导入 → 进入打分（全程自动，完成后自动收起）
     Popup {
         id: testSourceDownloadDialog
         modal: true
@@ -1723,21 +1723,8 @@ ApplicationWindow {
             }
         }
 
-        function startDownload(url, fileName, configName) {
-            _url        = url
-            _fileName   = fileName
-            _configName = configName
-            _status     = "downloading"
-            _statusText = "正在下载…"
-            _progress   = 0
-            _savePath   = ""
-            open()
-            // 用 C++ Downloader 异步下载，不阻塞 UI 线程
-            var savePath = (typeof Fs !== "undefined" ? Fs.downloadsDir() : "") + "/" + fileName
-            console.log("[TestSource] 开始下载:", url, "→", savePath)
-            if (typeof Downloader !== "undefined")
-                Downloader.download(url, savePath)
-        }
+        // 弹窗仅作进度/状态展示；下载由 root 的测试源自动化流水线直接驱动
+        //（需要尊重 testSource.workDir 配置，不走固定的 ~/Downloads）。
         Overlay.modal: Rectangle { color: "#aa000000" }
 
         background: Rectangle {
@@ -3298,15 +3285,6 @@ ApplicationWindow {
         xhr0.send()
     }
 
-    // ─── 测试源下载 ──────────────────────────────────────────────────────────
-    // 应用配置后若携带 testSourceUrl，自动下载到系统 Downloads 目录并解压
-    function _downloadTestSource(url, configName) {
-        // 从 URL 中提取文件名
-        var fileName = url.split("/").pop().split("?")[0] || "test-source.zip"
-        // 弹出下载进度弹窗
-        testSourceDownloadDialog.startDownload(url, fileName, configName)
-    }
-
     // ─── 测试源全自动流水线（点「接受」后一键就绪）────────────────────────────
     // 评分配置 JSON 中新增 testSource 对象字段：
     //   "testSource": {
@@ -3597,30 +3575,13 @@ ApplicationWindow {
                 root._pendingRemoteConfig = remaining.length > 0 ? remaining : null
                 if (!root._pendingRemoteConfig) root._taskUpdateVisible = false
 
-                // 【测试源】两种配置形态（testSource 对象优先）：
-                //   testSource（对象，推荐）→ 全自动流水线：下载 → 解压 → 绑定参考图/提示词
-                //                             → 导入多路 → 直接启动进入打分界面
-                //   testSourceUrl（字符串，旧）→ 仅下载 zip 到 Downloads，手动导入
-                // 兼容：testSource.url 留空时回退使用 testSourceUrl 作为下载地址，
-                //       这样 url 只需维护一处（testSource 其余字段仍生效）。
+                // 【测试源自动化】配置携带 testSource 对象时，应用后启动全自动流水线：
+                // 下载 → 解压 → 绑定参考图/提示词 → 导入多路 → 直接启动进入打分界面。
+                // （旧版 testSourceUrl 字符串字段已废弃，统一从 testSource.url 读取。）
                 var _tsObj = obj.testSource
-                var _tsUrl = ""
-                if (_tsObj && typeof _tsObj === "object") {
-                    if (typeof _tsObj.url === "string" && _tsObj.url.trim().length > 0) {
-                        _tsUrl = _tsObj.url.trim()
-                    } else if (typeof obj.testSourceUrl === "string" && obj.testSourceUrl.trim().length > 0) {
-                        _tsUrl = obj.testSourceUrl.trim()
-                    }
-                }
-                if (_tsUrl.length > 0) {
+                if (_tsObj && typeof _tsObj === "object" && typeof _tsObj.url === "string" && _tsObj.url.trim().length > 0) {
                     console.log("[TestSource] 命中 testSource 自动化配置, configName =", configName)
-                    var _tsMerged = {}
-                    for (var _tk in _tsObj) _tsMerged[_tk] = _tsObj[_tk]
-                    _tsMerged.url = _tsUrl
-                    root._startTestSourceAutomation(_tsMerged, configName)
-                } else if (obj.testSourceUrl && typeof obj.testSourceUrl === "string" && obj.testSourceUrl.trim().length > 0) {
-                    console.log("[TestSource] 命中旧版 testSourceUrl（仅下载）, configName =", configName)
-                    root._downloadTestSource(obj.testSourceUrl.trim(), configName)
+                    root._startTestSourceAutomation(_tsObj, configName)
                 }
             } catch (e) {
                 console.warn("[ConfigCheck] 应用单条配置失败：", e)

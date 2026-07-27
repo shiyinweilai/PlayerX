@@ -2225,6 +2225,51 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     text-align: center;
 }
 
+/* ─── 配置详情 Tab 栏（维度 / Checklist / 测试源）─── */
+.dim-tabbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 28px;
+    margin-top: 12px;
+    border-bottom: 1px solid var(--border-soft, #1f2027);
+}
+.dim-tab {
+    appearance: none;
+    border: 1px solid transparent;
+    border-bottom: none;
+    background: transparent;
+    color: var(--text-dim, #6f707a);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    border-radius: 10px 10px 0 0;
+    cursor: pointer;
+    position: relative;
+    top: 1px;
+    transition: color .12s, background .12s, border-color .12s;
+}
+.dim-tab:hover {
+    color: var(--text, #ecedf3);
+    background: var(--bg-hover, #21222a);
+}
+.dim-tab.is-active {
+    color: var(--primary, #0071e3);
+    background: var(--bg-elev-1, #16171c);
+    border-color: var(--border, #2a2b33);
+    font-weight: 600;
+}
+.dim-tab.is-active::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: -1px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--primary, #0071e3);
+}
+
 /* ─── 测试源自动化配置区（testSource）─── */
 .dim-ts-header {
     background: linear-gradient(90deg, rgba(255, 159, 10, .10), rgba(10, 132, 255, .08));

@@ -23,6 +23,24 @@ ApplicationWindow {
     id: dlg
     title: "打开文件夹 / 多组对比"
 
+    // ── ESC 退出面板 ──
+    // 优先级：子弹窗（模式菜单 / 未评分面板）先关 → 输入框聚焦中仅移除焦点 → 关闭面板。
+    // （dupConfirmDialog / resumeChoiceDialog 是 Dialog 类型，自带 CloseOnEscape，无需处理）
+    Shortcut {
+        sequences: ["Escape"]
+        context: Qt.WindowShortcut
+        onActivated: {
+            if (settingsPopup.visible) { settingsPopup.close(); return }
+            if (unratedDialog.visible) { unratedDialog.close(); return }
+            var fi = dlg.activeFocusItem
+            if (fi && (fi instanceof TextInput || fi instanceof TextEdit)) {
+                fi.focus = false
+                return
+            }
+            dlg.close()
+        }
+    }
+
     // ─── 每次 Dialog 显示时，把独立的「文件夹历史」合并到 lanes 列表 ──
     // 即使中途 _rowsModel 被 loadFlatFiles 等覆盖式重置，下次打开 Dialog 时
     // 历史中固化的文件夹路径仍会作为新 lane 出现（默认未勾选），符合"路径固化、
