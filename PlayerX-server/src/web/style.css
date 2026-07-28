@@ -2282,6 +2282,30 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 .dim-ts-delcfg-btn:hover {
     color: var(--danger, #ff453a);
 }
+/* 上传 zip 到服务器按钮（测试源区块标题行） */
+.dim-ts-upload-btn {
+    font-size: 12px;
+    color: var(--primary, #0071e3);
+    white-space: nowrap;
+}
+.dim-ts-upload-btn:hover:not(:disabled) {
+    text-decoration: underline;
+}
+.dim-ts-upload-btn:disabled {
+    opacity: .6;
+    cursor: default;
+}
+/* url 行的「服务器托管」标识：与 COS 外链一眼区分 */
+.dim-ts-hosted-badge {
+    flex: none;
+    margin-left: 8px;
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    color: #30d158;
+    background: rgba(48, 209, 88, .10);
+    border: 1px solid rgba(48, 209, 88, .32);
+}
 .dim-ts-row {
     display: flex;
     align-items: center;

@@ -14,7 +14,7 @@
  *
  * 启动：
  *   npm install                              # 仅首次
- *   node server.js                           # 默认 0.0.0.0:8765
+ *   node server.js                           # 默认 0.0.0.0:2026
  *   PORT=9000 node server.js                 # 自定义端口
  *
  * 注：服务端**不做鉴权**，仅适用于受信任的内网/局域网部署。
@@ -24,7 +24,7 @@ const express = require('express');
 const path    = require('path');
 const os      = require('os');
 
-const { WEB_DIR, UPLOAD_DIR, ARCHIVE_DIR, ARCHIVE_KEEP, ensureDirs, getUploadToken } = require('./src/lib/paths');
+const { WEB_DIR, UPLOAD_DIR, ARCHIVE_DIR, TESTSRC_DIR, ARCHIVE_KEEP, ensureDirs, getUploadToken } = require('./src/lib/paths');
 
 // 探测本机所有 IPv4 LAN 地址（排除回环 / link-local 169.254.x.x）；
 // 排序优先：常见家用 / 办公网段（192.168 → 10. → 172.16-31 → 其他）。
@@ -52,7 +52,7 @@ function getLanIPv4s() {
 const { mountApi } = require('./src/api');
 
 // ── 配置 ──────────────────────────────────────────────────────────────
-const PORT  = parseInt(process.env.PORT || '8765', 10);
+const PORT  = parseInt(process.env.PORT || '2026', 10);
 ensureDirs();
 
 const app = express();
@@ -82,10 +82,20 @@ app.get('/', (_req, res) => {
     res.sendFile(path.join(WEB_DIR, 'index.html'));
 });
 
-// 3) 挂载 API（包含 /upload /list /merge /files /api/status 等）
+// 3) 测试源安装包（zip）静态下载：客户端按 testSource.url 直接从此拉取。
+//    express.static 自带 Range（断点续传）与 etag 协商缓存，大文件友好，
+//    不套 /web 的 no-cache 头。
+app.use('/testsrc', express.static(TESTSRC_DIR, {
+    fallthrough: false,
+    setHeaders(res) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    },
+}));
+
+// 4) 挂载 API（包含 /upload /list /merge /files /api/status 等）
 mountApi(app);
 
-// 4) multer / 自定义错误兜底
+// 5) multer / 自定义错误兜底
 app.use((err, _req, res, _next) => {
     console.error('[error]', err);
     res.status(400).json({ ok: false, error: err.message || 'unknown error' });

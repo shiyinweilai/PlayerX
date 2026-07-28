@@ -20,13 +20,14 @@ const archive  = require('./archive');
 const auth     = require('./auth');
 const settings   = require('./settings');
 const dimensions = require('./dimensions');
+const testsrc    = require('./testsrc');
 
 function mountApi(app) {
     // ── 公开接口 ─────────────────────────────────────────────
     app.get('/api/status', status.makeHandler());
 
     // ── 上传路径兼容 ──────────────────────────────────────────
-    // 用户在播放器「上传设置」里很容易只填基址（如 http://host:8765 或带尾斜杠），
+    // 用户在播放器「上传设置」里很容易只填基址（如 http://host:2026 或带尾斜杠），
     // 不带 /upload 路径。为避免请求被静态中间件吞掉变成"看似成功实际没收到"，
     // 这里把以下所有 path 上的 POST 都路由到上传 handler：
     //   POST /  /upload  /upload/  /api/upload  /api/upload/
@@ -98,6 +99,10 @@ function mountApi(app) {
 
     // 归档合并：POST 形态（带 names 子集）也允许匿名访问，仅是合并下载
     app.post('/api/archive/merge/:folder', jsonParser, archive.handleMergeArchived);
+
+    // 测试源安装包（zip）托管：list 匿名可读，upload/delete 需管理员
+    //（静态下载 /testsrc/<name> 在 server.js 挂载）
+    testsrc(app);
 }
 
 module.exports = { mountApi };

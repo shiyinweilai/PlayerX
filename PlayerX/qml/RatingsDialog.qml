@@ -2905,7 +2905,7 @@ Window {
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
                 Layout.topMargin: 12
-                text: qsTr("填入后端服务地址，点“保存并上传”后会将当前评分 CSV 推送过去。\n局域网示例：http://192.168.x.x:8765/upload")
+                text: qsTr("填入后端服务地址，点“保存并上传”后会将当前评分 CSV 推送过去。\n局域网示例：http://192.168.x.x:2026/upload")
                 color: "#cfcfd4"
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap

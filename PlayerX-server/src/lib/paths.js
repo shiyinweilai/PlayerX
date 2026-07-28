@@ -13,6 +13,8 @@ const ROOT_DIR = path.resolve(__dirname, '..', '..');
 const UPLOAD_DIR  = path.join(ROOT_DIR, 'uploads');
 const ARCHIVE_DIR = path.join(ROOT_DIR, 'archive');
 const WEB_DIR     = path.join(ROOT_DIR, 'src', 'web');
+// 测试源安装包（zip）托管目录：客户端按 testSource.url 直接从此下载
+const TESTSRC_DIR = path.join(ROOT_DIR, 'testsrc');
 
 // 运行时可变配置（管理面板修改后会写入此文件，重启也生效）
 const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
@@ -79,6 +81,7 @@ function resolveToken() {
 function ensureDirs() {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
     fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+    fs.mkdirSync(TESTSRC_DIR, { recursive: true });
 }
 
 module.exports = {
@@ -86,6 +89,7 @@ module.exports = {
     UPLOAD_DIR,
     ARCHIVE_DIR,
     WEB_DIR,
+    TESTSRC_DIR,
     CONFIG_FILE,
     MAX_BYTES,
     ARCHIVE_KEEP,

@@ -1103,7 +1103,11 @@
                 const valHtml = admin
                     ? `<span class="dim-ts-val dim-ts-editable${v ? '' : ' dim-card-placeholder'}" data-ts-field="${f}" title="${escHtml(tip)}；点击编辑">${escHtml(v || '（未填写）')}</span>`
                     : `<span class="dim-ts-val${v ? '' : ' dim-card-placeholder'}">${escHtml(v || '—')}</span>`;
-                return `<div class="dim-ts-row"><span class="dim-ts-fname" title="${escHtml(tip)}">${f}</span>${valHtml}</div>`;
+                // url 指向本服务器托管包时打个标，一眼区分 COS 外链
+                const hostedBadge = (f === 'url' && /\/testsrc\//.test(v))
+                    ? '<span class="dim-ts-hosted-badge" title="该 zip 托管在本服务器上，客户端走内网下载">服务器托管</span>'
+                    : '';
+                return `<div class="dim-ts-row"><span class="dim-ts-fname" title="${escHtml(tip)}">${f}</span>${valHtml}${hostedBadge}</div>`;
             }).join('');
 
             const lanes = Array.isArray(ts.laneDirs) ? ts.laneDirs : [];
@@ -1141,6 +1145,7 @@
             <div class="dim-cl-header dim-ts-header">
                 <span class="dim-cl-title">📦 测试源</span>
                 <span class="dim-cl-subtitle">客户端点「接受」后自动：下载 → 解压 → 导入对比 → 绑定参考图/提示词 → 进入打分</span>
+                ${admin ? '<button class="dim-ts-upload-btn ghost-btn" title="选择 zip 上传到本服务器，成功后自动填入 url 字段">⇪ 上传 zip 到服务器</button><input type="file" class="dim-ts-upload-input" accept=".zip,application/zip" style="display:none">' : ''}
                 ${delCfgBtn}
             </div>
             <div class="dim-cl-body dim-ts-body">
@@ -1227,6 +1232,38 @@
                 ts.promptCsv = ts.promptCsv || 'prompt.csv';
             });
         });
+        // 上传 zip 到服务器（成功后自动回填 url 字段并保存）
+        const upBtn = dimView.querySelector('.dim-ts-upload-btn');
+        const upInput = dimView.querySelector('.dim-ts-upload-input');
+        if (upBtn && upInput) {
+            upBtn.addEventListener('click', (e) => { e.stopPropagation(); upInput.click(); });
+            upInput.addEventListener('change', async () => {
+                const f = upInput.files && upInput.files[0];
+                if (!f) return;
+                const oldText = upBtn.textContent;
+                upBtn.disabled = true;
+                upBtn.textContent = '上传中…';
+                try {
+                    const fd = new FormData();
+                    fd.append('file', f, f.name);
+                    const r = await adminFetch('/api/testsrc/upload', { method: 'POST', body: fd });
+                    const data = await r.json().catch(() => null);
+                    if (!r.ok || !data || !data.ok) {
+                        throw new Error((data && data.error) || ('HTTP ' + r.status));
+                    }
+                    // 回填绝对地址（客户端按此下载）；mutateTestSource 内部会保存并刷新分区
+                    const abs = location.origin + data.url;
+                    mutateTestSource(ts => { ts.url = abs; });
+                    showToast('已上传并填入测试源地址：' + data.name, 'ok');
+                } catch (err) {
+                    showToast('上传失败：' + err.message, 'err');
+                } finally {
+                    upBtn.disabled = false;
+                    upBtn.textContent = oldText;
+                    upInput.value = '';
+                }
+            });
+        }
         // 移除整个配置
         const delCfg = dimView.querySelector('.dim-ts-delcfg-btn');
         if (delCfg) delCfg.addEventListener('click', async () => {

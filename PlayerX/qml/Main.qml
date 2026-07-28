@@ -3105,6 +3105,17 @@ ApplicationWindow {
         } catch (e) { return "" }
     }
 
+    // 手动点🔔后可见列表为空时的轻提示（右下角 toast）：
+    //   · hiddenCount > 0：服务器有任务但全是「测试模式」且未开开发者模式 → 引导开启
+    //   · hiddenCount = 0：服务器确实没有任务
+    // 避免弹出一张空卡片让用户以为"点了没反应"。
+    function _hintRemoteTaskEmpty(hiddenCount) {
+        updateToast.text = hiddenCount > 0
+            ? "有 " + hiddenCount + " 个测试模式任务，开启「设置→开发者模式」后可见"
+            : "暂无远程任务"
+        updateToast.open()
+    }
+
     // 后台静默检测所有模式的远程配置是否有更新（不影响当前已加载的配置）
     // 流程：先拉 /api/active-config 获取所有模式绑定，再并发请求每个配置内容，
     //       任意一个模式与本地指纹不同，就弹出通知卡片。
@@ -3210,7 +3221,16 @@ ApplicationWindow {
                         // 卡片展示远程当前绑定的全部配置 + 每条"应用"按钮，
                         // 让用户能主动选择远程配置作为启动项。
                         root._remoteHasUpdate = false
-                        if (openCardOnNoUpdate) root._taskUpdateVisible = true
+                        if (openCardOnNoUpdate) {
+                            // 可见列表非空才开卡片；为空（如仅剩测试模式任务但未开
+                            // 开发者模式）→ 不开空卡片，改轻提示告知原因
+                            if (root._remoteConfigCardList.length > 0) {
+                                root._taskUpdateVisible = true
+                            } else {
+                                root._taskUpdateVisible = false
+                                root._hintRemoteTaskEmpty(allFetched.length)
+                            }
+                        }
                         if (typeof onNoUpdate === "function") onNoUpdate()
                         return
                     }
@@ -3233,6 +3253,9 @@ ApplicationWindow {
                     var _visiblePending = merged.filter(function(it) { return root.developerMode || it.mode !== "test" })
                     root._taskUpdateVisible = _visiblePending.length > 0
                     root._remoteHasUpdate = _visiblePending.length > 0
+                    // 手动点🔔但可见项为空（有更新的全是测试模式）→ 轻提示，不静默
+                    if (openCardOnNoUpdate && _visiblePending.length === 0)
+                        root._hintRemoteTaskEmpty(merged.length)
                     console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新，当前待应用", merged.length, "个（可见", _visiblePending.length, "个）")
                 }
 
@@ -5611,8 +5634,11 @@ ApplicationWindow {
                         root._taskUpdateVisible = false
                         return
                     }
-                    // 卡片未展开 → 展开：有更新直接开；无更新则主动检测并打开卡片
-                    var hasPending = Array.isArray(root._pendingRemoteConfig) && root._pendingRemoteConfig.length > 0
+                    // 卡片未展开 → 展开：有更新直接开；无更新则主动检测并打开卡片。
+                    // hasPending 需按可见性过滤：pending 可能全是测试模式，
+                    // 未开开发者模式时直接开卡片会是一张空卡片。
+                    var hasPending = Array.isArray(root._pendingRemoteConfig)
+                        && root._pendingRemoteConfig.some(function(it) { return root.developerMode || it.mode !== "test" })
                     if (hasPending) {
                         root._taskUpdateVisible = true
                     } else {

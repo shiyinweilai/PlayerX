@@ -512,8 +512,8 @@ def install(target: str, deploy_qt: bool = False):
 # ─── 开发者上传直连（dev-upload.conf）常量 ──────────────────────────
 # 写入 .app 里的 Contents/Resources/dev-upload.conf，C++ 端读它连本机 dev server。
 # 打包模式不会调用，不影响正式分发。
-# DEV_UPLOAD_HOST  = "127.0.0.1" # 本机,会根据机器IP来判断
-DEV_UPLOAD_HOST  = "21.91.38.202"
+DEV_UPLOAD_HOST  = "127.0.0.1" # 本机,会根据机器IP来判断
+# DEV_UPLOAD_HOST  = "21.91.38.202"
 DEV_UPLOAD_PORT  = 2026
 DEV_UPLOAD_TOKEN = "10086"
 
@@ -1564,7 +1564,7 @@ def main():
                         help="允许 --bump 到与当前相同或更低的版本号（同版本重打包 / 临时回退专用）")
     # ── 开发者上传直连开关 ──
     # 每次本地 `python3 build.py`（macOS 非打包模式）默认会把开发者上传 URL
-    # （http://<本机内网 IP>:8765/ + token=10086）写入 build tree 的 .app：
+    # （http://<本机内网 IP>:2026/ + token=10086）写入 build tree 的 .app：
     #     <PlayerX.app>/Contents/Resources/dev-upload.conf
     # C++ 端 RatingStore 启动时会读这个文件，优先于远端 latest.json 的 clientConfig，
     # 让开发/联调本地打开的 .app 直连本机 server，换电脑无需改代码（每次编译动态取 IP）。

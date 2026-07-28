@@ -65,7 +65,7 @@
     }
   ],
   "testSource": {
-    "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/test_auto2.zip",
+    "url": "http://127.0.0.1:2026/testsrc/test_auto2.zip",
     "workDir": "~/Downloads",
     "rootDir": "test_auto2",
     "laneDirs": [

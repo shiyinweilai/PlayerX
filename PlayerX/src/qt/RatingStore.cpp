@@ -121,7 +121,7 @@ RatingStore::RatingStore(QObject* parent) : QObject(parent) {
     //   1) 环境变量 PLAYERX_UPLOAD_URL_DEV（临时覆盖：export 一次即可，重启失效）
     //   2) bundle 内 dev-upload.conf（每次 `python3 build.py` 编译时由 build.py 写入，
     //      内容格式：
-    //          url=http://<本机内网IP>:8765/
+    //          url=http://<本机内网IP>:2026/
     //          token=10086
     //      这样"每次本地编译产物"天然带上当前机器的 dev URL，换电脑重编译自动跟新 IP；
     //      正式分发包（--package）不会写入此文件，普通用户看不到）
@@ -1161,7 +1161,7 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         return;
     }
     // ── URL 归一化 ────────────────────────────────────────────────────
-    // 用户经常只填基址（如 http://host:8765 或 http://host:8765/），并不带 /upload 路径。
+    // 用户经常只填基址（如 http://host:2026 或 http://host:2026/），并不带 /upload 路径。
     // 这种情况下后端的静态文件中间件会"吞掉"请求，看起来好像 200 实则没存文件，
     // 是历史上经常踩的坑。这里统一在客户端兜底：
     //   - path 为空或只有 "/"  → 补成 "/upload"

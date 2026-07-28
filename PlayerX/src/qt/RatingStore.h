@@ -56,7 +56,7 @@ class RatingStore : public QObject {
     Q_PROPERTY(QUrl defaultExportDir READ defaultExportDir CONSTANT)
 
     // 上传到后端的配置项，都持久化在 QSettings 下。
-    //   uploadServerUrl: 如 "http://192.168.1.10:8765/upload"；为空表示未配置，用户点上传时
+    //   uploadServerUrl: 如 "http://192.168.1.10:2026/upload"；为空表示未配置，用户点上传时
     //                    会被引导填写。
     //   uploadToken    : 可选；后端开了 PLAYERX_TOKEN 时填一致的值，未开可以为空。
     Q_PROPERTY(QString uploadServerUrl READ uploadServerUrl WRITE setUploadServerUrl NOTIFY uploadConfigChanged)
@@ -408,7 +408,7 @@ private:
 
     // 【开发者本地 override】进程启动时从环境变量读入，之后不落 QSettings；
     //   · m_uploadUrlOverridden : 是否命中（PLAYERX_UPLOAD_URL_DEV 非空）
-    //   · m_uploadUrlOverride   : 覆盖的 URL（例如 http://localhost:8765/）
+    //   · m_uploadUrlOverride   : 覆盖的 URL（例如 http://localhost:2026/）
     //   · m_uploadTokenOverride : 覆盖的 token（可空；仅当 URL 也 override 时才生效）
     // 命中时 uploadServerUrl() / uploadToken() 直接返回内存态值，setUploadServerUrl
     // 拒绝写入以防远端 clientConfig 或 QSettings 里的旧值把它顶掉。

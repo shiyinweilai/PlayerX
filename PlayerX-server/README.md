@@ -34,7 +34,7 @@ PlayerX-server/
 ```bash
 cd PlayerX-server
 npm install        # 仅首次
-npm start          # 默认监听 0.0.0.0:8765, token=123456
+npm start          # 默认监听 0.0.0.0:2026, token=123456
 ```
 
 自定义端口 / 鉴权：
@@ -44,7 +44,7 @@ PORT=9000 PLAYERX_TOKEN=mySecret123 node server.js   # 自定义 token
 PLAYERX_TOKEN=- node server.js                       # 关闭鉴权
 ```
 
-启动成功后浏览器打开 `http://<本机 IP>:8765/` 即可看到 Web 面板。
+启动成功后浏览器打开 `http://<本机 IP>:2026/` 即可看到 Web 面板。
 
 ## Web 面板
 
@@ -62,10 +62,10 @@ PLAYERX_TOKEN=- node server.js                       # 关闭鉴权
 1. 服务端：`npm start`
 2. 查本机 IP：`ipconfig getifaddr en0`（macOS）
 3. 客户端「评分数据 → ⚙ 上传设置」：
-   - 上传地址 = `http://<本机 IP>:8765/upload`
+   - 上传地址 = `http://<本机 IP>:2026/upload`
    - Token = 启动时配置的（默认 `123456`）
 4. 点「☁ 上传到云端」 → 服务端控制台会打印 `[upload] xxx.csv` 日志
-5. 浏览器访问 `http://<本机 IP>:8765/` → Web 面板查看 / 下载 / 合并
+5. 浏览器访问 `http://<本机 IP>:2026/` → Web 面板查看 / 下载 / 合并
 
 ## 接口
 
