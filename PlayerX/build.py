@@ -512,8 +512,9 @@ def install(target: str, deploy_qt: bool = False):
 # ─── 开发者上传直连（dev-upload.conf）常量 ──────────────────────────
 # 写入 .app 里的 Contents/Resources/dev-upload.conf，C++ 端读它连本机 dev server。
 # 打包模式不会调用，不影响正式分发。
-DEV_UPLOAD_HOST  = "127.0.0.1"
-DEV_UPLOAD_PORT  = 8765
+# DEV_UPLOAD_HOST  = "127.0.0.1" # 本机,会根据机器IP来判断
+DEV_UPLOAD_HOST  = "21.91.38.202"
+DEV_UPLOAD_PORT  = 2026
 DEV_UPLOAD_TOKEN = "10086"
 
 
