@@ -875,7 +875,6 @@
         if (obj && obj.type)  metaItems.push(`<span class="dim-meta-item dim-meta-type"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
         // 评测任务：可内联编辑
         metaItems.push(`<span class="dim-meta-item dim-meta-task"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val dim-meta-editable" data-field="task" title="点击编辑">${escHtml((obj && obj.task) || '（未填写，点击添加）')}</span></span>`);
-        if (obj && obj.scale) metaItems.push(`<span class="dim-meta-item dim-meta-muted dim-meta-scale"><span class="dim-meta-icon">📏</span>${escHtml(obj.scale)}</span>`);
         // 备注 tag：可内联编辑
         metaItems.push(`<span class="dim-meta-item dim-meta-tag"><span class="dim-meta-label">备注 tag</span><span class="dim-meta-val dim-meta-editable" data-field="tag" title="点击编辑">${escHtml((obj && obj.tag) || '（未填写，点击添加）')}</span></span>`);
         const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';

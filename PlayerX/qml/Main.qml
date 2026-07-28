@@ -4098,8 +4098,8 @@ ApplicationWindow {
                 } else {
                     // 无测试源配置：不会自动下载/导入/跳转 —— 中央大浮层明确告知，
                     // 引导手动导入（否则用户会以为"接受没反应"，Windows 实测反馈）。
-                    root._showRatingWarn("已应用配置「" + (configName || mode) + "」", 3600, 18,
-                                         "未配置测试源，请手动导入视频/文件夹开始评分")
+                    root._showRatingWarn("已应用配置「" + (configName || mode) + "」", 0, 18,
+                                         "未配置测试源，请手动导入视频/文件夹开始评分", true)
                 }
                 if (onDone) onDone()
             } catch (e) {
@@ -5279,12 +5279,13 @@ ApplicationWindow {
     // durationMs：可选显示时长（默认快闪 880ms；长文案提示传入更长时长）
     // fontPx：可选字号（默认 22；两行提示建议 18）
     // text2：可选第二行（与第一行异色：第一行浅白、第二行警示橙）
-    function _showRatingWarn(text, durationMs, fontPx, text2) {
+    // sticky：可选，true = 不自动消失，显示「知道了」按钮手动关闭
+    function _showRatingWarn(text, durationMs, fontPx, text2, sticky) {
         ratingToastText  = text
         ratingToastText2 = (typeof text2 === "string") ? text2 : ""
         ratingToastKind  = "warn"
         ratingToastScore = 0
-        ratingToast.show(durationMs, fontPx)
+        ratingToast.show(durationMs, fontPx, sticky)
     }
 
     function ratingAt(idx, dimKey) {
@@ -9523,13 +9524,20 @@ ApplicationWindow {
 
             // 字号：默认 22（打分快闪）；长文案提示由 show() 第二参数调小
             property int toastFontPx: 22
+            // sticky：true 时不自动消失，改由「知道了」按钮手动关闭（仅重要提示用）
+            property bool sticky: false
 
             // durationMs：可选显示时长（默认 880ms 快闪；重要提示可传更长）
             // fontPx：可选字号（默认 22；两行长文案建议 16，更精致不撑满屏）
-            function show(durationMs, fontPx) {
+            // sticky：可选，true = 不自动消失，显示「知道了」按钮
+            function show(durationMs, fontPx, sticky) {
                 hideTimer.interval = (typeof durationMs === "number" && durationMs > 0) ? durationMs : 880
                 toastFontPx = (typeof fontPx === "number" && fontPx > 0) ? fontPx : 22
-                hideTimer.restart()
+                ratingToast.sticky = (sticky === true)
+                if (ratingToast.sticky)
+                    hideTimer.stop()        // 常驻，等用户点「知道了」
+                else
+                    hideTimer.restart()     // 打分快闪/短警示：自动消失（不受影响）
                 fadeIn.restart()
             }
 
@@ -9597,6 +9605,35 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         style: Text.Raised
                         styleColor: "#000000"
+                    }
+
+                    // 「知道了」按钮：仅 sticky 常驻模式显示，点击手动关闭
+                    Rectangle {
+                        visible: ratingToast.sticky
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 84
+                        height: 28
+                        radius: 5
+                        color: toastOkMa.containsMouse ? "#3a3a46" : "#2a2a34"
+                        border.color: "#55ffffff"
+                        border.width: 1
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "知道了"
+                            color: "#e8e8ec"
+                            font.pixelSize: 13
+                        }
+                        MouseArea {
+                            id: toastOkMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                ratingToast.sticky = false
+                                fadeOut.restart()
+                            }
+                        }
                     }
                 }
             }
