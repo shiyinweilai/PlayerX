@@ -85,6 +85,19 @@ static QString normalizeFolderForMatch(const QString& raw) {
     if (t.isEmpty()) return QString();
     return QDir::cleanPath(QFileInfo(t).absoluteFilePath());
 }
+
+// folder 列显示名：file_path 所在目录的末 N 级路径（默认 3 级，如 "包名/g3/A"）。
+// 早期只取最后一段（"A"），后台列表无法区分同名文件夹，故多带两级父目录；
+// 分隔符统一为 '/'，兼容 Windows '\' 与 macOS/Linux '/'。
+// 用于 buildExportCsvBytes / buildArchiveExportCsvBytes 两处的 folder 列。
+static QString folderDisplayName(const QString& filePath, int levels = 3) {
+    if (filePath.isEmpty()) return QString();
+    QString dir = QFileInfo(filePath).dir().absolutePath();
+    dir.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const QStringList segs = dir.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    const int n = qMin(levels, segs.size());
+    return segs.mid(segs.size() - n).join(QLatin1Char('/'));
+}
 }  // namespace
 
 // ════════════════════════════════════════════════════════════════════════
@@ -868,9 +881,9 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
                                      ? dt.toString("yyyy-MM-dd HH:mm:ss")
                                      : rawTs;
 
-        // folder = file_path 所在目录的最后一段名字（与 UI 中折叠分组的标题一致）
-        QString folder;
-        if (!fp.isEmpty()) folder = QFileInfo(fp).dir().dirName();
+        // folder = file_path 所在目录的末三级路径（如 "包名/g3/A"），
+        // 后台列表可区分同名文件夹（见 folderDisplayName）
+        const QString folder = folderDisplayName(fp);
 
         const QString fileName =
             stripChannelPrefix(r.value("file_name").toString());
@@ -1043,8 +1056,8 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
                                      ? dt.toString("yyyy-MM-dd HH:mm:ss")
                                      : rawTs;
 
-        QString folder;
-        if (!fp.isEmpty()) folder = QFileInfo(fp).dir().dirName();
+        // folder = file_path 所在目录的末三级路径（与 buildExportCsvBytes 一致）
+        const QString folder = folderDisplayName(fp);
 
         const QString fileName =
             stripChannelPrefix(r.value("file_name").toString());
