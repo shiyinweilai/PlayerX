@@ -91,8 +91,12 @@ ApplicationWindow {
         // 导出/上传就已经处于"过滤为空"状态，避免残留旧勾选被写入 CSV）。
         _syncChecklistWhitelist()
 
-        // 恢复开发者模式开关（持久化）：默认不勾选（隐藏测试模式）；勾选后显示「测试模式」
-        try { root.developerMode = (Rating.loadString("ui/developerMode", "0") === "1") } catch (e) {}
+        // 开发者模式：不记忆，每次启动一律不勾选（隐藏测试模式），只能当次手动开启。
+        // 同时清掉历史版本可能残留的持久化值，避免旧机器上一直"被勾选"。
+        root.developerMode = false
+        try { Rating.saveString("ui/developerMode", "0") } catch (e) {}
+        // 恢复自动更新开关（持久化）：默认勾选（重启后自动检测并安装新版本）
+        try { root.autoUpdate = (Rating.loadString("ui/autoUpdate", "1") === "1") } catch (e) {}
         // 开发者模式未开启时，若历史记忆（rating.mode）停留在「测试模式」，强制回退为
         // 「关闭评分」——避免普通用户在不知情下处于测试模式（评分会写入测试 CSV）。
         if (!root.developerMode && typeof Rating !== "undefined" && Rating.currentMode === "test") {
@@ -672,14 +676,24 @@ ApplicationWindow {
 
             DarkMenuSeparator {}
 
-            // ── 开发者模式 ──（默认不勾选）
+            // ── 开发者模式 ──（每次启动一律不勾选，不记忆）
             // 勾选后：模式选择菜单 / 评分数据面板 Tab 中显示「测试模式」；
-            // 不勾选（默认）：测试模式隐藏。状态持久化到 QSettings，重启保持。
+            // 不勾选：测试模式隐藏。仅本次会话有效，重启恢复不勾选。
             DarkMenuItem {
                 text: qsTr("开发者模式")
                 checkable: true
                 checked: root.developerMode
                 onTriggered: root._setDeveloperMode(!root.developerMode)
+            }
+
+            // ── 自动更新 ──（默认勾选）
+            // 勾选：重启软件后自动检测并下载安装新版本，全程无需点击；
+            // 不勾选：维持原逻辑 —— 右上角胶囊提醒，用户手动选择更新。
+            DarkMenuItem {
+                text: qsTr("自动更新")
+                checkable: true
+                checked: root.autoUpdate
+                onTriggered: root._setAutoUpdate(!root.autoUpdate)
             }
         }
 
@@ -764,6 +778,14 @@ ApplicationWindow {
             if (Updater.state === "available" && updateDialog.userInitiated) {
                 updateDialog.open()
             }
+            // 【自动更新】勾选（默认）且为启动静默自检发现新版本：
+            // 直接弹进度窗并自动开始下载安装，全程无需用户点击；
+            // 未勾选 → 维持原逻辑（仅显示右上角胶囊，用户点击后才更新）。
+            if (Updater.state === "available" && !updateDialog.userInitiated && root.autoUpdate) {
+                console.log("[Updater] 自动更新开启，静默发现新版本 → 直接下载安装 v" + Updater.latestVersion)
+                updateDialog.open()
+                Updater.downloadAndApply()
+            }
             if (Updater.state === "error" && updateDialog.userInitiated) {
                 updateDialog.open()
             }
@@ -813,10 +835,21 @@ ApplicationWindow {
     // 不勾选（默认）：测试模式隐藏。
     // 状态持久化到 QSettings（ui/developerMode），重启保持。
     property bool developerMode: false
+
+    // 自动更新（默认勾选）：勾选时启动静默自检发现新版本后直接自动下载安装，
+    // 全程无需用户点击；不勾选则维持原逻辑（右上角胶囊提醒，手动更新）。
+    // 持久化 QSettings（ui/autoUpdate），重启保持。
+    property bool autoUpdate: true
+    function _setAutoUpdate(on) {
+        if (root.autoUpdate === on) return
+        root.autoUpdate = on
+        try { Rating.saveString("ui/autoUpdate", on ? "1" : "0") } catch (e) {}
+        console.log("[ConfigLoad] 自动更新 =", on)
+    }
     function _setDeveloperMode(on) {
         if (root.developerMode === on) return
         root.developerMode = on
-        try { Rating.saveString("ui/developerMode", on ? "1" : "0") } catch (e) {}
+        // 不持久化：仅本次会话有效，重启后一律恢复不勾选（见启动处）
         // 取消勾选开发者模式时，若当前正处于测试模式，立即回退为「关闭评分」
         if (!on && typeof Rating !== "undefined" && Rating.currentMode === "test") {
             console.log("[DevMode] 开发者模式关闭，当前模式为 test → 回退为 off")
