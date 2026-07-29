@@ -118,6 +118,15 @@ public:
     // 重复调用直接以 false 回调。
     Q_INVOKABLE void extractZipAsync(const QString& zipPath, const QString& destDir);
 
+    // 递归删除目录（含全部内容）。路径为空或不存在返回 false。
+    // 用途：测试源解压前清理旧的内容根目录 —— ditto/Expand-Archive 遇同名目录
+    // 是"合并覆盖"，旧文件会残留污染新导入的车道。
+    Q_INVOKABLE bool removeDirRecursively(const QString& path) const;
+
+    // 重命名/移动文件或目录（同卷内原子操作；dst 已存在时失败，调用方需先清理）。
+    // 用途：测试源暂存解压后，把内容根目录原子换名到最终位置。
+    Q_INVOKABLE bool renamePath(const QString& src, const QString& dst) const;
+
     // 列出目录的直接子目录（绝对路径，按名称升序）。目录不存在返回空表。
     // 用途：测试源解压后定位真正的内容根目录（zip 内常含单层顶层目录）。
     Q_INVOKABLE QStringList listSubDirs(const QString& dirPath) const;

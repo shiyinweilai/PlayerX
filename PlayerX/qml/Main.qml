@@ -3736,6 +3736,57 @@ ApplicationWindow {
         return ""
     }
 
+    // 暂存目录名（workDir 内）：测试源先解压到这里，校验/适配后再原子换名到位
+    readonly property string _tsStagingName: ".playerx_ts_staging"
+
+    // 把暂存目录里的解压结果放到最终内容根目录（extractTarget/rootDir）。
+    // 适配规则：
+    //   ① staging/rootDir 存在 → 正常路径（zip 结构与配置一致）；
+    //   ② 不存在但 staging 里只有 1 个顶层目录 → zip 被改过名（内部顶层目录名
+    //      与 rootDir 配置不一致），自动把该目录当内容根并改名为 rootDir；
+    //   ③ 其他 → 报错并列出实际解压出的顶层目录，引导修正配置。
+    // 就位前才清理旧内容根（护栏：必须严格位于 extractTarget 内部），
+    // 因此解压/适配失败时旧内容原样保留，不会像"先删再解"那样丢内容。
+    // 返回 "" 成功；非空为错误描述。
+    function _tsPlaceStagedContent(st, stagingDir) {
+        var rootRel = String(st.ts.rootDir || "").trim()
+        var finalRoot = st.extractTarget + "/" + rootRel
+        var stagedRoot = stagingDir + "/" + rootRel
+        if (!Fs.isDirectoryPath(stagedRoot)) {
+            var subs = []
+            try { subs = Fs.listSubDirs(stagingDir) || [] } catch (e) {}
+            // 过滤打包杂质目录：macOS 打的 zip 会带 __MACOSX 资源叉目录，
+            // macOS ditto 解压时自动忽略，但 Windows Expand-Archive 会原样解出，
+            // 不过滤会把顶层目录数判成 2 个，导致自动适配失效
+            subs = subs.filter(function(p) {
+                return String(p).split("/").pop() !== "__MACOSX"
+            })
+            if (subs.length === 1) {
+                console.warn("[TestSource] rootDir 配置「" + rootRel + "」与 zip 内顶层目录「"
+                    + subs[0] + "」不一致，已自动适配（建议在后台修正 rootDir）")
+                stagedRoot = subs[0]
+            } else {
+                var names = []
+                for (var i = 0; i < subs.length; ++i) names.push(subs[i].split("/").pop())
+                return "内容根目录不存在：" + finalRoot
+                    + "\n解压结果顶层目录：" + (names.length > 0 ? names.join("、") : "（无，zip 内可能只有散文件）")
+                    + "\n请检查 testSource.rootDir 配置"
+            }
+        }
+        // 清理旧内容根（护栏：finalRoot 必须严格位于 extractTarget 内部）
+        var prefix = st.extractTarget + "/"
+        if (finalRoot.length > prefix.length && finalRoot.indexOf(prefix) === 0
+                && Fs.isDirectoryPath(finalRoot)) {
+            console.log("[TestSource] 清理旧内容根目录:", finalRoot)
+            Fs.removeDirRecursively(finalRoot)
+        }
+        if (!Fs.renamePath(stagedRoot, finalRoot)) {
+            return "内容根目录就位失败：无法移动 " + stagedRoot + " → " + finalRoot
+        }
+        try { Fs.removeDirRecursively(stagingDir) } catch (e) {}
+        return ""
+    }
+
     // ── 测试源自动化：下载完成 → 解压 ──
     Connections {
         target: (typeof Downloader !== "undefined") ? Downloader : null
@@ -3752,7 +3803,18 @@ ApplicationWindow {
             testSourceDownloadDialog._progress = 1.0
             testSourceDownloadDialog._status = "downloading"   // 保持进度条满格可见
             testSourceDownloadDialog._statusText = "下载完成，正在解压…"
-            Fs.extractZipAsync(st.zipPath, st.extractTarget)
+            // rootDir 为非空相对路径（常规）：先解压到暂存目录，由 onZipExtracted
+            // 校验/适配后原子换名到位 —— zip 文件名随便改不影响（按 zip 内实际
+            // 顶层目录适配），且 ditto/Expand-Archive 的"合并覆盖"不会再残留污染；
+            // 解压失败时旧内容根目录原样保留。
+            // rootDir 为空 / 绝对路径（少见）：保持旧行为直接解压到 workDir。
+            var _rootRel = String(st.ts.rootDir || "").trim()
+            var _dest = st.extractTarget
+            if (_rootRel.length > 0 && _rootRel.charAt(0) !== "/") {
+                _dest = st.extractTarget + "/" + root._tsStagingName
+                if (Fs.isDirectoryPath(_dest)) Fs.removeDirRecursively(_dest)
+            }
+            Fs.extractZipAsync(st.zipPath, _dest)
         }
     }
 
@@ -3770,7 +3832,17 @@ ApplicationWindow {
                 return
             }
             testSourceDownloadDialog._statusText = "解压完成，正在导入…"
-            var err = root._tsImportAndStart(st, destDir)
+            // 走了暂存目录的，先把内容校验/适配并换名到最终内容根目录
+            var _suffix = "/" + root._tsStagingName
+            if (destDir.slice(-_suffix.length) === _suffix) {
+                var _placeErr = root._tsPlaceStagedContent(st, destDir)
+                if (_placeErr.length > 0) {
+                    testSourceDownloadDialog._status = "error"
+                    testSourceDownloadDialog._statusText = _placeErr
+                    return
+                }
+            }
+            var err = root._tsImportAndStart(st, st.extractTarget)
             if (err.length > 0) {
                 testSourceDownloadDialog._status = "error"
                 testSourceDownloadDialog._statusText = err

@@ -390,6 +390,19 @@ void FsUtils::extractZipAsync(const QString& zipPath, const QString& destDir) {
     proc->start(program, args);
 }
 
+bool FsUtils::removeDirRecursively(const QString& path) const {
+    if (path.isEmpty()) return false;
+    QDir d(path);
+    if (!d.exists()) return false;
+    return d.removeRecursively();
+}
+
+bool FsUtils::renamePath(const QString& src, const QString& dst) const {
+    if (src.isEmpty() || dst.isEmpty()) return false;
+    if (!QFileInfo::exists(src)) return false;
+    return QDir().rename(src, dst);
+}
+
 QStringList FsUtils::listSubDirs(const QString& dirPath) const {
     QStringList out;
     if (dirPath.isEmpty()) return out;
