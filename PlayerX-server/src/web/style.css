@@ -1172,13 +1172,16 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     overflow: hidden;
 }
 
-/* 左侧配置列表 */
+/* 左侧配置列表：独立带边界面板（完整边框 + 圆角 + 轻阴影），与页面底色拉开层次 */
 .dim-sidebar {
     width: 220px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--border, #2a2b33);
+    margin: 12px;
+    border: 1px solid var(--border, #2a2b33);
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(20, 20, 40, .05);
     background: var(--bg-elev-1, #16171c);
     overflow: hidden;
 }
@@ -1477,28 +1480,28 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     gap: 8px;
     margin-bottom: 18px;
 }
+/* 元信息：「标签 + 键入框」样式（不再是切换按钮式胶囊） */
 .dim-meta-item {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-size: 13px;
+    gap: 8px;
+    font-size: 13px;   /* 与下方 Tab 栏（dim-tab 13px）一致 */
     color: var(--text, #ecedf3);
     white-space: nowrap;
-    padding: 4px 10px 4px 6px;
-    border-radius: 999px;
-    background: var(--bg-elev-1, #16171c);
-    border: 1px solid var(--border-soft, #1f2027);
 }
 .dim-meta-item.dim-meta-muted {
     color: var(--muted, #86868b);
 }
 .dim-meta-label {
     flex-shrink: 0;
-    font-size: 11px;
+    height: 32px;             /* 与 dim-tab 显式同高，两行视觉平齐 */
+    display: inline-flex;
+    align-items: center;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: .06em;
-    padding: 2px 8px;
-    border-radius: 999px;
+    padding: 0 10px;
+    border-radius: 6px;   /* 小方角标签，与键入框风格统一 */
     color: var(--primary, #0071e3);
     background: rgba(0, 113, 227, .12);
 }
@@ -1506,6 +1509,30 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     font-size: 13px;
     font-weight: 600;
     color: var(--text, #ecedf3);
+}
+/* 可点击编辑的值：柔和填充式键入框（与 Tab 轨道同色系浅灰底、常态无硬边框，
+   不生硬；悬停浮起 + 主题色描边提示可编辑；点击后原有内联编辑逻辑接管） */
+.dim-meta-editable {
+    display: inline-flex;
+    align-items: center;
+    min-width: 90px;
+    height: 32px;             /* 与 dim-tab 显式同高 */
+    padding: 0 12px;
+    font-size: 13px;
+    border-radius: 9px;     /* 与 dim-tab 圆角一致 */
+    background: var(--bg-hover, #21222a);
+    border: 1px solid transparent;
+    cursor: text;
+    transition: background .12s, border-color .12s, box-shadow .12s;
+}
+.dim-meta-editable:hover {
+    background: var(--bg-elev-1, #16171c);
+    border-color: var(--primary, #0071e3);
+    box-shadow: 0 0 0 3px rgba(0, 113, 227, .10);
+}
+/* 备注 tag 的键入框加宽一倍 */
+.dim-meta-tag .dim-meta-editable {
+    min-width: 180px;
 }
 
 /* 按字段类型分色 */
@@ -1561,6 +1588,8 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     background: var(--bg-elev-1, #16171c);
     border: 1px solid var(--border, #2a2b33);
     border-radius: var(--radius-lg, 14px);
+    /* 立体感：近处接触影 + 远处环境影，比单纯描边更有层次 */
+    box-shadow: 0 1px 2px rgba(20, 20, 40, .05), 0 6px 18px rgba(20, 20, 40, .06);
     overflow: hidden;
     display: flex;
     flex-direction: row;
@@ -1706,12 +1735,13 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     box-shadow: 0 2px 8px rgba(10, 132, 255, .35);
 }
 
-/* 卡片 hover 更精致的浮起 */
+/* 卡片 hover 更精致的浮起：轻微上移 + 阴影加深扩散 */
 .dim-card {
     transition: box-shadow .18s, transform .18s;
 }
 .dim-card:hover {
-    box-shadow: 0 4px 16px rgba(0, 0, 0, .06);
+    transform: translateY(-2px);
+    box-shadow: 0 2px 4px rgba(20, 20, 40, .06), 0 12px 30px rgba(20, 20, 40, .10);
 }
 
 /* 编辑器区域（管理员登录后） */
@@ -1976,7 +2006,8 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     border: 1px solid var(--border, #2a2b33);
     border-radius: var(--radius-lg, 14px);
     overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, .03);
+    /* 与维度卡片同一套立体感阴影 */
+    box-shadow: 0 1px 2px rgba(20, 20, 40, .05), 0 6px 18px rgba(20, 20, 40, .06);
 }
 .dim-cl-header {
     display: flex;
@@ -2226,48 +2257,45 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
 }
 
 /* ─── 配置详情 Tab 栏（维度 / Checklist / 测试源）─── */
+/* Tab 栏：分段控件样式（轨道 + 浮起选中块），比下划线式更有立体感 */
 .dim-tabbar {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 0 28px;
-    margin-top: 12px;
-    border-bottom: 1px solid var(--border-soft, #1f2027);
+    gap: 4px;
+    padding: 4px;
+    /* 原 padding 0 28px 会与 dim-view 的 32px 内边距叠加错位，去掉后与卡片左缘对齐 */
+    margin: 14px 0 0;
+    background: var(--bg-hover, #21222a);
+    border: 1px solid var(--border, #2a2b33);
+    border-radius: 12px;
 }
 .dim-tab {
     appearance: none;
-    border: 1px solid transparent;
-    border-bottom: none;
+    border: none;
     background: transparent;
     color: var(--text-dim, #6f707a);
     font-size: 13px;
     font-weight: 500;
-    padding: 8px 16px;
-    border-radius: 10px 10px 0 0;
+    height: 32px;             /* 与元信息行显式同高 */
+    display: inline-flex;
+    align-items: center;
+    padding: 0 16px;
+    border-radius: 9px;
     cursor: pointer;
-    position: relative;
-    top: 1px;
-    transition: color .12s, background .12s, border-color .12s;
+    transition: color .12s, background .12s, box-shadow .12s;
 }
 .dim-tab:hover {
     color: var(--text, #ecedf3);
-    background: var(--bg-hover, #21222a);
 }
 .dim-tab.is-active {
     color: var(--primary, #0071e3);
     background: var(--bg-elev-1, #16171c);
-    border-color: var(--border, #2a2b33);
     font-weight: 600;
+    box-shadow: 0 1px 3px rgba(20, 20, 40, .14);
 }
+/* 分段控件样式下不再需要下划线指示条 */
 .dim-tab.is-active::after {
-    content: '';
-    position: absolute;
-    left: 10px;
-    right: 10px;
-    bottom: -1px;
-    height: 2px;
-    border-radius: 1px;
-    background: var(--primary, #0071e3);
+    display: none;
 }
 
 /* ─── 测试源自动化配置区（testSource）─── */
