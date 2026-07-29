@@ -3688,10 +3688,18 @@ ApplicationWindow {
         if (!Fs.isDirectoryPath(rootDir))
             return "内容根目录不存在：" + rootDir + "\n（请检查 testSource.rootDir 配置）"
 
+        // 组别：选组流程已在 _tsGateGroup 完成，这里把有效根切到所选组目录
+        // （g1/g2 等二级目录内各自包含完整的 laneDirs / 参考图 / 提示词）
+        var effRoot = rootDir
+        if (st._chosenGroup) {
+            effRoot = rootDir + "/" + st._chosenGroup
+            if (!Fs.isDirectoryPath(effRoot)) return "所选组别目录不存在：" + effRoot
+        }
+
         // 收集 lane 绝对路径并校验存在性
         var lanes = []
         for (var j = 0; j < laneDirs.length; ++j) {
-            var p = rootDir + "/" + laneDirs[j]
+            var p = effRoot + "/" + laneDirs[j]
             if (!Fs.isDirectoryPath(p)) return "缺少对比目录：" + p
             lanes.push(p)
         }
@@ -3709,9 +3717,9 @@ ApplicationWindow {
             if (legacyRef.length > 0) refDirs.push(legacyRef)
         }
         var csvRel = String(ts.promptCsv || "").trim()
-        var refAbs1 = refDirs.length > 0 ? rootDir + "/" + refDirs[0] : ""
-        var refAbs2 = refDirs.length > 1 ? rootDir + "/" + refDirs[1] : ""
-        var csvAbs = csvRel.length > 0 ? rootDir + "/" + csvRel : ""
+        var refAbs1 = refDirs.length > 0 ? effRoot + "/" + refDirs[0] : ""
+        var refAbs2 = refDirs.length > 1 ? effRoot + "/" + refDirs[1] : ""
+        var csvAbs = csvRel.length > 0 ? effRoot + "/" + csvRel : ""
         var bindRef1 = refAbs1.length > 0 && Fs.isDirectoryPath(refAbs1)
         var bindRef2 = refAbs2.length > 0 && Fs.isDirectoryPath(refAbs2)
         var bindCsv = csvAbs.length > 0 && Fs.fileExists(csvAbs)
@@ -3721,7 +3729,8 @@ ApplicationWindow {
             if (bindRef2) Reference.setReferenceFolder2(lanes[k], refAbs2)
             if (bindCsv) Reference.setReferenceCsv(lanes[k], csvAbs)
         }
-        console.log("[TestSource] 根目录:", rootDir, " 路:", lanes.join(" | "),
+        console.log("[TestSource] 根目录:", rootDir, " 组别:", st._chosenGroup || "(无)",
+            " 路:", lanes.join(" | "),
             " 参考图1:", bindRef1 ? refAbs1 : "(无)",
             " 参考图2:", bindRef2 ? refAbs2 : "(无)",
             " CSV:", bindCsv ? csvAbs : "(无)")
@@ -3738,6 +3747,82 @@ ApplicationWindow {
 
     // 暂存目录名（workDir 内）：测试源先解压到这里，校验/适配后再原子换名到位
     readonly property string _tsStagingName: ".playerx_ts_staging"
+
+    // ─── 组别（g1/g2 二级目录）─────────────────────────────────────
+    // 选组挂起时的上下文（st + extractTarget）；用户最近选择的组（会话内记忆）
+    property var    _tsGroupCtx: null
+    property string _tsLastGroup: ""
+
+    // 检测内容根下的「组别」子目录：包含全部 laneDirs 的二级目录（如 g1/g2）。
+    // 返回组名数组（仅名字）。__MACOSX 等杂质目录天然不含 laneDirs，自动排除。
+    function _tsDetectGroups(rootDir, laneDirs) {
+        var subs = []
+        try { subs = Fs.listSubDirs(rootDir) || [] } catch (e) {}
+        var out = []
+        for (var i = 0; i < subs.length; ++i) {
+            var name = String(subs[i]).split("/").pop()
+            if (name === "__MACOSX") continue
+            var all = true
+            for (var j = 0; j < laneDirs.length; ++j) {
+                if (!Fs.isDirectoryPath(subs[i] + "/" + laneDirs[j])) { all = false; break }
+            }
+            if (all) out.push(name)
+        }
+        return out
+    }
+
+    // 组别门：内容根下检测到组别目录时，弹窗让用户选择要导入的组，
+    // 选定后由 _tsOnGroupChosen 继续原导入流程。
+    // 返回 true = 已挂起等用户选择（调用方应直接 return）；false = 无需选组。
+    function _tsGateGroup(st, extractTarget) {
+        if (st._chosenGroup) return false
+        var ts = st.ts
+        var laneDirs = []
+        if (ts.laneDirs && typeof ts.laneDirs.length === "number") {
+            for (var i = 0; i < ts.laneDirs.length; ++i) {
+                var s = String(ts.laneDirs[i] || "").trim()
+                if (s.length > 0) laneDirs.push(s)
+            }
+        }
+        if (laneDirs.length === 0) return false
+        var rootDir = root._tsRootDirFor(ts, extractTarget)
+        if (!Fs.isDirectoryPath(rootDir)) return false   // 交给原逻辑报"根目录不存在"
+        var groups = root._tsDetectGroups(rootDir, laneDirs)
+        if (groups.length === 0) return false
+        console.log("[TestSource] 检测到组别:", groups.join(" | "), " 等待用户选择")
+        root._tsGroupCtx = { st: st, extractTarget: extractTarget }
+        testSourceGroupDialog.openWith(groups,
+            root._tsLastGroup || String(ts.group || "").trim(), st.configName || "")
+        testSourceDownloadDialog.close()   // 避免与选组弹窗两层叠压
+        return true
+    }
+
+    // 选组确认：把所选组挂到 st 上，继续原导入流程（错误回显到下载弹窗）
+    function _tsOnGroupChosen(g) {
+        var ctx = root._tsGroupCtx
+        root._tsGroupCtx = null
+        if (!ctx) return
+        root._tsLastGroup = g
+        ctx.st._chosenGroup = g
+        console.log("[TestSource] 用户选择组别:", g)
+        var err = root._tsImportAndStart(ctx.st, ctx.extractTarget)
+        if (err.length > 0) {
+            testSourceDownloadDialog._status = "error"
+            testSourceDownloadDialog._statusText = err
+            testSourceDownloadDialog.open()
+            return
+        }
+        // 记录本次产物（与 onZipExtracted 成功路径一致，供下次「跳过下载」判重）
+        root._tsSaveLastAuto(ctx.st)
+        testSourceDownloadDialog.close()
+    }
+
+    function _tsOnGroupCancel() {
+        console.log("[TestSource] 用户取消选组，本次自动化中止")
+        root._tsGroupCtx = null
+        testSourceDownloadDialog.close()
+    }
+
 
     // 把暂存目录里的解压结果放到最终内容根目录（extractTarget/rootDir）。
     // 适配规则：
@@ -3849,6 +3934,8 @@ ApplicationWindow {
                     return
                 }
             }
+            // 组别门：内容根下含 g1/g2 等组别时，先弹窗让用户选组再继续
+            if (root._tsGateGroup(st, st.extractTarget)) return
             var err = root._tsImportAndStart(st, st.extractTarget)
             if (err.length > 0) {
                 testSourceDownloadDialog._status = "error"
@@ -3860,6 +3947,165 @@ ApplicationWindow {
             // 成功：静默关闭下载弹窗（直接进入打分界面）；
             // 弹窗只保留给下载/解压/导入过程和失败场景。
             testSourceDownloadDialog.close()
+        }
+    }
+
+    // ─── 测试源组别选择对话框 ─────────────────────────────────────────
+    // 测试源内容根下检测到多个组别（g1/g2…）时，接受后弹出让用户选择要导入的一组，
+    // 选定后按该组继续原流程；取消则中止本次自动化。
+    Dialog {
+        id: testSourceGroupDialog
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.NoAutoClose
+        implicitWidth: 440
+
+        property var    _groups: []
+        property string _defaultGroup: ""
+        property string _configName: ""
+
+        function openWith(groups, defGroup, cfgName) {
+            _groups = groups || []
+            _defaultGroup = defGroup || ""
+            _configName = cfgName || ""
+            open()
+        }
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+        }
+
+        header: Rectangle {
+            color: "#1a2f4a"
+            implicitHeight: 46
+            radius: 6
+            // 盖住 header 底部圆角，与内容区平直衔接
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 6
+                color: "#1a2f4a"
+            }
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: "📦 选择测试源组别"
+                color: "#f0f0f3"
+                font.pixelSize: 14
+                font.bold: true
+            }
+            Text {
+                anchors.right: parent.right
+                anchors.rightMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                visible: testSourceGroupDialog._configName.length > 0
+                text: testSourceGroupDialog._configName
+                color: "#9a9aa8"
+                font.pixelSize: 12
+            }
+        }
+
+        contentItem: Item {
+            implicitWidth: 408
+            implicitHeight: groupCol.implicitHeight
+
+            Column {
+                id: groupCol
+                anchors.fill: parent
+                spacing: 10
+                topPadding: 14
+                bottomPadding: 14
+
+                Text {
+                    width: parent.width
+                    text: "该测试源包含多个组别，请选择要导入对比的一组："
+                    color: "#c8c8cc"
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
+
+                Repeater {
+                    model: testSourceGroupDialog._groups
+                    delegate: Rectangle {
+                        id: gBtn
+                        width: parent ? parent.width : 0
+                        height: 42
+                        radius: 6
+                        property bool isDefault: modelData === testSourceGroupDialog._defaultGroup
+                        color: gMa.containsMouse ? "#2a2a35" : (isDefault ? "#22303f" : "#222228")
+                        border.color: isDefault ? "#5a8fd8" : "#3a3a45"
+                        border.width: isDefault ? 1.5 : 1
+
+                        Text {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 14
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData
+                            color: "#e8e8ec"
+                            font.pixelSize: 14
+                            font.bold: gBtn.isDefault
+                        }
+                        Text {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 14
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: gBtn.isDefault
+                            text: "默认"
+                            color: "#5a8fd8"
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: gMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                testSourceGroupDialog.close()
+                                root._tsOnGroupChosen(modelData)
+                            }
+                        }
+                    }
+                }
+
+                Item {
+                    width: parent ? parent.width : 0
+                    height: 32
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 76
+                        height: 30
+                        radius: 5
+                        color: gCancelMa.containsMouse ? "#33333c" : "#26262c"
+                        border.color: "#3a3a45"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: "取消"
+                            color: "#c8c8cc"
+                            font.pixelSize: 12
+                        }
+                        MouseArea {
+                            id: gCancelMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                testSourceGroupDialog.close()
+                                root._tsOnGroupCancel()
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3917,7 +4163,11 @@ ApplicationWindow {
             d._status     = "downloading"
             d._statusText = "跳过下载，正在导入…"
             d.open()
-            var err = root._tsImportAndStart({ ts: st.ts }, st.extractTarget)
+            var _stObj = { ts: st.ts, configName: st.configName,
+                           zipPath: st.zipPath, extractTarget: st.extractTarget }
+            // 组别门：跳过下载同样可能遇到多组别包，先弹窗选组
+            if (root._tsGateGroup(_stObj, st.extractTarget)) { d.close(); return }
+            var err = root._tsImportAndStart(_stObj, st.extractTarget)
             if (err.length > 0) {
                 d._status = "error"
                 d._statusText = err

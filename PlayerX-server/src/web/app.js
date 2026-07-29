@@ -1096,6 +1096,7 @@
                 ['url',          'zip 下载地址（必填）：相对路径 /testsrc/xx.zip 随服务器迁移免改；COS 等绝对地址原样使用'],
                 ['workDir',      '下载 + 解压目录（支持 ~ 开头，默认系统 Downloads）'],
                 ['rootDir',      '内容根目录 = zip 内顶层目录名（相对 workDir；"/" 开头视为绝对路径）'],
+                ['group',        '默认组别（可选）：内容根下含 g1/g2 等分组目录时，客户端「接受」后弹窗选组，此处为默认选中组'],
                 ['promptCsv',    '提示词 CSV（相对内容根；留空则不绑定）'],
             ];
             const rowsHtml = fields.map(([f, tip]) => {
