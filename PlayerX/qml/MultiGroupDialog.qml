@@ -1949,6 +1949,59 @@ ApplicationWindow {
         return start()
     }
 
+    // ─── 刷新「未导入」空态的已有路 ─────────────────────────────────
+    // 条件：folderPath 非空且 currentPath 为空（恢复缓存时文件夹为空/不存在，
+    // 之后内容才被补齐 —— 如测试源解压、用户手动拷入文件）。
+    // prefFiles：调用方已扫描好的文件列表（可选，省去重复扫描）。
+    // 返回 true = 该路被刷新出了内容。
+    //
+    // 【关键】必须优先走「行 delegate 自身的注入路径」：给行赋 allFiles，
+    //   由行内部 _recomputeVisible 重算 visibleFiles/currentIndex 并经
+    //   laneChanged → _syncLaneFromRow 一致写回模型。
+    //   不能直接改模型——行的 currentIndex/selected 绑定早被行内命令式赋值
+    //   破坏（QML 绑定一旦在行内被 = 赋值即断裂），行内部状态（allFiles=[]、
+    //   currentIndex=-1）与模型分叉；之后任何一次 laneChanged（如勾选）都会
+    //   用行的旧空状态把模型的刷新结果覆盖回去（实测 currentIndex 0→-1 反转）。
+    function _refreshLaneIfEmpty(idx, prefFiles) {
+        if (idx < 0 || idx >= _rowsModel.count) return false
+        var l = _rowsModel.get(idx)
+        if (!l) return false
+        var fp = l.folderPath || ""
+        if (fp.length === 0) return false
+        if (l.currentPath && l.currentPath.length > 0) return false   // 已有内容，不动
+        var files = prefFiles
+        if (!files || files.length === 0) {
+            try { files = Fs.scanVideoFolderPath(fp, true) || [] } catch (e) { files = [] }
+        }
+        if (!files || files.length === 0) return false
+
+        // ① 行已实例化（常规）：走行自身注入路径，模型/runtime 由行的回写同步
+        var rowItem = rowsRepeater.itemAt(idx)
+        if (rowItem) {
+            rowItem.allFiles = files   // onAllFilesChanged → _recomputeVisible → 回写模型
+            console.log("[MGD] 空态路已刷新出内容(经行注入):", fp, "文件数:", files.length)
+            return true
+        }
+
+        // ② 行未实例化（极端兜底）：只更新模型 + runtime，
+        //    行创建时 Component.onCompleted 会从 _laneRuntime 注入
+        var visible = _filterAndSort(files, l.keyword || "")
+        if (idx < _laneRuntime.length) {
+            _laneRuntime[idx] = { allFiles: files, visibleFiles: visible }
+        } else {
+            // 兜底：极端情况下 runtime 与 model 长度不齐，补齐空槽再写入
+            while (_laneRuntime.length < idx) _laneRuntime.push({ allFiles: [], visibleFiles: [] })
+            _laneRuntime.push({ allFiles: files, visibleFiles: visible })
+        }
+        var ci = visible.length > 0 ? 0 : -1
+        _rowsModel.setProperty(idx, "currentIndex", ci)
+        _rowsModel.setProperty(idx, "currentPath", ci >= 0 ? visible[ci] : "")
+        _rowsModel.setProperty(idx, "allCount", files.length)
+        _rowsModel.setProperty(idx, "visibleCount", visible.length)
+        console.log("[MGD] 空态路已刷新出内容:", fp, "文件数:", files.length)
+        return true
+    }
+
     // ─── 把若干文件夹路径「追加合并」进 lanes 历史（仅写入，不启动）──
     //   · 已存在同路径的 lane → 跳过（不重复添加）
     //   · 不在历史中且能扫出视频 → 追加为新 lane（默认 selected=false：
@@ -2021,10 +2074,20 @@ ApplicationWindow {
             //   · 默认行为：直接跳过，不再强制 selected=true ——
             //     "任何时候不替用户勾选"原则：重复拖入/选择也不自动勾上已有路，
             //     其余字段（keyword / currentIndex / currentPath）保留不动。
+            //   · 例外：已有路处于「未导入」空态（currentPath 为空）时，用本次扫描
+            //     结果刷新它 —— 典型场景：缓存恢复时文件夹为空/不存在，测试源自动化
+            //     随后才把新内容解压进同一目录；不刷新的话 start() 会因 currentPath
+            //     为空跳过这些路，报"没有可播放的视频/路数上限"。
             //   · allowDuplicate=true：跳过该分支，继续走下方的「新增一路」逻辑，
             //     让用户得到一条与已有路同目录的新路（典型场景：刻意做同源对比）。
             if (existing[folderPath] && !allowDup) {
                 if (hitPaths.indexOf(folderPath) < 0) hitPaths.push(folderPath)
+                for (var ei = 0; ei < _rowsModel.count; ++ei) {
+                    var el = _rowsModel.get(ei)
+                    if (el && el.folderPath === folderPath) {
+                        _refreshLaneIfEmpty(ei, files)
+                    }
+                }
                 continue
             }
 
@@ -2065,6 +2128,15 @@ ApplicationWindow {
     //   · 合并后会触发一次 _persistLanes() 同步 lanes 持久化。
     // 返回：本次实际新追加的路径数。
     function _mergeFolderHistoryIntoLanes() {
+        // 自愈：已有但处于「未导入」空态的路（如恢复时文件夹为空、之后内容
+        // 才被补齐），趁打开对话框重新扫描刷新，避免用户看到空路无从下手。
+        // 与历史合并无关，无论历史是否为空都执行。
+        var refreshed = 0
+        for (var r0 = 0; r0 < _rowsModel.count; ++r0) {
+            if (_refreshLaneIfEmpty(r0)) refreshed++
+        }
+        if (refreshed > 0) { _bumpState(); _persistLanes() }
+
         var hist = _loadFolderHistory()
         if (!hist || hist.length === 0) return 0
 

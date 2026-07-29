@@ -3592,12 +3592,31 @@ ApplicationWindow {
             : extractTarget
     }
 
+    // 解析测试源 url：
+    //   · 绝对地址（http/https，如 COS 外链）→ 原样使用；
+    //   · 相对路径（/testsrc/xxx.zip）→ 按当前配置服务器的 origin 拼接 ——
+    //     配置可原样拷贝迁移服务器，url 永远不用手改；
+    //   · 其他形态（file:// 等）→ 原样交给下载器。
+    function _tsResolveUrl(rawUrl) {
+        var u = String(rawUrl || "").trim()
+        if (u.length === 0) return ""
+        if (/^https?:\/\//i.test(u)) return u
+        if (u.charAt(0) === "/") {
+            var base = root._dimApiUrl()   // http://host:port/api/dimensions
+            var origin = base ? base.replace(/\/api\/dimensions$/, "") : ""
+            if (origin.length > 0) return origin + u
+            console.warn("[TestSource] url 为相对路径但未配置服务器，无法解析:", u)
+            return ""
+        }
+        return u
+    }
+
     function _startTestSourceAutomation(ts, configName) {
         if (root._tsAuto) {
             console.warn("[TestSource] 已有自动化任务进行中，忽略本次触发")
             return
         }
-        var url = String(ts.url || "").trim()
+        var url = root._tsResolveUrl(ts.url)
         if (url.length === 0) return
         var fileName = url.split("/").pop().split("?")[0] || "test-source.zip"
         var workDir = root._tsExpandHome(String(ts.workDir || "").trim())
@@ -3628,7 +3647,7 @@ ApplicationWindow {
 
     // 真正开始下载（普通路径与「重新下载」强制路径共用）
     function _tsBeginDownload(ts, configName, fileName, zipPath, extractTarget) {
-        var url = String(ts.url || "").trim()
+        var url = root._tsResolveUrl(ts.url)   // 相对路径在此兜底解析（幂等）
         root._tsAuto = {
             ts: ts, configName: configName,
             zipPath: zipPath, extractTarget: extractTarget

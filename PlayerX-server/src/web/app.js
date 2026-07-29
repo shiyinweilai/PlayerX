@@ -1093,7 +1093,7 @@
                 + `<button class="dim-cl-add-btn dim-ts-add-btn">＋ 添加测试源配置</button>`;
         } else {
             const fields = [
-                ['url',          'zip 下载地址（必填，点击「接受」后自动下载并解压）'],
+                ['url',          'zip 下载地址（必填）：相对路径 /testsrc/xx.zip 随服务器迁移免改；COS 等绝对地址原样使用'],
                 ['workDir',      '下载 + 解压目录（支持 ~ 开头，默认系统 Downloads）'],
                 ['rootDir',      '内容根目录 = zip 内顶层目录名（相对 workDir；"/" 开头视为绝对路径）'],
                 ['promptCsv',    '提示词 CSV（相对内容根；留空则不绑定）'],
@@ -1251,10 +1251,11 @@
                     if (!r.ok || !data || !data.ok) {
                         throw new Error((data && data.error) || ('HTTP ' + r.status));
                     }
-                    // 回填绝对地址（客户端按此下载）；mutateTestSource 内部会保存并刷新分区
-                    const abs = location.origin + data.url;
-                    mutateTestSource(ts => { ts.url = abs; });
-                    showToast('已上传并填入测试源地址：' + data.name, 'ok');
+                    // 存相对路径（/testsrc/xxx.zip）：客户端自动按当前配置的服务器
+                    // origin 拼接，迁移服务器后配置原样拷贝即可，url 无需手改；
+                    // mutateTestSource 内部会保存并刷新分区
+                    mutateTestSource(ts => { ts.url = data.url; });
+                    showToast('已上传并填入测试源地址（相对路径，随服务器迁移）：' + data.name, 'ok');
                 } catch (err) {
                     showToast('上传失败：' + err.message, 'err');
                 } finally {
