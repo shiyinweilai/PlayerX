@@ -3777,8 +3777,15 @@ ApplicationWindow {
         var prefix = st.extractTarget + "/"
         if (finalRoot.length > prefix.length && finalRoot.indexOf(prefix) === 0
                 && Fs.isDirectoryPath(finalRoot)) {
+            // Windows 特有：旧内容根里的视频可能正在被播放（文件被系统锁定），
+            // 此时删除会静默失败、后续换名也失败。先关闭全部播放释放句柄 ——
+            // 自动化本来就会用新内容替换当前会话；macOS 无文件锁，调用无害。
+            try { Engine.closeAll() } catch (e) {}
             console.log("[TestSource] 清理旧内容根目录:", finalRoot)
-            Fs.removeDirRecursively(finalRoot)
+            if (!Fs.removeDirRecursively(finalRoot) && Fs.isDirectoryPath(finalRoot)) {
+                return "旧内容根目录删除失败（文件可能被占用）：" + finalRoot
+                    + "\n请关闭正在播放的相关视频后重试"
+            }
         }
         if (!Fs.renamePath(stagedRoot, finalRoot)) {
             return "内容根目录就位失败：无法移动 " + stagedRoot + " → " + finalRoot
