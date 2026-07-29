@@ -237,7 +237,8 @@ public slots:
     Q_INVOKABLE void revealArchiveFolder(const QString& mode = {}) const;
 
     // 平台用户名兑底（当 currentUser 为空时使用）
-    QString systemUserName() const;
+    // Q_INVOKABLE：QML 端测试源组别自动分配（groupMap）也用同一份兜底身份。
+    Q_INVOKABLE QString systemUserName() const;
 
     // ── 通用 KV 持久化（QSettings 透传）──────────────────────────
     // 复用 RatingStore 已有的 QSettings 实例（与 currentUser 等共用同一份 ini 文件），

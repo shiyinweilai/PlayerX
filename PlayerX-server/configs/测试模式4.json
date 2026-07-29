@@ -1,5 +1,5 @@
 {
-  "type": "测试模式",
+  "type": "测试模式4",
   "tag": "测试tag",
   "task": "测试任务",
   "scale": "1-5 Likert 整数",
@@ -75,6 +75,11 @@
     "promptCsv": "prompt.csv",
     "referenceDirs": [
       "first_frames"
-    ]
+    ],
+    "groups": {
+      "g1": [
+        "rbyang"
+      ]
+    }
   }
 }

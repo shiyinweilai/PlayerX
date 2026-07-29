@@ -735,6 +735,170 @@ ApplicationWindow {
                 onTriggered: aboutDialog.open()
             }
         }
+
+        // ─── 登录 ────────────────────────────────────────────────
+        // 当前仅「评分人设置」：评分数据上传署名 + 测试源组别自动分配（groupMap）；
+        // 与「评分数据面板」顶部的评分人输入框是同一份数据（Rating.currentUser）。
+        // 后续账号体系的其他能力往这个菜单里加。
+        DarkMenu {
+            id: loginMenu
+            title: qsTr("登录")
+            DarkMenuItem {
+                text: qsTr("评分人设置…")
+                onTriggered: loginDialog.open()
+            }
+        }
+    }
+
+    // ─── 登录对话框 ───────────────────────────────────────────────
+    Dialog {
+        id: loginDialog
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape
+        implicitWidth: 420
+        padding: 0
+
+        Overlay.modal: Rectangle { color: "#aa000000" }
+
+        background: Rectangle {
+            color: "#1e1e22"
+            border.color: "#3a3a42"
+            border.width: 1
+            radius: 6
+        }
+
+        header: Rectangle {
+            color: "#22303f"
+            implicitHeight: 46
+            radius: 6
+            // 盖住 header 底部圆角，与内容区平直衔接
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 6
+                color: "#22303f"
+            }
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                text: "👤 登录"
+                color: "#f0f0f3"
+                font.pixelSize: 14
+                font.bold: true
+            }
+        }
+
+        contentItem: Item {
+            implicitWidth: 388
+            implicitHeight: loginCol.implicitHeight
+
+            Column {
+                id: loginCol
+                anchors.fill: parent
+                spacing: 10
+                topPadding: 16
+                bottomPadding: 14
+
+                Text {
+                    width: parent.width
+                    text: "评分人：用于评分数据上传署名；若后台配置了组别分配，接受测试源时按评分人自动选组。"
+                    color: "#c8c8cc"
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 34
+                    radius: 5
+                    color: "#101013"
+                    border.color: loginNameField.activeFocus ? "#5a8fd8" : "#2c2c32"
+                    border.width: 1
+                    TextInput {
+                        id: loginNameField
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        verticalAlignment: TextInput.AlignVCenter
+                        color: "#e8e8ec"
+                        font.pixelSize: 13
+                        selectByMouse: true
+                        Keys.onReturnPressed: loginSaveMa.clicked(null)
+                        Keys.onEnterPressed: loginSaveMa.clicked(null)
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: loginNameField.text.length === 0
+                            text: "请输入姓名，如 张三"
+                            color: "#55555e"
+                            font.pixelSize: 12
+                        }
+                    }
+                }
+
+                Item {
+                    width: parent.width
+                    height: 32
+                    // 取消
+                    Rectangle {
+                        anchors.right: loginSaveBtn.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 76
+                        height: 30
+                        radius: 5
+                        color: loginCancelMa.containsMouse ? "#33333c" : "#26262c"
+                        border.color: "#3a3a45"
+                        border.width: 1
+                        Text { anchors.centerIn: parent; text: "取消"; color: "#c8c8cc"; font.pixelSize: 12 }
+                        MouseArea {
+                            id: loginCancelMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: loginDialog.close()
+                        }
+                    }
+                    // 保存
+                    Rectangle {
+                        id: loginSaveBtn
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 76
+                        height: 30
+                        radius: 5
+                        color: loginSaveMa.containsMouse ? "#0db092" : "#0fa085"
+                        Text { anchors.centerIn: parent; text: "保存"; color: "#ffffff"; font.pixelSize: 12; font.bold: true }
+                        MouseArea {
+                            id: loginSaveMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                var v = loginNameField.text.trim()
+                                if (typeof Rating !== "undefined") Rating.currentUser = v
+                                console.log("[Login] 评分人设置为:", v || "(空)")
+                                updateToast.text = v.length > 0
+                                        ? "评分人已设置为「" + v + "」"
+                                        : "已清除评分人（上传评分数据前需重新填写）"
+                                updateToast.open()
+                                loginDialog.close()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        onOpened: {
+            loginNameField.text = (typeof Rating !== "undefined" && Rating.currentUser)
+                                  ? Rating.currentUser : ""
+            loginNameField.forceActiveFocus()
+            loginNameField.selectAll()
+        }
     }
 
     // 注：Windows 标题栏左上角曾尝试放窗口图标（bg 内 / parent:appMenuBar /
@@ -3771,6 +3935,34 @@ ApplicationWindow {
         return out
     }
 
+    // 解析「评分人→组别」映射，命中返回组别名，否则返回 ""。
+    // 新结构：ts.groups 为对象 {"g1": ["张三","李四"], "g2": []}（空组 = 空数组）；
+    // 旧结构：ts.groupMap 为 "张三:g1, 李四:g2" 字符串（老后台/老配置写入），
+    // 两种格式自动识别，老客户端读新结构时查不到映射则安全降级为手动选组。
+    function _tsGroupForRater(ts, rater) {
+        var r = String(rater || "").trim()
+        if (r.length === 0 || !ts) return ""
+        var gs = ts.groups
+        if (gs && typeof gs === "object" && !Array.isArray(gs)) {
+            for (var name in gs) {
+                var arr = gs[name]
+                if (Array.isArray(arr) && arr.indexOf(r) >= 0) return name
+            }
+            return ""
+        }
+        var raw = String(ts.groupMap || "").trim()
+        if (raw.length === 0) return ""
+        var entries = raw.split(/[,，;；\n]+/)
+        for (var i = 0; i < entries.length; ++i) {
+            var kv = entries[i].split(/[:：]/)
+            if (kv.length < 2) continue
+            var name = kv[0].trim()
+            var grp = kv.slice(1).join(":").trim()
+            if (name.length > 0 && name === r) return grp
+        }
+        return ""
+    }
+
     // 组别门：内容根下检测到组别目录时，弹窗让用户选择要导入的组，
     // 选定后由 _tsOnGroupChosen 继续原导入流程。
     // 返回 true = 已挂起等用户选择（调用方应直接 return）；false = 无需选组。
@@ -3789,6 +3981,31 @@ ApplicationWindow {
         if (!Fs.isDirectoryPath(rootDir)) return false   // 交给原逻辑报"根目录不存在"
         var groups = root._tsDetectGroups(rootDir, laneDirs)
         if (groups.length === 0) return false
+
+        // 自动选组：配置声明了「评分人→组别」映射（groupMap），且当前评分人命中 →
+        // 跳过选组弹窗直接继续。评分人取值与上传署名一致（Rating.currentUser，
+        // 为空时回退系统用户名，与导出 CSV 的 rater 列兜底规则相同）。
+        var _rater = ""
+        try {
+            if (typeof Rating !== "undefined") {
+                _rater = String(Rating.currentUser || "").trim()
+                if (_rater.length === 0 && typeof Rating.systemUserName === "function")
+                    _rater = String(Rating.systemUserName() || "").trim()
+            }
+        } catch (e) {}
+        var _mapped = root._tsGroupForRater(ts, _rater)
+        if (_mapped.length > 0 && groups.indexOf(_mapped) >= 0) {
+            console.log("[TestSource] 评分人「" + _rater + "」命中组别映射 → 自动选择:", _mapped)
+            st._chosenGroup = _mapped
+            root._tsLastGroup = _mapped
+            updateToast.text = "已按评分人「" + _rater + "」自动选择组别「" + _mapped + "」"
+            updateToast.open()
+            return false
+        }
+        if (_mapped.length > 0)
+            console.warn("[TestSource] 映射组别「" + _mapped + "」不在包内组别",
+                         groups.join(" | "), "中，转手动选组")
+
         console.log("[TestSource] 检测到组别:", groups.join(" | "), " 等待用户选择")
         root._tsGroupCtx = { st: st, extractTarget: extractTarget }
         testSourceGroupDialog.openWith(groups,

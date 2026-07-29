@@ -2417,6 +2417,207 @@ table.preview-table tbody tr:hover { background: var(--bg-hover); }
     font-size: 13px;
     line-height: 1.6;
 }
+/* ─── 测试人（组别名单，独立 Tab） ─── */
+.dim-testers-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+/* 左右结构：组名居左固定，名单右侧流式排布 */
+.dim-tester-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    background: var(--bg-elev-2, #1c1d24);
+    border: 1px solid var(--border, #2a2b33);
+    border-radius: 10px;
+    padding: 10px 14px;
+}
+.dim-tester-newg-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+}
+.dim-tester-newg-ok,
+.dim-tester-newg-cancel {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.dim-tester-newg-ok {
+    border: 1px solid rgba(48, 209, 88, .45);
+    background: rgba(48, 209, 88, .10);
+    color: #30d158;
+}
+.dim-tester-newg-ok:hover {
+    background: #30d158;
+    color: #fff;
+}
+.dim-tester-newg-cancel {
+    border: 1px solid var(--border, #2a2b33);
+    background: transparent;
+    color: var(--text-dim, #6f707a);
+}
+.dim-tester-newg-cancel:hover {
+    background: var(--danger, #ff453a);
+    border-color: var(--danger, #ff453a);
+    color: #fff;
+}
+.dim-tester-card .dim-tester-gname {
+    flex: none;
+    margin-top: 1px;
+}
+.dim-tester-count {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-dim, #6f707a);
+    margin-top: 6px;
+}
+.dim-tester-members {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.dim-tester-filter {
+    width: 180px;
+    font-size: 12px;
+    padding: 5px 10px;
+    color: var(--text, #ecedf3);
+    background: var(--bg-elev-2, #1c1d24);
+    border: 1px solid var(--border, #2a2b33);
+    border-radius: 8px;
+    outline: none;
+}
+.dim-tester-filter:focus {
+    border-color: var(--primary, #0071e3);
+}
+.dim-tester-group {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.dim-tester-gname {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--primary, #0071e3);
+    background: rgba(0, 113, 227, .10);
+    border: 1px solid rgba(0, 113, 227, .28);
+    border-radius: 8px;
+    padding: 4px 8px 4px 10px;
+    cursor: pointer;
+    user-select: none;
+}
+.dim-tester-gname:hover {
+    background: rgba(0, 113, 227, .16);
+}
+.dim-tester-gname-input {
+    width: 90px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 2px 6px;
+    color: var(--primary, #0071e3);
+    background: var(--bg-elev-2, #1c1d24);
+    border: 1px solid var(--primary, #0071e3);
+    border-radius: 6px;
+    outline: none;
+}
+.dim-tester-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text, #ecedf3);
+    background: rgba(48, 209, 88, .10);
+    border: 1px solid rgba(48, 209, 88, .30);
+    border-radius: 999px;
+    padding: 4px 8px 4px 12px;
+}
+.dim-tester-del {
+    border: none;
+    background: transparent;
+    color: var(--text-dim, #6f707a);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    padding: 0 2px;
+}
+.dim-tester-del:hover {
+    color: var(--danger, #ff453a);
+}
+/* 删组按钮：独立于组名芯片外，圆形可见按钮，悬停变红 */
+.dim-tester-gdel {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin-top: 3px;
+    border-radius: 50%;
+    border: 1px solid var(--border, #2a2b33);
+    background: transparent;
+    color: var(--text-dim, #6f707a);
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.dim-tester-gdel:hover {
+    color: #fff;
+    background: var(--danger, #ff453a);
+    border-color: var(--danger, #ff453a);
+}
+.dim-tester-input {
+    width: 110px;
+    font-size: 13px;
+    padding: 5px 10px;
+    color: var(--text, #ecedf3);
+    background: var(--bg-elev-2, #1c1d24);
+    border: 1px solid var(--border, #2a2b33);
+    border-radius: 8px;
+    outline: none;
+}
+.dim-tester-input:focus {
+    border-color: var(--primary, #0071e3);
+}
+.dim-tester-newg-input {
+    width: 240px;
+    font-size: 13px;
+    padding: 5px 10px;
+    color: var(--text, #ecedf3);
+    background: var(--bg-elev-2, #1c1d24);
+    border: 1px solid var(--primary, #0071e3);
+    border-radius: 8px;
+    outline: none;
+}
+.dim-tester-add-group {
+    font-size: 12px;
+    color: var(--primary, #0071e3);
+    background: transparent;
+    border: 1px dashed rgba(0, 113, 227, .4);
+    border-radius: 8px;
+    padding: 5px 12px;
+    cursor: pointer;
+}
+.dim-tester-add-group:hover {
+    background: rgba(0, 113, 227, .08);
+    border-color: var(--primary, #0071e3);
+}
 .dim-ts-ref-cap {
     font-size: 12px;
     color: var(--text-dim, #6f707a);

@@ -884,6 +884,7 @@
             ['dims',       '📐 维度'],
             ['checklist',  '📋 Checklist'],
             ['testSource', '📦 测试源'],
+            ['testers',    '👥 测试人'],
         ];
         const tabsHtml = `<div class="dim-tabbar">${tabs.map(([id, label]) =>
             `<button class="dim-tab${dimActiveTab === id ? ' is-active' : ''}" data-tab="${id}">${label}</button>`
@@ -895,6 +896,8 @@
             contentHtml = renderChecklistPreview(obj ? obj.checklists : null, obj ? obj.checklist_config : null, admin);
         } else if (dimActiveTab === 'testSource') {
             contentHtml = renderTestSourceSection(obj, admin);
+        } else if (dimActiveTab === 'testers') {
+            contentHtml = renderTestersSection(obj, admin);
         } else {
             if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
                 contentHtml = `<div class="dim-view-loading">暂无维度配置</div>`
@@ -1155,6 +1158,135 @@
         </div>`;
     }
 
+    /** groupMap 字符串 → 结构化组别数组：[{name:'g1', members:['张三']}]（按首次出现排序，同名去重） */
+    function parseGroupMap(raw) {
+        const out = []; const idx = {};
+        String(raw || '').split(/[,，;；\n]+/).forEach(ent => {
+            const kv = ent.split(/[:：]/);
+            if (kv.length < 2) return;
+            const n = kv[0].trim();
+            const g = kv.slice(1).join(':').trim();
+            if (!n || !g) return;
+            if (idx[g] === undefined) { idx[g] = out.length; out.push({ name: g, members: [] }); }
+            const grp = out[idx[g]];
+            if (!grp.members.includes(n)) grp.members.push(n);
+        });
+        return out;
+    }
+
+    /** 结构化组别数组 → groupMap 字符串（空组自动丢弃） */
+    function serializeGroupMap(groups) {
+        const parts = [];
+        groups.forEach(g => (g.members || []).forEach(m => parts.push(m + ':' + g.name)));
+        return parts.join(', ');
+    }
+
+    /** 渲染模型（读取兼容三种历史格式，按优先级）：
+     *  ① 新结构：ts.groups 为对象 {"g1": ["a","b"], "g2": []} —— 空组 = 空数组，天然支持预配置；
+     *  ② 过渡结构：ts.groups 数组（组声明）+ ts.groupMap 字符串（名单映射）；
+     *  ③ 最旧结构：仅 ts.groupMap 字符串。 */
+    function buildTesterModel(ts) {
+        if (ts.groups && typeof ts.groups === 'object' && !Array.isArray(ts.groups)) {
+            return Object.keys(ts.groups).map(name => ({
+                name,
+                members: Array.isArray(ts.groups[name]) ? ts.groups[name].slice() : []
+            }));
+        }
+        const declared = Array.isArray(ts.groups)
+            ? ts.groups.map(s => String(s || '').trim()).filter(Boolean) : [];
+        const mg = parseGroupMap(ts.groupMap);
+        const byName = {};
+        mg.forEach(g => { byName[g.name] = g; });
+        const out = []; const seen = {};
+        declared.forEach(n => {
+            if (seen[n]) return;
+            seen[n] = true;
+            out.push({ name: n, members: byName[n] ? byName[n].members.slice() : [] });
+        });
+        mg.forEach(g => {
+            if (seen[g.name]) return;
+            seen[g.name] = true;
+            out.push({ name: g.name, members: g.members.slice() });
+        });
+        return out;
+    }
+
+    /** 把组别模型按新结构写回 ts：groups 对象；同时清掉旧字段（groupMap 字符串）。
+     *  对象键序即模型顺序（JS/JSON 字符串键保序），手动复制 JSON 也直观。 */
+    function writeTesterModel(ts, model) {
+        const obj = {};
+        model.forEach(g => { obj[g.name] = (g.members || []).slice(); });
+        ts.groups = obj;
+        delete ts.groupMap;
+    }
+
+    // 测试人名单过滤词（模块级状态：分区刷新后保持并重应用）
+    let dimTesterFilter = '';
+
+    /** 渲染「测试人」Tab：按组别管理评分人名单（groups 声明空组 + groupMap 名单） */
+    function renderTestersSection(obj, admin) {
+        const ts = (obj && obj.testSource && typeof obj.testSource === 'object') ? obj.testSource : {};
+        const groups = buildTesterModel(ts);
+        // 左右结构：组名居左固定，名单芯片在右侧流式排布（g1 + 人1, 人2 …）
+        // 删组 ✕ 独立在组名芯片外：与「点组名改名」热区完全分开，避免误触/判定纠缠
+        // 所有操作以组名（data-gname）为键，空组同样可渲染/可编辑
+        const cards = groups.map((g) => `
+            <div class="dim-tester-card" data-gname="${escHtml(g.name)}">
+                <span class="dim-tester-gname" ${admin ? `data-gname="${escHtml(g.name)}" title="点击编辑组名"` : ''}>${escHtml(g.name)}</span>
+                ${admin ? `<button class="dim-tester-gdel" data-gname="${escHtml(g.name)}" title="删除该组（成员一并移除）">✕</button>` : ''}
+                <span class="dim-tester-count">${g.members.length} 人</span>
+                <div class="dim-tester-members">
+                    ${g.members.map(m => `<span class="dim-tester-chip" data-name="${escHtml(m)}">${escHtml(m)}${admin ? `<button class="dim-tester-del" data-gname="${escHtml(g.name)}" data-name="${escHtml(m)}" title="移除该评分人">✕</button>` : ''}</span>`).join('')}
+                    ${admin ? `<input class="dim-tester-input" data-gname="${escHtml(g.name)}" placeholder="名字，回车添加" title="回车添加评分人到该组；同名评分人会自动从其它组移入本组（一人一组）">` : ''}
+                </div>
+            </div>`).join('');
+        const emptyHtml = groups.length === 0
+            ? `<div class="dim-ts-empty">暂无组别。${admin ? '点右上角「＋ 新增一组」开始分配测试人；' : ''}未分配名单的客户端接受测试源时仍会弹窗手动选组。</div>`
+            : '';
+        return `<div class="dim-testers-section dim-checklist-section">
+            <div class="dim-cl-header">
+                <span class="dim-cl-title">👥 测试人</span>
+                <span class="dim-cl-subtitle">评分人按组别分配：客户端「接受」时命中名单即免选组、自动进入对应组别打分（一人一组）</span>
+                <span style="flex:1"></span>
+                ${groups.length > 0 ? `<input class="dim-tester-filter" placeholder="🔍 过滤组名 / 名字" value="${escHtml(dimTesterFilter)}">` : ''}
+                ${admin ? '<button class="dim-tester-add-group" title="新增一个组别（如 g2）">＋ 新增一组</button>' : ''}
+            </div>
+            <div class="dim-cl-body dim-testers-body">
+                ${cards}${emptyHtml}
+            </div>
+        </div>`;
+    }
+
+    /** 应用测试人过滤（纯客户端 DOM，不改数据）：组名命中整组显示，否则按名字逐个过滤 */
+    function applyTesterFilter() {
+        const q = dimTesterFilter.trim().toLowerCase();
+        dimView.querySelectorAll('.dim-tester-card').forEach(card => {
+            const gname = (card.dataset.gname || '').toLowerCase();
+            const gMatch = q.length > 0 && gname.indexOf(q) >= 0;
+            let visibleCount = 0;
+            card.querySelectorAll('.dim-tester-chip').forEach(chip => {
+                const show = q.length === 0 || gMatch
+                    || (chip.dataset.name || '').toLowerCase().indexOf(q) >= 0;
+                chip.style.display = show ? '' : 'none';
+                if (show) visibleCount++;
+            });
+            card.style.display = (q.length === 0 || gMatch || visibleCount > 0) ? '' : 'none';
+        });
+    }
+
+    /** 就地重渲染测试人分区 */
+    function refreshTestersSection() {
+        let data;
+        try { data = JSON.parse(dimRawData); } catch (_) { return; }
+        const sec = dimView.querySelector('.dim-testers-section');
+        if (!sec) return;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = renderTestersSection(data, isLoggedIn());
+        sec.replaceWith(tmp.firstElementChild);
+        bindTestersEvents();
+        if (dimTesterFilter) applyTesterFilter();
+    }
+
     /** 就地重渲染测试源分区（避免整页刷新打断其他编辑焦点） */
     function refreshTestSourceSection() {
         let data;
@@ -1167,7 +1299,7 @@
         bindTestSourceEvents();
     }
 
-    /** 修改 testSource 并持久化 + 就地刷新分区 */
+    /** 修改 testSource 并持久化 + 就地刷新分区（测试源 / 测试人两个 Tab 各自检测存在性） */
     async function mutateTestSource(mutator) {
         let latest;
         try { latest = JSON.parse(dimRawData); } catch (_) { return; }
@@ -1175,6 +1307,169 @@
         mutator(latest.testSource, latest);
         await persistDimData(latest);
         refreshTestSourceSection();
+        refreshTestersSection();
+    }
+
+    /** 测试人 Tab 事件绑定（管理员）：组内增删名单、新增/改名/删除组、过滤 */
+    function bindTestersEvents() {
+        if (!isLoggedIn()) return;
+        // 名单过滤（组名命中整组显示，否则按名字逐个过滤）
+        const filterInp = dimView.querySelector('.dim-tester-filter');
+        if (filterInp) {
+            filterInp.addEventListener('input', () => {
+                dimTesterFilter = filterInp.value;
+                applyTesterFilter();
+            });
+        }
+        // 添加评分人到组（回车提交；一人一组：自动从其它组移出）
+        dimView.querySelectorAll('.dim-tester-input').forEach(inp => {
+            inp.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                const v = inp.value.trim();
+                if (!v) return;
+                const gname = inp.dataset.gname || '';
+                mutateTestSource(ts => {
+                    const model = buildTesterModel(ts);
+                    const g = model.find(x => x.name === gname);
+                    if (!g) return;
+                    if (g.members.includes(v)) return;
+                    model.forEach(og => { og.members = og.members.filter(m => m !== v); });
+                    g.members.push(v);
+                    writeTesterModel(ts, model);
+                });
+            });
+        });
+        // 移除评分人（新结构下空数组即空组，名单清空组仍在，便于预配置）
+        dimView.querySelectorAll('.dim-tester-del').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const gname = btn.dataset.gname || '';
+                const name = btn.dataset.name;
+                mutateTestSource(ts => {
+                    const model = buildTesterModel(ts);
+                    const g = model.find(x => x.name === gname);
+                    if (!g) return;
+                    g.members = g.members.filter(m => m !== name);
+                    writeTesterModel(ts, model);
+                });
+            });
+        });
+        // 新增一组：新增一行「组名 + 成员（可留空）」两个键入框，空组同样保存
+        //（空组写入 ts.groups 声明数组；groupMap 只承载名单，客户端零改动）。
+        // 组名回车 → 跳成员框；成员回车 / ✓ → 提交；Esc / ✕ → 取消。
+        const addGBtn = dimView.querySelector('.dim-tester-add-group');
+        if (addGBtn) addGBtn.addEventListener('click', () => {
+            if (dimView.querySelector('.dim-tester-newg-row')) return;
+            const row = document.createElement('div');
+            row.className = 'dim-tester-card dim-tester-newg-row';
+            row.innerHTML =
+                '<input class="dim-tester-newg-input dim-ng-name" placeholder="组名，如 g3">' +
+                '<input class="dim-tester-input dim-ng-member" placeholder="成员（可留空）">' +
+                '<button class="dim-tester-newg-ok" title="创建该组">✓</button>' +
+                '<button class="dim-tester-newg-cancel" title="取消">✕</button>';
+            const body = dimView.querySelector('.dim-testers-body');
+            if (body) body.insertBefore(row, body.firstChild);
+            else addGBtn.parentElement.insertBefore(row, addGBtn);
+            const nameInp = row.querySelector('.dim-ng-name');
+            const memberInp = row.querySelector('.dim-ng-member');
+            nameInp.focus();
+            const cancel = () => { if (row.isConnected) row.remove(); };
+            const commit = () => {
+                const gname = nameInp.value.trim();
+                const member = memberInp.value.trim();
+                if (!gname) { nameInp.focus(); return; }
+                let data;
+                try { data = JSON.parse(dimRawData); } catch (_) { return; }
+                const ts = (data && data.testSource) || {};
+                if (buildTesterModel(ts).some(g => g.name === gname)) {
+                    showToast('组「' + gname + '」已存在', 'err');
+                    return;
+                }
+                mutateTestSource(ts2 => {
+                    const model = buildTesterModel(ts2);
+                    model.push({ name: gname, members: member ? [member] : [] });
+                    writeTesterModel(ts2, model);
+                });
+            };
+            nameInp.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') { cancel(); return; }
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                memberInp.focus();
+            });
+            memberInp.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') { cancel(); return; }
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                commit();
+            });
+            row.querySelector('.dim-tester-newg-ok').addEventListener('click', (e) => {
+                e.stopPropagation();
+                commit();
+            });
+            row.querySelector('.dim-tester-newg-cancel').addEventListener('click', (e) => {
+                e.stopPropagation();
+                cancel();
+            });
+            // 焦点完全离开该行且两框皆空 → 自动取消（relatedTarget 判定避免框间切换误杀）
+            const maybeCancel = () => {
+                setTimeout(() => {
+                    if (!row.isConnected) return;
+                    if (row.contains(document.activeElement)) return;
+                    if (!nameInp.value.trim() && !memberInp.value.trim()) cancel();
+                }, 0);
+            };
+            nameInp.addEventListener('blur', maybeCancel);
+            memberInp.addEventListener('blur', maybeCancel);
+        });
+        // 编辑组名（点击组名芯片 → 行内输入框；模型键改名，成员归属随键走）
+        dimView.querySelectorAll('.dim-tester-gname').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (el.querySelector('input')) return;
+                const oldName = el.dataset.gname || '';
+                const input = document.createElement('input');
+                input.className = 'dim-tester-gname-input';
+                input.value = oldName;
+                el.textContent = '';
+                el.appendChild(input);
+                input.focus();
+                input.select();
+                let done = false;
+                const finish = (commit) => {
+                    if (done) return;
+                    done = true;
+                    const v = input.value.trim();
+                    if (!commit || !v || v === oldName) { refreshTestersSection(); return; }
+                    mutateTestSource(ts => {
+                        const model = buildTesterModel(ts);
+                        if (model.some(g => g.name === v)) {
+                            showToast('组名「' + v + '」已存在', 'err');
+                            return;
+                        }
+                        const g = model.find(x => x.name === oldName);
+                        if (g) g.name = v;
+                        writeTesterModel(ts, model);
+                    });
+                };
+                input.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+                    else if (ev.key === 'Escape') finish(false);
+                });
+                input.addEventListener('blur', () => finish(true));
+            });
+        });
+        // 删除组（成员一并移除）
+        dimView.querySelectorAll('.dim-tester-gdel').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const gname = btn.dataset.gname || '';
+                mutateTestSource(ts => {
+                    writeTesterModel(ts, buildTesterModel(ts).filter(g => g.name !== gname));
+                });
+            });
+        });
     }
 
     /** testSource 单字段行内编辑（url / workDir / rootDir / referenceDir / promptCsv） */
@@ -1420,6 +1715,8 @@
 
         // 测试源自动化配置区事件绑定
         bindTestSourceEvents();
+        // 测试人 Tab 事件绑定（分区不存在时内部查询为空，自然无操作）
+        bindTestersEvents();
 
         // 添加维度
         const addDimBtn = dimView.querySelector('.dim-add-dim-btn');

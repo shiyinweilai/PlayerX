@@ -1,5 +1,5 @@
 {
-  "type": "测试模式",
+  "type": "测试模式3",
   "tag": "测试tag",
   "task": "测试任务",
   "scale": "1-5 Likert 整数",
@@ -65,16 +65,80 @@
     }
   ],
   "testSource": {
-    "url": "/testsrc/test_auto2.zip",
+    "url": "/testsrc/0.0.9a_small_subj_9P_0728_v1.zip",
     "workDir": "~/Downloads",
-    "rootDir": "test_auto2",
+    "rootDir": "0.0.9a_small_subj_9P_0728_v1",
     "laneDirs": [
       "A",
-      "B"
+      "B",
+      "C"
     ],
     "promptCsv": "prompt.csv",
     "referenceDirs": [
       "first_frames"
-    ]
+    ],
+    "groups": {
+      "g1": [
+        "adgerjiang",
+        "alanhszhang",
+        "alanhqin",
+        "andersomlin",
+        "bonniehou",
+        "clairesu",
+        "codeczhang",
+        "damondou",
+        "derrickgli",
+        "dillonqwang"
+      ],
+      "g2": [
+        "firexu",
+        "herburtchen",
+        "hypolei",
+        "jachineli",
+        "jaymechen",
+        "jingranwu",
+        "jingweichi",
+        "kejichen",
+        "kunwachiu",
+        "lancerkong"
+      ],
+      "g3": [
+        "yirensong",
+        "lynjiang",
+        "mattzhong",
+        "mitiyang",
+        "morganzou",
+        "pchuanzhang",
+        "poirotchen",
+        "qifangao",
+        "ritcheyma",
+        "rbyang"
+      ],
+      "g4": [
+        "romeohuang",
+        "seemaywang",
+        "syoungshu",
+        "tyrellzhang",
+        "victorxiong",
+        "wenchzhang",
+        "wigentang",
+        "xirongsong",
+        "yanfujiang",
+        "yaoyaoguo"
+      ],
+      "g5": [
+        "yiweizhang",
+        "yitongan",
+        "yostonwang",
+        "yuhuanshen",
+        "zachzhong",
+        "zalezhai",
+        "zanezan",
+        "zazzyzhang",
+        "zeyujiang",
+        "ziminliu",
+        "zoyalin"
+      ]
+    }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "type": "测试模式",
+  "type": "测试模式2",
   "tag": "测试tag",
   "task": "测试任务",
   "scale": "1-5 Likert 整数",
@@ -65,16 +65,17 @@
     }
   ],
   "testSource": {
-    "url": "/testsrc/test_auto2.zip",
+    "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/test_auto.zip",
     "workDir": "~/Downloads",
-    "rootDir": "test_auto2",
+    "rootDir": "test_auto",
     "laneDirs": [
       "A",
       "B"
     ],
     "promptCsv": "prompt.csv",
     "referenceDirs": [
-      "first_frames"
+      "first_frames",
+      "second_frames"
     ]
   }
 }
