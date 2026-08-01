@@ -438,10 +438,11 @@ ApplicationWindow {
             bottomPadding: 0
 
             // 登录项特判：点击直接弹登录/个人信息对话框，不展开下拉菜单；
+            // 再次点击则关闭面板（切换语义）；
             // 其余菜单保持默认的展开/收起行为（覆盖 onClicked 后需手动实现）。
             onClicked: {
                 if (mbItem.menu === loginMenu) {
-                    loginDialog.open()
+                    root._toggleLoginDialog()
                 } else if (mbItem.menu) {
                     if (mbItem.menu.visible) mbItem.menu.close()
                     else mbItem.menu.open()
@@ -760,7 +761,7 @@ ApplicationWindow {
             title: root._loggedIn ? Rating.currentUser : qsTr("登录")
             DarkMenuItem {
                 text: root._loggedIn ? qsTr("个人信息…") : qsTr("登录…")
-                onTriggered: loginDialog.open()
+                onTriggered: root._toggleLoginDialog()
             }
         }
     }
@@ -776,9 +777,16 @@ ApplicationWindow {
         updateToast.open()
     }
 
+    // 登录面板开关切换：所有入口（macOS 原生拦截回调 / Windows delegate 特判 /
+    // 菜单兜底项）统一走这里 —— 再次点击入口即关闭面板
+    function _toggleLoginDialog() {
+        if (loginDialog.visible) loginDialog.close()
+        else loginDialog.open()
+    }
+
     // macOS 原生菜单拦截回调入口（C++ menuWillOpen 阶段触发）
     function _openLoginDialogFromNative() {
-        loginDialog.open()
+        root._toggleLoginDialog()
     }
 
     // ─── 登录 / 个人信息对话框 ──────────────────────────────────────
@@ -790,7 +798,8 @@ ApplicationWindow {
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.NoButton
-        closePolicy: Popup.CloseOnEscape
+        // 退出方式：Esc / 点击面板外任意处 / 头部 ✕ / 再次点击菜单入口（见 _toggleLoginDialog）
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         implicitWidth: 400
         padding: 0
 
@@ -828,11 +837,11 @@ ApplicationWindow {
                 font.pixelSize: 14
                 font.bold: true
             }
-            // 已登录徽章
+            // 已登录徽章（让位给 ✕ 关闭按钮）
             Rectangle {
                 visible: root._loggedIn
-                anchors.right: parent.right
-                anchors.rightMargin: 16
+                anchors.right: loginCloseX.left
+                anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
                 width: loginStateText.width + 14
                 height: 20
@@ -844,6 +853,23 @@ ApplicationWindow {
                     text: "已登录"
                     color: "#5dd8b0"
                     font.pixelSize: 10
+                }
+            }
+            // 头部 ✕ 关闭按钮
+            Text {
+                id: loginCloseX
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                text: "✕"
+                color: loginCloseXMa.containsMouse ? "#ffffff" : "#9a9aa8"
+                font.pixelSize: 14
+                MouseArea {
+                    id: loginCloseXMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: loginDialog.close()
                 }
             }
         }
