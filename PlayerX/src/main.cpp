@@ -53,6 +53,14 @@ extern "C" {
 // 实现在 src/qt/MacAppearance.mm（Objective-C++）：
 // 强制 NSApp 深色外观，让系统标题栏 / 原生菜单 / 原生对话框渲染为深色。
 void applyMacDarkAppearance();
+// 登录菜单展开拦截：菜单栏「登录/评分人名」点击时在 menuWillOpen 阶段
+// 取消展开（永不出下拉）并回调此处，转而打开 QML 登录对话框。
+void installLoginMenuSuppressor(void* ctx, void(*fn)(void*));
+static void openLoginDialogFromNative(void* ctx) {
+    // ctx = QML 根对象；QueuedConnection 保证回到 Qt 主事件循环再开对话框
+    QMetaObject::invokeMethod(static_cast<QObject*>(ctx),
+                              "_openLoginDialogFromNative", Qt::QueuedConnection);
+}
 #endif
 
 #if defined(Q_OS_WIN)
@@ -233,9 +241,17 @@ int main(int argc, char* argv[]) {
 
     engine.loadFromModule("PlayerX", "Main");
 
+    const QObjectList rootObjs = engine.rootObjects();
+
+#if defined(Q_OS_MACOS)
+    // 安装登录菜单展开拦截：macOS 菜单栏点击「登录/名字」直接弹对话框、永不出下拉。
+    if (!rootObjs.isEmpty()) {
+        installLoginMenuSuppressor(rootObjs.first(), &openLoginDialogFromNative);
+    }
+#endif
+
 #if defined(Q_OS_WIN)
     // QML 窗口 visible:true，load 返回时原生句柄已存在，立即深色化标题栏。
-    const QObjectList rootObjs = engine.rootObjects();
     if (!rootObjs.isEmpty()) {
         applyWindowsDarkTitleBar(qobject_cast<QQuickWindow*>(rootObjs.first()));
     }

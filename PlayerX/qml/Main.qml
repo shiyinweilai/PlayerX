@@ -437,6 +437,17 @@ ApplicationWindow {
             topPadding: 0
             bottomPadding: 0
 
+            // 登录项特判：点击直接弹登录/个人信息对话框，不展开下拉菜单；
+            // 其余菜单保持默认的展开/收起行为（覆盖 onClicked 后需手动实现）。
+            onClicked: {
+                if (mbItem.menu === loginMenu) {
+                    loginDialog.open()
+                } else if (mbItem.menu) {
+                    if (mbItem.menu.visible) mbItem.menu.close()
+                    else mbItem.menu.open()
+                }
+            }
+
             contentItem: Text {
                 text: mbItem.text
                 color: mbItem.highlighted || mbItem.hovered ? "#ffffff" : "#cfcfd2"
@@ -737,28 +748,55 @@ ApplicationWindow {
         }
 
         // ─── 登录 ────────────────────────────────────────────────
-        // 当前仅「评分人设置」：评分数据上传署名 + 测试源组别自动分配（groupMap）；
-        // 与「评分数据面板」顶部的评分人输入框是同一份数据（Rating.currentUser）。
-        // 后续账号体系的其他能力往这个菜单里加。
+        // 未登录显示「登录」，已登录显示评分人名字。
+        // 点击直接弹登录/个人信息对话框、永不出下拉：
+        //   · macOS：C++ 在 NSMenu 即将展开时 cancelTracking 拦截
+        //     （src/qt/MacAppearance.mm installLoginMenuSuppressor）；
+        //   · Windows/Linux：menuBar delegate 特判点击直弹。
+        // 菜单项仅作兜底（拦截失效时仍可点开对话框）。
+        // 评分人即 Rating.currentUser，与评分数据面板顶部输入框同一份数据。
         DarkMenu {
             id: loginMenu
-            title: qsTr("登录")
+            title: root._loggedIn ? Rating.currentUser : qsTr("登录")
             DarkMenuItem {
-                text: qsTr("评分人设置…")
+                text: root._loggedIn ? qsTr("个人信息…") : qsTr("登录…")
                 onTriggered: loginDialog.open()
             }
         }
     }
 
-    // ─── 登录对话框 ───────────────────────────────────────────────
+    // 登录态：评分人已设置（Rating.currentUser 非空）
+    readonly property bool _loggedIn: (typeof Rating !== "undefined")
+                                      && String(Rating.currentUser || "").trim().length > 0
+
+    function _logout() {
+        if (typeof Rating !== "undefined") Rating.currentUser = ""
+        console.log("[Login] 已退出登录")
+        updateToast.text = "已退出登录"
+        updateToast.open()
+    }
+
+    // macOS 原生菜单拦截回调入口（C++ menuWillOpen 阶段触发）
+    function _openLoginDialogFromNative() {
+        loginDialog.open()
+    }
+
+    // ─── 登录 / 个人信息对话框 ──────────────────────────────────────
+    // 未登录：登录框（输入评分人姓名）；
+    // 已登录：个人信息页（头像 / 姓名 / 系统用户 / 上传服务器），
+    // 支持「修改资料」进入编辑态、「退出登录」清除身份。
     Dialog {
         id: loginDialog
         modal: true
         anchors.centerIn: parent
         standardButtons: Dialog.NoButton
         closePolicy: Popup.CloseOnEscape
-        implicitWidth: 420
+        implicitWidth: 400
         padding: 0
+
+        // 编辑态：true=显示姓名输入框；未登录时恒为编辑态（即登录框）
+        property bool _editing: false
+        readonly property bool _showProfile: root._loggedIn && !_editing
 
         Overlay.modal: Rectangle { color: "#aa000000" }
 
@@ -785,20 +823,170 @@ ApplicationWindow {
                 anchors.left: parent.left
                 anchors.leftMargin: 16
                 anchors.verticalCenter: parent.verticalCenter
-                text: "👤 登录"
+                text: loginDialog._showProfile ? "👤 个人信息" : "👤 登录"
                 color: "#f0f0f3"
                 font.pixelSize: 14
                 font.bold: true
             }
+            // 已登录徽章
+            Rectangle {
+                visible: root._loggedIn
+                anchors.right: parent.right
+                anchors.rightMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                width: loginStateText.width + 14
+                height: 20
+                radius: 10
+                color: "#1f4d3f"
+                Text {
+                    id: loginStateText
+                    anchors.centerIn: parent
+                    text: "已登录"
+                    color: "#5dd8b0"
+                    font.pixelSize: 10
+                }
+            }
         }
 
         contentItem: Item {
-            implicitWidth: 388
-            implicitHeight: loginCol.implicitHeight
+            implicitWidth: 368
+            implicitHeight: loginDialog._showProfile ? profileCol.implicitHeight : editCol.implicitHeight
 
+            // ════ 个人信息页 ════
             Column {
-                id: loginCol
+                id: profileCol
                 anchors.fill: parent
+                visible: loginDialog._showProfile
+                spacing: 0
+                topPadding: 22
+                bottomPadding: 16
+
+                // 头像：姓名首字符
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 60
+                    height: 60
+                    radius: 30
+                    color: "#0fa085"
+                    Text {
+                        anchors.centerIn: parent
+                        text: {
+                            var n = (typeof Rating !== "undefined" ? String(Rating.currentUser || "") : "").trim()
+                            return n.length > 0 ? n.charAt(0).toUpperCase() : "?"
+                        }
+                        color: "#ffffff"
+                        font.pixelSize: 26
+                        font.bold: true
+                    }
+                }
+                Item { width: 1; height: 10 }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: (typeof Rating !== "undefined" ? Rating.currentUser : "")
+                    color: "#f0f0f3"
+                    font.pixelSize: 18
+                    font.bold: true
+                }
+                Item { width: 1; height: 4 }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: {
+                        var su = ""
+                        try { if (typeof Rating !== "undefined") su = String(Rating.systemUserName() || "") } catch (e) {}
+                        return "系统用户：" + (su.length > 0 ? su : "未知")
+                    }
+                    color: "#9a9aa8"
+                    font.pixelSize: 12
+                }
+                Item { width: 1; height: 16 }
+                Rectangle {
+                    width: parent.width - 32
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    height: 1
+                    color: "#2c2c32"
+                }
+                // 信息行：上传服务器
+                Item {
+                    width: parent.width - 32
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    height: 38
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "上传服务器"
+                        color: "#9a9aa8"
+                        font.pixelSize: 12
+                    }
+                    Text {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: {
+                            var u = (typeof Rating !== "undefined" ? String(Rating.uploadServerUrl || "") : "")
+                            return u.length > 0 ? u : "未配置"
+                        }
+                        color: "#c8c8cc"
+                        font.pixelSize: 12
+                    }
+                }
+                Rectangle {
+                    width: parent.width - 32
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    height: 1
+                    color: "#2c2c32"
+                }
+                Item { width: 1; height: 16 }
+                // 按钮行：退出登录（左，警示色） / 修改资料（右，主色）
+                Item {
+                    width: parent.width - 32
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    height: 30
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 88
+                        height: 30
+                        radius: 5
+                        color: logoutMa.containsMouse ? "#3a2630" : "#26262c"
+                        border.color: logoutMa.containsMouse ? "#8a4040" : "#3a3a45"
+                        border.width: 1
+                        Text { anchors.centerIn: parent; text: "退出登录"; color: "#e07870"; font.pixelSize: 12 }
+                        MouseArea {
+                            id: logoutMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { loginDialog.close(); root._logout() }
+                        }
+                    }
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 88
+                        height: 30
+                        radius: 5
+                        color: editMa.containsMouse ? "#0db092" : "#0fa085"
+                        Text { anchors.centerIn: parent; text: "修改资料"; color: "#ffffff"; font.pixelSize: 12; font.bold: true }
+                        MouseArea {
+                            id: editMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                loginNameField.text = (typeof Rating !== "undefined") ? Rating.currentUser : ""
+                                loginDialog._editing = true
+                                loginNameField.forceActiveFocus()
+                                loginNameField.selectAll()
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ════ 登录 / 编辑页 ════
+            Column {
+                id: editCol
+                anchors.fill: parent
+                visible: !loginDialog._showProfile
                 spacing: 10
                 topPadding: 16
                 bottomPadding: 14
@@ -842,7 +1030,7 @@ ApplicationWindow {
                 Item {
                     width: parent.width
                     height: 32
-                    // 取消
+                    // 取消：已登录的编辑态 → 返回个人信息页；未登录 → 关闭
                     Rectangle {
                         anchors.right: loginSaveBtn.left
                         anchors.rightMargin: 10
@@ -859,10 +1047,13 @@ ApplicationWindow {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: loginDialog.close()
+                            onClicked: {
+                                if (root._loggedIn) loginDialog._editing = false
+                                else loginDialog.close()
+                            }
                         }
                     }
-                    // 保存
+                    // 登录 / 保存（姓名必填，空则聚焦不提交）
                     Rectangle {
                         id: loginSaveBtn
                         anchors.right: parent.right
@@ -871,7 +1062,13 @@ ApplicationWindow {
                         height: 30
                         radius: 5
                         color: loginSaveMa.containsMouse ? "#0db092" : "#0fa085"
-                        Text { anchors.centerIn: parent; text: "保存"; color: "#ffffff"; font.pixelSize: 12; font.bold: true }
+                        Text {
+                            anchors.centerIn: parent
+                            text: root._loggedIn ? "保存" : "登录"
+                            color: "#ffffff"
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
                         MouseArea {
                             id: loginSaveMa
                             anchors.fill: parent
@@ -879,11 +1076,13 @@ ApplicationWindow {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 var v = loginNameField.text.trim()
+                                if (v.length === 0) { loginNameField.forceActiveFocus(); return }
+                                var firstLogin = !root._loggedIn
                                 if (typeof Rating !== "undefined") Rating.currentUser = v
-                                console.log("[Login] 评分人设置为:", v || "(空)")
-                                updateToast.text = v.length > 0
-                                        ? "评分人已设置为「" + v + "」"
-                                        : "已清除评分人（上传评分数据前需重新填写）"
+                                console.log("[Login]", firstLogin ? "登录:" : "评分人更新为:", v)
+                                updateToast.text = firstLogin
+                                        ? "已登录，欢迎「" + v + "」"
+                                        : "评分人已更新为「" + v + "」"
                                 updateToast.open()
                                 loginDialog.close()
                             }
@@ -894,11 +1093,15 @@ ApplicationWindow {
         }
 
         onOpened: {
+            _editing = !root._loggedIn
             loginNameField.text = (typeof Rating !== "undefined" && Rating.currentUser)
                                   ? Rating.currentUser : ""
-            loginNameField.forceActiveFocus()
-            loginNameField.selectAll()
+            if (_editing) {
+                loginNameField.forceActiveFocus()
+                loginNameField.selectAll()
+            }
         }
+        onClosed: _editing = false
     }
 
     // 注：Windows 标题栏左上角曾尝试放窗口图标（bg 内 / parent:appMenuBar /
@@ -919,7 +1122,16 @@ ApplicationWindow {
         interval: 500
         running: true
         repeat: false
-        onTriggered: Updater.checkForUpdates(true)
+        onTriggered: {
+            // 开发者 override（dev-upload.conf / PLAYERX_UPLOAD_URL_DEV）激活时跳过
+            // 自动更新：否则 dev 构建会被 CDN 新版静默替换（开发中的 .app 直接被
+            // 删了换掉，实测反复发生）；手动「帮助 → 检查更新…」不受影响。
+            if (typeof Rating !== "undefined" && Rating.uploadUrlOverridden) {
+                console.log("[Updater] 开发者 override 激活，跳过自动更新检查")
+                return
+            }
+            Updater.checkForUpdates(true)
+        }
     }
 
     // 首次失败后的重试定时器（仅触发一次）
@@ -929,6 +1141,7 @@ ApplicationWindow {
         running: false
         repeat: false
         onTriggered: {
+            if (typeof Rating !== "undefined" && Rating.uploadUrlOverridden) return
             root._autoCheckRetried = true
             Updater.checkForUpdates(true)
         }
