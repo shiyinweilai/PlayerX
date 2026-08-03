@@ -4852,6 +4852,13 @@ ApplicationWindow {
                 if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
                 // 用户点了应用 = 明确接受该配置，清掉可能残留的忽略快照
                 delete fp2["__ignored__:" + _fpKey]
+                // 记录"用户实际应用的配置"：服务器 active 绑定（__bindings__）可能与用户
+                // 手动选择的配置不同（如同一模式多张卡片），tooltip 的规则配置名应以
+                // 实际应用为准，__bindings__ 仅作变更检测基线，不能当显示源
+                var _appliedMap = {}
+                try { _appliedMap = JSON.parse(fp2["__applied__"] || "{}") } catch(e) {}
+                _appliedMap[mode] = configName
+                fp2["__applied__"] = JSON.stringify(_appliedMap)
                 root._localConfigFingerprint = fp2
                 root._saveFingerprintToFile()
 
@@ -5022,6 +5029,9 @@ ApplicationWindow {
             var _switchTag = ""
             // 深拷贝后修改再赋值，确保 QML property var binding 触发更新
             var fp2 = JSON.parse(JSON.stringify(root._localConfigFingerprint || {}))
+            // "用户实际应用的配置"映射（mode → configName），tooltip 显示源
+            var appliedMap = {}
+            try { appliedMap = JSON.parse(fp2["__applied__"] || "{}") } catch(e) {}
             var dimsCache = JSON.parse(JSON.stringify(root._dimsByMode || {}))
             var ckCache = JSON.parse(JSON.stringify(root._checklistByMode || {}))
             // 【tag 按 mode 独立缓存】批量应用时同步更新，避免多 mode 共享单一 tag 造成相互覆盖
@@ -5036,6 +5046,8 @@ ApplicationWindow {
                 if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
                 // 用户点了应用 = 明确接受该配置，清掉可能残留的忽略快照
                 delete fp2["__ignored__:" + _fpKey]
+                // 记录实际应用的配置（tooltip 显示源，见单条应用路径注释）
+                if (item.mode && item.configName) appliedMap[item.mode] = item.configName
 
                 // 所有 mode 都存入维度缓存
                 var _dims = obj.dimensions.map(function(d) {
@@ -5087,6 +5099,8 @@ ApplicationWindow {
             root._saveDimsByMode()
             root._tagByMode = tagCache
             root._saveTagByMode()
+            // 落盘"实际应用的配置"映射（tooltip 显示源）
+            fp2["__applied__"] = JSON.stringify(appliedMap)
             root._localConfigFingerprint = fp2
             root._saveFingerprintToFile()
             root._pendingRemoteConfig = null
@@ -5367,6 +5381,16 @@ ApplicationWindow {
         if (!mode || mode === "off") return ""
         var fp = root._localConfigFingerprint
         if (!fp) return ""
+        // ① 优先「用户实际应用的配置」：手动接受多张卡片中的某张时，
+        //    服务器 active 绑定（__bindings__）可能与实际应用的不一致
+        var appliedStr = fp["__applied__"] || ""
+        if (appliedStr.length > 0) {
+            try {
+                var applied = JSON.parse(appliedStr)
+                if (applied && applied[mode]) return applied[mode]
+            } catch(e) {}
+        }
+        // ② 服务器 active 绑定关系
         var bindingsStr = fp["__bindings__"] || ""
         if (bindingsStr.length > 0) {
             try {
@@ -7240,6 +7264,13 @@ ApplicationWindow {
                     if (root._rulesPageUrl().length === 0) {
                         // 兜底：当前模式尚未绑定规则配置（按钮此时其实是隐藏的，这里仅为鲁棒）
                         return qsTr("当前模式「%1」未绑定评分规则").arg(modeLabel || qsTr("未选择"))
+                    }
+                    var tag = root._remoteTag
+                    if (tag.length > 0) {
+                        return qsTr("当前模式：%1\n规则配置：%2\n备注 tag：%3\n点击查看完整评分规则")
+                                .arg(modeLabel || qsTr("未选择"))
+                                .arg(cfg || qsTr("未绑定"))
+                                .arg(tag)
                     }
                     return qsTr("当前模式：%1\n规则配置：%2\n点击查看完整评分规则")
                             .arg(modeLabel || qsTr("未选择"))

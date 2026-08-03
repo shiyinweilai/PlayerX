@@ -736,7 +736,16 @@ ApplicationWindow {
         if (!mode || mode === "off") return ""
         var fp = localConfigFingerprint
         if (!fp) return ""
-        // 优先从 __bindings__ 读取：格式 JSON.stringify({ mode -> configName })
+        // ① 优先「用户实际应用的配置」：手动接受多张卡片中的某张时，
+        //    服务器 active 绑定（__bindings__）可能与实际应用的不一致
+        var appliedStr = fp["__applied__"] || ""
+        if (appliedStr.length > 0) {
+            try {
+                var applied = JSON.parse(appliedStr)
+                if (applied && applied[mode]) return applied[mode]
+            } catch(e) {}
+        }
+        // ② 从 __bindings__ 读取：格式 JSON.stringify({ mode -> configName })
         var bindingsStr = fp["__bindings__"] || ""
         if (bindingsStr.length > 0) {
             try {
