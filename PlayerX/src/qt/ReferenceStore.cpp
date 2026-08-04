@@ -816,12 +816,15 @@ QVariantMap ReferenceStore::referenceTextForVideoOffset(const QString& videoPath
     for (auto rit = row.constBegin(); rit != row.constEnd(); ++rit) {
         const QString key = rit.key().trimmed().toLower();
         const QString val = rit.value().toString();
-        if (key == "prompt" || key == "zh" || key == "zh_prompt" || key == "中文" || key == QString::fromUtf8("中文prompt")) {
-            zh = val;
-        } else if (key == "en_prompt" || key == "en" || key == "english" || key == "english_prompt") {
-            en = val;
-        } else if (key == "image" || key == "img" || key == "图片" || key == "filename") {
-            image = val;
+        // 已识别齐三个字段后跳过后续匹配（同义列名以先出现的列为准，不被覆盖）
+        if (zh.isEmpty() || en.isEmpty() || image.isEmpty()) {
+            if (zh.isEmpty() && (key == "prompt" || key == "zh" || key == "zh_prompt" || key == "中文" || key == QString::fromUtf8("中文prompt"))) {
+                zh = val;
+            } else if (en.isEmpty() && (key == "en_prompt" || key == "en" || key == "english" || key == "english_prompt")) {
+                en = val;
+            } else if (image.isEmpty() && (key == "image" || key == "img" || key == "图片" || key == "filename")) {
+                image = val;
+            }
         }
         // raw 拼接：以 "列名: 值" 形式（仅当存在多列时使用）
         if (!val.trimmed().isEmpty()) {
