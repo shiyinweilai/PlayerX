@@ -2387,19 +2387,84 @@ ApplicationWindow {
                 width: parent.width
             }
 
-            // 进度条（下载中显示）
+            // 进度条（下载中显示）：胶囊式 —— 深色底 + 极光渐变填充 + 前沿辉光，
+            // 左侧静态标签、右侧大号百分比（参考"画境观屿"生成进度胶囊样式）。
             Rectangle {
+                id: tsProgressCapsule
                 width: parent.width
-                height: 4
-                radius: 2
-                color: "#2a2a34"
+                height: 30
+                radius: height / 2
+                color: "#0b0b10"
+                border.color: "#2e2e3a"
+                border.width: 1
                 visible: testSourceDownloadDialog._status === "downloading"
+
+                // ── 填充层：横向渐变（深海蓝 → 青 → 薄荷绿），圆角随胶囊 ──
                 Rectangle {
-                    width: parent.width * testSourceDownloadDialog._progress
-                    height: parent.height
-                    radius: parent.radius
-                    color: "#0a64f0"
+                    id: tsProgressFill
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: parent.height - 4
+                    // 宽度最小保持一个圆头，0% 时隐藏避免露出小圆点
+                    width: Math.max(parent.height - 4,
+                                    (parent.width - 4) * testSourceDownloadDialog._progress)
+                    visible: testSourceDownloadDialog._progress > 0.005
+                    radius: height / 2
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.00; color: "#16213e" }
+                        GradientStop { position: 0.55; color: "#14506e" }
+                        GradientStop { position: 0.85; color: "#1b9e8f" }
+                        GradientStop { position: 1.00; color: "#4ef0c0" }
+                    }
                     Behavior on width { NumberAnimation { duration: 120 } }
+
+                    // ── 前沿辉光（两层叠：宽软光晕 + 窄亮芯，模拟极光边缘）──
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.rightMargin: -2
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 42; height: parent.height - 10
+                        radius: width / 2
+                        opacity: 0.35
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: "transparent" }
+                            GradientStop { position: 1.0; color: "#7fffd4" }
+                        }
+                    }
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 14; height: parent.height - 16
+                        radius: width / 2
+                        opacity: 0.9
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: "transparent" }
+                            GradientStop { position: 1.0; color: "#d8fff2" }
+                        }
+                    }
+                }
+
+                // ── 文字层（压在填充层之上）──
+                Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 18
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "测试源下载中"
+                    color: "#cfe8e0"
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 18
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Math.round(testSourceDownloadDialog._progress * 100) + "%"
+                    color: "#ffffff"
+                    font.pixelSize: 15
+                    font.bold: true
                 }
             }
 
