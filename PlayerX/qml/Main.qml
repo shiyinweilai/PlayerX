@@ -79,6 +79,9 @@ ApplicationWindow {
                 }
                 if (tip.contentItem) {
                     tip.contentItem.color = "#e8e8ec"            // 浅色文字
+                    // 允许个别 tooltip 用 <font color> 做局部着色（如"评分规则"悬浮提示）。
+                    // 已排查：现有全部 tooltip 文本不含 < / &，开 RichText 不影响纯文本渲染。
+                    tip.contentItem.textFormat = Text.RichText
                 }
             }
         } catch (e) {
@@ -7330,16 +7333,28 @@ ApplicationWindow {
                         // 兜底：当前模式尚未绑定评测类型（按钮此时其实是隐藏的，这里仅为鲁棒）
                         return qsTr("当前模式「%1」未绑定评分规则").arg(modeLabel || qsTr("未选择"))
                     }
+                    // ── 富文本着色：标签灰、值按语义分色，末行提示再弱一档 ──
+                    // （全局 ToolTip 已在启动时开启 RichText；动态值先转义防 HTML 注入）
+                    function esc(s) {
+                        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                    }
+                    var C_LABEL = "#9aa0a6"   // 标签：灰
+                    var C_MODE  = "#7ab8f5"   // 当前模式：蓝（与按钮主色呼应）
+                    var C_CFG   = "#4ef0c0"   // 评测类型：薄荷绿
+                    var C_TAG   = "#ffc069"   // 备注 tag：暖橙
+                    var C_HINT  = "#6f6f7c"   // 末行提示：弱灰
+                    var vMode = esc(modeLabel || qsTr("未选择"))
+                    var vCfg  = esc(cfg || qsTr("未绑定"))
+                    var lines = [
+                        "<font color=\"" + C_LABEL + "\">当前模式：</font><font color=\"" + C_MODE + "\">" + vMode + "</font>",
+                        "<font color=\"" + C_LABEL + "\">评测类型：</font><font color=\"" + C_CFG + "\">" + vCfg + "</font>"
+                    ]
                     var tag = root._remoteTag
                     if (tag.length > 0) {
-                        return qsTr("当前模式：%1\n评测类型：%2\n备注 tag：%3\n点击查看完整评分规则")
-                                .arg(modeLabel || qsTr("未选择"))
-                                .arg(cfg || qsTr("未绑定"))
-                                .arg(tag)
+                        lines.push("<font color=\"" + C_LABEL + "\">备注 tag：</font><font color=\"" + C_TAG + "\">" + esc(tag) + "</font>")
                     }
-                    return qsTr("当前模式：%1\n评测类型：%2\n点击查看完整评分规则")
-                            .arg(modeLabel || qsTr("未选择"))
-                            .arg(cfg || qsTr("未绑定"))
+                    lines.push("<font color=\"" + C_HINT + "\">点击查看完整评分规则</font>")
+                    return lines.join("\n")
                 }
                 background: Rectangle {
                     radius: 11
