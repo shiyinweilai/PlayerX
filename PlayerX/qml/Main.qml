@@ -7262,17 +7262,17 @@ ApplicationWindow {
                     }
                     var cfg = root._boundConfigName()
                     if (root._rulesPageUrl().length === 0) {
-                        // 兜底：当前模式尚未绑定规则配置（按钮此时其实是隐藏的，这里仅为鲁棒）
+                        // 兜底：当前模式尚未绑定评测类型（按钮此时其实是隐藏的，这里仅为鲁棒）
                         return qsTr("当前模式「%1」未绑定评分规则").arg(modeLabel || qsTr("未选择"))
                     }
                     var tag = root._remoteTag
                     if (tag.length > 0) {
-                        return qsTr("当前模式：%1\n规则配置：%2\n备注 tag：%3\n点击查看完整评分规则")
+                        return qsTr("当前模式：%1\n评测类型：%2\n备注 tag：%3\n点击查看完整评分规则")
                                 .arg(modeLabel || qsTr("未选择"))
                                 .arg(cfg || qsTr("未绑定"))
                                 .arg(tag)
                     }
-                    return qsTr("当前模式：%1\n规则配置：%2\n点击查看完整评分规则")
+                    return qsTr("当前模式：%1\n评测类型：%2\n点击查看完整评分规则")
                             .arg(modeLabel || qsTr("未选择"))
                             .arg(cfg || qsTr("未绑定"))
                 }

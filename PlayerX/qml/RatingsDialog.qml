@@ -2183,15 +2183,23 @@ Window {
         // 修法：把文件名直接拼到下载目录 URL 后面，组成完整路径 URL。
         currentFolder: (typeof Rating !== "undefined") ? Rating.defaultExportDir : ""
         currentFile: {
-            var name = "PlayerX_ratings"
-            var u = (typeof Rating !== "undefined") ? Rating.currentUser : ""
-            if (u && u.length > 0) name += "_" + u
-            // 时间戳 yyyyMMdd_HHmm
+            // 命名与服务端上传落盘规则完全一致：<user>__<tag>__<mode>__<yyyy-MM-dd_HH-mm-ss>.csv
+            // （见 PlayerX-server src/api/upload.js + src/lib/slug.js 的 safeSlug/tsNow）。
+            // 这样本地导出件与云端件同名同规则，人工对账 / 直接补传都不会对不上。
+            function safeSlug(raw, fallback) {
+                var s = String(raw || "").replace(/[^A-Za-z0-9._\-一-龥]/g, "_").slice(0, 64)
+                return s.length > 0 ? s : fallback
+            }
+            var u = safeSlug(userField.text, "anon")
+            var tag = safeSlug(tagField.text, "default")
+            var mode = safeSlug(root._selectedMode, "subjective")
+            // 时间戳 yyyy-MM-dd_HH-mm-ss（与 tsNow() 同形）
             var d = new Date()
             function pad(n) { return (n < 10 ? "0" : "") + n }
-            name += "_" + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate())
-                  + "_" + pad(d.getHours()) + pad(d.getMinutes())
-            // 拼接到下载目录 URL 后面，例如：file:///Users/xxx/Downloads/PlayerX_ratings_xxx.csv
+            var ts = d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate())
+                   + "_" + pad(d.getHours()) + "-" + pad(d.getMinutes()) + "-" + pad(d.getSeconds())
+            var name = u + "__" + tag + "__" + mode + "__" + ts
+            // 拼接到下载目录 URL 后面，例如：file:///Users/xxx/Downloads/xxx__tag__mode__ts.csv
             var dir = (typeof Rating !== "undefined") ? Rating.defaultExportDir.toString() : ""
             if (dir.length > 0) {
                 if (dir.charAt(dir.length - 1) !== "/") dir += "/"
