@@ -35,12 +35,12 @@
     function onActionChange() {
         currentAction = $('tkAction').value;
         const btn = $('tkRun');
-     btn.textContent = actionLabels[currentAction] || '▶ 执行';
+        btn.textContent = actionLabels[currentAction] || '▶ 执行';
         // 更新 loading 文案
-      const loadingText = $('tkLoadingText');
-      if (loadingText) {
-    const labels = { build: '构建中…', analyze: '分析中…', verify: '校验中…', rank: '统计中…' };
-loadingText.textContent = labels[currentAction] || '执行中…';
+        const loadingText = $('tkLoadingText');
+        if (loadingText) {
+            const labels = { build: '构建中…', analyze: '分析中…', verify: '校验中…', rank: '统计中…' };
+            loadingText.textContent = labels[currentAction] || '执行中…';
         }
     }
 
@@ -70,15 +70,15 @@ loadingText.textContent = labels[currentAction] || '执行中…';
         $('tf_samples').value = (obj.samples || []).join(',');
         $('tf_excludeSamples').value = (obj.exclude_samples || []).join(',');
         $('tf_excludeRaters').value = (obj.exclude_raters || []).join(',');
-    // companions
+        // companions
         const comp = obj.companions || {};
-$('tf_ffDir').value = comp.first_frames_dir || '';
+        $('tf_ffDir').value = comp.first_frames_dir || '';
         $('tf_promptCsv').value = comp.prompt_csv || '';
-     $('tf_promptCols').value = (comp.prompt_cols || ['Image', 'prompt', 'en_prompt']).join(',');
-     // 分析配置
+        $('tf_promptCols').value = (comp.prompt_cols || ['Image', 'prompt', 'en_prompt']).join(',');
+        // 分析配置
         $('tf_dimensions').value = (obj.dimensions || ['multi_总分']).join(',');
- $('tf_analyzeInput').value = obj.analyze_input || '';
-  $('tf_analyzeOutput').value = obj.analyze_output || '';
+        $('tf_analyzeInput').value = obj.analyze_input || '';
+        $('tf_analyzeOutput').value = obj.analyze_output || '';
     }
 
     function formToJson() {
@@ -94,13 +94,13 @@ $('tf_ffDir').value = comp.first_frames_dir || '';
         const reuseMap = $('tf_reuseMap').value.trim();
         if (reuseMap) obj.reuse_map_csv = reuseMap;
         obj.models = parseList($('tf_models').value);
- const srcDir = $('tf_srcDir').value.trim();
-   if (srcDir) obj.src_model_dir = srcDir;
-  const dstDir = $('tf_dstDir').value.trim();
-  if (dstDir) {
+        const srcDir = $('tf_srcDir').value.trim();
+        if (srcDir) obj.src_model_dir = srcDir;
+        const dstDir = $('tf_dstDir').value.trim();
+        if (dstDir) {
             obj.dst_dir = dstDir;
         } else if (obj.tag) {
-       obj.dst_dir = obj.tag;
+            obj.dst_dir = obj.tag;
         }
         const mapCsv = $('tf_mapCsv').value.trim();
         if (mapCsv) obj.map_csv = mapCsv;
@@ -118,18 +118,18 @@ $('tf_ffDir').value = comp.first_frames_dir || '';
             obj.companions = {};
             if (ffDir) obj.companions.first_frames_dir = ffDir;
             if (promptCsv) obj.companions.prompt_csv = promptCsv;
-      const promptCols = parseList($('tf_promptCols').value);
- if (promptCols.length > 0) obj.companions.prompt_cols = promptCols;
+            const promptCols = parseList($('tf_promptCols').value);
+            if (promptCols.length > 0) obj.companions.prompt_cols = promptCols;
         }
-    // 分析配置
+        // 分析配置
         const dimensions = $('tf_dimensions').value.trim();
         if (dimensions) obj.dimensions = parseList(dimensions);
         const analyzeInput = $('tf_analyzeInput').value.trim();
-if (analyzeInput) obj.analyze_input = analyzeInput;
+        if (analyzeInput) obj.analyze_input = analyzeInput;
         const analyzeOutput = $('tf_analyzeOutput').value.trim();
         if (analyzeOutput) obj.analyze_output = analyzeOutput;
         return obj;
- }
+    }
 
     function jsonTextToObj() { return JSON.parse($('tkJsonEditor').value); }
     function objToJsonText(obj) { $('tkJsonEditor').value = JSON.stringify(obj, null, 2); }
@@ -144,7 +144,7 @@ if (analyzeInput) obj.analyze_input = analyzeInput;
         $('tkToggleJson').classList.toggle('active-mode', on);
         $('tkFmtJson').style.display = on ? '' : 'none';
         if (on) {
-            try { objToJsonText(formToJson()); } catch (_) {}
+            try { objToJsonText(formToJson()); } catch (_) { }
         } else {
             try {
                 jsonToForm(jsonTextToObj());
@@ -161,17 +161,17 @@ if (analyzeInput) obj.analyze_input = analyzeInput;
     async function loadConfigList() {
         const listEl = $('tkCfgList');
         try {
-      const r = await fetch('/api/configs');
+            const r = await fetch('/api/configs');
             const j = await r.json();
-      if (!j.ok) throw new Error(j.error || '加载失败');
-   // 从评分规则配置列表中获取，只展示含 build 配置的
-     configs = (j.configs || []).map(c => ({
-name: c.name,
-    tag: c.tag || '',
-   models: c.build ? (c.build.models || []).length : 0,
-           hasBuild: !!c.build,
-          }));
-         renderConfigList();
+            if (!j.ok) throw new Error(j.error || '加载失败');
+            // 从评分规则配置列表中获取，只展示含 build 配置的
+            configs = (j.configs || []).map(c => ({
+                name: c.name,
+                tag: c.tag || '',
+                models: c.build ? (c.build.models || []).length : 0,
+                hasBuild: !!c.build,
+            }));
+            renderConfigList();
         } catch (e) {
             listEl.innerHTML = `<div class="an-cfg-empty" style="color:var(--danger)">加载失败: ${esc(e.message)}</div>`;
         }
@@ -204,7 +204,7 @@ name: c.name,
                 const ok = await PX().confirmDialog('删除配置', `确定删除配置「${name}」？`, '🗑️');
                 if (!ok) return;
                 try {
-                      const r = await adminFetch(`/api/configs/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                    const r = await adminFetch(`/api/configs/${encodeURIComponent(name)}`, { method: 'DELETE' });
                     const j = await r.json();
                     if (!j.ok) throw new Error(j.error);
                     toast(`已删除「${name}」`, 'ok');
@@ -219,58 +219,55 @@ name: c.name,
         currentConfig = name;
         renderConfigList();
         try {
-   const r = await fetch(`/api/configs/${encodeURIComponent(name)}`);
+            const r = await fetch(`/api/configs/${encodeURIComponent(name)}`);
             if (!r.ok) throw new Error('HTTP ' + r.status);
-        const text = await r.text();
+            const text = await r.text();
             const fullObj = JSON.parse(text);
-     // 从评分规则 JSON 中提取 build 子对象作为任务配置
-     const obj = fullObj.build || {};
+            // 从评分规则 JSON 中提取 build 子对象作为任务配置
+            const obj = fullObj.build || {};
             // 如果评分规则有 tag 但 build 没有，继承过来
-        if (!obj.tag && fullObj.tag) obj.tag = fullObj.tag;
-     objToJsonText(obj);
+            if (!obj.tag && fullObj.tag) obj.tag = fullObj.tag;
+            objToJsonText(obj);
             jsonToForm(obj);
             $('tkCfgName').textContent = name;
-      $('tkJsonErr').style.display = 'none';
-   setJsonMode(false);
-    switchTab('editor');
-     } catch (e) {
-        toast('加载配置失败: ' + e.message, 'err');
+            $('tkJsonErr').style.display = 'none';
+            setJsonMode(false);
+            switchTab('editor');
+        } catch (e) {
+            toast('加载配置失败: ' + e.message, 'err');
         }
     }
 
-  // ── 新建配置 ──
+    // ── 新建配置 ──
     async function addConfig() {
         if (!isLoggedIn()) { toast('请先登录', 'warn'); openLogin(); return; }
-    const trimmed = 'config_' + (configs.length + 1);
+        const trimmed = 'config_' + (configs.length + 1);
         try {
             // 创建一个带 build 字段的评分规则配置
-        const newCfg = {
-         tag: 'subj_test',
-      dimensions: [],
-       build: {
-     src_model_dir: '/data/daxinli/projects/HOIVLMBench',
-      models: [
-        'wan2.2_14b_gptc_lora6000x8',
-    'wan2.2_14b_highonly_sft_aligned_5000x56',
-  'wan2.2_14b_sft_aligned_10000x56',
-          ],
-    n_groups: 5,
-          blind: true,
- seed: 42,
-  group_mode: 'fresh',
-         dimensions: ['multi_总分'],
-     },
+            const newCfg = {
+                tag: 'subj_test',
+                dimensions: [],
+                build: {
+                    src_model_dir: '/path/to/models',
+                    models: [
+                    ],
+                    n_groups: 5,
+                    blind: true,
+                    seed: 42,
+                    group_mode: 'fresh',
+                    dimensions: ['multi_总分'],
+                },
             };
             const r = await adminFetch(`/api/configs/${encodeURIComponent(trimmed)}`, {
-      method: 'PUT',
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(newCfg),
-         });
+            });
             const j = await r.json();
-     if (!j.ok) throw new Error(j.error);
+            if (!j.ok) throw new Error(j.error);
             await loadConfigList();
-   selectConfig(trimmed);
- } catch (e) { toast('创建失败: ' + e.message, 'err'); }
+            selectConfig(trimmed);
+        } catch (e) { toast('创建失败: ' + e.message, 'err'); }
     }
 
     // ── JSON 格式化 / 保存 ──
@@ -287,30 +284,30 @@ name: c.name,
     async function saveConfig() {
         if (!currentConfig) { toast('请先选择配置', 'warn'); return; }
         if (!isLoggedIn()) { toast('请先登录', 'warn'); openLogin(); return; }
-      let obj;
-   try { obj = getCurrentConfigObj(); }
+        let obj;
+        try { obj = getCurrentConfigObj(); }
         catch (e) {
             $('tkJsonErr').textContent = 'JSON 格式错误: ' + e.message;
-      $('tkJsonErr').style.display = 'block';
-      return;
+            $('tkJsonErr').style.display = 'block';
+            return;
         }
-  $('tkJsonErr').style.display = 'none';
+        $('tkJsonErr').style.display = 'none';
         try {
-       // 先读取完整的评分规则 JSON
-    const fr = await fetch(`/api/configs/${encodeURIComponent(currentConfig)}`);
-      let fullObj = {};
-    if (fr.ok) { try { fullObj = await fr.json(); } catch (_) {} }
-      // 把构建配置写入 build 字段（不影响其他字段）
-fullObj.build = obj;
-  const r = await adminFetch(`/api/configs/${encodeURIComponent(currentConfig)}`, {
-     method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-     body: JSON.stringify(fullObj),
+            // 先读取完整的评分规则 JSON
+            const fr = await fetch(`/api/configs/${encodeURIComponent(currentConfig)}`);
+            let fullObj = {};
+            if (fr.ok) { try { fullObj = await fr.json(); } catch (_) { } }
+            // 把构建配置写入 build 字段（不影响其他字段）
+            fullObj.build = obj;
+            const r = await adminFetch(`/api/configs/${encodeURIComponent(currentConfig)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(fullObj),
             });
-  const j = await r.json();
-    if (!j.ok) throw new Error(j.error);
-     toast(`已保存「${currentConfig}」`, 'ok');
-       await loadConfigList();
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error);
+            toast(`已保存「${currentConfig}」`, 'ok');
+            await loadConfigList();
         } catch (e) { toast('保存失败: ' + e.message, 'err'); }
     }
 
@@ -355,155 +352,155 @@ fullObj.build = obj;
     // ── 执行操作（build/analyze/verify/rank） ──
     async function runAction() {
         if (!isLoggedIn()) { toast('请先登录', 'warn'); openLogin(); return; }
- if (!currentConfig) { toast('请先选择一个配置', 'warn'); return; }
+        if (!currentConfig) { toast('请先选择一个配置', 'warn'); return; }
 
         let config;
         try { config = getCurrentConfigObj(); }
         catch (e) {
-    $('tkJsonErr').textContent = 'JSON 格式错误: ' + e.message;
-        $('tkJsonErr').style.display = 'block';
+            $('tkJsonErr').textContent = 'JSON 格式错误: ' + e.message;
+            $('tkJsonErr').style.display = 'block';
             return;
- }
-      $('tkJsonErr').style.display = 'none';
+        }
+        $('tkJsonErr').style.display = 'none';
 
         const action = currentAction;
         const actionNames = { build: '构建', analyze: '分析', verify: '校验', rank: '排名' };
- const actionName = actionNames[action] || action;
+        const actionName = actionNames[action] || action;
 
         // build 会清空输出目录，确认一下
         if (action === 'build' && config.dst_dir) {
             const ok = await PX().confirmDialog('确认构建',
-        `构建将清空并重建输出目录：\n${config.dst_dir}\n\n确定继续？`, '📦');
+                `构建将清空并重建输出目录：\n${config.dst_dir}\n\n确定继续？`, '📦');
             if (!ok) return;
-     }
+        }
 
-     switchTab('results');
-    $('tkEmpty').hidden = true;
-  $('tkResultsArea').hidden = true;
+        switchTab('results');
+        $('tkEmpty').hidden = true;
+        $('tkResultsArea').hidden = true;
         $('tkLoading').hidden = false;
-  const loadingText = $('tkLoadingText');
+        const loadingText = $('tkLoadingText');
         if (loadingText) loadingText.textContent = actionName + '中…';
-     const runBtn = $('tkRun');
+        const runBtn = $('tkRun');
         runBtn.disabled = true;
         runBtn.textContent = '⏳ ' + actionName + '中…';
 
         try {
             // 根据 tag 确定文件夹结构
-const tag = config.tag || config.dst_dir || currentConfig;
+            const tag = config.tag || config.dst_dir || currentConfig;
             // 所有操作共用 tag 作为根目录
-        if (!config.dst_dir) config.dst_dir = tag;
+            if (!config.dst_dir) config.dst_dir = tag;
 
-const apiPath = action === 'build' ? '/api/build' : '/api/analyze';
+            const apiPath = action === 'build' ? '/api/build' : '/api/analyze';
             const r = await adminFetch(apiPath, {
-   method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-     body: JSON.stringify({ config, action }),
-        });
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ config, action }),
+            });
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
-   const data = await r.json();
- if (!data.ok) throw new Error(data.error || actionName + '失败');
+            const data = await r.json();
+            if (!data.ok) throw new Error(data.error || actionName + '失败');
 
             $('tkLoading').hidden = true;
-      $('tkResultsArea').hidden = false;
-        if (action === 'build') {
-    renderResults(data.data);
-           // 构建成功后自动 zip 到 testsrc
-          if (data.data && data.data.dstDir) {
-  toast('📦 正在压缩…', 'info');
-            try {
-   const zr = await adminFetch('/api/build/zip', {
-    method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-           body: JSON.stringify({ dstDir: data.data.dstDir, tag }),
-    });
-           const zj = await zr.json();
-  if (zr.ok && zj.ok) {
-        toast(`✅ 已压缩 → testsrc/${zj.zipName}`, 'ok');
-     } else {
-              toast('⚠️ 压缩失败：' + (zj.error || ''), 'err');
-           }
-     } catch (ze) {
-         toast('⚠️ 压缩异常：' + ze.message, 'err');
-         }
-        }
-   } else {
-       renderAnalyzeResults(data.data, action);
-      }
-        toast('✅ ' + actionName + '完成', 'ok');
-    } catch (e) {
-    $('tkLoading').hidden = true;
-  $('tkEmpty').hidden = false;
- toast(`❌ ${actionName}失败: ${e.message}`, 'err');
+            $('tkResultsArea').hidden = false;
+            if (action === 'build') {
+                renderResults(data.data);
+                // 构建成功后自动 zip 到 testsrc
+                if (data.data && data.data.dstDir) {
+                    toast('📦 正在压缩…', 'info');
+                    try {
+                        const zr = await adminFetch('/api/build/zip', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ dstDir: data.data.dstDir, tag }),
+                        });
+                        const zj = await zr.json();
+                        if (zr.ok && zj.ok) {
+                            toast(`✅ 已压缩 → testsrc/${zj.zipName}`, 'ok');
+                        } else {
+                            toast('⚠️ 压缩失败：' + (zj.error || ''), 'err');
+                        }
+                    } catch (ze) {
+                        toast('⚠️ 压缩异常：' + ze.message, 'err');
+                    }
+                }
+            } else {
+                renderAnalyzeResults(data.data, action);
+            }
+            toast('✅ ' + actionName + '完成', 'ok');
+        } catch (e) {
+            $('tkLoading').hidden = true;
+            $('tkEmpty').hidden = false;
+            toast(`❌ ${actionName}失败: ${e.message}`, 'err');
         } finally {
-      runBtn.disabled = false;
-    runBtn.textContent = actionLabels[action];
+            runBtn.disabled = false;
+            runBtn.textContent = actionLabels[action];
         }
     }
 
     // ── 渲染分析/校验/排名结果 ──
     function renderAnalyzeResults(data, action) {
-     const kpiCards = $('tkKpis');
+        const kpiCards = $('tkKpis');
         const detail = $('tkDetail');
 
         if (action === 'analyze') {
             const kpis = [
-      { label: '评分员数', value: data.raters || '-' },
-{ label: '维度数', value: data.dimensions || '-' },
-    { label: '样本数', value: data.samples || '-' },
-  { label: '平均分', value: data.avgScore != null ? data.avgScore.toFixed(2) : '-' },
-        { label: '状态', value: data.success ? '✅ 完成' : '❌ 失败' },
+                { label: '评分员数', value: data.raters || '-' },
+                { label: '维度数', value: data.dimensions || '-' },
+                { label: '样本数', value: data.samples || '-' },
+                { label: '平均分', value: data.avgScore != null ? data.avgScore.toFixed(2) : '-' },
+                { label: '状态', value: data.success ? '✅ 完成' : '❌ 失败' },
             ];
-     kpiCards.innerHTML = kpis.map(k =>
+            kpiCards.innerHTML = kpis.map(k =>
                 `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
             ).join('');
 
             let html = '';
             if (data.outputPath) {
-             html += `<div class="an-sec"><div class="sec-h">输出路径</div><p style="font-size:12px;color:var(--text-sec)">${esc(data.outputPath)}</p></div>`;
+                html += `<div class="an-sec"><div class="sec-h">输出路径</div><p style="font-size:12px;color:var(--text-sec)">${esc(data.outputPath)}</p></div>`;
             }
             if (data.summary) {
-   html += `<div class="an-sec"><div class="sec-h">分析摘要</div><pre style="font-size:12px;white-space:pre-wrap">${esc(data.summary)}</pre></div>`;
-      }
-         detail.innerHTML = html || '<div class="an-sec">分析完成</div>';
+                html += `<div class="an-sec"><div class="sec-h">分析摘要</div><pre style="font-size:12px;white-space:pre-wrap">${esc(data.summary)}</pre></div>`;
+            }
+            detail.innerHTML = html || '<div class="an-sec">分析完成</div>';
         } else if (action === 'verify') {
- const kpis = [
-      { label: '检查项', value: data.checks || '-' },
-      { label: '通过', value: data.passed || '-' },
-    { label: '失败', value: data.failed || 0 },
-          { label: '状态', value: (data.failed || 0) === 0 ? '✅ 全部通过' : '❌ 有异常' },
+            const kpis = [
+                { label: '检查项', value: data.checks || '-' },
+                { label: '通过', value: data.passed || '-' },
+                { label: '失败', value: data.failed || 0 },
+                { label: '状态', value: (data.failed || 0) === 0 ? '✅ 全部通过' : '❌ 有异常' },
             ];
-     kpiCards.innerHTML = kpis.map(k =>
-       `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
+            kpiCards.innerHTML = kpis.map(k =>
+                `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
             ).join('');
-     detail.innerHTML = data.details ? `<div class="an-sec"><pre style="font-size:12px;white-space:pre-wrap">${esc(data.details)}</pre></div>` : '';
+            detail.innerHTML = data.details ? `<div class="an-sec"><pre style="font-size:12px;white-space:pre-wrap">${esc(data.details)}</pre></div>` : '';
         } else if (action === 'rank') {
-          const kpis = [
+            const kpis = [
                 { label: '模型数', value: data.models || '-' },
-       { label: '维度', value: data.dimension || '-' },
-          { label: '最高分', value: data.topScore != null ? data.topScore.toFixed(2) : '-' },
-        { label: '状态', value: data.success ? '✅ 完成' : '❌ 失败' },
-         ];
-         kpiCards.innerHTML = kpis.map(k =>
-    `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
-          ).join('');
-     detail.innerHTML = data.ranking ? `<div class="an-sec"><div class="sec-h">排名结果</div><pre style="font-size:12px;white-space:pre-wrap">${esc(data.ranking)}</pre></div>` : '';
-   }
+                { label: '维度', value: data.dimension || '-' },
+                { label: '最高分', value: data.topScore != null ? data.topScore.toFixed(2) : '-' },
+                { label: '状态', value: data.success ? '✅ 完成' : '❌ 失败' },
+            ];
+            kpiCards.innerHTML = kpis.map(k =>
+                `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
+            ).join('');
+            detail.innerHTML = data.ranking ? `<div class="an-sec"><div class="sec-h">排名结果</div><pre style="font-size:12px;white-space:pre-wrap">${esc(data.ranking)}</pre></div>` : '';
+        }
     }
 
     // ── 文件选择 ──
     function pickFile() {
         const input = document.createElement('input');
-   input.type = 'file';
+        input.type = 'file';
         input.accept = '.csv,.json';
-  input.onchange = () => {
-      if (input.files.length > 0) {
-       const file = input.files[0];
-        const dataSrc = $('tkDataSrc');
-          if (dataSrc) dataSrc.textContent = '数据源：' + file.name;
-          if ($('tf_analyzeInput')) $('tf_analyzeInput').value = file.name;
+        input.onchange = () => {
+            if (input.files.length > 0) {
+                const file = input.files[0];
+                const dataSrc = $('tkDataSrc');
+                if (dataSrc) dataSrc.textContent = '数据源：' + file.name;
+                if ($('tf_analyzeInput')) $('tf_analyzeInput').value = file.name;
             }
-  };
-     input.click();
+        };
+        input.click();
     }
 
     // ── 对外接口 ──
@@ -520,34 +517,34 @@ const apiPath = action === 'build' ? '/api/build' : '/api/analyze';
     // ── 初始化（懒加载） ──
     function initModule() {
         // Tab 切换
-  document.querySelectorAll('#pageTasks .an-tab').forEach(tab => {
+        document.querySelectorAll('#pageTasks .an-tab').forEach(tab => {
             tab.addEventListener('click', () => switchTab(tab.dataset.tab));
- });
-  // 模式切换
-   $('tkToggleJson').addEventListener('click', () => setJsonMode(!isJsonMode));
+        });
+        // 模式切换
+        $('tkToggleJson').addEventListener('click', () => setJsonMode(!isJsonMode));
         $('tkFmtJson').addEventListener('click', formatJson);
-  $('tkSaveCfg').addEventListener('click', saveConfig);
+        $('tkSaveCfg').addEventListener('click', saveConfig);
         // 新建配置
-  $('tkAddCfg').addEventListener('click', addConfig);
-    // Action 切换
+        $('tkAddCfg').addEventListener('click', addConfig);
+        // Action 切换
         $('tkAction').addEventListener('change', onActionChange);
- // 文件选择
+        // 文件选择
         const pickBtn = $('tkPickBtn');
-  if (pickBtn) pickBtn.addEventListener('click', pickFile);
-// 高级路径配置折叠
+        if (pickBtn) pickBtn.addEventListener('click', pickFile);
+        // 高级路径配置折叠
         const pathAdvToggle = $('tkPathAdvToggle');
         const pathAdvPanel = $('tkPathAdvPanel');
         if (pathAdvToggle && pathAdvPanel) {
-       pathAdvToggle.addEventListener('click', () => {
-           const open = !pathAdvPanel.hidden;
-             pathAdvPanel.hidden = open;
-       pathAdvToggle.textContent = open ? '高级路径配置 ▸' : '高级路径配置 ▾';
-       pathAdvToggle.classList.toggle('open', !open);
+            pathAdvToggle.addEventListener('click', () => {
+                const open = !pathAdvPanel.hidden;
+                pathAdvPanel.hidden = open;
+                pathAdvToggle.textContent = open ? '高级路径配置 ▸' : '高级路径配置 ▾';
+                pathAdvToggle.classList.toggle('open', !open);
             });
         }
         // 运行
- $('tkRun').addEventListener('click', runAction);
+        $('tkRun').addEventListener('click', runAction);
         // 初始化 action 状态
-     onActionChange();
+        onActionChange();
     }
 })();

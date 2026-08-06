@@ -5495,7 +5495,7 @@ ApplicationWindow {
         return result
     }
 
-    // ── 构造后端规则页面 URL：origin + /#rules/ + encodeURIComponent(configName) ──
+    // ── 构造后端规则页面 URL：origin + /#tasks/ + encodeURIComponent(configName) ──
     // 与 MultiGroupDialog._rulesPageUrl 一致；无绑定配置或服务器地址为空时返回 ""。
     function _rulesPageUrl() {
         var base = (typeof Rating !== "undefined" && Rating.uploadServerUrl) ? Rating.uploadServerUrl.trim() : ""
@@ -5504,7 +5504,7 @@ ApplicationWindow {
         if (configName.length === 0) return ""
         var m = base.match(/^(https?:\/\/[^/]+)/)
         var origin = m ? m[1] : base.replace(/\/$/, "")
-        return origin + "/#rules/" + encodeURIComponent(configName)
+        return origin + "/#tasks/" + encodeURIComponent(configName)
     }
 
     // 切换到多维模式或维度配置变化时，重新初始化 cellRatings
@@ -7310,7 +7310,7 @@ ApplicationWindow {
             //   · 评分规则属于「评分域」入口，语义上不属于播放器通用控件；
             //     所以放在分隔线【左侧】的"非播放器控件区"，与右侧的 1x/<<>>/多组切换分开。
             //   · 与 MultiGroupDialog 顶部的"查看规则 ↗"按钮完全同源：点击后
-            //     Qt.openUrlExternally 到后端 /#rules/<configName>。
+            //     Qt.openUrlExternally 到后端 /#tasks/<configName>。
             //   · 可见性双重守卫：仅当有视频（fileCount>0）且当前 mode 已绑定后端配置
             //     （_rulesPageUrl 非空）时才显示；否则宽度 0 不留空白。
             //   · 样式沿用 MultiGroupDialog viewRulesBtn 的深蓝底+浅蓝字方案，

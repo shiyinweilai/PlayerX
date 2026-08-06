@@ -95,7 +95,7 @@
         $('anToggleJson').classList.toggle('active-mode', on);
         $('anFmtJson').style.display = on ? '' : 'none';
         if (on) {
-            try { objToJsonText(formToJson()); } catch (_) {}
+            try { objToJsonText(formToJson()); } catch (_) { }
         } else {
             try {
                 jsonToForm(jsonTextToObj());
@@ -183,30 +183,27 @@
     async function addConfig() {
         if (!isLoggedIn()) { toast('请先登录', 'warn'); openLogin(); return; }
         const trimmed = 'config_' + (configs.length + 1);
-     try {
-         const defaultCfg = {
-tag: '',
-              src_model_dir: '/data/daxinli/projects/HOIVLMBench',
-       dst_dir: '',
-      models: [
-           'wan2.2_14b_gptc_lora6000x8',
-           'wan2.2_14b_highonly_sft_aligned_5000x56',
-  'wan2.2_14b_sft_aligned_10000x56',
-             ],
-     n_groups: 5,
-   map_csv: 'map_subj.csv',
-            deanon_csv: 'playerx_selected_deanon.csv',
-       };
-  const r = await adminFetch(`/api/analyze-configs/${encodeURIComponent(trimmed)}`, {
- method: 'PUT',
-       headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify(defaultCfg),
-    });
-          const j = await r.json();
-    if (!j.ok) throw new Error(j.error);
- await loadConfigList();
-    selectConfig(trimmed);
-    } catch (e) { toast('创建失败: ' + e.message, 'err'); }
+        try {
+            const defaultCfg = {
+                tag: '',
+                src_model_dir: '/path/to/models',
+                dst_dir: '',
+                models: [
+                ],
+                n_groups: 5,
+                map_csv: 'map_subj.csv',
+                deanon_csv: 'playerx_selected_deanon.csv',
+            };
+            const r = await adminFetch(`/api/analyze-configs/${encodeURIComponent(trimmed)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(defaultCfg),
+            });
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error);
+            await loadConfigList();
+            selectConfig(trimmed);
+        } catch (e) { toast('创建失败: ' + e.message, 'err'); }
     }
 
     // ── JSON 格式化 / 保存 ──

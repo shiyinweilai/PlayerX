@@ -77,5 +77,14 @@
       "first_frames",
       "second_frames"
     ]
+  },
+  "build": {
+    "src_model_dir": "",
+    "n_groups": 5,
+    "seed": 42,
+    "blind": true,
+    "group_mode": "fresh",
+    "models": [],
+    "sync_to_testsrc": true
   }
 }

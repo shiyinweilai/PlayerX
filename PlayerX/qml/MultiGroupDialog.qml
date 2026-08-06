@@ -770,7 +770,7 @@ ApplicationWindow {
         return result
     }
 
-    // 构造后端规则页面 URL：origin + /#rules/ + encodeURIComponent(configName)
+    // 构造后端规则页面 URL：origin + /#tasks/ + encodeURIComponent(configName)
     function _rulesPageUrl() {
         var base = uploadServerUrl.trim()
         if (base.length === 0) return ""
@@ -778,7 +778,7 @@ ApplicationWindow {
         if (configName.length === 0) return ""
         var m = base.match(/^(https?:\/\/[^/]+)/)
         var origin = m ? m[1] : base.replace(/\/$/, "")
-        return origin + "/#rules/" + encodeURIComponent(configName)
+        return origin + "/#tasks/" + encodeURIComponent(configName)
     }
 
     // ─── 单路浏览模式的「N 宫格」状态 ───────────────────────────────
