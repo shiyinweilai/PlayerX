@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>PlayerX · 评分收集</title>
+<title>PlayerX · 评分中心</title>
 <link rel="stylesheet" href="/web/style.css" />
 </head>
 <body>
@@ -12,16 +12,14 @@
     <div class="brand">
         <span class="brand-mark">★</span>
         <span class="brand-name">PlayerX</span>
-        <span class="brand-sub">评分收集中心</span>
+        <span class="brand-sub">评分中心</span>
     </div>
     <div class="topbar-right">
         <span class="status-pill" id="serverStatus">
             <span class="dot"></span><span id="serverStatusText">连接中…</span>
         </span>
-        <button class="ghost-btn" id="tokenSettingsBtn" title="设置上传 Token，控制播放器端是否能上传" hidden>⚙ 上传 Token</button>
-        <button class="ghost-btn" id="dimPageBtn" title="查看评分维度说明">📐 评分规则</button>
+        <button class="ghost-btn" id="refreshBtn" title="刷新列表"><svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
         <button class="ghost-btn" id="adminLoginBtn" title="登录后才能执行删除 / 归档等管理操作">🔒 用户登录</button>
-        <button class="ghost-btn" id="refreshBtn" title="刷新列表">↻</button>
     </div>
 </header>
 
@@ -59,240 +57,323 @@
     </div>
 </div>
 
-<!-- ────────── 维度规则独立页面 ────────── -->
-<section class="dim-page" id="dimPage" hidden>
-    <div class="dim-page-head">
-        <div class="dim-page-title">📐 评分规则</div>
-        <div class="dim-page-actions">
-            <!-- 拖拽上传提示（所有人可见） -->
-            <label class="dim-upload-hint" id="dimUploadHint" title="拖拽 .json 文件到页面任意位置，或点击此处选择文件">
-                <input type="file" accept=".json,application/json" id="dimUploadInput" style="display:none">
-                <span>📂 拖拽或上传 .json</span>
-            </label>
-            <!-- 管理员登录后显示编辑/保存按钮 -->
-            <button class="ghost-btn" id="dimEditBtn" style="display:none">✏️ 编辑配置</button>
-            <button class="ghost-btn" id="dimFormatBtn" style="display:none" title="格式化 JSON">格式化</button>
-            <button class="primary-btn" id="dimSaveBtn" style="display:none">保存</button>
-            <button class="ghost-btn" id="dimCancelEditBtn" style="display:none">取消编辑</button>
-            <button class="ghost-btn" id="dimPageCloseBtn" title="返回主列表">✕ 关闭</button>
-        </div>
-    </div>
+<!-- ────────── Admin 工作台 ────────── -->
+<div class="admin-shell">
+    <!-- 左侧栏导航 -->
+    <nav class="admin-sidebar">
+        <div class="nav-group">总览</div>
+   <div class="nav-item" data-module="dashboard"><svg class="nav-icon" width="18" height="18" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M27.9167 30H20.4167C19.2658 30 18.3333 29.1392 18.3333 28.0769V21.1538C18.3333 20.3038 17.5875 19.6154 16.6667 19.6154H13.3333C12.4125 19.6154 11.6667 20.3038 11.6667 21.1538V28.0769C11.6667 29.1392 10.7342 30 9.58333 30H2.08333C0.9325 30 0 29.1392 0 28.0769V13.3946C0 11.6262 0.878334 9.95539 2.3825 8.86154L14.2258 0.246923C14.68 -0.0823077 15.32 -0.0823077 15.7733 0.246923L27.6183 8.86154C29.1225 9.95539 30 11.6254 30 13.3931V28.0769C30 29.1392 29.0675 30 27.9167 30Z" fill="currentColor"/></svg> 数据大盘</div>
+        <div class="nav-group">评分</div>
+    <div class="nav-item active" data-module="files"><svg class="nav-icon" width="18" height="18" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12.6923 0C10.1547 0 8.07692 2.16563 8.07692 4.8V6H10.3846V4.8C10.3846 3.45938 11.4032 2.4 12.6923 2.4H17.3077C18.5968 2.4 19.6154 3.45938 19.6154 4.8V6H21.9231V4.8C21.9231 2.16563 19.8453 0 17.3077 0H12.6923ZM5.625 7.2C2.51953 7.2 0 9.82031 0 13.05V24.15C0 27.3797 2.51953 30 5.625 30H24.375C27.4805 30 30 27.3797 30 24.15V13.05C30 9.82031 27.4805 7.2 24.375 7.2H5.625ZM15 15.4875C16.3386 15.4875 17.4159 16.6078 17.4159 18C17.4159 19.3922 16.3386 20.5125 15 20.5125C13.6614 20.5125 12.5841 19.3922 12.5841 18C12.5841 16.6078 13.6614 15.4875 15 15.4875Z" fill="currentColor"/></svg> 评分文件</div>
+      <div class="nav-item" data-module="tasks"><svg class="nav-icon" width="18" height="18" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15.0013 0C10.482 0 6.81914 3.50348 6.81914 7.82609V9.13044C6.81914 13.453 10.482 16.9565 15.0013 16.9565C19.5206 16.9565 23.1835 13.453 23.1835 9.13044V7.82609C23.1835 3.50348 19.5206 0 15.0013 0ZM14.9987 20.8696C9.53569 20.8696 2.52628 23.6959 0.509366 26.2041C-0.737054 27.755 0.44947 30 2.49366 30H27.5063C29.5505 30 30.7371 27.755 29.4906 26.2041C27.4737 23.6972 20.4616 20.8696 14.9987 20.8696Z" fill="currentColor"/></svg> 任务管理</div>
+      <div class="nav-item" data-module="models"><svg class="nav-icon" width="18" height="18" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M19.6641 0C19.4231 0 19.2178 0.171203 19.1738 0.408203L18.9531 1.58398C18.8961 1.88898 18.6546 2.11669 18.3496 2.17969C18.0656 2.23869 17.7857 2.31239 17.5137 2.40039C17.2187 2.49639 16.8973 2.42055 16.6953 2.18555L15.9199 1.2793C15.7629 1.0963 15.4981 1.05283 15.2891 1.17383L14.7109 1.50781C14.5029 1.62781 14.4083 1.88042 14.4883 2.10742L14.8848 3.23438C14.9878 3.52637 14.8931 3.84378 14.6621 4.05078C14.4471 4.24378 14.2438 4.44711 14.0508 4.66211C13.8438 4.89311 13.5264 4.98972 13.2344 4.88672L12.1055 4.48828C11.8785 4.40828 11.6278 4.50194 11.5078 4.71094L11.1719 5.29102C11.0519 5.49902 11.0973 5.76487 11.2793 5.92188L11.377 6.00586C12.56 6.02586 13.572 6.87206 13.791 8.03906L13.8516 8.35742L14.0605 8.11133C14.5195 7.57733 15.1622 7.28695 15.8262 7.25195C16.7222 5.89695 18.255 5 20 5C22.761 5 25 7.239 25 10C25 11.745 24.103 13.2779 22.748 14.1719C22.713 14.8359 22.4227 15.4795 21.8887 15.9375L21.6426 16.1465L21.9609 16.207C23.1279 16.426 23.9741 17.4381 23.9941 18.6211L24.0781 18.7188C24.2351 18.9017 24.5 18.9472 24.709 18.8262L25.2891 18.4902C25.4971 18.3702 25.5917 18.1196 25.5117 17.8926L25.1133 16.7637C25.0103 16.4717 25.1069 16.1543 25.3379 15.9473C25.5529 15.7543 25.7562 15.5509 25.9492 15.3359C26.1562 15.1049 26.4736 15.0103 26.7656 15.1133L27.8926 15.5098C28.1196 15.5898 28.3722 15.4961 28.4922 15.2871L28.8262 14.707C28.9462 14.499 28.9027 14.2351 28.7207 14.0781L27.8145 13.3008C27.5795 13.0988 27.5036 12.7774 27.5996 12.4824C27.6876 12.2104 27.7613 11.9324 27.8203 11.6484C27.8833 11.3444 28.111 11.1029 28.416 11.0449L29.5918 10.8223C29.8288 10.7813 30 10.5769 30 10.3359V9.66406C30 9.42306 29.8288 9.21783 29.5918 9.17383L28.416 8.95312C28.111 8.89612 27.8833 8.65461 27.8203 8.34961C27.7613 8.06561 27.6876 7.78567 27.5996 7.51367C27.5036 7.21867 27.5795 6.89731 27.8145 6.69531L28.7207 5.91992C28.9037 5.76292 28.9472 5.49806 28.8262 5.28906L28.4922 4.71094C28.3722 4.50294 28.1196 4.40828 27.8926 4.48828L26.7656 4.88477C26.4736 4.98777 26.1562 4.89311 25.9492 4.66211C25.7562 4.44711 25.5529 4.24378 25.3379 4.05078C25.1069 3.84378 25.0103 3.52637 25.1133 3.23438L25.5117 2.10547C25.5917 1.87847 25.4981 1.62781 25.2891 1.50781L24.709 1.17188C24.501 1.05188 24.2351 1.0973 24.0781 1.2793L23.3027 2.18555C23.1007 2.42055 22.7794 2.49639 22.4844 2.40039C22.2124 2.31239 21.9324 2.23869 21.6484 2.17969C21.3444 2.11669 21.1029 1.88703 21.0449 1.58203L20.8242 0.40625C20.7822 0.17025 20.5769 0 20.3359 0H19.6641ZM11 13C14.314 13 17 15.686 17 19C17 22.314 14.314 25 11 25C7.686 25 5 22.314 5 19C5 15.686 7.686 13 11 13ZM11 17C9.895 17 9 17.895 9 19C9 20.105 9.895 21 11 21C12.105 21 13 20.105 13 19C13 17.895 12.105 17 11 17Z" fill="currentColor"/></svg> 模型管理</div>
+     <div class="nav-group">数据</div>
+        <div class="nav-item" data-module="archive"><svg class="nav-icon" width="18" height="18" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12.6923 0C10.1547 0 8.07692 2.16563 8.07692 4.8V6H10.3846V4.8C10.3846 3.45938 11.4032 2.4 12.6923 2.4H17.3077C18.5968 2.4 19.6154 3.45938 19.6154 4.8V6H21.9231V4.8C21.9231 2.16563 19.8453 0 17.3077 0H12.6923ZM5.625 7.2C2.51953 7.2 0 9.82031 0 13.05V24.15C0 27.3797 2.51953 30 5.625 30H24.375C27.4805 30 30 27.3797 30 24.15V13.05C30 9.82031 27.4805 7.2 24.375 7.2H5.625ZM15 15.4875C16.3386 15.4875 17.4159 16.6078 17.4159 18C17.4159 19.3922 16.3386 20.5125 15 20.5125C13.6614 20.5125 12.5841 19.3922 12.5841 18C12.5841 16.6078 13.6614 15.4875 15 15.4875Z" fill="currentColor"/></svg> 归档库</div>
+        <div class="nav-group">系统</div>
+ <div class="nav-item" data-module="settings"><svg class="nav-icon" width="18" height="18" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M19.6641 0C19.4231 0 19.2178 0.171203 19.1738 0.408203L18.9531 1.58398C18.8961 1.88898 18.6546 2.11669 18.3496 2.17969C18.0656 2.23869 17.7857 2.31239 17.5137 2.40039C17.2187 2.49639 16.8973 2.42055 16.6953 2.18555L15.9199 1.2793C15.7629 1.0963 15.4981 1.05283 15.2891 1.17383L14.7109 1.50781C14.5029 1.62781 14.4083 1.88042 14.4883 2.10742L14.8848 3.23438C14.9878 3.52637 14.8931 3.84378 14.6621 4.05078C14.4471 4.24378 14.2438 4.44711 14.0508 4.66211C13.8438 4.89311 13.5264 4.98972 13.2344 4.88672L12.1055 4.48828C11.8785 4.40828 11.6278 4.50194 11.5078 4.71094L11.1719 5.29102C11.0519 5.49902 11.0973 5.76487 11.2793 5.92188L11.377 6.00586C12.56 6.02586 13.572 6.87206 13.791 8.03906L13.8516 8.35742L14.0605 8.11133C14.5195 7.57733 15.1622 7.28695 15.8262 7.25195C16.7222 5.89695 18.255 5 20 5C22.761 5 25 7.239 25 10C25 11.745 24.103 13.2779 22.748 14.1719C22.713 14.8359 22.4227 15.4795 21.8887 15.9375L21.6426 16.1465L21.9609 16.207C23.1279 16.426 23.9741 17.4381 23.9941 18.6211L24.0781 18.7188C24.2351 18.9017 24.5 18.9472 24.709 18.8262L25.2891 18.4902C25.4971 18.3702 25.5917 18.1196 25.5117 17.8926L25.1133 16.7637C25.0103 16.4717 25.1069 16.1543 25.3379 15.9473C25.5529 15.7543 25.7562 15.5509 25.9492 15.3359C26.1562 15.1049 26.4736 15.0103 26.7656 15.1133L27.8926 15.5098C28.1196 15.5898 28.3722 15.4961 28.4922 15.2871L28.8262 14.707C28.9462 14.499 28.9027 14.2351 28.7207 14.0781L27.8145 13.3008C27.5795 13.0988 27.5036 12.7774 27.5996 12.4824C27.6876 12.2104 27.7613 11.9324 27.8203 11.6484C27.8833 11.3444 28.111 11.1029 28.416 11.0449L29.5918 10.8223C29.8288 10.7813 30 10.5769 30 10.3359V9.66406C30 9.42306 29.8288 9.21783 29.5918 9.17383L28.416 8.95312C28.111 8.89612 27.8833 8.65461 27.8203 8.34961C27.7613 8.06561 27.6876 7.78567 27.5996 7.51367C27.5036 7.21867 27.5795 6.89731 27.8145 6.69531L28.7207 5.91992C28.9037 5.76292 28.9472 5.49806 28.8262 5.28906L28.4922 4.71094C28.3722 4.50294 28.1196 4.40828 27.8926 4.48828L26.7656 4.88477C26.4736 4.98777 26.1562 4.89311 25.9492 4.66211C25.7562 4.44711 25.5529 4.24378 25.3379 4.05078C25.1069 3.84378 25.0103 3.52637 25.1133 3.23438L25.5117 2.10547C25.5917 1.87847 25.4981 1.62781 25.2891 1.50781L24.709 1.17188C24.501 1.05188 24.2351 1.0973 24.0781 1.2793L23.3027 2.18555C23.1007 2.42055 22.7794 2.49639 22.4844 2.40039C22.2124 2.31239 21.9324 2.23869 21.6484 2.17969C21.3444 2.11669 21.1029 1.88703 21.0449 1.58203L20.8242 0.40625C20.7822 0.17025 20.5769 0 20.3359 0H19.6641ZM11 13C14.314 13 17 15.686 17 19C17 22.314 14.314 25 11 25C7.686 25 5 22.314 5 19C5 15.686 7.686 13 11 13ZM11 17C9.895 17 9 17.895 9 19C9 20.105 9.895 21 11 21C12.105 21 13 20.105 13 19C13 17.895 12.105 17 11 17Z" fill="currentColor"/></svg> 设置</div>
+    </nav>
 
-    <div class="dim-body">
-        <!-- 左侧：配置文件列表 -->
-        <div class="dim-sidebar" id="dimSidebar">
-            <div class="dim-sidebar-head">
-                <span class="dim-sidebar-title">配置列表</span>
-                <button class="dim-sidebar-add ghost-btn" id="dimAddBtn" style="display:none" title="新建配置">＋</button>
+    <!-- 内容区 -->
+    <div class="admin-content">
+        <!-- ═══ 模块：数据大盘 ═══ -->
+        <section id="pageDashboard" hidden>
+            <div class="placeholder-page">
+                <div class="placeholder-icon">📊</div>
+                <div class="placeholder-title">数据大盘</div>
+                <div class="placeholder-sub">任务进度、完成度、评分统计等数据概览<br>即将上线，敬请期待</div>
             </div>
-            <div class="dim-sidebar-list" id="dimSidebarList">
-                <div class="dim-sidebar-loading">加载中…</div>
-            </div>
-            <!-- 拖拽上传区 -->
-            <div class="dim-drop-zone" id="dimDropZone">
-                <span class="dim-drop-icon">📂</span>
-                <span class="dim-drop-text">拖拽 <code>.json</code> 到此处</span>
-                <span class="dim-drop-sub" id="dimDropSub">拖入后自动预览</span>
-            </div>
-        </div>
+        </section>
 
-        <!-- 右侧：内容区 -->
-        <div class="dim-content">
-            <!-- 卡片展示 -->
-            <div class="dim-view" id="dimView">
-                <div class="dim-view-loading">请从左侧选择配置</div>
-            </div>
-            <!-- JSON 编辑器 -->
-            <div class="dim-editor-section" id="dimEditorSection" style="display:none">
-                <div class="login-err" id="dimErr" style="display:none"></div>
-                <textarea id="dimEditor" spellcheck="false" autocomplete="off" placeholder="加载中…"></textarea>
-            </div>
-        </div>
-    </div>
-</section>
+        <!-- ═══ 模块：模型管理 ═══ -->
+        <section id="pageModels" hidden>
+            <div class="models-page"></div>
+        </section>
 
-<!-- ────────── 模式 Tab（全部 / 多维评分 / 主观评分 / 质量比较 / 质量比较2） ────────── -->
-<section class="mode-tabs" id="modeTabs" role="tablist" aria-label="评分模式分桶">
-    <button class="mode-tab is-active" role="tab" data-mode=""             aria-selected="true">
-        全部 <span class="mode-tab-count" data-mode-count="__total__">0</span>
-    </button>
-    <button class="mode-tab"           role="tab" data-mode="multi_dim"    aria-selected="false">
-        多维评分<span class="mode-tab-count" data-mode-count="multi_dim">0</span>
-    </button>
-    <button class="mode-tab"           role="tab" data-mode="subjective"   aria-selected="false">
-        主观评分<span class="mode-tab-count" data-mode-count="subjective">0</span>
-    </button>
-    <button class="mode-tab"           role="tab" data-mode="quality"      aria-selected="false">
-        质量比较<span class="mode-tab-count" data-mode-count="quality">0</span>
-    </button>
-    <button class="mode-tab"           role="tab" data-mode="quality_slide" aria-selected="false">
-        质量比较2<span class="mode-tab-count" data-mode-count="quality_slide">0</span>
-    </button>
-    <button class="mode-tab"           role="tab" data-mode="test"         aria-selected="false">
-        测试模式<span class="mode-tab-count" data-mode-count="test">0</span>
-    </button>
-</section>
 
-<!-- ────────── 概览卡片 ────────── -->
-<section class="cards">
-    <div class="card">
-        <div class="card-label">已收文件</div>
-        <div class="card-value" id="kpiCount">—</div>
-        <div class="card-foot">总数</div>
-    </div>
-    <div class="card">
-        <div class="card-label">评分人</div>
-        <div class="card-value" id="kpiUsers">—</div>
-        <div class="card-foot">独立用户</div>
-    </div>
-    <div class="card">
-        <div class="card-label">标签组</div>
-        <div class="card-value" id="kpiTags">—</div>
-        <div class="card-foot">user / tag 组合</div>
-    </div>
-    <div class="card">
-        <div class="card-label">总大小</div>
-        <div class="card-value" id="kpiSize">—</div>
-        <div class="card-foot">uploads/</div>
-    </div>
-</section>
+        <!-- ═══ 模块：评分文件 ═══ -->
+        <section id="pageFiles">
+            <!-- 模式 Tab -->
+            <section class="mode-tabs" id="modeTabs" role="tablist" aria-label="评分模式分桶">
+                <button class="mode-tab is-active" role="tab" data-mode=""             aria-selected="true">
+                    全部 <span class="mode-tab-count" data-mode-count="__total__">0</span>
+                </button>
+                <button class="mode-tab"           role="tab" data-mode="multi_dim"    aria-selected="false">
+                    多维评分<span class="mode-tab-count" data-mode-count="multi_dim">0</span>
+                </button>
+                <button class="mode-tab"           role="tab" data-mode="subjective"   aria-selected="false">
+                    主观评分<span class="mode-tab-count" data-mode-count="subjective">0</span>
+                </button>
+                <button class="mode-tab"           role="tab" data-mode="quality"      aria-selected="false">
+                    质量比较<span class="mode-tab-count" data-mode-count="quality">0</span>
+                </button>
+                <button class="mode-tab"           role="tab" data-mode="quality_slide" aria-selected="false">
+                    质量比较2<span class="mode-tab-count" data-mode-count="quality_slide">0</span>
+                </button>
+                <button class="mode-tab"           role="tab" data-mode="test"         aria-selected="false">
+                    测试模式<span class="mode-tab-count" data-mode-count="test">0</span>
+                </button>
+            </section>
 
-<!-- ────────── 操作行 ────────── -->
-<section class="toolbar">
-    <div class="toolbar-left">
-        <input type="search" id="searchInput" placeholder="搜索 评分人 / 标签 / 文件名…" />
-        <span class="sel-info" id="selInfo" hidden>已选 <b id="selCount">0</b> 项</span>
-    </div>
-    <div class="toolbar-right">
-        <button class="ghost-btn" id="archiveSelBtn" disabled title="把选中的文件归档到指定文件夹">
-            📦 归档选中
+            <!-- 概览卡片 -->
+            <section class="cards">
+                <div class="card">
+                    <div class="card-label">已收文件</div>
+                    <div class="card-value" id="kpiCount">—</div>
+                    <div class="card-foot">总数</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">评分人</div>
+                    <div class="card-value" id="kpiUsers">—</div>
+                    <div class="card-foot">独立用户</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">标签组</div>
+                    <div class="card-value" id="kpiTags">—</div>
+                    <div class="card-foot">user / tag 组合</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">总大小</div>
+                    <div class="card-value" id="kpiSize">—</div>
+                    <div class="card-foot">uploads/</div>
+                </div>
+            </section>
+
+            <!-- 操作行 -->
+            <section class="toolbar">
+                <div class="toolbar-left">
+                    <input type="search" id="searchInput" placeholder="搜索 评分人 / 标签 / 文件名…" />
+                    <span class="sel-info" id="selInfo" hidden>已选 <b id="selCount">0</b> 项</span>
+                </div>
+                <div class="toolbar-right">
+      <button class="ghost-btn" id="archiveSelBtn" disabled title="把选中的文件归档到指定文件夹">
+<svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg> 归档选中
+     </button>
+            <button class="ghost-btn danger" id="deleteSelBtn" disabled title="批量删除选中的文件">
+     <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> 删除选中
+          </button>
+                    <span class="sep"></span>
+                    <button class="ghost-btn" id="openArchiveBtn" title="查看归档库">
+            <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg> 归档库
         </button>
-        <button class="ghost-btn danger" id="deleteSelBtn" disabled title="批量删除选中的文件">
-            🗑 删除选中
-        </button>
+                    <span class="sep"></span>
+     <button class="primary-btn" id="mergeLatestBtn" disabled title="勾选若干文件后，把它们合并为一个 csv 下载">
+     <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 合并下载（选中）
+         </button>
+            <button class="ghost-btn" id="mergeAllBtn" title="合并所有 csv（含历史）">
+          <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 合并全部
+      </button>
+                    <span class="sep"></span>
+                    <button class="ghost-btn" id="analyzeSelBtn" disabled title="对选中的文件执行盲评分析（仅管理员）">
+                        🔬 分析选中
+                    </button>
+                    <span class="sep"></span>
+                    <label class="ghost-btn" id="manualUploadLabel" title="手动上传文件到 uploads/ 目录（仅管理员）" style="display:none">
+                        <span>📤 手动上传</span>
+                        <input type="file" id="manualUploadInput" style="display:none">
+                    </label>
+                </div>
+            </section>
+
+            <!-- 列表表格 -->
+            <section class="table-wrap">
+                <table id="filesTable">
+                    <colgroup>
+                        <col data-col="check" style="width:44px"  />
+                        <col data-col="user"  style="width:110px" />
+                        <col data-col="tag"   style="width:130px" />
+                        <col data-col="mode"  style="width:80px"  />
+                        <col data-col="name"  />
+                        <col data-col="size"  style="width:80px"  />
+                        <col data-col="mtime" style="width:160px" />
+                        <col data-col="actions" style="width:200px" />
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th class="col-check" data-col="check"><input type="checkbox" id="selAll" title="全选/取消" /></th>
+                            <th class="sortable" data-key="user" data-col="user">评分人</th>
+                            <th class="sortable" data-key="tag"  data-col="tag">标签</th>
+                            <th class="sortable" data-key="mode" data-col="mode">模式</th>
+                            <th class="sortable" data-key="name" data-col="name">文件名</th>
+                            <th class="sortable num" data-key="size"  data-col="size">大小</th>
+                            <th class="sortable num" data-key="mtime" data-col="mtime">最近更新 ⋎</th>
+                            <th class="actions" data-col="actions">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="filesTbody">
+                        <!-- 动态填充 -->
+                    </tbody>
+                </table>
+                <div class="empty" id="emptyHint" hidden>
+                    <div class="empty-icon">📭</div>
+                    <div class="empty-title">暂无 CSV</div>
+                    <div class="empty-sub">客户端导出评分后点击「上传到云端」即可在这里看到。</div>
+                </div>
+            </section>
+
+            <footer class="footer">
+                <span id="appVer">PlayerX-server</span>
+                <span class="dim">·</span>
+                <a href="/list" target="_blank">原始 JSON</a>
+                <span class="dim">·</span>
+                <a href="/merge" target="_blank">合并下载</a>
+            </footer>
+        </section>
+
+  <!-- ═══ 模块：任务管理 ═══ -->
+        <section class="dim-page" id="dimPage" hidden>
+ <div class="dim-shell">
+      <!-- 左：主区 -->
+    <div class="dim-main">
+        <!-- 工具栏 -->
+    <div class="dim-toolbar">
+   <label class="dim-upload-hint" id="dimUploadHint" title="拖拽 .json 文件到页面任意位置，或点击此处选择文件">
+          <input type="file" accept=".json,application/json" id="dimUploadInput" style="display:none">
+           <span><svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> 上传 .json</span>
+ </label>
+         <span class="dim-toolbar-spacer"></span>
+         <button class="ghost-btn" id="dimEditBtn" style="display:none"><svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> 编辑配置</button>
+          <button class="ghost-btn" id="dimFormatBtn" style="display:none" title="格式化 JSON">格式化</button>
+   <button class="primary-btn" id="dimSaveBtn" style="display:none">保存</button>
+          <button class="ghost-btn" id="dimCancelEditBtn" style="display:none">取消编辑</button>
+                </div>
+        <!-- 内容区 -->
+      <div class="dim-content">
+        <div class="dim-view" id="dimView">
+   <div class="dim-view-loading">请从右侧选择配置</div>
+     </div>
+   <div class="dim-editor-section" id="dimEditorSection" style="display:none">
+           <div class="login-err" id="dimErr" style="display:none"></div>
+           <textarea id="dimEditor" spellcheck="false" autocomplete="off" placeholder="加载中…"></textarea>
+    </div>
+     </div>
+           </div>
+
+      <!-- 右：配置列表 -->
+     <aside class="dim-sidebar" id="dimSidebar">
+          <div class="dim-sidebar-head">
+  <span class="dim-sidebar-title">配置列表</span>
+ <button class="dim-sidebar-add" id="dimAddBtn" style="display:none" title="新建配置">＋</button>
+         </div>
+                 <div class="dim-sidebar-list" id="dimSidebarList">
+    <div class="dim-sidebar-loading">加载中…</div>
+          </div>
+          <div class="dim-drop-zone" id="dimDropZone">
+      <span class="dim-drop-icon"><svg class="inline-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+             <span class="dim-drop-text">拖拽 <code>.json</code> 到此处</span>
+     <span class="dim-drop-sub" id="dimDropSub">拖入后自动预览</span>
+            </div>
+       </aside>
+            </div>
+        </section>
+
+
+    <!-- ═══ 模块：归档库 ═══ -->
+        <section id="pageArchive" hidden>
+            <div class="archive-page">
+                <div class="archive-page-head">
+          <span class="archive-page-title"><svg class="inline-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg> 归档库</span>
+                    <span class="archive-meta" id="archiveMeta"></span>
+                    <span class="archive-actions">
+                        <button class="ghost-btn" id="archiveRefresh" title="刷新归档列表"><svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+                    </span>
+                </div>
+                <div class="archive-body">
+                    <aside class="archive-folders" id="archiveFolders">
+                        <div class="archive-empty" id="archiveFoldersEmpty" hidden>
+                            还没有归档文件夹。<br/>在主列表勾选文件后点击「归档选中」即可创建。
+                        </div>
+                        <ul class="archive-folder-list" id="archiveFolderList"></ul>
+                    </aside>
+                    <section class="archive-files" id="archiveFiles">
+                        <div class="archive-files-toolbar" id="archiveFilesToolbar" hidden>
+                            <span class="sel-info" id="archiveSelInfo" hidden>已选 <b id="archiveSelCount">0</b> 项</span>
+                            <span class="archive-spacer"></span>
+        <button class="ghost-btn" id="archiveDownloadSelBtn" disabled title="批量下载选中（按顺序逐个下载）">
+    <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 下载选中
+          </button>
+   <button class="primary-btn" id="archiveMergeBtn" title="合并下载：未选中时合并整个文件夹，选中时仅合并所选">
+             <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 合并下载
+  </button>
         <span class="sep"></span>
-        <button class="ghost-btn" id="openArchiveBtn" title="查看归档库">
-            📂 归档库
-        </button>
-        <span class="sep"></span>
-        <button class="primary-btn" id="mergeLatestBtn" disabled title="勾选若干文件后，把它们合并为一个 csv 下载">
-            ⬇ 合并下载（选中）
-        </button>
-        <button class="ghost-btn" id="mergeAllBtn" title="合并所有 csv（含历史）">
-            ⬇ 合并全部
-        </button>
-    </div>
-</section>
+  <button class="ghost-btn danger" id="archiveDelSelBtn" disabled title="批量删除选中">
+        <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> 删除选中
+      </button>
+       <button class="ghost-btn danger" id="archiveDelFolderBtn" title="删除整个文件夹">
+                <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> 删除此文件夹
+         </button>
+                        </div>
+                        <div class="archive-files-hint" id="archiveFilesHint">从左侧选择一个归档文件夹查看内容。</div>
+                        <div class="archive-files-wrap" id="archiveFilesWrap" hidden>
+                            <table class="archive-files-table" id="archiveFilesTable">
+                                <thead>
+                                    <tr>
+                                        <th class="col-check"><input type="checkbox" id="archiveSelAll" title="全选/取消" /></th>
+                                        <th>文件名</th>
+                                        <th class="num">大小</th>
+                                        <th class="num">最近更新</th>
+                                        <th class="actions">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="archiveFilesTbody"></tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </section>
 
-<!-- ────────── 列表表格 ────────── -->
-<section class="table-wrap">
-    <!--
-      关于列宽控制：
-        1. table-layout 走 fixed（见 style.css），所有列宽都由 <colgroup> 内的 <col> 决定；
-           「文件名」列不指定 width，自动占据剩余空间，避免长文件名被挤成 "rbyang_…"。
-        2. JS 侧（initColumnResizing）会读取 localStorage 中保存的用户自定义宽度
-           覆盖到 <col> 上，并在 <th> 右侧叠一个拖拽手柄，支持鼠标拖动调宽。
-        3. data-col 用于 JS 定位对应的 <col>，保持 HTML 列与 col 顺序一致即可。
-    -->
-    <table id="filesTable">
-        <colgroup>
-            <col data-col="check" style="width:44px"  />
-            <col data-col="user"  style="width:110px" />
-            <col data-col="tag"   style="width:130px" />
-            <col data-col="mode"  style="width:80px"  />
-            <col data-col="name"  /> <!-- 文件名：占满剩余 -->
-            <col data-col="size"  style="width:80px"  />
-            <col data-col="mtime" style="width:160px" />
-            <col data-col="actions" style="width:200px" />
-        </colgroup>
-        <thead>
-            <tr>
-                <th class="col-check" data-col="check"><input type="checkbox" id="selAll" title="全选/取消" /></th>
-                <th class="sortable" data-key="user" data-col="user">评分人</th>
-                <th class="sortable" data-key="tag"  data-col="tag">标签</th>
-                <th class="sortable" data-key="mode" data-col="mode">模式</th>
-                <th class="sortable" data-key="name" data-col="name">文件名</th>
-                <th class="sortable num" data-key="size"  data-col="size">大小</th>
-                <th class="sortable num" data-key="mtime" data-col="mtime">最近更新 ⋎</th>
-                <th class="actions" data-col="actions">操作</th>
-            </tr>
-        </thead>        </thead>        <tbody id="filesTbody">
-            <!-- 动态填充 -->
-        </tbody>
-    </table>
-    <div class="empty" id="emptyHint" hidden>
-        <div class="empty-icon">📭</div>
-        <div class="empty-title">暂无 CSV</div>
-        <div class="empty-sub">客户端导出评分后点击「上传到云端」即可在这里看到。</div>
+        <!-- ═══ 模块：设置 ═══ -->
+        <section id="pageSettings" hidden>
+            <div class="st-wrap">
+                              <div class="st-title"><svg class="inline-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> 设置</div>
+                <div class="st-card">
+                    <div class="t">上传 Token</div>
+                    <div class="d">播放器客户端上传评分 CSV 时需携带此 Token。留空 = 关闭鉴权（任何人都能上传，不推荐）。</div>
+                    <div class="st-row">
+                        <span class="val" id="stTokenView">—</span>
+                        <button class="ghost-btn" id="stTokenEdit">修改 Token</button>
+                    </div>
+                </div>
+                <div class="st-card">
+                    <div class="t">服务器信息</div>
+                    <div class="d">当前服务版本与运行状态。</div>
+                    <div class="st-row">
+                        <span class="val" id="stServerInfo">—</span>
+                    </div>
+                </div>
+            </div>
+        </section>
     </div>
-</section>
-
-<footer class="footer">
-    <span id="appVer">PlayerX-server</span>
-    <span class="dim">·</span>
-    <a href="/list" target="_blank">原始 JSON</a>
-    <span class="dim">·</span>
-    <a href="/merge" target="_blank">合并下载</a>
-</footer>
+</div>
 
 <!-- ────────── Toast ────────── -->
 <div class="toast" id="toast" hidden></div>
 
-<!-- ────────── 归档库抽屉（左侧滑出，左右双栏） ────────── -->
-<aside class="archive-drawer" id="archiveDrawer" hidden aria-labelledby="archiveTitle" role="complementary">
-    <div class="archive-head">
-        <span class="archive-title" id="archiveTitle">📂 归档库</span>
-        <span class="archive-meta" id="archiveMeta"></span>
-        <span class="archive-actions">
-            <button class="ghost-btn" id="archiveRefresh" title="刷新归档列表">↻</button>
-            <button class="ghost-btn" id="archiveClose"   title="关闭归档库">×</button>
-        </span>
+<!-- ────────── 分析文件选择弹窗 ────────── -->
+<div class="login-mask" id="anFileMask" hidden>
+    <div class="login-box" style="width:560px" role="dialog" aria-labelledby="anFileTitle">
+        <div class="login-title" id="anFileTitle">选择分析文件</div>
+        <div class="login-sub">勾选要纳入分析的评分 CSV 文件</div>
+        <div class="an-file-list" id="anFileList"></div>
+        <div class="login-actions">
+            <button class="ghost-btn" id="anFileCancel">取消</button>
+            <button class="primary-btn" id="anFileOk">确定</button>
+        </div>
     </div>
-    <div class="archive-body">
-        <!-- 左：文件夹列表 -->
-        <aside class="archive-folders" id="archiveFolders">
-            <div class="archive-empty" id="archiveFoldersEmpty" hidden>
-                还没有归档文件夹。<br/>在主列表勾选文件后点击「归档选中」即可创建。
-            </div>
-            <ul class="archive-folder-list" id="archiveFolderList"></ul>
-        </aside>
-        <!-- 右：当前文件夹内容 -->
-        <section class="archive-files" id="archiveFiles">
-            <div class="archive-files-toolbar" id="archiveFilesToolbar" hidden>
-                <span class="sel-info" id="archiveSelInfo" hidden>已选 <b id="archiveSelCount">0</b> 项</span>
-                <span class="archive-spacer"></span>
-                <button class="ghost-btn" id="archiveDownloadSelBtn" disabled title="批量下载选中（zip 不支持，按顺序逐个下载）">
-                    ⬇ 下载选中
-                </button>
-                <button class="primary-btn" id="archiveMergeBtn" title="合并下载：未选中时合并整个文件夹，选中时仅合并所选">
-                    ⬇ 合并下载
-                </button>
-                <span class="sep"></span>
-                <button class="ghost-btn danger" id="archiveDelSelBtn" disabled title="批量删除选中">
-                    🗑 删除选中
-                </button>
-                <button class="ghost-btn danger" id="archiveDelFolderBtn" title="删除整个文件夹">
-                    ❌ 删除此文件夹
-                </button>
-            </div>
-            <div class="archive-files-hint" id="archiveFilesHint">从左侧选择一个归档文件夹查看内容。</div>
-            <div class="archive-files-wrap" id="archiveFilesWrap" hidden>
-                <table class="archive-files-table" id="archiveFilesTable">
-                    <thead>
-                        <tr>
-                            <th class="col-check"><input type="checkbox" id="archiveSelAll" title="全选/取消" /></th>
-                            <th>文件名</th>
-                            <th class="num">大小</th>
-                            <th class="num">最近更新</th>
-                            <th class="actions">操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="archiveFilesTbody"></tbody>
-                </table>
-            </div>
-        </section>
+</div>
+
+<!-- ────────── 自定义确认弹窗 ────────── -->
+<div class="login-mask" id="confirmMask" hidden>
+    <div class="login-box confirm-box" role="dialog" aria-labelledby="confirmTitle">
+        <div class="confirm-icon" id="confirmIcon">⚠️</div>
+        <div class="login-title" id="confirmTitle">确认操作</div>
+        <div class="confirm-msg" id="confirmMsg"></div>
+        <div class="login-actions">
+            <button class="ghost-btn" id="confirmCancel">取消</button>
+            <button class="primary-btn" id="confirmOk">确定</button>
+        </div>
     </div>
-</aside>
+</div>
 
 <!-- ────────── 预览抽屉（右侧滑出，无遮罩） ────────── -->
 <aside class="preview-drawer" id="previewMask" hidden aria-labelledby="previewTitle" role="complementary">

@@ -9,7 +9,11 @@
  */
 const express = require('express');
 
-const upload   = require('./upload');
+const upload       = require('./upload');
+const manualUpload  = require('./manual-upload');
+const analyze      = require('./analyze');
+const analyzeCfgs  = require('./analyze-configs');
+const build        = require('./build');
 const list     = require('./list');
 const merge    = require('./merge');
 const files    = require('./files');
@@ -21,6 +25,7 @@ const auth     = require('./auth');
 const settings   = require('./settings');
 const dimensions = require('./dimensions');
 const testsrc    = require('./testsrc');
+const models     = require('./models');
 
 function mountApi(app) {
     // ── 公开接口 ─────────────────────────────────────────────
@@ -76,6 +81,30 @@ function mountApi(app) {
     // 上传 Token 设置（仅管理员可读写）
     app.get('/api/settings/upload-token', auth.requireAdmin, settings.handleGet);
     app.put('/api/settings/upload-token', auth.requireAdmin, jsonParser, settings.handlePut);
+
+    // 管理员手动上传（仅登录管理员可用）
+    app.post('/api/manual-upload', auth.requireAdmin, manualUpload.multerMiddleware, manualUpload.handle);
+
+    // 盲评分析（仅登录管理员可用）
+    app.post('/api/analyze', auth.requireAdmin, express.json({ limit: '1mb' }), analyze.handle);
+
+    // 盲评构建（仅登录管理员可用）
+    app.post('/api/build', auth.requireAdmin, express.json({ limit: '1mb' }), build.handle);
+    app.post('/api/build/zip', auth.requireAdmin, express.json({ limit: '1mb' }), build.handleZip);
+    app.post('/api/build/list-models', auth.requireAdmin, express.json({ limit: '1mb' }), build.handleListModels);
+
+    //模型源目录管理
+    app.get('/api/models',auth.requireAdmin, models.handleList);
+    app.post('/api/models/scan',    auth.requireAdmin, express.json({ limit: '1mb' }), models.handleScan);
+    app.post('/api/models',auth.requireAdmin, express.json({ limit: '1mb' }), models.handleCreate);
+    app.put('/api/models/:id',      auth.requireAdmin, express.json({ limit: '1mb' }), models.handleUpdate);
+    app.delete('/api/models/:id',   auth.requireAdmin, models.handleDelete);
+
+    // 盲评分析配置管理（GET 公开，写操作需管理员）
+    app.get('/api/analyze-configs',              analyzeCfgs.handleList);
+    app.get('/api/analyze-configs/:name',        analyzeCfgs.handleGetOne);
+    app.put('/api/analyze-configs/:name',        auth.requireAdmin, jsonParser, analyzeCfgs.handlePutOne);
+    app.delete('/api/analyze-configs/:name',     auth.requireAdmin, analyzeCfgs.handleDeleteOne);
 
     // 多配置文件管理（GET 公开，写操作需管理员）
     app.get('/api/configs',              dimensions.handleList);

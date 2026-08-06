@@ -135,11 +135,18 @@ function handleList(_req, res) {
                 const name = f.replace(/\.json$/, '');
                 let meta = { name, type: '', task: '', activeForModes: configModes[name] || [] };
                 try {
-                    const obj = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, f), 'utf8'));
-                    meta.type = obj.type || '';
-                    meta.task = obj.task || '';
-                    meta.tag  = obj.tag  || '';
-                } catch (_) {}
+          const obj = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, f), 'utf8'));
+     meta.type = obj.type || '';
+          meta.task = obj.task || '';
+    meta.tag  = obj.tag  || '';
+          // 返回 build 摘要供任务管理使用
+          if (obj.build) {
+   meta.build = {
+   models: obj.build.models || [],
+       src_model_dir: obj.build.src_model_dir || '',
+};
+         }
+           } catch (_) {}
                 return meta;
             });
 

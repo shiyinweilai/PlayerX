@@ -1,0 +1,47 @@
+{
+    "_说明": "盲评配置文件 —— 正向分发(build)和反向分析(analyze/verify/rank)共用同一个文件。",
+    "tag": "测试tag",
+    "src_model_dir": "/data/daxinli/projects/HOIVLMBench",
+    "dst_dir": "subj_test",
+    "models": [
+        "wan2.2_14b_gptc_lora6000x8",
+        "wan2.2_14b_highonly_sft_aligned_5000x56",
+        "wan2.2_14b_sft_aligned_10000x56"
+    ],
+    "n_groups": 5,
+    "group_mode": "fresh",
+    "_group_mode说明": "fresh = 随机打散后均匀分到各组; reuse = 复用上次分组(需填 reuse_map_csv) 只重新打乱A/B/C",
+    "seed": 42,
+    "samples": [],
+    "_samples说明": "留空 = 默认 1~100; 也可显式写 [1, 2, 3, 5, ...]",
+    "exclude_samples": [],
+    "_exclude_samples说明": "如 [46, 81], 仅当 samples 留空时生效",
+    "dimensions": [
+        "multi_动作",
+        "multi_物理",
+        "multi_商品",
+        "multi_总分"
+    ],
+    "_dimensions说明": "如果只有总分这个维度, 写 [\"multi_总分\"]",
+    "exclude_raters": [],
+    "_exclude_raters说明": "排除的评分员, 如 [\"syoungshu\"], 用于排除用错分组版本的评分员",
+    "map_csv": "map_subj.csv",
+    "_map_csv说明": "map 文件路径, 不能放在 dst_dir 底下, 否则会跟着发给评分员泄密",
+    "raw_csv": "playerx_selected.csv",
+    "_raw_csv说明": "PlayerX 原始评分导出文件",
+    "deanon_csv": "playerx_selected_deanon.csv",
+    "_deanon_csv说明": "解析后的输出文件名, 放在 dst_dir 里",
+    "companions": {
+        "_说明": "配套文件: 每个样本的参考帧和 prompt 文本, 按组拆分到各组目录下。不需要就删掉这个整个字段",
+        "prompt_csv": "prompt.csv",
+        "_prompt_csv说明": "prompt 源文件, 列必须包含 Image",
+        "first_frames_dir": "first_frames",
+        "_first_frames_dir说明": "第一帧图片目录, 文件名如 1.png 2.png",
+        "prompt_cols": [
+            "Image",
+            "prompt",
+            "en_prompt"
+        ],
+        "_prompt_cols说明": "只保留这些列写入各组 prompt.csv, 即使源文件有额外列也不带出"
+    }
+}

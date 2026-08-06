@@ -1,7 +1,7 @@
 {
-  "type": "测试模式3",
-  "tag": "测试tag",
-  "task": "测试任务",
+  "type": "多维评分v8",
+  "tag": "0.0.9a_small_subj_9P_0728_v1",
+  "task": "test2",
   "scale": "1-5 Likert 整数",
   "dimensions": [
     {
@@ -64,8 +64,8 @@
       "exclusive": true
     }
   ],
+  "testSourceUrl": "https://tvp-76917.gzc.vod.tencent-cloud.com/daxinli/0.0.9a_small_subj_4P_0729_v1.zip?sign=q-sign-algorithm%3Dsha1%26q-ak%3DU19cqylkJA9iuAykVImMp9cH%26q-sign-time%3D1785312967%3B1785744967%26q-key-time%3D1785312967%3B1785744967%26q-header-list%3Dhost%26q-url-param-list%3D%26q-signature%3D643e21c6b44b590873dd12107b8860cc4673acab",
   "testSource": {
-    "url": "/testsrc/0.0.9a_small_subj_9P_0728_v1.zip",
     "workDir": "~/Downloads",
     "rootDir": "0.0.9a_small_subj_9P_0728_v1",
     "laneDirs": [
@@ -73,10 +73,11 @@
       "B",
       "C"
     ],
-    "promptCsv": "prompt.csv",
     "referenceDirs": [
       "first_frames"
     ],
+    "promptCsv": "prompt.csv",
+    "url": "/testsrc/0.0.9a_small_subj_9P_0728_v1.zip",
     "groups": {
       "g1": [
         "adgerjiang",
@@ -88,7 +89,8 @@
         "codeczhang",
         "damondou",
         "derrickgli",
-        "dillonqwang"
+        "dillonqwang",
+        "daxinli"
       ],
       "g2": [
         "firexu",

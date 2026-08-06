@@ -143,7 +143,7 @@
             } else {
                 adminLoginBtn.hidden = false;
                 if (logged) {
-                    adminLoginBtn.textContent = '👤 已登录（点击退出）';
+                         adminLoginBtn.textContent = '已登录（点击退出）';
                     adminLoginBtn.classList.add('is-logged');
                     adminLoginBtn.title = '点击退出管理员登录';
                 } else {
@@ -156,6 +156,22 @@
         // "上传 Token "按钮仅在管理员登录后可见
         if (tokenSettingsBtn) {
             tokenSettingsBtn.hidden = !(auth.enabled && logged);
+        }
+        // 「手动上传」按钮仅在管理员登录后可见
+        const manualUploadLabel = $('manualUploadLabel');
+        if (manualUploadLabel) {
+            manualUploadLabel.style.display = (auth.enabled && logged) ? '' : 'none';
+        }
+        // 「分析选中」按钮仅在管理员登录后可用
+        const analyzeSelBtn = $('analyzeSelBtn');
+        if (analyzeSelBtn) {
+            if (auth.enabled && !logged) {
+                analyzeSelBtn.classList.add('lock-disabled');
+                analyzeSelBtn.title = '需要管理员登录后才能操作';
+            } else {
+                analyzeSelBtn.classList.remove('lock-disabled');
+                analyzeSelBtn.title = '对选中的文件执行盲评分析（仅管理员）';
+            }
         }
         // 维度页面的「编辑配置」「＋新建」按钮仅在管理员登录后可见
         const dimEditBtnEl = $('dimEditBtn');
@@ -400,22 +416,423 @@
 
     function modeLabel(mode) { return MODE_LABELS[mode] || mode; }
 
-    // ── 页面开关 ──
-    function showDimPage(skipHashUpdate) {
-        dimPageOpen = true;
-        dimPage.hidden = false;
-        mainContent.forEach(el => { if (el) el.style.display = 'none'; });
-        if (!skipHashUpdate) history.replaceState(null, '', '#rules');
-        loadConfigList();
+    // ── 模块路由（sidebar 导航） ──
+    const MODULES = {
+        dashboard:{ section: () => $('pageDashboard'), hash: '#dashboard' },
+        files:    { section: () => $('pageFiles'),hash: '#files' },
+        tasks:    { section: () => dimPage,         hash: '#tasks' },
+        models:   { section: () => $('pageModels'),   hash: '#models' },
+        archive:  { section: () => $('pageArchive'),  hash: '#archive' },
+     settings: { section: () => $('pageSettings'), hash: '#settings' },
+    };
+    let currentModule = 'files';
+
+    function switchModule(name, skipHashUpdate) {
+        if (!MODULES[name]) name = 'files';
+        // 隐藏所有 section
+        Object.values(MODULES).forEach(m => { const el = m.section(); if (el) el.hidden = true; });
+        // 显示目标
+        const target = MODULES[name].section();
+        if (target) target.hidden = false;
+        // sidebar 高亮
+        document.querySelectorAll('.nav-item').forEach(el => {
+            el.classList.toggle('active', el.dataset.module === name);
+        });
+        // hash
+        if (!skipHashUpdate) history.replaceState(null, '', MODULES[name].hash);
+        currentModule = name;
+        // 各模块进入时的初始化
+        if (name === 'tasks') { dimPageOpen = true; loadConfigList(); }
+        else { dimPageOpen = false; }
+     if (name === 'archive') { loadArchiveFolders(); }
+        if (name === 'models') { renderModelsPage(); }
+        if (name === 'tasks' && window.PXTasks && typeof window.PXTasks.onShow === 'function') {
+   window.PXTasks.onShow();
+        }
     }
 
-    function hideDimPage() {
-        dimPageOpen = false;
-        dimPage.hidden = true;
-        mainContent.forEach(el => { if (el) el.style.display = ''; });
-        exitDimEdit();
-        history.replaceState(null, '', location.pathname + location.search);
+        // ═══════════════════════════════════════════════════════════════
+    //模型管理模块
+    // ═══════════════════════════════════════════════════════════════
+    let modelsData = [];
+    let modelsScope = 'all'; // 'all' | 'personal' | 'team'
+
+    async function renderModelsPage() {
+        const container = document.querySelector('.models-page');
+        if (!container) return;
+        container.innerHTML = '<div style="padding:40px;color:#64748b;text-align:center">加载中...</div>';
+        try {
+            const r = await adminFetch('/api/models');
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || 'Failed');
+            modelsData = j.sources || [];
+        } catch (e) {
+            container.innerHTML = `<div style="padding:40px;color:#ef4444;text-align:center">加载失败: ${e.message}</div>`;
+            return;
+        }
+        renderModelsContent(container);
     }
+
+    function renderModelsContent(container) {
+        //过滤scope
+        const filtered = modelsScope === 'all' ? modelsData : modelsData.filter(s => (s.scope || 'personal') === modelsScope);
+
+        const sourcesHtml = filtered.map((src) => {
+            const realIdx = modelsData.indexOf(src);
+            const scope = src.scope || 'personal';
+            const ownerName = src.owner || '个人';
+ const scopeLabel = scope === 'team' ? '团队' : `${ownerName}`;
+            const modelsHtml = (src.models || []).map(m =>
+                `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${realIdx}" data-model="${escHtml(m)}">&times;</button></span>`
+            ).join('');
+     return `
+ <div class="mdl-source-card" data-idx="${realIdx}">
+<div class="mdl-source-header">
+      <input class="mdl-source-name-input" data-idx="${realIdx}" value="${escHtml(src.name)}" title="点击编辑名称" />
+     <span class="mdl-source-path">${escHtml(src.path)}</span>
+     <span class="mdl-source-scope ${scope}">${scopeLabel}</span>
+    <div class="mdl-source-actions">
+ <button class="mdl-btn mdl-btn-del" data-idx="${realIdx}" title="删除此源目录"><span class="mdl-btn-shadow"></span><span class="mdl-btn-edge mdl-btn-edge-red"></span><span class="mdl-btn-front mdl-btn-front-red">删除</span></button>
+      </div>
+   </div>
+       <div class="mdl-models-wrap" data-idx="${realIdx}" style="cursor:pointer">
+          <svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+  ${modelsHtml || '<span class="mdl-empty">点击展开</span>'}
+ </div>
+                <div class="mdl-tree-panel" data-idx="${realIdx}" style="display:none"></div>
+            </div>`;
+        }).join('');
+
+        container.innerHTML = `
+            <div class="mdl-header-row">
+                <div>
+            <h2 class="mdl-page-title"><svg class="inline-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg> 模型源目录管理</h2>
+                    <p class="mdl-page-desc">管理多个源目录，勾选即添加模型。支持个人/团队分组与多级子目录展开。</p>
+                </div>
+                <div class="mdl-scope-tabs">
+                    <button class="mdl-scope-tab ${modelsScope==='all'?'active':''}" data-scope="all">全部</button>
+        <button class="mdl-scope-tab ${modelsScope==='personal'?'active':''}" data-scope="personal"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 个人</button>
+       <button class="mdl-scope-tab ${modelsScope==='team'?'active':''}" data-scope="team"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> 团队</button>
+                </div>
+            </div>
+            <div class="mdl-add-row">
+                <input class="mdl-add-name" placeholder="测试集名称" />
+                <input class="mdl-add-path" placeholder="源目录路径（如：/data/models/daxin）" />
+                <input class="mdl-add-owner" placeholder="归属人（如：张三）" />
+                <select class="mdl-add-scope">
+        <option value="personal">个人</option>
+     <option value="team">团队</option>
+                </select>
+       <button class="mdl-btn mdl-btn-add"><span class="mdl-btn-blob"></span><span class="mdl-btn-inner">＋ 添加</span></button>
+            </div>
+            <div class="mdl-sources-list">${sourcesHtml || '<div class="mdl-empty-page">暂无源目录，请在上方添加</div>'}</div>`;
+
+        bindModelsEvents(container);
+    }
+
+    //保存模型列表到后端（即时保存）
+    async function saveModels(idx) {
+        const src = modelsData[idx];
+        try {
+            await adminFetch(`/api/models/${src.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ models: src.models })
+            });
+        } catch (e) { console.error('模型保存失败', e); }
+    }
+
+    // 渲染目录树节点
+    function renderTreeNode(dirs, parentPath, idx, existing, dirsInfo) {
+        return dirs.map((d, i) => {
+            const fullPath = parentPath + '/' + d;
+   const checked = existing.has(d) || existing.has(fullPath) ? 'checked' : '';
+ const hasChildren = dirsInfo ? dirsInfo[i].hasChildren : true;
+return `<div class="mdl-tree-node">
+         <label class="mdl-tree-item">
+     <input type="checkbox" class="mdl-tree-cb" value="${escHtml(d)}" data-full="${escHtml(fullPath)}" ${checked}>
+             <span class="mdl-tree-name">${escHtml(d)}</span>
+          </label>
+    ${hasChildren ? `<button class="mdl-tree-expand" data-path="${escHtml(fullPath)}" title="展开子目录">▶</button>` : ''}
+   <div class="mdl-tree-children" data-parent="${escHtml(fullPath)}" style="display:none"></div>
+            </div>`;
+        }).join('');
+    }
+
+    function bindModelsEvents(container) {
+        // scope tabs切换
+        container.querySelectorAll('.mdl-scope-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                modelsScope = tab.dataset.scope;
+                renderModelsContent(container);
+            });
+        });
+
+        // 添加源目录
+        const addBtn = container.querySelector('.mdl-btn-add');
+        if (addBtn) addBtn.addEventListener('click', async () => {
+            const name = container.querySelector('.mdl-add-name').value.trim() || `测试集${modelsData.length + 1}`;
+            const dirPath = container.querySelector('.mdl-add-path').value.trim() || '';
+            const scope = container.querySelector('.mdl-add-scope').value;
+  const owner = container.querySelector('.mdl-add-owner').value.trim();
+            try {
+                const r = await adminFetch('/api/models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, path: dirPath, scope, owner })
+                });
+                const j = await r.json();
+                if (!j.ok) throw new Error(j.error);
+                modelsData.push(j.source);
+                renderModelsContent(container);
+            } catch (e) { alert('添加失败: ' + e.message); }
+        });
+
+ // 原地编辑测试集名称
+container.querySelectorAll('.mdl-source-name-input').forEach(input => {
+            let saving = false;
+            const save = async () => {
+      if (saving) return;
+        const idx = +input.dataset.idx;
+            const src = modelsData[idx];
+                const newName = input.value.trim();
+    if (!newName || newName === src.name) { input.value = src.name; return; }
+   saving = true;
+     try {
+     const r = await adminFetch(`/api/models/${src.id}`, {
+           method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newName })
+        });
+         const j = await r.json();
+                    if (!j.ok) throw new Error(j.error);
+              modelsData[idx].name = newName;
+          } catch (e) { alert('修改名称失败: ' + e.message); input.value = src.name; }
+      saving = false;
+            };
+       input.addEventListener('blur', save);
+            input.addEventListener('keydown', (e) => {
+     if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = modelsData[+input.dataset.idx].name; input.blur(); }
+  });
+        });
+
+        // 删除源目录
+        container.querySelectorAll('.mdl-btn-del').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const idx = +btn.dataset.idx;
+         const src = modelsData[idx];
+    try {
+    const r = await adminFetch(`/api/models/${src.id}`, { method: 'DELETE' });
+                    const j = await r.json();
+                    if (!j.ok) throw new Error(j.error);
+                    modelsData.splice(idx, 1);
+                    renderModelsContent(container);
+                } catch (e) { alert('删除失败: ' + e.message); }
+            });
+        });
+
+// 点击模型区域展开树
+ container.querySelectorAll('.mdl-models-wrap').forEach(wrap => {
+         wrap.addEventListener('click', async (e) => {
+      // 如果点击的是标签删除按钮，不触发展开
+ if (e.target.closest('.mdl-tag-rm')) return;
+ const idx = +wrap.dataset.idx;
+    const src = modelsData[idx];
+     const panel = container.querySelector(`.mdl-tree-panel[data-idx="${idx}"]`);
+ if (!panel) return;
+    if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+                panel.innerHTML = '<span class="mdl-tree-loading">⏳ 扫描目录中...</span>';
+ panel.style.display = 'block';
+           try {
+       const r = await adminFetch('/api/models/scan', {
+     method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: src.path })
+   });
+       const j = await r.json();
+           if (!j.ok) throw new Error(j.error);
+    const existing = new Set(src.models || []);
+    const treeHtml = renderTreeNode(j.dirs, src.path, idx, existing, j.dirsInfo);
+    panel.innerHTML = `<div class="mdl-tree-toolbar">
+  <button class="mdl-tree-collapse" data-idx="${idx}" title="收起"><svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg> 收起</button>
+    <input class="mdl-tree-filter" data-idx="${idx}" placeholder="输入关键字过滤..." />
+    <label class="mdl-tree-selectall-label"><input type="checkbox" class="mdl-tree-selectall-cb" data-idx="${idx}" /> 全选</label>
+    </div>
+    <div class="mdl-tree-root">${treeHtml}</div>`;
+         bindTreeEvents(panel, idx, container);
+         // 绑定收起按钮
+         panel.querySelector('.mdl-tree-collapse').addEventListener('click', () => {
+panel.style.display = 'none';
+         });
+         // 绑定过滤框
+      panel.querySelector('.mdl-tree-filter').addEventListener('input', function() {
+             const keyword = this.value.trim().toLowerCase();
+   panel.querySelectorAll('.mdl-tree-node').forEach(node => {
+     const name = node.querySelector(':scope > .mdl-tree-item > .mdl-tree-name');
+      if (!name) return;
+     const match = !keyword || name.textContent.toLowerCase().includes(keyword);
+         node.style.display = match ? '' : 'none';
+ // 如果匹配，确保所有父节点也可见
+      if (match && keyword) {
+       let parent = node.parentElement;
+         while (parent && !parent.classList.contains('mdl-tree-root')) {
+   if (parent.classList.contains('mdl-tree-node')) parent.style.display = '';
+  if (parent.classList.contains('mdl-tree-children')) parent.style.display = 'block';
+     parent = parent.parentElement;
+       }
+         }
+          });
+     });
+ // 绑定全选checkbox
+     panel.querySelector('.mdl-tree-selectall-cb').addEventListener('change', async function() {
+ const cbs = panel.querySelectorAll('.mdl-tree-cb');
+   const visibleCbs = Array.from(cbs).filter(cb => cb.closest('.mdl-tree-node').style.display !== 'none');
+    const isChecked = this.checked;
+    const src = modelsData[idx];
+    if (isChecked) {
+        // 全选：将所有可见的加入
+        visibleCbs.forEach(cb => { cb.checked = true; });
+        const newModels = visibleCbs.map(cb => cb.value);
+        src.models = [...new Set([...(src.models || []), ...newModels])];
+    } else {
+    // 取消全选：移除所有可见的
+        const visibleVals = new Set(visibleCbs.map(cb => cb.value));
+        visibleCbs.forEach(cb => { cb.checked = false; });
+        src.models = (src.models || []).filter(m => !visibleVals.has(m));
+    }
+    await saveModels(idx);
+    // 更新标签显示
+    const wrap = container.querySelector(`.mdl-source-card[data-idx="${idx}"] .mdl-models-wrap`);
+ if (wrap) {
+      const modelsHtml = src.models.map(m =>
+            `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`
+        ).join('');
+        wrap.innerHTML = '<svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> ' + (modelsHtml || '<span class="mdl-empty">点击展开</span>');
+        wrap.querySelectorAll('.mdl-tag-rm').forEach(btn2 => {
+  btn2.addEventListener('click', async () => {
+          const model2 = btn2.dataset.model;
+                modelsData[idx].models = modelsData[idx].models.filter(m => m !== model2);
+  await saveModels(idx);
+  renderModelsContent(container);
+   });
+        });
+    }
+  });
+ } catch (e) {
+         panel.innerHTML = `<span style="color:#ef4444;font-size:12px">扫描失败: ${e.message}</span>`;
+    }
+       });
+        });
+
+        // 删除单个模型标签
+        container.querySelectorAll('.mdl-tag-rm').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const idx = +btn.dataset.src;
+                const model = btn.dataset.model;
+                modelsData[idx].models = (modelsData[idx].models || []).filter(m => m !== model);
+                await saveModels(idx);
+                renderModelsContent(container);
+            });
+        });
+    }
+
+    function bindTreeEvents(panel, idx, container) {
+        //勾选即时添加/移除模型
+        panel.addEventListener('change', async (e) => {
+            if (!e.target.classList.contains('mdl-tree-cb')) return;
+            const val = e.target.value;
+            const src = modelsData[idx];
+            if (!src.models) src.models = [];
+            if (e.target.checked) {
+                if (!src.models.includes(val)) src.models.push(val);
+            } else {
+                src.models = src.models.filter(m => m !== val);
+            }
+            await saveModels(idx);
+            // 更新标签显示
+            const wrap = container.querySelector(`.mdl-source-card[data-idx="${idx}"] .mdl-models-wrap`);
+            if (wrap) {
+                const modelsHtml = src.models.map(m =>
+                    `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`
+                ).join('');
+                wrap.innerHTML = '<svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> ' + (modelsHtml || '<span class="mdl-empty">点击展开</span>');
+                wrap.querySelectorAll('.mdl-tag-rm').forEach(btn2 => {
+                    btn2.addEventListener('click', async () => {
+                        const model2 = btn2.dataset.model;
+                        modelsData[idx].models = modelsData[idx].models.filter(m => m !== model2);
+                        await saveModels(idx);
+                        renderModelsContent(container);
+                    });
+                });
+            }
+        });
+
+        // 展开子目录
+        panel.querySelectorAll('.mdl-tree-expand').forEach(btn => {
+            btn.addEventListener('click', async function() {
+                const subPath = this.dataset.path;
+                const childrenDiv = this.nextElementSibling;
+                if (!childrenDiv) return;
+                if (childrenDiv.style.display !== 'none') {
+                    childrenDiv.style.display = 'none';
+                    this.textContent = '▶';
+                    return;
+                }
+                if (childrenDiv.dataset.loaded) {
+                    childrenDiv.style.display = 'block';
+                    this.textContent = '▼';
+                    return;
+                }
+                this.textContent = '…';
+                try {
+                    const r = await adminFetch('/api/models/scan', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: subPath })
+                    });
+                    const j = await r.json();
+                    if (!j.ok) throw new Error(j.error);
+                    if (j.dirs.length === 0) {
+                        this.textContent = '·';
+                        this.disabled = true;
+                        return;
+                    }
+  const existing = new Set(modelsData[idx].models || []);
+      childrenDiv.innerHTML = renderTreeNode(j.dirs, subPath, idx, existing, j.dirsInfo);
+                    childrenDiv.dataset.loaded = '1';
+                    childrenDiv.style.display = 'block';
+                    this.textContent = '▼';
+                    // 递归绑定子级展开按钮
+                    childrenDiv.querySelectorAll('.mdl-tree-expand').forEach(subBtn => {
+                        subBtn.addEventListener('click', async function() {
+                            const sp = this.dataset.path;
+                            const cd = this.nextElementSibling;
+                            if (!cd) return;
+                            if (cd.style.display !== 'none') { cd.style.display = 'none'; this.textContent = '▶'; return; }
+                            if (cd.dataset.loaded) { cd.style.display = 'block'; this.textContent = '▼'; return; }
+                            this.textContent = '…';
+                            try {
+                                const r2 = await adminFetch('/api/models/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: sp }) });
+                                const j2 = await r2.json();
+                                if (!j2.ok) throw new Error(j2.error);
+         if (j2.dirs.length === 0) { this.textContent = '·'; this.disabled = true; return; }
+          const ex2 = new Set(modelsData[idx].models || []);
+              cd.innerHTML = renderTreeNode(j2.dirs, sp, idx, ex2, j2.dirsInfo);
+                                cd.dataset.loaded = '1';
+                                cd.style.display = 'block';
+                                this.textContent = '▼';
+                            } catch (e2) { this.textContent = '!'; }
+                        });
+                    });
+                } catch (e) { this.textContent = '!'; }
+            });
+        });
+    }
+
+    // ── 页面开关（兼容旧接口，内部走模块路由） ──
+    function showDimPage(skipHashUpdate) { switchModule('tasks', skipHashUpdate); }
+    function hideDimPage() { switchModule('files'); exitDimEdit(); }
 
     // ── 左侧：加载配置列表 ──
     async function loadConfigList() {
@@ -475,9 +892,9 @@
                 <div class="dim-sidebar-item-row2">
                     <span class="dim-sidebar-item-task">${c.task ? escHtml(c.task) : ''}</span>
                     <div class="dim-sidebar-item-actions">
-                        ${admin ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="绑定/解绑模式">📌 绑定</button>` : ''}
+                     ${admin ? `<button class="dim-activate-btn ghost-btn" data-name="${escHtml(c.name)}" title="绑定/解绑模式"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg> 绑定</button>` : ''}
                         ${admin ? `<button class="dim-copy-btn ghost-btn" data-name="${escHtml(c.name)}" title="复制一份此配置">复制</button>` : ''}
-                        ${admin ? `<button class="dim-sidebar-del ghost-btn" data-name="${escHtml(c.name)}" title="删除此配置">🗑</button>` : ''}
+                 ${admin ? `<button class="dim-sidebar-del ghost-btn" data-name="${escHtml(c.name)}" title="删除此配置"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>` : ''}
                     </div>
                 </div>
             </div>
@@ -793,7 +1210,7 @@
         dimView.innerHTML = '<div class="dim-view-loading">加载中…</div>';
         dimView.style.display = '';
         // 更新 URL hash，方便分享直达链接
-        if (dimPageOpen) history.replaceState(null, '', '#rules/' + encodeURIComponent(name));
+        if (dimPageOpen) history.replaceState(null, '', '#tasks/' + encodeURIComponent(name));
         try {
             const r = await fetch(`/api/configs/${encodeURIComponent(name)}?_=` + Date.now());
             const text = await r.text();
@@ -821,7 +1238,7 @@
             if (dimCurrentName === name) {
                 dimCurrentName = null;
                 dimRawData = null;
-                dimView.innerHTML = '<div class="dim-view-loading">请从左侧选择配置</div>';
+                dimView.innerHTML = '<div class="dim-view-loading">请从右侧选择配置</div>';
             }
             loadConfigList();
         } catch (e) {
@@ -880,58 +1297,164 @@
         const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';
 
         // ── Tab 栏 ──
-        const tabs = [
-            ['dims',       '📐 维度'],
-            ['checklist',  '📋 Checklist'],
-            ['testSource', '📦 测试源'],
-            ['testers',    '👥 测试人'],
-        ];
+   const tabs = [
+ ['dims', '维度'],
+    ['checklist',  'Checklist'],
+     ['testers',    '测试人'],
+     ['build',      '🔨 构建'],
+     ];
         const tabsHtml = `<div class="dim-tabbar">${tabs.map(([id, label]) =>
             `<button class="dim-tab${dimActiveTab === id ? ' is-active' : ''}" data-tab="${id}">${label}</button>`
         ).join('')}</div>`;
 
-        // ── Tab 内容：只渲染当前 Tab ──
+ // ── Tab 内容：只渲染当前 Tab ──
         let contentHtml = '';
         if (dimActiveTab === 'checklist') {
-            contentHtml = renderChecklistPreview(obj ? obj.checklists : null, obj ? obj.checklist_config : null, admin);
-        } else if (dimActiveTab === 'testSource') {
-            contentHtml = renderTestSourceSection(obj, admin);
-        } else if (dimActiveTab === 'testers') {
-            contentHtml = renderTestersSection(obj, admin);
+ contentHtml = renderChecklistPreview(obj ? obj.checklists : null, obj ? obj.checklist_config : null, admin);
+     } else if (dimActiveTab === 'testers') {
+   contentHtml = renderTestersSection(obj, admin);
+    } else if (dimActiveTab === 'build') {
+     contentHtml = renderBuildSection(obj, admin);
         } else {
             if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
-                contentHtml = `<div class="dim-view-loading">暂无维度配置</div>`
-                    + (admin ? `<div style="padding:0 28px"><button class="dim-add-dim-btn ghost-btn" style="margin-top:8px">＋ 添加维度</button></div>` : '');
-            } else {
-                const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
-                const addDimBtn = admin ? `<button class="dim-add-dim-btn ghost-btn">＋ 添加维度</button>` : '';
-                contentHtml = `<div class="dim-cards-grid">${cardsHtml}</div>`
-                    + `<div class="dim-bottom-actions" style="display:flex;align-items:center;padding:0 28px;gap:0">${addDimBtn}</div>`;
-            }
+      contentHtml = `<div class="dim-checklist-section">
+      <div class="dim-cl-header">
+   <span class="dim-cl-title">维度</span>
+       <span class="dim-cl-subtitle">评分维度及等级定义</span>
+ </div>
+   <div class="dim-cl-body">
+                <div class="dim-view-loading">暂无维度配置</div>
+    ${admin ? `<button class="dim-add-dim-btn">＋ 添加维度</button>` : ''}
+            </div>
+        </div>`;
+  } else {
+     const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
+   const addDimBtn = admin ? `<button class="dim-add-dim-btn">＋ 添加维度</button>` : '';
+     contentHtml = `<div class="dim-checklist-section">
+        <div class="dim-cl-header">
+    <span class="dim-cl-title">维度</span>
+              <span class="dim-cl-subtitle">评分维度及等级定义</span>
+ </div>
+ <div class="dim-cl-body">
+  <div class="dim-cards-grid">${cardsHtml}</div>
+ <div class="dim-bottom-actions">${addDimBtn}</div>
+        </div>
+        </div>`;
+      }
         }
 
         dimView.innerHTML = metaHtml + tabsHtml + contentHtml;
 
         // 渲染后绑定事件（延迟到 innerHTML 写入后）
         setTimeout(() => {
-            bindMetaInlineEdit();
-            bindDimTabs();
+    bindMetaInlineEdit();
+   bindDimTabs();
             if (admin) bindCardEdit(obj || { dimensions: [] });
+         if (dimActiveTab === 'build' && admin) bindBuildTabEvents();
         }, 0);
     }
 
     /** Tab 切换绑定：切换后整体重渲染（状态保存在 dimActiveTab） */
     function bindDimTabs() {
         dimView.querySelectorAll('.dim-tab').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const tab = btn.dataset.tab;
-                if (!tab || tab === dimActiveTab) return;
-                dimActiveTab = tab;
-                let data;
-                try { data = JSON.parse(dimRawData); } catch (_) { data = { dimensions: [] }; }
-                renderDimCards(data);
+         btn.addEventListener('click', () => {
+       const tab = btn.dataset.tab;
+         if (!tab || tab === dimActiveTab) return;
+             dimActiveTab = tab;
+     let data;
+       try { data = JSON.parse(dimRawData); } catch (_) { data = { dimensions: [] }; }
+      renderDimCards(data);
+   });
+      });
+    }
+
+    /** 构建 Tab 事件绑定 */
+    function bindBuildTabEvents() {
+      const runBtn = dimView.querySelector('.dim-build-run-btn');
+      if (runBtn) runBtn.addEventListener('click', runBuildAction);
+
+      // ── 展开/折叠右侧测试源面板 ──
+      const toggleBtn = dimView.querySelector('.dim-build-toggle-ts');
+  if (toggleBtn) {
+   toggleBtn.addEventListener('click', () => {
+       const right = dimView.querySelector('.dim-build-right');
+    if (right) {
+          right.classList.toggle('dim-build-right--collapsed');
+  toggleBtn.textContent = right.classList.contains('dim-build-right--collapsed') ? '⚙ 测试源' : '✕ 收起';
+ }
+          });
+      }
+
+ // ── 从模型管理加载模型列表 ──
+   const loadModelsBtn = dimView.querySelector('.dim-build-load-models');
+   if (loadModelsBtn) {
+      loadModelsBtn.addEventListener('click', async () => {
+      const picker = dimView.querySelector('.dim-build-model-picker');
+    if (!picker) return;
+          if (picker.style.display !== 'none') { picker.style.display = 'none'; return; }
+
+     picker.innerHTML = '<span class="dim-build-picker-loading">加载中...</span>';
+          picker.style.display = 'block';
+
+          try {
+  const resp = await adminFetch('/api/models');
+      const data = await resp.json();
+ if (!data.ok) { picker.innerHTML = `<span class="dim-build-picker-err">\u274c ${data.error}</span>`; return; }
+
+    const sources = data.sources || [];
+            if (sources.length === 0) {
+    picker.innerHTML = '<span class="dim-build-picker-err">暂无模型源目录，请先到「模型管理」添加</span>';
+  return;
+            }
+
+ // 按测试集名字列出，点击直接导入
+            let listHtml = '<div class="dim-build-picker-list">';
+            sources.forEach((src, idx) => {
+              const modelCount = (src.models || []).length;
+          listHtml += `<div class="dim-build-picker-source-item" data-src-idx="${idx}">
+    <span class="dim-build-picker-source-name">${escHtml(src.name)}</span>
+         <span class="dim-build-picker-source-count">${modelCount} 个模型</span>
+    </div>`;
             });
-        });
+   listHtml += '</div>';
+
+  picker.innerHTML = listHtml;
+
+ // 点击测试集名字直接导入所有模型
+    const ta = dimView.querySelector('[data-bf="models"]');
+   picker.querySelectorAll('.dim-build-picker-source-item').forEach(item => {
+         item.addEventListener('click', () => {
+     const srcIdx = +item.dataset.srcIdx;
+        const src = sources[srcIdx];
+  const models = (src.models || []).map(m => src.path + '/' + m);
+      if (models.length === 0) {
+              item.classList.add('dim-build-picker-source-empty');
+                item.querySelector('.dim-build-picker-source-count').textContent = '暂无模型';
+          setTimeout(() => item.classList.remove('dim-build-picker-source-empty'), 1500);
+   return;
+   }
+       if (ta) { ta.value = models.join('\n'); ta.dispatchEvent(new Event('change')); }
+      picker.style.display = 'none';
+     });
+       });
+          } catch (e) {
+ picker.innerHTML = `<span class="dim-build-picker-err">\u274c 请求失败: ${e.message}</span>`;
+        }
+   });
+      }
+
+      // ── 自动保存：构建配置字段变化时自动持久化到 JSON ──
+      let buildSaveTimer = null;
+  const autosaveBuild = () => {
+          if (buildSaveTimer) clearTimeout(buildSaveTimer);
+ buildSaveTimer = setTimeout(() => { saveBuildConfig(true); }, 600);
+      };
+   dimView.querySelectorAll('[data-bf]').forEach(el => {
+          el.addEventListener('change', autosaveBuild);
+          if (el.tagName === 'TEXTAREA' || el.type === 'text' || !el.type) {
+         el.addEventListener('blur', autosaveBuild);
+       }
+    });
     }
 
     /** 渲染单张维度卡片 HTML（纯字符串，不绑定事件） */
@@ -994,7 +1517,7 @@
             : (d.definition ? `<div class="dim-card-def">${escHtml(d.definition)}</div>` : '');
 
         const delDimBtn = admin
-            ? `<button class="dim-del-dim-btn ghost-btn" data-dim="${idx}" title="删除此维度">🗑 删除</button>`
+             ? `<button class="dim-del-dim-btn ghost-btn" data-dim="${idx}" title="删除此维度"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> 删除</button>`
             : '';
 
         return `<div class="dim-card${admin ? ' dim-card-draggable' : ''}" data-dim="${idx}" draggable="${admin ? 'true' : 'false'}">
@@ -1067,7 +1590,7 @@
             : '';
         return `<div class="dim-checklist-section">
             <div class="dim-cl-header">
-                <span class="dim-cl-title">📋 Checklist</span>
+                     <span class="dim-cl-title">Checklist</span>
                 <span class="dim-cl-subtitle">打分后弹出的问题标记</span>
                 ${exclusiveHint}
             </div>
@@ -1077,6 +1600,272 @@
                 ${addRowBtn}
             </div>
         </div>`;
+    }
+
+    // ── 构建配置 Tab ──
+    function renderBuildSection(obj, admin) {
+        const b = (obj && obj.build && typeof obj.build === 'object') ? obj.build : {};
+      const tag = (obj && obj.tag) || '';
+
+        // size: xs=60px, sm=80px, md=140px, lg=240px, xl=100%
+    const fld = (label, id, val, ph, size) => {
+            const szCls = 'dim-build-sz-' + (size || 'md');
+   return `<div class="dim-build-field ${szCls}"><label class="dim-build-label">${escHtml(label)}</label>`
+                + (admin
+  ? `<input class="dim-build-input" data-bf="${id}" value="${escHtml(val || '')}" placeholder="${escHtml(ph || '')}">`
+     : `<span class="dim-build-val">${escHtml(val || ph || '—')}</span>`)
+    + `</div>`;
+        };
+
+        const selFld = (label, id, val, opts, size) => {
+    const szCls = 'dim-build-sz-' + (size || 'sm');
+            return `<div class="dim-build-field ${szCls}"><label class="dim-build-label">${escHtml(label)}</label>`
+      + (admin
+ ? `<select class="dim-build-input" data-bf="${id}">${opts.map(([v, t]) => `<option value="${escHtml(v)}"${val === v ? ' selected' : ''}>${escHtml(t)}</option>`).join('')}</select>`
+         : `<span class="dim-build-val">${escHtml(opts.find(o => o[0] === val)?.[1] || val || '—')}</span>`)
+         + `</div>`;
+     };
+
+     const models = Array.isArray(b.models) ? b.models.join('\n') : '';
+  const samples = Array.isArray(b.samples) ? b.samples.join(',') : '';
+        const excludeSamples = Array.isArray(b.exclude_samples) ? b.exclude_samples.join(',') : '';
+
+        const syncToTs = b.sync_to_testsrc !== false; // 默认勾选
+
+        let bodyHtml = `
+        <div class="dim-build-grp">
+        <div class="dim-build-grp-title">路径配置</div>
+   <div class="dim-build-grid">
+       ${fld('首帧目录', 'first_frames_dir', b.companions ? b.companions.first_frames_dir : '', 'first_frames', 'half')}
+       ${fld('Prompt CSV', 'prompt_csv', b.companions ? b.companions.prompt_csv : '', 'prompt.csv', 'half')}
+      </div>
+        </div>
+        <div class="dim-build-grp">
+        <div class="dim-build-grp-title">构建参数</div>
+   <div class="dim-build-grid">
+             ${fld('组数', 'n_groups', String(b.n_groups || 5), '5', 'xs')}
+    ${fld('种子', 'seed', String(b.seed != null ? b.seed : 42), '42', 'xs')}
+${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false', '否']], 'xs')}
+    ${fld('样本列表', 'samples', samples, '留空默认1~100，如1,2,3,5', 'md')}
+    ${fld('排除样本', 'exclude_samples', excludeSamples, '如 10,20', 'sm')}
+    ${fld('Prompt 列名', 'prompt_cols', b.companions && b.companions.prompt_cols ? b.companions.prompt_cols.join(',') : '', 'image,prompt,en_prompt', 'lg')}
+      </div>
+        </div>
+        <div class="dim-build-grp">
+                   <div class="dim-build-grp-title">模型列表${admin ? '<button class="dim-build-load-models" title="从模型管理加载"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 从模型管理加载</button>' : ''}</div>
+   ${admin
+     ? `<textarea class="dim-build-input dim-build-models" data-bf="models" rows="4" placeholder="每行一个模型（路径格式：源目录/模型名）">${escHtml(models)}</textarea>`
+   : `<pre class="dim-build-val" style="white-space:pre-wrap">${escHtml(models || '（未配置）')}</pre>`}
+            ${admin ? '<div class="dim-build-model-picker" style="display:none"></div>' : ''}
+ </div>`;
+
+        if (admin) {
+      bodyHtml += `
+<div class="dim-build-actions">
+     <select class="dim-build-action-sel">
+    <option value="build">build（构建盲评包）</option>
+        <option value="analyze">analyze（反解分析）</option>
+   <option value="verify">verify（审计校验）</option>
+<option value="rank">rank（排名统计）</option>
+  </select>
+          <button class="primary-btn dim-build-run-btn">▶ 执行</button>
+    <label class="dim-build-sync-label"><input type="checkbox" class="dim-build-sync-cb" data-bf="sync_to_testsrc" ${syncToTs ? 'checked' : ''}> 同步zip到测试源</label>
+    <span class="dim-build-status" id="dimBuildStatus"></span>
+     </div>`;
+    }
+
+        // 测试源部分（右列，默认折叠）
+        const tsHtml = renderTestSourceSection(obj, admin);
+
+        return `<div class="dim-build-combined">
+          <div class="dim-build-left">
+ <div class="dim-build-section dim-checklist-section">
+     <div class="dim-cl-header">
+ <span class="dim-cl-title">🔨 构建配置</span>
+    <span class="dim-cl-subtitle">Tag 自动使用「备注 tag」字段；输出目录 = tag 同名；构建后自动 zip 到 testsrc</span>
+    <button class="dim-build-toggle-ts" title="展开测试源配置">⚙ 测试源</button>
+   </div>
+ <div class="dim-cl-body dim-build-body">${bodyHtml}</div>
+</div>
+      </div>
+       <div class="dim-build-right dim-build-right--collapsed">
+  <div class="dim-build-right-inner">${tsHtml}</div>
+</div>
+        </div>`;
+    }
+
+    /** 从构建 Tab 表单读取 build 配置对象 */
+    function readBuildForm() {
+     const get = (id) => {
+            const el = dimView.querySelector(`[data-bf="${id}"]`);
+         return el ? el.value.trim() : '';
+     };
+   const parseList = (s) => s.split(/[,，\s]+/).filter(Boolean);
+        const parseIntList = (s) => s.split(/[,，\s]+/).filter(Boolean).map(Number).filter(n => !isNaN(n));
+
+        const build = {};
+        // src_model_dir 从models 路径中自动推断
+        const modelsRaw = get('models');
+        const modelsList = modelsRaw.split(/\n+/).map(s => s.trim()).filter(Boolean);
+        if (modelsList.length > 0&& modelsList[0].includes('/')) {
+            // 取第一个模型的父目录作为 src_model_dir
+            const parts = modelsList[0].split('/');
+            parts.pop();
+            build.src_model_dir = parts.join('/');
+        } else {
+            build.src_model_dir = '';
+        }
+   build.n_groups = parseInt(get('n_groups')) || 5;
+        build.seed = parseInt(get('seed'));
+        if (isNaN(build.seed)) build.seed = 42;
+    build.blind = get('blind') !== 'false';
+        build.group_mode = 'fresh';
+
+        const modelsRaw2 = get('models');
+  build.models = modelsRaw2.split(/\n+/).map(s => s.trim()).filter(Boolean).map(s => {
+            // 如果是完整路径，取最后的文件夹名
+            const parts = s.split('/');
+            return parts[parts.length - 1];
+        });
+
+ const samplesRaw = get('samples');
+   if (samplesRaw) build.samples = parseIntList(samplesRaw);
+        const exclRaw = get('exclude_samples');
+   if (exclRaw) build.exclude_samples = parseIntList(exclRaw);
+
+        // companions
+    const ffDir = get('first_frames_dir');
+        const pCsv = get('prompt_csv');
+        const pCols = get('prompt_cols');
+    if (ffDir || pCsv || pCols) {
+            build.companions = {};
+if (ffDir) build.companions.first_frames_dir = ffDir;
+   if (pCsv) build.companions.prompt_csv = pCsv;
+          if (pCols) build.companions.prompt_cols = parseList(pCols);
+  }
+
+        // 同步到测试源选项
+        const syncCb = dimView.querySelector('.dim-build-sync-cb');
+        build.sync_to_testsrc = syncCb ? syncCb.checked : true;
+
+        return build;
+    }
+
+    /** 保存构建配置到当前评分规则 JSON 中（silent=true 时不弹提示） */
+async function saveBuildConfig(silent) {
+if (!dimCurrentName) { if (!silent) showToast('❌ 未选择配置', 'err'); return; }
+        let data;
+ try { data = JSON.parse(dimRawData); } catch (_) { data = {}; }
+        data.build = readBuildForm();
+   try {
+            const r = await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {
+      method: 'PUT',
+   headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify(data),
+            });
+    if (r.status === 401) return;
+            const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) { if (!silent) showToast('❌ ' + (j.error || '保存失败'), 'err'); return; }
+            dimRawData = JSON.stringify(data, null, 2);
+   if (!silent) showToast('✅ 构建配置已保存', 'ok');
+        } catch (e) {
+          if (!silent) showToast('❌ 网络错误：' + e.message, 'err');
+        }
+    }
+
+    /** 执行构建/分析操作 */
+    async function runBuildAction() {
+     if (!dimCurrentName) { showToast('❌ 未选择配置', 'err'); return; }
+        // 先持久化当前表单的 build 配置
+await saveBuildConfig(true);
+        let data;
+ try { data = JSON.parse(dimRawData); } catch (_) { data = {}; }
+        const build = readBuildForm();
+        const tag = data.tag || dimCurrentName;
+        // 用 tag 作为 dst_dir（相对路径，后端基于 tasks/ 目录解析）
+        build.tag = tag;
+        if (!build.dst_dir) build.dst_dir = tag;
+  // map_csv 统一放在 tasks/map/ 目录下
+        if (!build.map_csv) build.map_csv = `map/map_${tag}.csv`;
+
+        const actionSel = dimView.querySelector('.dim-build-action-sel');
+      const action = actionSel ? actionSel.value : 'build';
+        const statusEl = dimView.querySelector('#dimBuildStatus');
+
+        const actionLabels = { build: '构建中…', analyze: '分析中…', verify: '校验中…', rank: '统计中…' };
+     if (statusEl) statusEl.textContent = actionLabels[action] || '执行中…';
+
+        const apiPath = action === 'build' ? '/api/build' : '/api/analyze';
+        const body = action === 'build'
+            ? { config: build }
+        : { config: build, action };
+
+        try {
+            const r = await adminFetch(apiPath, {
+    method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+    });
+            if (r.status === 401) { if (statusEl) statusEl.textContent = ''; return; }
+  const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j.ok) {
+  showToast('❌ ' + (j.error || '执行失败'), 'err');
+         if (statusEl) statusEl.textContent = '❌ 失败';
+     return;
+            }
+     // 构建成功后根据勾选决定是否 zip 到 testsrc
+            if (action === 'build' && j.data && j.data.dstDir && build.sync_to_testsrc) {
+             if (statusEl) statusEl.textContent = '压缩中…';
+                try {
+           const zr = await adminFetch('/api/build/zip', {
+     method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
+    });
+           const zj = await zr.json().catch(() => ({}));
+  if (zr.ok && zj.ok) {
+        showToast(`✅ 构建完成并已压缩 → ${zj.zipName}`, 'ok');
+           if (statusEl) statusEl.textContent = `✅ ${zj.zipName}`;
+        // 自动填写测试源 url 并刷新右侧面板
+        if (zj.zipName) {
+      data.build = build;
+            if (!data.testSource) data.testSource = {};
+         data.testSource.url = `/testsrc/${zj.zipName}`;
+  dimRawData = JSON.stringify(data, null, 2);
+    // 保存配置（含更新后的 testSource.url）
+      await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {
+     method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(data),
+        });
+        // 刷新右侧测试源面板
+        const rightPanel = dimView.querySelector('.dim-build-right-inner');
+     if (rightPanel) {
+        rightPanel.innerHTML = renderTestSourceSection(data, true);
+  bindTestSourceEvents();
+            // 自动展开右侧面板以显示更新
+            const right = dimView.querySelector('.dim-build-right');
+   if (right) right.classList.remove('dim-build-right--collapsed');
+         const toggleBtn = dimView.querySelector('.dim-build-toggle-ts');
+   if (toggleBtn) toggleBtn.textContent = '✕ 收起';
+        }
+  }
+           } else {
+     showToast('⚠️ 构建成功但压缩失败：' + (zj.error || ''), 'err');
+     if (statusEl) statusEl.textContent = '⚠️ 压缩失败';
+          }
+      } catch (ze) {
+                    showToast('⚠️ 构建成功但压缩异常：' + ze.message, 'err');
+              if (statusEl) statusEl.textContent = '⚠️ 压缩异常';
+           }
+     } else {
+       showToast('✅ 执行完成', 'ok');
+        if (statusEl) statusEl.textContent = '✅ 完成';
+            }
+        } catch (e) {
+  showToast('❌ 网络错误：' + e.message, 'err');
+            if (statusEl) statusEl.textContent = '❌ 网络错误';
+        }
     }
 
     // ── 测试源自动化配置区（testSource 对象）──────────────────────────────
@@ -1147,7 +1936,7 @@
 
         return `<div class="dim-ts-section dim-checklist-section">
             <div class="dim-cl-header dim-ts-header">
-                <span class="dim-cl-title">📦 测试源</span>
+                  <span class="dim-cl-title">测试源</span>
                 <span class="dim-cl-subtitle">客户端点「接受」后自动：下载 → 解压 → 导入对比 → 绑定参考图/提示词 → 进入打分</span>
                 ${admin ? '<button class="dim-ts-upload-btn ghost-btn" title="选择 zip 上传到本服务器，成功后自动填入 url 字段">⇪ 上传 zip 到服务器</button><input type="file" class="dim-ts-upload-input" accept=".zip,application/zip" style="display:none">' : ''}
                 ${delCfgBtn}
@@ -1245,7 +2034,7 @@
             : '';
         return `<div class="dim-testers-section dim-checklist-section">
             <div class="dim-cl-header">
-                <span class="dim-cl-title">👥 测试人</span>
+           <span class="dim-cl-title">测试人</span>
                 <span class="dim-cl-subtitle">评分人按组别分配：客户端「接受」时命中名单即免选组、自动进入对应组别打分（一人一组）</span>
                 <span style="flex:1"></span>
                 ${groups.length > 0 ? `<input class="dim-tester-filter" placeholder="🔍 过滤组名 / 名字" value="${escHtml(dimTesterFilter)}">` : ''}
@@ -1550,8 +2339,62 @@
                     // 存相对路径（/testsrc/xxx.zip）：客户端自动按当前配置的服务器
                     // origin 拼接，迁移服务器后配置原样拷贝即可，url 无需手改；
                     // mutateTestSource 内部会保存并刷新分区
-                    mutateTestSource(ts => { ts.url = data.url; });
-                    showToast('已上传并填入测试源地址（相对路径，随服务器迁移）：' + data.name, 'ok');
+                    //
+                    // 自动识别策略：
+                    //   - url：永远更新为新 zip 的地址
+                    //   - rootDir：用新 zip 的内容（zip 顶层目录或文件名）覆盖；上传后用户仍可手动改
+                    //   - laneDirs / referenceDirs / promptCsv：用服务端 zip 分析结果覆盖；
+                    //     若新 zip 没识别到对应项（返回空），则保留旧值不破坏
+                    //   - groups：服务端识别到组目录时合并（保留旧成员，新增空组），不会清空已有成员
+                    mutateTestSource(ts => {
+                        ts.url = data.url;
+                        // rootDir：优先用服务端 zip 分析结果，否则用文件名（去 .zip）
+                        const zipRootDir = (data.suggestions && data.suggestions.rootDir) || '';
+                        ts.rootDir = zipRootDir || data.name.replace(/\.zip$/i, '');
+                        if (data.suggestions) {
+                            const s = data.suggestions;
+                            if (Array.isArray(s.laneDirs) && s.laneDirs.length > 0) {
+                                ts.laneDirs = s.laneDirs;
+                            }
+                            if (Array.isArray(s.referenceDirs) && s.referenceDirs.length > 0) {
+                                ts.referenceDirs = s.referenceDirs;
+                            }
+                            if (s.promptCsv) {
+                                ts.promptCsv = s.promptCsv;
+                            }
+                            // groups：合并识别到的新组，保留旧成员
+                            if (Array.isArray(s.groups) && s.groups.length > 0) {
+                                if (!ts.groups || typeof ts.groups !== 'object' || Array.isArray(ts.groups)) {
+                                    ts.groups = {};
+                                }
+                                s.groups.forEach(gname => {
+                                    if (!ts.groups[gname]) ts.groups[gname] = [];
+                                });
+                                // 清理旧字段
+                                delete ts.groupMap;
+                            }
+                        }
+                    });
+                    const fillMsg = [];
+                    if (data.suggestions) {
+                        if (data.suggestions.rootDir) {
+                            fillMsg.push('rootDir=' + data.suggestions.rootDir);
+                        }
+                        if (data.suggestions.laneDirs && data.suggestions.laneDirs.length) {
+                            fillMsg.push('laneDirs=' + data.suggestions.laneDirs.join(','));
+                        }
+                        if (data.suggestions.referenceDirs && data.suggestions.referenceDirs.length) {
+                            fillMsg.push('refDirs=' + data.suggestions.referenceDirs.join(','));
+                        }
+                        if (data.suggestions.promptCsv) {
+                            fillMsg.push('promptCsv=' + data.suggestions.promptCsv);
+                        }
+                        if (data.suggestions.groups && data.suggestions.groups.length) {
+                            fillMsg.push('groups=' + data.suggestions.groups.join(','));
+                        }
+                    }
+                    const extraInfo = fillMsg.length > 0 ? '（已自动识别：' + fillMsg.join(' / ') + '）' : '';
+                    showToast('已上传并填入测试源地址（相对路径，随服务器迁移）：' + data.name + extraInfo, 'ok');
                 } catch (err) {
                     showToast('上传失败：' + err.message, 'err');
                 } finally {
@@ -2608,6 +3451,55 @@
         });
     }
 
+    // ── 手动上传（管理员，上传到 uploads/） ─────────────
+    const manualUploadLabel = $('manualUploadLabel');
+    const manualUploadInput = $('manualUploadInput');
+    if (manualUploadLabel && manualUploadInput) {
+        manualUploadInput.addEventListener('change', async () => {
+            const file = manualUploadInput.files && manualUploadInput.files[0];
+            if (!file) return;
+            const oldText = manualUploadLabel.querySelector('span').textContent;
+            try {
+                manualUploadLabel.querySelector('span').textContent = '⏳ 上传中…';
+                manualUploadLabel.style.pointerEvents = 'none';
+                const fd = new FormData();
+                fd.append('file', file);
+                const res = await adminFetch('/api/manual-upload', { method: 'POST', body: fd });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                if (!data.ok) throw new Error(data.error || '上传失败');
+                showToast(`✅ 已上传 ${data.saved} (${fmtSize(data.size)})`);
+                await fetchList(); // 刷新文件列表
+            } catch (e) {
+                showToast(`❌ 上传失败: ${e.message}`);
+            } finally {
+                manualUploadLabel.querySelector('span').textContent = oldText;
+                manualUploadLabel.style.pointerEvents = '';
+                manualUploadInput.value = ''; // 允许重复选同一文件
+            }
+        });
+    }
+
+    // ── 盲评分析：切换到分析模块并传递选中文件 ─────────────
+    const analyzeSelBtn = $('analyzeSelBtn');
+    if (analyzeSelBtn) {
+     analyzeSelBtn.addEventListener('click', () => {
+      if (!guardWrite()) return;
+            const names = [...state.selected];
+  if (names.length === 0) { showToast('请先勾选要分析的文件', 'warn'); return; }
+     switchModule('tasks');
+     // 切换到构建 tab 并选择 analyze
+ setTimeout(() => {
+    const buildTab = document.querySelector('.dim-tab[data-tab="build"]');
+      if (buildTab) buildTab.click();
+      setTimeout(() => {
+          const sel = document.querySelector('.dim-build-action-sel');
+          if (sel) { sel.value = 'analyze'; }
+      }, 100);
+    }, 100);
+        });
+    }
+
     // 整个评分规则页面响应拖拽（左侧+右侧大区域均可）
     // 只有拖入外部文件时才显示蓝色边框，页面内元素拖拽不触发
     function _isFileDrag(e) {
@@ -2860,6 +3752,9 @@
         if (deleteSelBtn)  deleteSelBtn.disabled  = (n === 0);
         // 合并下载（选中）：未选中时禁用
         if (mergeLatest) mergeLatest.disabled = (n === 0);
+        // 分析选中：未选中时禁用
+        const analyzeBtn = $('analyzeSelBtn');
+        if (analyzeBtn) analyzeBtn.disabled = (n === 0);
 
         // 表头全选复选框：与当前 filtered 可见行联动
         if (selAll) {
@@ -2923,11 +3818,8 @@
                 fail ? 'warn' : 'ok',
             );
             await fetchList();
-            // 若归档抽屉正打开，顺手刷新它，保证刚归档进去的文件立刻可见
-            if (typeof archiveDrawer !== 'undefined' && archiveDrawer
-                && archiveDrawer.classList.contains('open')) {
-                loadArchiveFolders();
-            }
+            // 若归档页正打开，顺手刷新它，保证刚归档进去的文件立刻可见
+            if (currentModule === 'archive') loadArchiveFolders();
         } catch (e) {
             setStatus('err', '归档失败');
             showToast('归档失败：' + e.message, 'err');
@@ -3196,9 +4088,7 @@
         downloadFile('/api/merge?' + params.toString(), `playerx_all${fileTag}.csv`);
     });
 
-    // ────────── 归档库抽屉 ──────────
-    const archiveDrawer        = $('archiveDrawer');
-    const archiveCloseBtn      = $('archiveClose');
+    // ────────── 归档库（页面模块） ──────────
     const archiveRefreshBtn    = $('archiveRefresh');
     const openArchiveBtn       = $('openArchiveBtn');
     const archiveMeta          = $('archiveMeta');
@@ -3224,17 +4114,10 @@
     };
 
     function openArchiveDrawer() {
-        archiveDrawer.hidden = false;
-        requestAnimationFrame(() => archiveDrawer.classList.add('open'));
-        loadArchiveFolders();
+        switchModule('archive');
     }
     function closeArchiveDrawer() {
-        archiveDrawer.classList.remove('open');
-        setTimeout(() => {
-            if (!archiveDrawer.classList.contains('open')) {
-                archiveDrawer.hidden = true;
-            }
-        }, 220);
+        switchModule('files');
     }
 
     async function loadArchiveFolders() {
@@ -3352,8 +4235,8 @@
             // 合并下载：选中时合并所选；未选中时合并整个文件夹（只要文件夹有文件就可用）
             archiveMergeBtn.disabled = (archive.files.length === 0);
             archiveMergeBtn.textContent = (n > 0)
-                ? `⬇ 合并下载选中（${n}）`
-                : '⬇ 合并下载（全部）';
+                   ? `合并下载选中（${n}）`
+      : '合并下载（全部）';
         }
         if (archiveSelAll) {
             const visible = archive.files;
@@ -3496,7 +4379,6 @@
     });
 
     openArchiveBtn.addEventListener('click', openArchiveDrawer);
-    archiveCloseBtn.addEventListener('click', closeArchiveDrawer);
     archiveRefreshBtn.addEventListener('click', () => loadArchiveFolders());
 
     // 下载选中：浏览器无原生 zip，按顺序逐个触发下载
@@ -3655,17 +4537,111 @@
     }
 
     // ── Hash 工具函数 ──
-    // 解析 #rules 或 #rules/<configName>，返回 { isRules, configName }
+// 解析 #tasks 或 #tasks/<configName>，返回 { isTasks, configName }
     function _parseHash() {
         const h = decodeURIComponent(location.hash || '');
-        if (h === '#rules') return { isRules: true, configName: null };
-        const m = h.match(/^#rules\/(.+)$/);
-        if (m) return { isRules: true, configName: m[1] };
-        return { isRules: false, configName: null };
+ if (h === '#tasks') return { isTasks: true, configName: null };
+        const m = h.match(/^#tasks\/(.+)$/);
+     if (m) return { isTasks: true, configName: m[1] };
+        return { isTasks: false, configName: null };
     }
     function _getHashConfig() {
         return _parseHash().configName;
     }
+
+    // ── Sidebar 导航绑定 ──
+    document.querySelectorAll('.nav-item').forEach(el => {
+        el.addEventListener('click', () => {
+            switchModule(el.dataset.module);
+        });
+    });
+
+    // ── 设置页逻辑 ──
+    (function initSettings() {
+        const tokenView = $('stTokenView');
+        const tokenEdit = $('stTokenEdit');
+        const serverInfo = $('stServerInfo');
+        if (tokenEdit) {
+            tokenEdit.addEventListener('click', () => {
+                if (!guardWrite()) return;
+                openTokenDialog();
+            });
+        }
+        const pageSettings = $('pageSettings');
+        if (!pageSettings) return;
+        async function refreshTokenView() {
+            if (!tokenView) return;
+            if (!isLoggedIn()) { tokenView.textContent = '（需登录后查看）'; return; }
+            try {
+                const r = await adminFetch('/api/settings/upload-token');
+                const j = await r.json();
+                if (j.ok) tokenView.textContent = j.token ? `已设置（${j.token.length} 位）` : '未设置（关闭鉴权）';
+            } catch (_) { tokenView.textContent = '获取失败'; }
+        }
+        const observer = new MutationObserver(() => {
+            if (!pageSettings.hidden) {
+                refreshTokenView();
+                if (serverInfo && serverInfo.textContent === '—') {
+                    fetch('/api/status').then(r => r.json()).then(j => {
+                        serverInfo.textContent = `PlayerX-server v${j.version || '?'} · 运行中`;
+                    }).catch(() => { serverInfo.textContent = '连接失败'; });
+                }
+            }
+        });
+        observer.observe(pageSettings, { attributes: true, attributeFilter: ['hidden'] });
+    })();
+
+    // ── 自定义确认弹窗（替代原生 window.confirm） ──
+    function confirmDialog(title, msg, icon) {
+        return new Promise((resolve) => {
+            const mask = $('confirmMask');
+            const titleEl = $('confirmTitle');
+            const msgEl = $('confirmMsg');
+            const iconEl = $('confirmIcon');
+            const okBtn = $('confirmOk');
+            const cancelBtn = $('confirmCancel');
+            if (!mask) { resolve(window.confirm(msg)); return; }
+            titleEl.textContent = title || '确认操作';
+            msgEl.textContent = msg || '';
+            iconEl.textContent = icon || '⚠️';
+            mask.hidden = false;
+            function cleanup(result) {
+                mask.hidden = true;
+                okBtn.removeEventListener('click', onOk);
+                cancelBtn.removeEventListener('click', onCancel);
+                mask.removeEventListener('click', onMask);
+                document.removeEventListener('keydown', onKey);
+                resolve(result);
+            }
+            function onOk() { cleanup(true); }
+            function onCancel() { cleanup(false); }
+            function onMask(e) { if (e.target === mask) cleanup(false); }
+            function onKey(e) {
+                if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
+                if (e.key === 'Escape') cleanup(false);
+            }
+            okBtn.addEventListener('click', onOk);
+            cancelBtn.addEventListener('click', onCancel);
+            mask.addEventListener('click', onMask);
+            document.addEventListener('keydown', onKey);
+            okBtn.focus();
+        });
+    }
+
+    // ── 暴露共享 API 给 admin-analyze.js / admin-tasks.js ──
+    window.PX = {
+        adminFetch,
+        isLoggedIn,
+        showToast,
+        escHtml,
+        openLoginDialog,
+        updateAuthUi,
+        getSelectedFiles: () => [...state.selected],
+        switchModule,
+        openArchive: openArchiveDrawer,
+        openTokenSettings: openTokenDialog,
+        confirmDialog,
+    };
 
     // ────────── 启动 ──────────
     (async function init() {
@@ -3675,7 +4651,20 @@
         updateAuthUi();          // 列表渲染后再刷一次（同步行内删除按钮的锁定态）
         // 表头是静态的，初始化一次即可；列宽的持久化由 localStorage 维护
         initColumnResizing(document.getElementById('filesTable'));
-        // 检测 URL hash，支持直达链接：#rules 或 #rules/<configName>
-        if (_parseHash().isRules) showDimPage(true);
+        // 检测 URL hash，支持直达链接
+        const h = location.hash || '';
+    if (_parseHash().isTasks) {
+        switchModule('tasks', true);
+      } else if (h === '#dashboard') {
+            switchModule('dashboard', true);
+        } else if (h === '#analyze') {
+            switchModule('analyze', true);
+        } else if (h === '#settings') {
+            switchModule('settings', true);
+        } else if (h === '#archive') {
+            switchModule('archive', true);
+        } else if (h === '#models') {
+            switchModule('models', true);
+        }
     })();
 })();
