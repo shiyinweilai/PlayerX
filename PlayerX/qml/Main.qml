@@ -10090,13 +10090,71 @@ ApplicationWindow {
                 spacing: 24
                 width: Math.min(parent.width - 80, 720)
 
-                // 标题
-                Text {
+                // ── 标题组（参考设计稿）：PlayerX（X 品牌蓝）+ 蓝色发光装饰线 ──
+                //   装饰线：水平渐变（两端透明、中间饱和）+ 微弱外发光，
+                //   纤细不抢眼，仅用于衬托 X 标识，宽度略小于文字总宽。
+                ColumnLayout {
                     Layout.alignment: Qt.AlignHCenter
-                    text: "PlayerX"
-                    color: "#e8e8ec"
-                    font.pixelSize: 36
-                    font.bold: true
+                    spacing: 10
+
+                    Row {
+                        id: titleRow
+                        Layout.alignment: Qt.AlignHCenter
+                        Text { text: "Player"; color: "#f4f6fa"; font.pixelSize: 36; font.bold: true }
+                        Text { text: "X";      color: "#3b8ef2"; font.pixelSize: 36; font.bold: true }
+                    }
+
+                    // 装饰线本体 + 光晕：三层同中心渐变线叠出"发光"观感
+                    //（Qt5Compat.GraphicalEffects 的运行库在本应用部署中不可用，
+                    //  Glow 会导致启动失败；改用零依赖叠层模拟，效果等价）
+                    Item {
+                        Layout.alignment: Qt.AlignHCenter
+                        implicitWidth: titleRow.implicitWidth * 0.9
+                        implicitHeight: 10
+
+                        // 外层光晕（最宽最淡）
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: parent.width
+                            height: 10
+                            radius: 5
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0.0; color: "#003b8ef2" }
+                                GradientStop { position: 0.3; color: "#223b8ef2" }
+                                GradientStop { position: 0.7; color: "#223b8ef2" }
+                                GradientStop { position: 1.0; color: "#003b8ef2" }
+                            }
+                        }
+                        // 中层光晕
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: parent.width
+                            height: 6
+                            radius: 3
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0.0; color: "#003b8ef2" }
+                                GradientStop { position: 0.3; color: "#553b8ef2" }
+                                GradientStop { position: 0.7; color: "#553b8ef2" }
+                                GradientStop { position: 1.0; color: "#003b8ef2" }
+                            }
+                        }
+                        // 核心亮线
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: parent.width
+                            height: 3
+                            radius: 1.5
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0.0; color: "#003b8ef2" }
+                                GradientStop { position: 0.3; color: "#3b8ef2" }
+                                GradientStop { position: 0.7; color: "#3b8ef2" }
+                                GradientStop { position: 1.0; color: "#003b8ef2" }
+                            }
+                        }
+                    }
                 }
                 Text {
                     Layout.alignment: Qt.AlignHCenter
