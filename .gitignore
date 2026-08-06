@@ -28,3 +28,4 @@ PlayerX-server/archive
 PlayerX/release/latest.json
 PlayerX/release/remote-url.json
 PlayerX-server/testsrc
+PlayerX-server/package-lock.json
