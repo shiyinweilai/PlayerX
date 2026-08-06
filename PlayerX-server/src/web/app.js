@@ -1704,29 +1704,14 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         const parseIntList = (s) => s.split(/[,，\s]+/).filter(Boolean).map(Number).filter(n => !isNaN(n));
 
         const build = {};
-        // src_model_dir 从models 路径中自动推断
+        // models 直接保留绝对路径（后端支持绝对路径模型目录，不需要 src_model_dir）
         const modelsRaw = get('models');
-        const modelsList = modelsRaw.split(/\n+/).map(s => s.trim()).filter(Boolean);
-        if (modelsList.length > 0&& modelsList[0].includes('/')) {
-            // 取第一个模型的父目录作为 src_model_dir
-            const parts = modelsList[0].split('/');
-            parts.pop();
-            build.src_model_dir = parts.join('/');
-        } else {
-            build.src_model_dir = '';
-        }
+        build.models = modelsRaw.split(/\n+/).map(s => s.trim()).filter(Boolean);
    build.n_groups = parseInt(get('n_groups')) || 5;
         build.seed = parseInt(get('seed'));
         if (isNaN(build.seed)) build.seed = 42;
     build.blind = get('blind') !== 'false';
         build.group_mode = 'fresh';
-
-        const modelsRaw2 = get('models');
-  build.models = modelsRaw2.split(/\n+/).map(s => s.trim()).filter(Boolean).map(s => {
-            // 如果是完整路径，取最后的文件夹名
-            const parts = s.split('/');
-            return parts[parts.length - 1];
-        });
 
  const samplesRaw = get('samples');
    if (samplesRaw) build.samples = parseIntList(samplesRaw);

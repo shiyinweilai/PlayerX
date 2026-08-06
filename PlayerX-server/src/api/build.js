@@ -138,18 +138,16 @@ function reuseGroups(samples, reuseCsv) {
 
 function checkSources(srcDir, models, samples) {
     const need = new Set(samples.map(n => `${n}.mp4`));
-    if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) {
-        throw new Error(`源目录不存在: ${srcDir}`);
-    }
     for (const m of models) {
-        const d = path.join(srcDir, m);
+        // 模型路径如果本身就是绝对路径则直接使用，否则拼 srcDir
+        const d = path.isAbsolute(m) ? m : path.join(srcDir, m);
         if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) {
             throw new Error(`模型目录不存在: ${d}`);
         }
         const have = new Set(fs.readdirSync(d).filter(f => f.endsWith('.mp4')));
         const missing = [...need].filter(f => !have.has(f));
         if (missing.length > 0) {
-            throw new Error(`${m}: 缺${missing.length}文件 ${missing.slice(0, 10).join(',')}`);
+            throw new Error(`${path.basename(d)}: 缺${missing.length}文件 ${missing.slice(0, 10).join(',')}`);
         }
     }
 }
@@ -197,8 +195,9 @@ function copyBlind(samples, groupOf, models, labels, srcDir, dstDir, comp,
         for (let i = 0; i < labels.length; i++) {
             const lb = labels[i];
             const model = perm[i];
-            fs.copyFileSync(path.join(srcDir, model, fn), path.join(dstDir, g, lb, fn));
-            row[`${lb}_source`] = model;
+            const modelDir = path.isAbsolute(model) ? model : path.join(srcDir, model);
+            fs.copyFileSync(path.join(modelDir, fn), path.join(dstDir, g, lb, fn));
+            row[`${lb}_source`] = path.basename(model);
         }
         mapRows.push(row);
 
@@ -231,9 +230,10 @@ function copyDirect(samples, models, srcDir, dstDir, rng) {
     for (const n of samples) {
         const fn = `${n}.mp4`;
         for (const model of models) {
-            const d = path.join(dstDir, model);
+            const modelDir = path.isAbsolute(model) ? model : path.join(srcDir, model);
+            const d = path.join(dstDir, path.basename(model));
             fs.mkdirSync(d, { recursive: true });
-            fs.copyFileSync(path.join(srcDir, model, fn), path.join(d, fn));
+            fs.copyFileSync(path.join(modelDir, fn), path.join(d, fn));
         }
     }
 }
@@ -420,9 +420,6 @@ function handle(req, res) {
     const { config } = req.body || {};
     if (!config || typeof config !== 'object') {
         return res.status(400).json({ ok: false, error: 'missing config object' });
-    }
-    if (!config.src_model_dir) {
-        return res.status(400).json({ ok: false, error: '缺少 src_model_dir' });
     }
     if (!config.dst_dir) {
         return res.status(400).json({ ok: false, error: '缺少 dst_dir' });

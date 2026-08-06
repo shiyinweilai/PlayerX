@@ -1,6 +1,6 @@
 {
   "type": "测试模式",
-  "tag": "测试tag",
+  "tag": "test",
   "task": "测试任务",
   "scale": "1-5 Likert 整数",
   "dimensions": [
@@ -65,7 +65,7 @@
     }
   ],
   "testSource": {
-    "url": "/testsrc/test_auto2.zip",
+    "url": "/testsrc/test.zip",
     "workDir": "~/Downloads",
     "rootDir": "test_auto2",
     "laneDirs": [
@@ -78,12 +78,18 @@
     ]
   },
   "build": {
-    "src_model_dir": "",
+    "models": [
+      "/Users/rbyang/Downloads/src/wan2.2_14b_gptc_lora6000x8",
+      "/Users/rbyang/Downloads/src/wan2.2_14b_highonly_sft_aligned_5000x56",
+      "/Users/rbyang/Downloads/src/wan2.2_14b_lowonly_sft_aligned_5000x56"
+    ],
     "n_groups": 5,
     "seed": 42,
     "blind": true,
     "group_mode": "fresh",
-    "models": [],
-    "sync_to_testsrc": true
+    "sync_to_testsrc": true,
+    "tag": "test",
+    "dst_dir": "test",
+    "map_csv": "map/map_test.csv"
   }
 }

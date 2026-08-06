@@ -1,3 +1,16 @@
 {
-  "sources": []
+  "sources": [
+    {
+      "id": "mshps5j5sj2p90",
+      "name": "test",
+      "path": "/Users/rbyang/Downloads/src",
+      "models": [
+        "wan2.2_14b_gptc_lora6000x8",
+        "wan2.2_14b_highonly_sft_aligned_5000x56",
+        "wan2.2_14b_lowonly_sft_aligned_5000x56"
+      ],
+      "scope": "personal",
+      "owner": ""
+    }
+  ]
 }
