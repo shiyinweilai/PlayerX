@@ -24,39 +24,38 @@ void applyMacDarkAppearance() {
 //     macOS 默认会跟踪切换展开 —— 拦截掉，必须显式点击才展开。
 //  2) 「登录 / 评分人名字」点击直接弹信息面板，永不出现下拉。
 //
-// 判定原理（会话状态机，不依赖鼠标事件）：
+// 判定原理（跟踪会话状态机，不依赖鼠标事件）：
 //   实测菜单栏点击不经过本地/全局事件监听器（WindowServer 直发），
-//   NSMenuDidBeginTrackingNotification 也不为 Qt 原生菜单触发，
 //   唯一可靠 hook 点是 NSMenuDelegate 的 menuWillOpen:（渲染前）。
-//   · 没有任何菜单展开时的 willOpen → 必是显式点击 → 放行；
-//     （登录菜单：取消展开 + 弹信息面板，直达无下拉）
-//   · 已有菜单展开中的 willOpen → 必是悬停滑入 → cancelTracking 取消，
-//     整个跟踪会话结束，用户接下来点击目标菜单正常展开。
-//   菜单关闭（选项/Esc/点外）经 menuDidClose: 复位会话状态。
+//   点击 vs 悬停滑入的区分：二者都会先 didClose 旧菜单再 willOpen 新菜单
+//   （所以"某菜单是否打开着"区分不了），但悬停滑入发生在【同一次连续的
+//   菜单栏跟踪会话】内，而每次显式点击都会先结束旧会话、再开启新会话。
+//   主菜单栏（NSApp.mainMenu）的 NSMenuDidBegin/EndTrackingNotification
+//   正好标记会话边界（同步派发，保证时序）：
+//   · Begin/End → 复位"本会话已有菜单展开"标记；
+//   · willOpen 时标记为真 → 同会话内的再次展开 = 悬停滑入 → 取消；
+//   · 标记为假 → 新会话首次展开 = 显式点击 → 放行（登录菜单：取消+弹面板）。
+//   兜底：若系统版本不发主菜单栏跟踪通知（g_seenTrackingNotif 恒假），
+//   守卫退化为不拦截任何展开，保证点击功能不受新问题影响。
 //
-// 注意：守卫包装 Qt 原有的 NSMenuDelegate（若有），menuWillOpen/menDidClose
-// 之外的调用（menuNeedsUpdate: 等动态项同步）全部转发，不影响菜单内容刷新。
+// 注意：守卫包装 Qt 原有的 NSMenuDelegate（QCocoaNSMenuDelegate），
+// menuWillOpen/menuDidClose 之外的调用（menuNeedsUpdate: 等动态项同步）
+// 全部转发，不影响菜单内容刷新。
 // Qt 重同步/重建菜单会重置 delegate，故用 1s 定时器 + 激活通知自愈重挂。
-//
 // 子菜单（如 设置 ▸ 布局）不挂守卫，照常悬停展开。
-// 已知边角：一个菜单展开时点击另一个菜单，若系统先 willOpen 新菜单再
-// didClose 旧菜单，这次点击会被当成滑入取消（再点一次即可）；
-// 键盘菜单导航的左右方向键切换同理会被拦一次。
+// 已知边角：键盘菜单导航的左右方向键切换在同一会话内，会被拦一次。
 
 static void (*g_loginMenuFn)(void*) = nullptr;
 static void *g_loginMenuCtx = nullptr;
 static NSTimeInterval g_lastLoginFire = 0;   // 上次信息面板触发时刻（去重用）
-static BOOL g_menuSessionOpen = NO;          // 是否有一级菜单正在展开/跟踪
-
-// ── 临时诊断日志（排查菜单栏拦截链路，定位后删除）──
-#define PXMLOG(fmt, ...) fprintf(stderr, "[PXMenu] " fmt "\n", ##__VA_ARGS__)
+static BOOL g_trackingMenuOpened = NO;       // 本次跟踪会话内是否已展开过菜单
+static BOOL g_seenTrackingNotif = NO;        // 是否收到过主菜单栏跟踪通知（兜底用）
 
 // 触发登录信息面板（0.5s 内去重）
 static void px_fireLoginDialog() {
     NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
     if (now - g_lastLoginFire < 0.5) return;
     g_lastLoginFire = now;
-    PXMLOG("fireLoginDialog → 调 QML 打开面板");
     if (g_loginMenuFn) g_loginMenuFn(g_loginMenuCtx);
 }
 
@@ -79,31 +78,26 @@ static BOOL px_isLoginMenu(NSMenu *menu, NSInteger index) {
 
 @implementation PXTopMenuGuard
 - (void)menuWillOpen:(NSMenu *)menu {
+    // 同会话内的再次展开 = 悬停滑入（未收到主菜单栏跟踪通知时该判定停用，
+    // 守卫退化为全放行，确保点击功能不受影响）
+    const BOOL hoverSwitch = g_seenTrackingNotif && g_trackingMenuOpened;
     if (self.isLogin) {
-        // 登录：任何情况都不展开下拉；仅"无菜单展开中的点击"才弹面板
-        PXMLOG("willOpen LOGIN title=%s session=%d → cancel%s",
-               [menu.title UTF8String], g_menuSessionOpen,
-               g_menuSessionOpen ? "（悬停滑入，不弹面板）" : "（点击，弹面板）");
+        // 登录：任何情况都不展开下拉；仅"新会话首次展开（点击）"才弹面板
         [menu cancelTrackingWithoutAnimation];
-        if (!g_menuSessionOpen) px_fireLoginDialog();
-        g_menuSessionOpen = NO;   // 拦截即结束本次跟踪会话
+        if (!hoverSwitch) px_fireLoginDialog();
         return;
     }
-    if (g_menuSessionOpen) {
-        // 已有菜单展开时的再次展开 = 悬停滑入 → 禁止（必须点击）
-        PXMLOG("willOpen title=%s session=1 → cancel（悬停滑入）", [menu.title UTF8String]);
+    if (hoverSwitch) {
         [menu cancelTrackingWithoutAnimation];
-        g_menuSessionOpen = NO;
         return;
     }
-    PXMLOG("willOpen title=%s session=0 → 放行（点击）", [menu.title UTF8String]);
-    g_menuSessionOpen = YES;
+    g_trackingMenuOpened = YES;
     if ([self.orig respondsToSelector:@selector(menuWillOpen:)])
         [self.orig menuWillOpen:menu];
 }
 - (void)menuDidClose:(NSMenu *)menu {
-    PXMLOG("didClose title=%s → session=0", [menu.title UTF8String]);
-    g_menuSessionOpen = NO;
+    // 注意：此处【不】复位 g_trackingMenuOpened —— 悬停滑入与点击切换
+    // 都会先 didClose 旧菜单，复位由主菜单栏 End/Begin 跟踪通知负责。
     if ([self.orig respondsToSelector:@selector(menuDidClose:)])
         [self.orig menuDidClose:menu];
 }
@@ -130,9 +124,6 @@ static void px_installGuards() {
         gd.isLogin = px_isLoginMenu(sub, (NSInteger)i);
         gd.orig = sub.delegate;   // 保留 Qt 原 delegate 以便转发
         sub.delegate = gd;
-        PXMLOG("guard 挂载: [%lu] title=%s isLogin=%d orig=%s",
-               (unsigned long)i, [sub.title UTF8String], gd.isLogin,
-               gd.orig ? [NSStringFromClass([gd.orig class]) UTF8String] : "nil");
     }
 }
 
@@ -151,5 +142,28 @@ void installLoginMenuSuppressor(void* ctx, void(*fn)(void*)) {
         [NSTimer scheduledTimerWithTimeInterval:1.0
                                        repeats:YES
                                          block:^(NSTimer *t) { px_installGuards(); }];
+
+        // 主菜单栏跟踪会话边界：Begin/End 都复位"本会话已有菜单展开"标记。
+        // queue:nil = 同步派发，保证通知与 willOpen/didClose 的相对时序不变。
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSMenuDidBeginTrackingNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification *note) {
+            if (note.object == [NSApp mainMenu]) {
+                g_seenTrackingNotif = YES;
+                g_trackingMenuOpened = NO;
+            }
+        }];
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSMenuDidEndTrackingNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification *note) {
+            if (note.object == [NSApp mainMenu]) {
+                g_seenTrackingNotif = YES;
+                g_trackingMenuOpened = NO;
+            }
+        }];
     });
 }
