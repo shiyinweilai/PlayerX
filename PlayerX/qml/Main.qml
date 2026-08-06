@@ -440,21 +440,27 @@ ApplicationWindow {
             topPadding: 0
             bottomPadding: 0
 
-            // 登录项特判：点击直接弹登录/个人信息对话框，不展开下拉菜单；
-            // 再次点击则关闭面板（切换语义）；
-            // 其余菜单保持默认的展开/收起行为（覆盖 onClicked 后需手动实现）。
+            // 【禁止悬停切换下拉】Qt 的 MenuBar 内部连接了
+            // hoveredChanged → onItemHovered：一旦有菜单展开，鼠标滑过相邻项
+            // 就会自动切换下拉。把 hoverEnabled 关掉后该链路失效，
+            // 展开/收起/切换完全由点击驱动（C++ triggered → onItemTriggered）。
+            // 视觉 hover 反馈由下方自有 HoverHandler 提供，不受影响。
+            hoverEnabled: false
+            HoverHandler { id: mbHover }
+
+            // 登录项特判：点击直接弹登录/个人信息对话框（其下拉在 loginMenu 的
+            // aboutToShow 中被即时收起，永不展示）。
+            // 其余菜单【不要】手动 toggle：C++ MenuBar 已连接
+            // triggered → onItemTriggered 负责展开/收起；QML 再手动 open/close
+            // 会双重触发，表现为"点击后菜单立即缩回去"（Windows 实测）。
             onClicked: {
-                if (mbItem.menu === loginMenu) {
+                if (mbItem.menu === loginMenu)
                     root._toggleLoginDialog()
-                } else if (mbItem.menu) {
-                    if (mbItem.menu.visible) mbItem.menu.close()
-                    else mbItem.menu.open()
-                }
             }
 
             contentItem: Text {
                 text: mbItem.text
-                color: mbItem.highlighted || mbItem.hovered ? "#ffffff" : "#cfcfd2"
+                color: mbItem.highlighted || mbHover.hovered ? "#ffffff" : "#cfcfd2"
                 font.pixelSize: 12
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
@@ -465,9 +471,10 @@ ApplicationWindow {
 
             background: Rectangle {
                 implicitHeight: 26
-                // highlighted = 当前 Menu 已展开；hovered = 鼠标悬停
+                // highlighted = 当前 Menu 已展开；mbHover.hovered = 鼠标悬停
+                //（hoverEnabled 已关闭，视觉悬停改走自有 HoverHandler）
                 color: mbItem.highlighted ? "#3a3a45"
-                       : mbItem.hovered   ? "#2a2a32"
+                       : mbHover.hovered  ? "#2a2a32"
                                           : "transparent"
                 radius: 3
             }
@@ -762,6 +769,11 @@ ApplicationWindow {
         DarkMenu {
             id: loginMenu
             title: root._loggedIn ? Rating.currentUser : qsTr("登录")
+            // Windows/Linux（QML 菜单）：C++ MenuBar 点击菜单项时会无条件 popup
+            // 本菜单，这里在 aboutToShow 阶段立即收起 → 永不出现下拉，
+            // 与 macOS 原生 NSMenuDelegate cancelTracking 拦截同语义。
+            // aboutToShow 于弹窗实际显示前发出，此时收起不会产生可见闪烁。
+            onAboutToShow: close()
             DarkMenuItem {
                 text: root._loggedIn ? qsTr("个人信息…") : qsTr("登录…")
                 onTriggered: root._toggleLoginDialog()
