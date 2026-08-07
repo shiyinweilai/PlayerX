@@ -1,0 +1,16 @@
+﻿updated_at,rater,folder,file_name,stars,slide_type,checklist,tag,mode
+2026-08-07 12:05:25,rbyang,subj/g1/A,4.mp4,4,multi_总分,person_issue,subj,test
+2026-08-07 12:05:27,rbyang,subj/g1/B,4.mp4,4,multi_总分,no_issue,subj,test
+2026-08-07 12:05:29,rbyang,subj/g1/C,4.mp4,5,multi_总分,person_issue,subj,test
+2026-08-07 12:05:33,rbyang,subj/g1/A,6.mp4,4,multi_总分,no_issue,subj,test
+2026-08-07 12:05:36,rbyang,subj/g1/B,6.mp4,5,multi_总分,no_issue,subj,test
+2026-08-07 12:05:38,rbyang,subj/g1/C,6.mp4,3,multi_总分,"product_issue,physics_issue",subj,test
+2026-08-07 12:05:47,rbyang,subj/g1/A,7.mp4,4,multi_总分,no_issue,subj,test
+2026-08-07 12:05:44,rbyang,subj/g1/B,7.mp4,2,multi_总分,"person_issue,product_issue",subj,test
+2026-08-07 12:05:51,rbyang,subj/g1/C,7.mp4,3,multi_总分,no_issue,subj,test
+2026-08-07 12:05:57,rbyang,subj/g1/A,8.mp4,4,multi_总分,no_issue,subj,test
+2026-08-07 12:05:59,rbyang,subj/g1/B,8.mp4,4,multi_总分,person_issue,subj,test
+2026-08-07 12:06:01,rbyang,subj/g1/C,8.mp4,4,multi_总分,person_issue,subj,test
+2026-08-07 12:06:06,rbyang,subj/g1/A,9.mp4,3,multi_总分,person_issue,subj,test
+2026-08-07 12:06:08,rbyang,subj/g1/B,9.mp4,4,multi_总分,no_issue,subj,test
+2026-08-07 12:06:10,rbyang,subj/g1/C,9.mp4,4,multi_总分,product_issue,subj,test

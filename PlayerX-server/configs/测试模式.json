@@ -1,6 +1,6 @@
 {
   "type": "测试模式",
-  "tag": "test",
+  "tag": "subj",
   "task": "测试任务",
   "scale": "1-5 Likert 整数",
   "dimensions": [
@@ -65,12 +65,13 @@
     }
   ],
   "testSource": {
-    "url": "/testsrc/test.zip",
+    "url": "/testsrc/subj.zip",
     "workDir": "~/Downloads",
-    "rootDir": "test_auto2",
+    "rootDir": "subj",
     "laneDirs": [
       "A",
-      "B"
+      "B",
+      "C"
     ],
     "promptCsv": "prompt.csv",
     "referenceDirs": [
@@ -83,13 +84,29 @@
       "/Users/rbyang/Downloads/src/wan2.2_14b_highonly_sft_aligned_5000x56",
       "/Users/rbyang/Downloads/src/wan2.2_14b_lowonly_sft_aligned_5000x56"
     ],
-    "n_groups": 5,
+    "n_groups": 2,
     "seed": 42,
     "blind": true,
     "group_mode": "fresh",
+    "samples": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "companions": {
+      "first_frames_dir": "/Users/rbyang/Downloads/first_frames",
+      "prompt_csv": "/Users/rbyang/Downloads/prompt.csv"
+    },
     "sync_to_testsrc": true,
-    "tag": "test",
-    "dst_dir": "test",
-    "map_csv": "map/map_test.csv"
+    "tag": "subj",
+    "dst_dir": "subj",
+    "map_csv": "map/map_subj.csv"
   }
 }

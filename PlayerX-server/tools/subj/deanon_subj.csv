@@ -1,0 +1,16 @@
+updated_at,rater,folder,file_name,stars,slide_type,checklist,tag,mode,group,model,eval_mode
+2026-08-07 12:05:25,rbyang,A,4.mp4,4,multi_总分,person_issue,subj,test,g1,wan2.2_14b_highonly_sft_aligned_5000x56,blind
+2026-08-07 12:05:27,rbyang,B,4.mp4,4,multi_总分,no_issue,subj,test,g1,wan2.2_14b_lowonly_sft_aligned_5000x56,blind
+2026-08-07 12:05:29,rbyang,C,4.mp4,5,multi_总分,person_issue,subj,test,g1,wan2.2_14b_gptc_lora6000x8,blind
+2026-08-07 12:05:33,rbyang,A,6.mp4,4,multi_总分,no_issue,subj,test,g1,wan2.2_14b_gptc_lora6000x8,blind
+2026-08-07 12:05:36,rbyang,B,6.mp4,5,multi_总分,no_issue,subj,test,g1,wan2.2_14b_highonly_sft_aligned_5000x56,blind
+2026-08-07 12:05:38,rbyang,C,6.mp4,3,multi_总分,"product_issue,physics_issue",subj,test,g1,wan2.2_14b_lowonly_sft_aligned_5000x56,blind
+2026-08-07 12:05:47,rbyang,A,7.mp4,4,multi_总分,no_issue,subj,test,g1,wan2.2_14b_lowonly_sft_aligned_5000x56,blind
+2026-08-07 12:05:44,rbyang,B,7.mp4,2,multi_总分,"person_issue,product_issue",subj,test,g1,wan2.2_14b_highonly_sft_aligned_5000x56,blind
+2026-08-07 12:05:51,rbyang,C,7.mp4,3,multi_总分,no_issue,subj,test,g1,wan2.2_14b_gptc_lora6000x8,blind
+2026-08-07 12:05:57,rbyang,A,8.mp4,4,multi_总分,no_issue,subj,test,g1,wan2.2_14b_lowonly_sft_aligned_5000x56,blind
+2026-08-07 12:05:59,rbyang,B,8.mp4,4,multi_总分,person_issue,subj,test,g1,wan2.2_14b_highonly_sft_aligned_5000x56,blind
+2026-08-07 12:06:01,rbyang,C,8.mp4,4,multi_总分,person_issue,subj,test,g1,wan2.2_14b_gptc_lora6000x8,blind
+2026-08-07 12:06:06,rbyang,A,9.mp4,3,multi_总分,person_issue,subj,test,g1,wan2.2_14b_highonly_sft_aligned_5000x56,blind
+2026-08-07 12:06:08,rbyang,B,9.mp4,4,multi_总分,no_issue,subj,test,g1,wan2.2_14b_gptc_lora6000x8,blind
+2026-08-07 12:06:10,rbyang,C,9.mp4,4,multi_总分,product_issue,subj,test,g1,wan2.2_14b_lowonly_sft_aligned_5000x56,blind

@@ -533,9 +533,10 @@ function cmdRank(cfg) {
         }
     }
 
-    // 写 CSV（兼容 Python 版输出格式）
-    const rankCsv = path.join(dstDir, 'model_ranking.csv');
-    const pairCsv = path.join(dstDir, 'pairwise_significance.csv');
+    // 写 CSV（兼容 Python 版输出格式）—— 文件名用 tag 区分
+    const rankTag = cfg.tag || 'selected';
+    const rankCsv = path.join(dstDir, `model_ranking_${rankTag}.csv`);
+    const pairCsv = path.join(dstDir, `pairwise_significance_${rankTag}.csv`);
     fs.mkdirSync(dstDir, { recursive: true });
 
     const rankHeader = '模型,样本数,均值,CI95下,CI95上,BT强度,BT_Elo,BT排名';
@@ -570,40 +571,142 @@ function resolveSamples(cfg) {
 // ─────────────────────────────────────────────────────────────────────
 
 function handle(req, res) {
-    const { names, config, action } = req.body || {};
-    console.log('[analyze] 收到请求: action=%s, names=%d, config=%j', action, (names || []).length, config);
-    if (!Array.isArray(names) || names.length === 0) {
-        return res.status(400).json({ ok: false, error: 'missing names array' });
-    }
+    const { names, config, action, tag } = req.body || {};
+    console.log('[analyze] 收到请求: action=%s, tag=%s, names=%d, config=%j', action, tag, (names || []).length, config);
+
     const act = action || 'rank';
     if (!['analyze', 'verify', 'rank'].includes(act)) {
         return res.status(400).json({ ok: false, error: 'invalid action, must be analyze/verify/rank' });
+    }
+
+    //── 按 tag 自动搜集评分文件 + 查找 map CSV ──
+    let resolvedNames = names;
+    let autoMapCsv = null;
+    let autoConfig = null;  // 从 configs/ 目录自动定位到的配置
+
+    if (tag && (!Array.isArray(names) || names.length === 0)) {
+        const { UPLOAD_DIR, TASKS_DIR } = require('../lib/paths');
+
+        // 自动联动配置文件：扫描 configs/ 目录，找到 build.tag === tag 的配置
+    const CONFIGS_DIR = path.join(path.dirname(path.dirname(__dirname)), 'configs');
+        if (fs.existsSync(CONFIGS_DIR)) {
+         const configFiles = fs.readdirSync(CONFIGS_DIR).filter(f => f.endsWith('.json'));
+for (const cf of configFiles) {
+    try {
+          const cfgData = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, cf), 'utf8'));
+  if (cfgData.build && cfgData.build.tag === tag) {
+autoConfig = cfgData;
+             console.log('[analyze] 自动联动配置文件: %s (build.tag=%s)', cf, tag);
+     break;
+        }
+        } catch(e) { /* skip invalid json */ }
+    }
+        }
+
+   //扫描 uploads/ 下所有该 tag 的评分 CSV
+        const allFiles = fs.readdirSync(UPLOAD_DIR).filter(f => f.endsWith('.csv'));
+        resolvedNames = allFiles.filter(f => {
+            // 文件名格式：user__tag__mode__ts.csv（双下划线分割）
+            const parts = f.split('__');
+            return parts.length >= 2 && parts[1] === tag;
+        });
+        if (resolvedNames.length === 0) {
+            return res.status(400).json({ ok: false, error: `没有找到 tag="${tag}" 的评分文件` });
+        }
+        console.log('[analyze] tag=%s 自动匹配到 %d 个评分文件', tag, resolvedNames.length);
+        // 自动查找 map CSV：tasks/map/map_{tag}.csv 或 tasks/{tag}/map.csv
+        const mapCandidates = [
+            path.join(TASKS_DIR, 'map', `map_${tag}.csv`),
+            path.join(TASKS_DIR, tag, 'map.csv'),
+            path.join(TASKS_DIR, tag, `map_${tag}.csv`),
+        ];
+        for (const c of mapCandidates) {
+            if (fs.existsSync(c)) { autoMapCsv = c; break; }
+        }
+        if (!autoMapCsv) {
+            //兜底：扫描 tasks/map/ 下含该 tag 的 map 文件
+            const mapDir = path.join(TASKS_DIR, 'map');
+            if (fs.existsSync(mapDir)) {
+                const maps = fs.readdirSync(mapDir).filter(f => f.includes(tag) && f.startsWith('map'));
+                if (maps.length > 0) autoMapCsv = path.join(mapDir, maps[0]);
+            }
+        }
+        console.log('[analyze] 自动定位 map CSV: %s', autoMapCsv || '未找到');
+    }
+
+    if (!Array.isArray(resolvedNames) || resolvedNames.length === 0) {
+        return res.status(400).json({ ok: false, error: 'missing names array（或 tag 未匹配到文件）' });
     }
 
     let tmpCsv = null;
     try {
         // 1. 合并选中文件 → 临时 CSV
         console.log('[analyze] 步骤1: 合并选中文件...');
-        tmpCsv = mergeSelectedToTemp(names);
+        tmpCsv = mergeSelectedToTemp(resolvedNames);
         console.log('[analyze] 合并完成: %s (%d bytes)', tmpCsv, fs.statSync(tmpCsv).size);
 
-        // 2. 构建配置（解析相对路径 + 自动检测 tag）
+      // 2. 构建配置（解析相对路径 + 自动检测 tag）
         console.log('[analyze] 步骤2: 构建配置...');
         const cfg = Object.assign({}, config || {});
-        cfg.raw_csv = tmpCsv;
-      // map_csv 若为相对路径，从 tasks 目录解析
+  cfg.raw_csv = tmpCsv;
+        if (tag) cfg.tag = tag;
+        // map_csv 优先用 auto检测到的
+   if (autoMapCsv && !cfg.map_csv) cfg.map_csv = autoMapCsv;
+
+    // 合并自动联动的配置文件中的 build 字段（提供 samples/exclude_samples/n_groups 等）
+        if (autoConfig && autoConfig.build) {
+          const bc = autoConfig.build;
+        if (bc.samples && !cfg.samples) cfg.samples = bc.samples;
+  if (bc.exclude_samples && !cfg.exclude_samples) cfg.exclude_samples = bc.exclude_samples;
+  if (bc.n_groups && !cfg.n_groups) cfg.n_groups = bc.n_groups;
+        if (bc.models && !cfg.models) cfg.models = bc.models;
+            if (bc.map_csv && !cfg.map_csv) cfg.map_csv = bc.map_csv;
+     if (bc.dst_dir && !cfg.dst_dir) cfg.dst_dir = bc.dst_dir;
+            if (bc.seed != null && cfg.seed == null) cfg.seed = bc.seed;
+            console.log('[analyze] 已合并 build 配置: samples=%j, exclude=%j, n_groups=%s',
+     cfg.samples, cfg.exclude_samples, cfg.n_groups);
+      }
+   // map_csv 若为相对路径，从 tasks 目录解析
     const { TASKS_DIR } = require('../lib/paths');
         // dst_dir 默认放到 tasks/map/ 目录下（反解码文件统一存放）
         if (!cfg.dst_dir) cfg.dst_dir = path.join(TASKS_DIR, 'map');
-        if (!cfg.deanon_csv) cfg.deanon_csv = 'playerx_selected_deanon.csv';
+        // 所有产物文件名都跟 tag 绑定，方便区分校验
+   if (!cfg.deanon_csv) cfg.deanon_csv = `deanon_${tag || 'selected'}.csv`;
       if (cfg.map_csv && !path.isAbsolute(cfg.map_csv)) {
             const candidate = path.join(TASKS_DIR, cfg.map_csv);
             console.log('[analyze] map_csv 相对路径解析: %s → %s (存在: %s)', cfg.map_csv, candidate, fs.existsSync(candidate));
   if (fs.existsSync(candidate)) cfg.map_csv = candidate;
         }
-        // tag 为空时不过滤（选中文件直接分析，不做 tag 匹配）
-        console.log('[analyze] 最终配置: %j', cfg);
+
+     // 将合并后的 CSV 拷贝一份到 tasks/map/ 以便校验（用 tag 命名）
+        const mergedDst = path.join(cfg.dst_dir, `merged_${tag || 'selected'}.csv`);
         fs.mkdirSync(cfg.dst_dir, { recursive: true });
+        fs.copyFileSync(tmpCsv, mergedDst);
+ console.log('[analyze] 合并 CSV 已保存到: %s', mergedDst);
+
+  console.log('[analyze] 最终配置: %j', cfg);
+
+      // 如果 cfg.models 缺失（独立分析面板不传 models），从 map CSV 自动推断：
+  // map CSV 表头含 A_source / B_source / C_source ...，列数即模型数，
+        // 取第一行数据的各 *_source 值作为 models 名称。
+   if (!cfg.models && cfg.map_csv && fs.existsSync(cfg.map_csv)) {
+     const mapLines = fs.readFileSync(cfg.map_csv, 'utf8').replace(/\r/g, '').split('\n');
+     const mapHeader = mapLines[0] || '';
+  const cols = mapHeader.split(',').map(c => c.trim()).filter(c => c.endsWith('_source'));
+if (cols.length > 0 && mapLines.length > 1) {
+     // 从第一行数据中提取模型名
+     const vals = mapLines[1].split(',').map(v => v.trim());
+ const headerArr = mapHeader.split(',').map(c => c.trim());
+        cfg.models = cols.map(c => {
+    const idx = headerArr.indexOf(c);
+      return idx >= 0 ? vals[idx] : c.replace('_source', '');
+       });
+       console.log('[analyze] 从 map CSV 自动推断 models: %j', cfg.models);
+   }
+    }
+        if (!cfg.models || cfg.models.length === 0) {
+      throw new Error('无法确定 models：请确保 map CSV 存在且包含 A_source/B_source 等列');
+        }
 
         // 3. 执行：rank 前自动先跑 analyze 生成 deanon CSV
         let data;
@@ -616,11 +719,15 @@ function handle(req, res) {
         } else if (act === 'rank') {
             // 先跑 analyze 生成 deanon CSV，再跑 rank
             console.log('[analyze] 步骤3: 先跑 analyze 生成 deanon CSV...');
-            cmdAnalyze(cfg);
+            const analyzeData = cmdAnalyze(cfg);
             console.log('[analyze] analyze 完成，执行 cmdRank...');
             data = cmdRank(cfg);
+            // 补充文件统计到返回数据
+            data.fileCount = resolvedNames.length;
+            data.filtered = analyzeData.filtered;
+            data.deduped = analyzeData.deduped;
         }
-        console.log('[analyze] 执行完成: %j', data);
+        console.log('[analyze] 执行完成');
 
         // 4. 清理临时文件
         try { fs.unlinkSync(tmpCsv); } catch (_) {}

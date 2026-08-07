@@ -422,6 +422,7 @@
         files:    { section: () => $('pageFiles'),hash: '#files' },
         tasks:    { section: () => dimPage,         hash: '#tasks' },
         models:   { section: () => $('pageModels'),   hash: '#models' },
+        analyze:  { section: () => $('pageAnalyze'),  hash: '#analyze' },
         archive:  { section: () => $('pageArchive'),  hash: '#archive' },
      settings: { section: () => $('pageSettings'), hash: '#settings' },
     };
@@ -1226,9 +1227,45 @@ panel.style.display = 'none';
         }
     }
 
+    // ── 自定义确认弹窗（替代 window.confirm）──
+    function pxConfirm(msg, { title = '提示', confirmText = '确定', cancelText = '取消', danger = false } = {}) {
+        return new Promise(resolve => {
+            const overlay = document.createElement('div');
+            Object.assign(overlay.style, {
+                position:'fixed',top:'0',left:'0',right:'0',bottom:'0',zIndex:'10000',
+                background:'rgba(0,0,0,.35)',backdropFilter:'blur(2px)',
+                display:'flex',alignItems:'center',justifyContent:'center'
+            });
+            const box = document.createElement('div');
+            Object.assign(box.style, {
+                background:'#fff',borderRadius:'14px',padding:'28px 32px 22px',
+                minWidth:'340px',maxWidth:'440px',boxShadow:'0 8px 40px rgba(0,0,0,.18)',
+                animation:'none'
+            });
+            const okColor = danger ? '#ff4d4f' : '#4a9eff';
+            box.innerHTML = `
+                <div style="font-size:16px;font-weight:700;margin-bottom:10px;color:#222">${escHtml(title)}</div>
+                <div style="font-size:14px;color:#555;line-height:1.6;margin-bottom:22px">${escHtml(msg)}</div>
+                <div style="display:flex;justify-content:flex-end;gap:10px">
+                    <button class="_pxCfmC" style="padding:8px 20px;border-radius:8px;font-size:14px;border:none;cursor:pointer;font-weight:500;background:#f0f0f0;color:#555">${escHtml(cancelText)}</button>
+                    <button class="_pxCfmO" style="padding:8px 20px;border-radius:8px;font-size:14px;border:none;cursor:pointer;font-weight:500;background:${okColor};color:#fff">${escHtml(confirmText)}</button>
+                </div>`;
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+            const close = (val) => { overlay.remove(); document.removeEventListener('keydown', escHandler); resolve(val); };
+            box.querySelector('._pxCfmO').addEventListener('click', () => close(true));
+            box.querySelector('._pxCfmC').addEventListener('click', () => close(false));
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+            const escHandler = (e) => { if (e.key === 'Escape') close(false); };
+            document.addEventListener('keydown', escHandler);
+            box.querySelector('._pxCfmO').focus();
+        });
+    }
+
     // ── 删除配置 ──
     async function deleteConfig(name) {
-        if (!confirm(`确定删除配置「${name}」？此操作不可恢复。`)) return;
+        const yes = await pxConfirm(`确定删除配置「${name}」？此操作不可恢复。`, { title: '删除配置', confirmText: '删除', danger: true });
+        if (!yes) return;
         try {
             const r = await adminFetch(`/api/configs/${encodeURIComponent(name)}`, { method: 'DELETE' });
             if (r.status === 401) return;
@@ -3763,21 +3800,12 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         const names = [...state.selected];
         if (names.length === 0) return;
         if (!guardWrite()) return;
-        const def = (() => {
+        // 直接用当天日期作为归档文件夹名（不弹窗）
+        const f = (() => {
             const d = new Date();
             const pad = (x) => String(x).padStart(2, '0');
             return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
         })();
-        const folder = window.prompt(
-            `归档选中的 ${names.length} 份文件到哪个文件夹？\n\n仅允许中文 / 字母 / 数字 / . _ - 空格（1~64 位）。`,
-            def,
-        );
-        if (folder == null) return; // 用户取消
-        const f = folder.trim();
-        if (!/^[A-Za-z0-9._\-\u4e00-\u9fa5 ]{1,64}$/.test(f) || f.startsWith('.')) {
-            showToast('归档文件夹名不合法', 'err');
-            return;
-        }
         archiveSelBtn.disabled = true;
         try {
             setStatus('warn', '归档中…');
@@ -4650,6 +4678,99 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             switchModule('archive', true);
         } else if (h === '#models') {
             switchModule('models', true);
+        } else if (h === '#analyze') {
+            switchModule('analyze', true);
         }
+    })();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 分析结果模块 —— 独立面板，按 tag 自动查找 map CSV + 评分文件 → 反解排名
+    // ═══════════════════════════════════════════════════════════════════════
+    (function initAnalyzeModule() {
+        const tagSel    = $('analyzeTagSel');
+        const runBtn    = $('analyzeRunBtn');
+        const statusEl  = $('analyzeStatus');
+        const resultDiv = $('analyzeResult');
+        const emptyDiv  = $('analyzeEmpty');
+        if (!tagSel || !runBtn) return;
+
+        // ── 加载可用 tag（从 uploads/ 目录中扫描所有独立 tag）──
+        async function loadTags() {
+  try {
+      const r = await fetch('/api/list');
+    if (!r.ok) return;
+        const j = await r.json();
+         const tags = new Set();
+       (j.items || []).forEach(f => { if (f.tag) tags.add(f.tag); });
+    tagSel.innerHTML = '';
+                [...tags].sort().forEach(t => {
+           const o = document.createElement('option');
+                o.value = t; o.textContent = t;
+          tagSel.appendChild(o);
+       });
+            } catch(e) { console.warn('loadTags:', e); }
+        }
+
+        // 面板激活时刷新 tag 列表
+        const obs = new MutationObserver(() => {
+            const sec = $('pageAnalyze');
+            if (sec && !sec.hidden) loadTags();
+        });
+        const sec = $('pageAnalyze');
+        if (sec) obs.observe(sec, { attributes: true, attributeFilter: ['hidden'] });
+
+        // ── 执行分析 ──
+        runBtn.addEventListener('click', async () => {
+            const tag = tagSel.value;
+            if (!tag) { showToast('请选择 Tag', 'warn'); return; }
+            statusEl.textContent = '分析中…';
+            runBtn.disabled = true;
+            resultDiv.style.display = 'none';
+            emptyDiv.style.display = 'none';
+            try {
+                const r = await adminFetch('/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tag, action: 'rank' })
+                });
+                const j = await r.json();
+                if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
+                renderAnalyzeResult(j.data, tag);
+                statusEl.textContent = '✅ 完成';
+            } catch(e) {
+                showToast('❌ ' + e.message, 'err');
+                statusEl.textContent = '❌ ' + e.message;
+                emptyDiv.style.display = '';
+            } finally { runBtn.disabled = false; }
+        });
+
+        // ── 渲染结果 ──
+        function renderAnalyzeResult(data, tag) {
+            resultDiv.style.display = '';
+    emptyDiv.style.display = 'none';
+      //统计卡片
+     $('azStatFiles').textContent  = data.fileCount || '-';
+         $('azStatRows').textContent   = data.filtered || data.raw || '-';
+ $('azStatDedup').textContent  = data.deduped   || '-';
+   $('azStatGroups').textContent = data.completeGroups || '-';
+            // 排名表
+        const rankTb = document.querySelector('#azRankTable tbody');
+      rankTb.innerHTML = '';
+            (data.models || []).forEach((m, i) => {
+   const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${i+1}</td><td><b>${esc(m.name || m.model || '')}</b></td><td>${m.strength != null ? m.strength.toFixed(4) : (m.bt != null ? m.bt.toFixed(3) : '-')}</td><td>${m.elo != null ? Math.round(m.elo) : '-'}</td><td>${m.mean != null ? m.mean.toFixed(2) : (m.winRate != null ? (m.winRate*100).toFixed(1)+'%' : '-')}</td>`;
+                rankTb.appendChild(tr);
+ });
+            // 成对检验表
+            const pairTb = document.querySelector('#azPairTable tbody');
+ pairTb.innerHTML = '';
+      (data.pairs || []).forEach(p => {
+        const tr = document.createElement('tr');
+          const sig = p.significant === '**' ? '⭐⭐' : p.significant === '*' ? '⭐' : '';
+          tr.innerHTML = `<td>${esc(p.modelA || p.a || '')}</td><td>${esc(p.modelB || p.b || '')}</td><td>${p.aWins}</td><td>${p.bWins}</td><td>${p.signP != null ? p.signP.toFixed(4) : (p.p != null ? p.p.toFixed(4) : '-')}</td><td>${sig || (p.significant || '')}</td>`;
+     pairTb.appendChild(tr);
+ });
+    }
+        function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     })();
 })();
