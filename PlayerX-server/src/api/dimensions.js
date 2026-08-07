@@ -55,10 +55,16 @@ function getActiveBindings() {
     return {};
 }
 
-/** 写入所有模式绑定 */
+/** 写入所有模式绑定（保留附加字段，如 order） */
 function setActiveBindings(bindings) {
     ensureConfigsDir();
-    fs.writeFileSync(ACTIVE_CONFIG_FILE, JSON.stringify({ bindings }, null, 2), 'utf8');
+    let prev = {};
+    try {
+        if (fs.existsSync(ACTIVE_CONFIG_FILE)) {
+            prev = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8')) || {};
+        }
+    } catch (_) {}
+    fs.writeFileSync(ACTIVE_CONFIG_FILE, JSON.stringify({ ...prev, bindings }, null, 2), 'utf8');
 }
 
 /** 兼容旧接口：获取 multi_dim 模式绑定的第一个配置名（不含 .json），不存在则返回 null */

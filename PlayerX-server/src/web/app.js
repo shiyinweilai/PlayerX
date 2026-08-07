@@ -987,7 +987,7 @@
             item.addEventListener('dragleave', () => {
                 item.classList.remove('dim-sidebar-item-drag-over-top', 'dim-sidebar-item-drag-over-bottom');
             });
-            item.addEventListener('drop', e => {
+            item.addEventListener('drop', async e => {
                 e.preventDefault();
                 e.stopPropagation();
                 const targetName = item.dataset.name;
@@ -1007,12 +1007,17 @@
                 }
                 // 读取新顺序并保存
                 const newOrder = Array.from(dimSidebarList.querySelectorAll('.dim-sidebar-item')).map(el => el.dataset.name);
-                fetch('/api/configs-order', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ order: newOrder }),
-                    credentials: 'include',
-                }).catch(() => { });
+                try {
+                    const r = await adminFetch('/api/configs-order', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order: newOrder }),
+                    });
+                    const j = await r.json().catch(() => ({}));
+                    if (!r.ok || !j.ok) throw new Error(j.error || '保存排序失败');
+                } catch (err) {
+                    showToast('❌ 排序保存失败：' + (err && err.message ? err.message : '网络错误'), 'err');
+                }
             });
         });
     }
