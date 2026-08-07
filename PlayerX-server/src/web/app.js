@@ -1262,16 +1262,13 @@
         });
     }
 
-    // ── 删除配置 ──
+    // ── 删除配置（无确认弹窗）──
     async function deleteConfig(name) {
-        const yes = await pxConfirm(`确定删除配置「${name}」？此操作不可恢复。`, { title: '删除配置', confirmText: '删除', danger: true });
-        if (!yes) return;
         try {
             const r = await adminFetch(`/api/configs/${encodeURIComponent(name)}`, { method: 'DELETE' });
             if (r.status === 401) return;
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) { showToast('❌ ' + (j.error || '删除失败'), 'err'); return; }
-            showToast('✅ ' + j.message, 'ok');
             if (dimCurrentName === name) {
                 dimCurrentName = null;
                 dimRawData = null;

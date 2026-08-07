@@ -201,13 +201,10 @@
             el.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const name = el.dataset.del;
-                const ok = await PX().confirmDialog('删除配置', `确定删除配置「${name}」？`, '🗑️');
-                if (!ok) return;
                 try {
                     const r = await adminFetch(`/api/configs/${encodeURIComponent(name)}`, { method: 'DELETE' });
                     const j = await r.json();
                     if (!j.ok) throw new Error(j.error);
-                    toast(`已删除「${name}」`, 'ok');
                     if (currentConfig === name) { currentConfig = null; $('tkCfgName').textContent = ''; }
                     await loadConfigList();
                 } catch (e2) { toast('删除失败: ' + e2.message, 'err'); }
