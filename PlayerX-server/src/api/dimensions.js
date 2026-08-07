@@ -34,6 +34,38 @@ const LEGACY_DIM_FILE = path.join(__dirname, '../../dimensions.json');
 // 激活配置记录文件（存在 configs/ 目录下）
 const ACTIVE_CONFIG_FILE = path.join(__dirname, '../../configs/_active.json');
 
+// 模式顺序与显示文案（用于根据绑定同步 json.type）
+const MODE_LABELS = {
+    multi_dim: '多维评分',
+    subjective: '主观评分',
+    quality: '质量比较',
+    quality_slide: '质量比较2',
+    test: '测试模式',
+};
+const MODE_ORDER = ['multi_dim', 'subjective', 'quality', 'quality_slide', 'test'];
+
+/** 绑定互斥化：同一个配置名只允许出现在一个模式下（按 MODE_ORDER 优先级保留） */
+function normalizeBindingsExclusive(bindings) {
+    const src = bindings && typeof bindings === 'object' ? bindings : {};
+    const out = {};
+    const occupied = new Set();
+    const modeSeq = [
+        ...MODE_ORDER,
+        ...Object.keys(src).filter(m => !MODE_ORDER.includes(m)),
+    ];
+    for (const mode of modeSeq) {
+        const names = Array.isArray(src[mode]) ? src[mode] : (src[mode] ? [src[mode]] : []);
+        const kept = [];
+        for (const name of names) {
+            if (!name || occupied.has(name)) continue;
+            occupied.add(name);
+            kept.push(name);
+        }
+        if (kept.length) out[mode] = kept;
+    }
+    return out;
+}
+
 /** 读取所有模式绑定 { mode -> configName[] }，不存在则返回 {} */
 function getActiveBindings() {
     try {
@@ -41,15 +73,15 @@ function getActiveBindings() {
             const obj = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8'));
             // 兼容旧格式 { name: '...' } → 自动迁移为 multi_dim 绑定
             if (obj.name && !obj.bindings) {
-                return { multi_dim: [obj.name] };
+                return normalizeBindingsExclusive({ multi_dim: [obj.name] });
             }
             const raw = obj.bindings || {};
-            // 兼容旧格式：字符串值 → 单元素数组
+            // 兼容旧格式：字符串值 → 单元素数组，并做互斥归一化
             const normalized = {};
             for (const [mode, val] of Object.entries(raw)) {
                 normalized[mode] = Array.isArray(val) ? val : [val];
             }
-            return normalized;
+            return normalizeBindingsExclusive(normalized);
         }
     } catch (_) {}
     return {};
@@ -72,6 +104,48 @@ function getActiveConfigName() {
     const b = getActiveBindings();
     const arr = b['multi_dim'];
     return (Array.isArray(arr) && arr.length > 0) ? arr[0] : null;
+}
+
+/** 根据绑定关系计算配置应有的 type（未绑定则待绑定） */
+function getTypeFromBindings(bindings, configName) {
+    for (const mode of MODE_ORDER) {
+        const names = bindings[mode];
+        if (Array.isArray(names) && names.includes(configName)) {
+            return MODE_LABELS[mode] || mode;
+        }
+    }
+    for (const [mode, names] of Object.entries(bindings || {})) {
+        if (Array.isArray(names) && names.includes(configName)) {
+            return MODE_LABELS[mode] || mode;
+        }
+    }
+    return '待绑定';
+}
+
+/** 将单个配置文件的 json.type 同步为绑定对应类型 */
+function syncConfigTypeByBindings(configName, bindings) {
+    const file = path.join(CONFIGS_DIR, configName + '.json');
+    if (!fs.existsSync(file)) return null;
+    try {
+        const obj = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const nextType = getTypeFromBindings(bindings, configName);
+        if (obj.type !== nextType) {
+            obj.type = nextType;
+            fs.writeFileSync(file, JSON.stringify(obj, null, 2), 'utf8');
+        }
+        return nextType;
+    } catch (_) {
+        return null;
+    }
+}
+
+/** 批量同步所有配置的 json.type */
+function syncAllConfigTypesByBindings(bindings) {
+    ensureConfigsDir();
+    const files = fs.readdirSync(CONFIGS_DIR).filter(f => f.endsWith('.json') && f !== '_active.json');
+    for (const f of files) {
+        syncConfigTypeByBindings(f.replace(/\.json$/, ''), bindings);
+    }
 }
 
 /** 确保 configs 目录存在，并迁移旧 dimensions.json */
@@ -118,6 +192,7 @@ function handleList(_req, res) {
     ensureConfigsDir();
     try {
         const bindings = getActiveBindings(); // { mode -> configName[] }
+        syncAllConfigTypesByBindings(bindings);
         // 反转：configName -> [mode, ...]
         const configModes = {};
         for (const [mode, names] of Object.entries(bindings)) {
@@ -139,10 +214,10 @@ function handleList(_req, res) {
             .filter(f => f.endsWith('.json') && f !== '_active.json')
             .map(f => {
                 const name = f.replace(/\.json$/, '');
-                let meta = { name, type: '', task: '', activeForModes: configModes[name] || [] };
+                let meta = { name, type: getTypeFromBindings(bindings, name), task: '', activeForModes: configModes[name] || [] };
                 try {
           const obj = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, f), 'utf8'));
-     meta.type = obj.type || '';
+     meta.type = obj.type || meta.type;
           meta.task = obj.task || '';
     meta.tag  = obj.tag  || '';
           // 返回 build 摘要供任务管理使用
@@ -208,25 +283,42 @@ function handleSetActive(req, res) {
     if (!fs.existsSync(file)) return res.status(404).json({ ok: false, error: '配置不存在' });
     try {
         const bindings = getActiveBindings(); // { mode -> configName[] }
-        const current = bindings[mode] || [];
-        const idx = current.indexOf(safed);
+
+        let prevMode = null;
+        for (const [m, names] of Object.entries(bindings)) {
+            if (Array.isArray(names) && names.includes(safed)) {
+                prevMode = m;
+                break;
+            }
+        }
+
         let action;
-        if (idx !== -1) {
-            // 已绑定 → 解绑（从数组中移除）
-            current.splice(idx, 1);
-            if (current.length === 0) delete bindings[mode];
-            else bindings[mode] = current;
+        if (prevMode === mode) {
+            // 点中当前模式：解绑
+            bindings[mode] = (bindings[mode] || []).filter(n => n !== safed);
+            if (!bindings[mode].length) delete bindings[mode];
             action = 'unbound';
         } else {
-            // 未绑定 → 追加到数组
-            bindings[mode] = [...current, safed];
-            action = 'bound';
+            // 互斥绑定：先从所有模式移除，再绑定到目标模式
+            for (const m of Object.keys(bindings)) {
+                const next = (bindings[m] || []).filter(n => n !== safed);
+                if (next.length) bindings[m] = next;
+                else delete bindings[m];
+            }
+            bindings[mode] = [...(bindings[mode] || []), safed];
+            action = prevMode ? 'rebound' : 'bound';
         }
-        setActiveBindings(bindings);
+
+        const finalBindings = normalizeBindingsExclusive(bindings);
+        setActiveBindings(finalBindings);
+        syncAllConfigTypesByBindings(finalBindings);
+
         const msg = action === 'unbound'
             ? `已解绑「${safed}」与模式「${mode}」`
-            : `已将「${safed}」绑定到模式「${mode}」（当前共 ${bindings[mode] ? bindings[mode].length : 0} 个）`;
-        res.json({ ok: true, action, message: msg, bindings });
+            : (action === 'rebound'
+                ? `已将「${safed}」从「${prevMode}」切换为「${mode}」`
+                : `已将「${safed}」绑定到模式「${mode}」（当前共 ${finalBindings[mode] ? finalBindings[mode].length : 0} 个）`);
+        res.json({ ok: true, action, message: msg, bindings: finalBindings, prevMode: prevMode || '' });
     } catch (e) {
         res.status(500).json({ ok: false, error: '设置失败：' + e.message });
     }
@@ -243,6 +335,8 @@ function handleGetOne(req, res) {
     const file = path.join(CONFIGS_DIR, name + '.json');
     if (!fs.existsSync(file)) return res.status(404).json({ ok: false, error: '配置不存在' });
     try {
+        const bindings = getActiveBindings();
+        syncConfigTypeByBindings(name, bindings);
         const raw = fs.readFileSync(file, 'utf8');
         JSON.parse(raw); // 验证合法性
         res.send(raw);
@@ -289,10 +383,12 @@ function handlePutOne(req, res) {
     }
 
     try {
+        const bindings = getActiveBindings();
+        parsed.type = getTypeFromBindings(bindings, name);
         fs.writeFileSync(path.join(CONFIGS_DIR, name + '.json'), JSON.stringify(parsed, null, 2), 'utf8');
         res.json({
             ok: true,
-            message: `已保存「${parsed.type || name}」，共 ${parsed.dimensions.length} 个维度`,
+            message: `已保存「${name}」，共 ${parsed.dimensions.length} 个维度`,
             name,
             type: parsed.type || '',
             task: parsed.task || '',
@@ -314,6 +410,22 @@ function handleDeleteOne(req, res) {
     if (!fs.existsSync(file)) return res.status(404).json({ ok: false, error: '配置不存在' });
     try {
         fs.unlinkSync(file);
+
+        const bindings = getActiveBindings();
+        let changed = false;
+        for (const [mode, names] of Object.entries(bindings)) {
+            const filtered = (Array.isArray(names) ? names : []).filter(n => n !== name);
+            if (filtered.length !== names.length) {
+                changed = true;
+                if (filtered.length === 0) delete bindings[mode];
+                else bindings[mode] = filtered;
+            }
+        }
+        if (changed) {
+            setActiveBindings(bindings);
+            syncAllConfigTypesByBindings(bindings);
+        }
+
         res.json({ ok: true, message: `已删除配置「${name}」` });
     } catch (e) {
         res.status(500).json({ ok: false, error: '删除失败：' + e.message });
@@ -345,6 +457,7 @@ function handleGet(req, res) {
         const activeFile = path.join(CONFIGS_DIR, activeName + '.json');
         if (fs.existsSync(activeFile)) {
             try {
+                syncConfigTypeByBindings(activeName, bindings);
                 const raw = fs.readFileSync(activeFile, 'utf8');
                 JSON.parse(raw);
                 return res.send(raw);

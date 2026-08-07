@@ -887,7 +887,7 @@
             <div class="dim-sidebar-item ${c.name === dimCurrentName ? 'is-active' : ''}${admin ? ' dim-sidebar-item-draggable' : ''}" data-name="${escHtml(c.name)}"${admin ? ' draggable="true"' : ''}>
                 <div class="dim-sidebar-item-main">
                     ${dragHandle}
-                    <span class="dim-sidebar-item-type" title="双击重命名">${escHtml(c.type || c.name)}</span>
+                    <span class="dim-sidebar-item-type" title="双击重命名配置名">${escHtml(c.name)}</span>
                     ${badgesHtml}
                 </div>
                 <div class="dim-sidebar-item-row2">
@@ -1094,31 +1094,13 @@
             dimActiveBindings = j.bindings || {};
             if (j.action === 'bound') {
                 showToast(`✅ 已将「${name}」绑定到「${modeLabel(mode)}」`, 'ok');
+            } else if (j.action === 'rebound') {
+                showToast(`✅ 已切换为「${modeLabel(mode)}」`, 'ok');
             } else {
                 showToast(`✅ 已解绑「${name}」与「${modeLabel(mode)}」`, 'ok');
             }
-            // 重新渲染侧边栏（不重新请求列表）
-            const items = dimSidebarList.querySelectorAll('.dim-sidebar-item');
-            items.forEach(el => {
-                const cName = el.dataset.name;
-                const main = el.querySelector('.dim-sidebar-item-main');
-                if (!main) return;
-                // 移除旧 badges
-                main.querySelectorAll('.dim-active-badge').forEach(b => b.remove());
-                // 重新生成 badges（兼容新格式数组和旧格式字符串）
-                const activeModes = MODE_ORDER.filter(m => {
-                    const v = dimActiveBindings[m];
-                    return Array.isArray(v) ? v.includes(cName) : v === cName;
-                });
-                activeModes.forEach(m => {
-                    const badge = document.createElement('span');
-                    badge.className = 'dim-active-badge';
-                    badge.dataset.mode = m;
-                    badge.title = `已绑定到模式：${modeLabel(m)}`;
-                    badge.textContent = modeLabel(m);
-                    main.appendChild(badge);
-                });
-            });
+            // 重新拉取列表：确保左侧评测类型（type）与绑定同步
+            await loadConfigList();
         } catch (e) {
             showToast('❌ 网络错误：' + e.message, 'err');
         }
@@ -1134,7 +1116,6 @@
             try { obj = JSON.parse(text); } catch (e) { throw new Error('JSON 解析失败'); }
             // 生成新名称：原名 + _copy（若已存在则加时间戳）
             const newName = name + '_copy_' + Date.now();
-            obj.type = (obj.type || name) + ' (副本)';
             const newRaw = JSON.stringify(obj, null, 2);
             const saveR = await adminFetch(`/api/configs/${encodeURIComponent(newName)}`, {
                 method: 'PUT',
@@ -1155,11 +1136,10 @@
     function startRenameConfig(itemEl, spanEl) {
         if (itemEl.querySelector('.dim-sidebar-rename-input')) return; // 已在编辑中
         const oldName = itemEl.dataset.name;
-        const oldText = spanEl.textContent;
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'dim-sidebar-rename-input';
-        input.value = oldText;
+        input.value = oldName;
         spanEl.replaceWith(input);
         input.focus();
         input.select();
@@ -1167,14 +1147,13 @@
         async function commitRename() {
             const newName = input.value.trim();
             input.replaceWith(spanEl); // 先还原 span
-            if (!newName || newName === oldText) return;
-            // 读取当前配置内容，更新 type 字段，然后用新名保存，再删旧名
+            if (!newName || newName === oldName) return;
+            // 读取当前配置内容，用新文件名保存，再删旧名（不改 type）
             try {
                 const r = await fetch(`/api/configs/${encodeURIComponent(oldName)}?_=` + Date.now());
                 const text = await r.text();
                 let parsed;
                 try { parsed = JSON.parse(text); } catch (_) { parsed = {}; }
-                parsed.type = newName;
                 const newFileName = newName.replace(/\s+/g, '_');
                 // 保存新文件
                 const saveR = await adminFetch(`/api/configs/${encodeURIComponent(newFileName)}`, {
@@ -1185,12 +1164,29 @@
                 if (saveR.status === 401) return;
                 const saveJ = await saveR.json().catch(() => ({}));
                 if (!saveR.ok || !saveJ.ok) { showToast('❌ 重命名失败：' + (saveJ.error || ''), 'err'); return; }
-                // 删除旧文件（如果名字变了）
+                // 保留旧文件的绑定关系：把旧名绑定的模式补绑到新名
                 if (newFileName !== oldName) {
+                    try {
+                        const activeRes = await fetch('/api/active-config?_=' + Date.now());
+                        const activeJson = await activeRes.json().catch(() => ({}));
+                        const bindings = activeJson && activeJson.bindings ? activeJson.bindings : {};
+                        const boundModes = Object.keys(bindings).filter(mode => {
+                            const arr = Array.isArray(bindings[mode]) ? bindings[mode] : (bindings[mode] ? [bindings[mode]] : []);
+                            return arr.includes(oldName);
+                        });
+                        for (const mode of boundModes) {
+                            await adminFetch('/api/active-config', {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ name: newFileName, mode }),
+                            });
+                        }
+                    } catch (_) { }
+
                     await adminFetch(`/api/configs/${encodeURIComponent(oldName)}`, { method: 'DELETE' });
                     if (dimCurrentName === oldName) dimCurrentName = newFileName;
                 }
-                showToast(`✅ 已重命名为「${newName}」`, 'ok');
+                showToast(`✅ 已重命名为「${newFileName}」`, 'ok');
                 loadConfigList();
             } catch (e) {
                 showToast('❌ 重命名失败：' + e.message, 'err');
@@ -1287,7 +1283,7 @@
 
     // ── 新建配置（直接进编辑器，不弹 prompt） ──
     function promptNewConfig() {
-        // 用时间戳生成临时文件名，保存时会根据 type 字段自动更新
+        // 用时间戳生成临时文件名（文件名仅用于标识）
         const tmpName = 'new_' + Date.now();
         const template = JSON.stringify({
             type: '新配置',
@@ -3367,8 +3363,8 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             dimErr.style.display = '';
             return;
         }
-        // 文件名：优先用当前选中，否则用 type 字段
-        const saveName = dimCurrentName || (parsed.type ? parsed.type.replace(/\s+/g, '_') : 'new_config');
+        // 文件名：优先用当前选中；新建时使用时间戳临时名
+        const saveName = dimCurrentName || ('new_' + Date.now());
         dimSaveBtn.disabled = true;
         try {
             const r = await adminFetch(`/api/configs/${encodeURIComponent(saveName)}`, {
@@ -3434,10 +3430,8 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             return;
         }
         const rawText = JSON.stringify(parsed, null, 2);
-        // 用 type 字段推断文件名；没有 type 则用时间戳
-        const newName = parsed.type
-            ? parsed.type.replace(/\s+/g, '_')
-            : 'import_' + Date.now();
+        // 导入时文件名仅使用时间戳，不从 type 推导
+        const newName = 'import_' + Date.now();
         dimCurrentName = newName;
         dimRawData = rawText;
         if (dimEditing) exitDimEdit();
@@ -3457,7 +3451,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                     showToast('❌ 保存失败：' + (j.error || '未知错误'), 'err');
                     return;
                 }
-                showToast(`✅ 已导入并保存「${parsed.type || newName}」，共 ${parsed.dimensions.length} 个维度`, 'ok');
+                showToast(`✅ 已导入并保存「${newName}」，共 ${parsed.dimensions.length} 个维度`, 'ok');
                 loadConfigList(); // 刷新左侧列表，显示新文件名
             } catch (e) {
                 showToast('❌ 网络错误：' + e.message, 'err');
