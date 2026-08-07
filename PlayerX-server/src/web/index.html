@@ -105,12 +105,20 @@
                         <label for="analyzeTagSel">Tag</label>
                         <select id="analyzeTagSel"></select>
                     </div>
-                    <button id="analyzeRunBtn" class="primary-btn">▶ 执行分析</button>
+                    <div class="analyze-control-item analyze-control-item-sm">
+                        <label for="analyzeActionSel">执行模式</label>
+                        <select id="analyzeActionSel">
+                            <option value="rank">rank（排名统计）</option>
+                            <option value="analyze">analyze（反解分析）</option>
+                            <option value="verify">verify（审计校验）</option>
+                        </select>
+                    </div>
+                    <button id="analyzeRunBtn" class="primary-btn">▶ 执行</button>
                     <span id="analyzeStatus" class="analyze-status"></span>
                 </div>
 
                 <div id="analyzeResult" style="display:none">
-                    <div class="analyze-stats-grid">
+                    <div class="analyze-stats-grid" id="azStatsGrid">
                         <div class="analyze-stat-card">
                             <div class="analyze-stat-label">评分文件</div>
                             <div class="analyze-stat-value" id="azStatFiles">0</div>
@@ -129,7 +137,32 @@
                         </div>
                     </div>
 
-                    <section class="analyze-card-section">
+                    <section id="azAnalyzeSection" class="analyze-card-section" hidden>
+                        <h3 class="analyze-section-title">反解分析摘要</h3>
+                        <div class="analyze-kv-grid">
+                            <div class="analyze-kv-item"><span>原始行</span><b id="azAnalyzeRaw">-</b></div>
+                            <div class="analyze-kv-item"><span>筛选后</span><b id="azAnalyzeFiltered">-</b></div>
+                            <div class="analyze-kv-item"><span>去重后</span><b id="azAnalyzeDeduped">-</b></div>
+                            <div class="analyze-kv-item"><span>反解行数</span><b id="azAnalyzeDeanon">-</b></div>
+                            <div class="analyze-kv-item"><span>丢弃行</span><b id="azAnalyzeDropped">-</b></div>
+                            <div class="analyze-kv-item"><span>排除评分员</span><b id="azAnalyzeExcluded">-</b></div>
+                        </div>
+                    </section>
+
+                    <section id="azVerifySection" class="analyze-card-section" hidden>
+                        <h3 class="analyze-section-title">审计校验结果</h3>
+                        <div class="analyze-kv-grid">
+                            <div class="analyze-kv-item"><span>L1 磁盘审计</span><b id="azVerifyL1">-</b></div>
+                            <div class="analyze-kv-item"><span>L2 数据校验</span><b id="azVerifyL2">-</b></div>
+                            <div class="analyze-kv-item"><span>总体结果</span><b id="azVerifyOverall">-</b></div>
+                            <div class="analyze-kv-item"><span>重算条数</span><b id="azVerifyRecomputed">-</b></div>
+                            <div class="analyze-kv-item"><span>反解条数</span><b id="azVerifyDeanon">-</b></div>
+                            <div class="analyze-kv-item"><span>不一致数</span><b id="azVerifyMismatch">-</b></div>
+                        </div>
+                        <div class="analyze-verify-details" id="azVerifyDetails"></div>
+                    </section>
+
+                    <section id="azRankSection" class="analyze-card-section" hidden>
                         <h3 class="analyze-section-title">模型排名</h3>
                         <div class="analyze-table-wrap">
                             <table id="azRankTable" class="analyze-table analyze-table-resizable">
@@ -154,7 +187,7 @@
                         </div>
                     </section>
 
-                    <section class="analyze-card-section">
+                    <section id="azPairSection" class="analyze-card-section" hidden>
                         <h3 class="analyze-section-title">成对显著性检验</h3>
                         <div class="analyze-table-wrap">
                             <table id="azPairTable" class="analyze-table analyze-table-resizable">

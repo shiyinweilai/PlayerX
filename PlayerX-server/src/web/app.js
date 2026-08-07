@@ -1695,7 +1695,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         <div class="dim-build-grp">
                    <div class="dim-build-grp-title">模型列表${admin ? '<button class="dim-build-load-models" title="从模型管理加载"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 从模型管理加载</button>' : ''}</div>
    ${admin
-                ? `<textarea class="dim-build-input dim-build-models" data-bf="models" rows="4" placeholder="每行一个模型（路径格式：源目录/模型名）">${escHtml(models)}</textarea>`
+                ? `<textarea class="dim-build-input dim-build-models" data-bf="models" rows="4" placeholder="每行一个模型（路径格式：只支持绝对路径）">${escHtml(models)}</textarea>`
                 : `<pre class="dim-build-val" style="white-space:pre-wrap">${escHtml(models || '（未配置）')}</pre>`}
             ${admin ? '<div class="dim-build-model-picker" style="display:none"></div>' : ''}
  </div>`;
@@ -1703,15 +1703,9 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         if (admin) {
             bodyHtml += `
 <div class="dim-build-actions">
-     <select class="dim-build-action-sel">
-    <option value="build">build（构建盲评包）</option>
-        <option value="analyze">analyze（反解分析）</option>
-   <option value="verify">verify（审计校验）</option>
-<option value="rank">rank（排名统计）</option>
-  </select>
-          <button class="primary-btn dim-build-run-btn">▶ 执行</button>
     <label class="dim-build-sync-label"><input type="checkbox" class="dim-build-sync-cb" data-bf="sync_to_testsrc" ${syncToTs ? 'checked' : ''}> 同步zip到测试源</label>
     <span class="dim-build-status" id="dimBuildStatus"></span>
+    <button class="primary-btn dim-build-run-btn">▶ 执行构建</button>
      </div>`;
         }
 
@@ -1799,7 +1793,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         }
     }
 
-    /** 执行构建/分析操作 */
+    /** 执行构建（盲评包） */
     async function runBuildAction() {
         if (!dimCurrentName) { showToast('❌ 未选择配置', 'err'); return; }
         // 先持久化当前表单的 build 配置
@@ -1814,17 +1808,12 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         // map_csv 统一放在 tasks/map/ 目录下
         if (!build.map_csv) build.map_csv = `map/map_${tag}.csv`;
 
-        const actionSel = dimView.querySelector('.dim-build-action-sel');
-        const action = actionSel ? actionSel.value : 'build';
+        const action = 'build';
         const statusEl = dimView.querySelector('#dimBuildStatus');
+        if (statusEl) statusEl.textContent = '构建中…';
 
-        const actionLabels = { build: '构建中…', analyze: '分析中…', verify: '校验中…', rank: '统计中…' };
-        if (statusEl) statusEl.textContent = actionLabels[action] || '执行中…';
-
-        const apiPath = action === 'build' ? '/api/build' : '/api/analyze';
-        const body = action === 'build'
-            ? { config: build }
-            : { config: build, action };
+        const apiPath = '/api/build';
+        const body = { config: build };
 
         try {
             const r = await adminFetch(apiPath, {
@@ -3532,23 +3521,18 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         });
     }
 
-    // ── 盲评分析：切换到分析模块并传递选中文件 ─────────────
+    // ── 盲评分析：直接切换到「分析结果」页，并默认选中 analyze ─────────────
     const analyzeSelBtn = $('analyzeSelBtn');
     if (analyzeSelBtn) {
         analyzeSelBtn.addEventListener('click', () => {
             if (!guardWrite()) return;
             const names = [...state.selected];
             if (names.length === 0) { showToast('请先勾选要分析的文件', 'warn'); return; }
-            switchModule('tasks');
-            // 切换到构建 tab 并选择 analyze
+            switchModule('analyze');
             setTimeout(() => {
-                const buildTab = document.querySelector('.dim-tab[data-tab="build"]');
-                if (buildTab) buildTab.click();
-                setTimeout(() => {
-                    const sel = document.querySelector('.dim-build-action-sel');
-                    if (sel) { sel.value = 'analyze'; }
-                }, 100);
-            }, 100);
+                const sel = $('analyzeActionSel');
+                if (sel) sel.value = 'analyze';
+            }, 60);
         });
     }
 
@@ -4720,10 +4704,16 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
     // ═══════════════════════════════════════════════════════════════════════
     (function initAnalyzeModule() {
         const tagSel = $('analyzeTagSel');
+        const actionSel = $('analyzeActionSel');
         const runBtn = $('analyzeRunBtn');
         const statusEl = $('analyzeStatus');
         const resultDiv = $('analyzeResult');
         const emptyDiv = $('analyzeEmpty');
+        const statsGrid = $('azStatsGrid');
+        const analyzeSection = $('azAnalyzeSection');
+        const verifySection = $('azVerifySection');
+        const rankSection = $('azRankSection');
+        const pairSection = $('azPairSection');
         if (!tagSel || !runBtn) return;
 
         const ANALYZE_RANK_COL_KEY = 'PlayerX.analyze.rank.colWidths.v1';
@@ -4799,42 +4789,40 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             statusEl.className = `analyze-status ${type ? `is-${type}` : ''}`.trim();
         }
 
-        // ── 执行分析 ──
-        runBtn.addEventListener('click', async () => {
-            const tag = tagSel.value;
-            if (!tag) { showToast('请选择 Tag', 'warn'); return; }
-            setAnalyzeStatus('分析中…', 'loading');
-            runBtn.disabled = true;
-            resultDiv.style.display = 'none';
-            emptyDiv.style.display = 'none';
-            try {
-                const r = await adminFetch('/api/analyze', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tag, action: 'rank' })
-                });
-                const j = await r.json();
-                if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
-                renderAnalyzeResult(j.data, tag);
-                setAnalyzeStatus('已完成', 'success');
-            } catch (e) {
-                showToast('❌ ' + e.message, 'err');
-                setAnalyzeStatus('失败：' + e.message, 'error');
-                emptyDiv.style.display = '';
-            } finally { runBtn.disabled = false; }
-        });
+        function hideAllAnalyzeSections() {
+            if (statsGrid) statsGrid.hidden = true;
+            if (analyzeSection) analyzeSection.hidden = true;
+            if (verifySection) verifySection.hidden = true;
+            if (rankSection) rankSection.hidden = true;
+            if (pairSection) pairSection.hidden = true;
+        }
 
-        // ── 渲染结果 ──
-        function renderAnalyzeResult(data, tag) {
-            resultDiv.style.display = '';
-            emptyDiv.style.display = 'none';
+        function renderAnalyzeSummary(data) {
+            $('azAnalyzeRaw').textContent = data.raw ?? '-';
+            $('azAnalyzeFiltered').textContent = data.filtered ?? '-';
+            $('azAnalyzeDeduped').textContent = data.deduped ?? '-';
+            $('azAnalyzeDeanon').textContent = data.deanonRows ?? '-';
+            $('azAnalyzeDropped').textContent = data.dropped ?? '-';
+            $('azAnalyzeExcluded').textContent = data.excluded ?? '-';
+        }
 
-            // 统计卡片
-            $('azStatFiles').textContent = data.fileCount || '-';
-            $('azStatRows').textContent = data.filtered || data.raw || '-';
-            $('azStatDedup').textContent = data.deduped || '-';
-            $('azStatGroups').textContent = data.completeGroups || '-';
+        function renderVerifySummary(data) {
+            $('azVerifyL1').textContent = data.l1 ?? '-';
+            $('azVerifyL2').textContent = data.l2 ?? '-';
+            $('azVerifyOverall').textContent = data.overall ?? '-';
+            $('azVerifyRecomputed').textContent = data.recomputedCount ?? '-';
+            $('azVerifyDeanon').textContent = data.deanonCount ?? '-';
+            $('azVerifyMismatch').textContent = data.mismatches ?? '-';
+            const detailsEl = $('azVerifyDetails');
+            if (detailsEl) {
+                const details = Array.isArray(data.details) ? data.details : [];
+                detailsEl.innerHTML = details.length
+                    ? `<ul>${details.map(d => `<li>${esc(d)}</li>`).join('')}</ul>`
+                    : '<div class="analyze-verify-empty">无异常明细</div>';
+            }
+        }
 
+        function renderRankTables(data) {
             // 排名表
             const rankTb = document.querySelector('#azRankTable tbody');
             rankTb.innerHTML = '';
@@ -4856,6 +4844,64 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 pairTb.appendChild(tr);
             });
         }
+
+        function renderAnalyzeResult(data, action) {
+            resultDiv.style.display = '';
+            emptyDiv.style.display = 'none';
+            hideAllAnalyzeSections();
+
+            if (action === 'analyze') {
+                if (analyzeSection) analyzeSection.hidden = false;
+                renderAnalyzeSummary(data || {});
+                return;
+            }
+
+            if (action === 'verify') {
+                if (verifySection) verifySection.hidden = false;
+                renderVerifySummary(data || {});
+                return;
+            }
+
+            // rank：展示反解摘要 + 排名统计
+            $('azStatFiles').textContent = data.fileCount ?? '-';
+            $('azStatRows').textContent = data.filtered ?? data.raw ?? '-';
+            $('azStatDedup').textContent = data.deduped ?? '-';
+            $('azStatGroups').textContent = data.completeGroups ?? '-';
+            if (statsGrid) statsGrid.hidden = false;
+            if (analyzeSection) analyzeSection.hidden = false;
+            if (rankSection) rankSection.hidden = false;
+            if (pairSection) pairSection.hidden = false;
+            renderAnalyzeSummary(data || {});
+            renderRankTables(data || {});
+        }
+
+        // ── 执行分析 ──
+        runBtn.addEventListener('click', async () => {
+            const tag = tagSel.value;
+            const action = actionSel ? actionSel.value : 'rank';
+            if (!tag) { showToast('请选择 Tag', 'warn'); return; }
+            const actionLabel = action === 'verify' ? '校验中…' : action === 'analyze' ? '反解中…' : '统计中…';
+            setAnalyzeStatus(actionLabel, 'loading');
+            runBtn.disabled = true;
+            resultDiv.style.display = 'none';
+            emptyDiv.style.display = 'none';
+            try {
+                const r = await adminFetch('/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tag, action })
+                });
+                const j = await r.json();
+                if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
+                renderAnalyzeResult(j.data, action);
+                setAnalyzeStatus('已完成', 'success');
+            } catch (e) {
+                showToast('❌ ' + e.message, 'err');
+                setAnalyzeStatus('失败：' + e.message, 'error');
+                emptyDiv.style.display = '';
+            } finally { runBtn.disabled = false; }
+        });
+
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     })();
 })();

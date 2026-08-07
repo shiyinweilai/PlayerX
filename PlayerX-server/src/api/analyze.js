@@ -721,11 +721,13 @@ if (cols.length > 0 && mapLines.length > 1) {
             console.log('[analyze] 步骤3: 先跑 analyze 生成 deanon CSV...');
             const analyzeData = cmdAnalyze(cfg);
             console.log('[analyze] analyze 完成，执行 cmdRank...');
-            data = cmdRank(cfg);
-            // 补充文件统计到返回数据
-            data.fileCount = resolvedNames.length;
-            data.filtered = analyzeData.filtered;
-            data.deduped = analyzeData.deduped;
+            const rankData = cmdRank(cfg);
+            // rank 场景合并反解摘要，前端可同时展示「反解 + 排名」
+            data = {
+                ...analyzeData,
+                ...rankData,
+                fileCount: resolvedNames.length,
+            };
         }
         console.log('[analyze] 执行完成');
 
