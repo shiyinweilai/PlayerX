@@ -1673,7 +1673,7 @@ panel.style.display = 'none';
         <div class="dim-build-grp">
         <div class="dim-build-grp-title">路径配置</div>
    <div class="dim-build-grid">
-       ${fld('首帧目录', 'first_frames_dir', b.companions ? b.companions.first_frames_dir : '', 'first_frames', 'half')}
+       ${fld('参考帧目录', 'first_frames_dir', b.companions ? b.companions.first_frames_dir : '', 'first_frames', 'half')}
        ${fld('Prompt CSV', 'prompt_csv', b.companions ? b.companions.prompt_csv : '', 'prompt.csv', 'half')}
       </div>
         </div>
@@ -1860,9 +1860,22 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             const lanes = [];
             for (let i = 0; i < modelCount; i++) lanes.push(String.fromCharCode(65 + i));
             data.testSource.laneDirs = lanes;
-            // promptCsv / referenceDirs 构建时已包含在 zip 里，填默认值
+            // promptCsv / referenceDirs 构建时已包含在 zip 里，自动同步
             if (!data.testSource.promptCsv) data.testSource.promptCsv = 'prompt.csv';
-            if (!data.testSource.referenceDirs || data.testSource.referenceDirs.length === 0) data.testSource.referenceDirs = ['first_frames'];
+            // referenceDirs 始终从构建配置的参考帧目录检测覆盖（取 basename，支持逗号分隔多目录）
+            {
+                const ffDir = (build.companions && build.companions.first_frames_dir) || '';
+                if (ffDir) {
+                    const dirs = ffDir.split(/[,，]+/).map(d => {
+                        const trimmed = d.trim();
+                        const parts = trimmed.replace(/[\/\\]+$/, '').split(/[\/\\]/);
+                        return parts[parts.length - 1] || trimmed;
+                    }).filter(Boolean);
+                    data.testSource.referenceDirs = dirs.length > 0 ? dirs : ['first_frames'];
+                } else if (!data.testSource.referenceDirs || data.testSource.referenceDirs.length === 0) {
+                    data.testSource.referenceDirs = ['first_frames'];
+                }
+            }
   dimRawData = JSON.stringify(data, null, 2);
     // 保存配置（含更新后的 testSource）
       await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {

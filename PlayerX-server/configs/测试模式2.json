@@ -70,12 +70,12 @@
       "/Users/rbyang/Downloads/src/wan2.2_14b_highonly_sft_aligned_5000x56",
       "/Users/rbyang/Downloads/src/wan2.2_14b_lowonly_sft_aligned_5000x56"
     ],
-    "n_groups": 5,
+    "n_groups": 2,
     "seed": 42,
     "blind": true,
     "group_mode": "fresh",
     "companions": {
-      "first_frames_dir": "/Users/rbyang/Downloads/first_frames",
+      "first_frames_dir": "/Users/rbyang/Downloads/first_frames,/Users/rbyang/Downloads/second_frames",
       "prompt_csv": "/Users/rbyang/Downloads/prompt.csv"
     },
     "sync_to_testsrc": true

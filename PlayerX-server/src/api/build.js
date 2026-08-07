@@ -169,7 +169,7 @@ function loadPrompts(comp, samples) {
 // ─────────────────────────────────────────────────────────────────────
 
 function copyBlind(samples, groupOf, models, labels, srcDir, dstDir, comp,
-                   promptByN, promptCols, ffDir, rng) {
+                   promptByN, promptCols, ffDirs, rng) {
     const groups = [...new Set(Object.values(groupOf))].sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
 
     // 创建目录（先清空旧目录）
@@ -179,7 +179,10 @@ function copyBlind(samples, groupOf, models, labels, srcDir, dstDir, comp,
             fs.mkdirSync(path.join(dstDir, g, lb), { recursive: true });
         }
         if (comp) {
-            fs.mkdirSync(path.join(dstDir, g, 'first_frames'), { recursive: true });
+            // 为每个参考帧目录创建对应子目录
+            for (const ffEntry of ffDirs) {
+                fs.mkdirSync(path.join(dstDir, g, ffEntry.name), { recursive: true });
+            }
         }
     }
 
@@ -201,10 +204,13 @@ function copyBlind(samples, groupOf, models, labels, srcDir, dstDir, comp,
         }
         mapRows.push(row);
 
-        if (comp && n in promptByN) {
-            const ffSrc = path.join(ffDir, `${n}.png`);
-            if (fs.existsSync(ffSrc)) {
-                fs.copyFileSync(ffSrc, path.join(dstDir, g, 'first_frames', `${n}.png`));
+        // 复制每个参考帧目录的图片
+        if (comp) {
+            for (const ffEntry of ffDirs) {
+                const ffSrc = path.join(ffEntry.dir, `${n}.png`);
+                if (fs.existsSync(ffSrc)) {
+                    fs.copyFileSync(ffSrc, path.join(dstDir, g, ffEntry.name, `${n}.png`));
+                }
             }
         }
     }
@@ -301,13 +307,19 @@ function verify(dstDir, srcDir, models, labels, groupOf, mapRows, comp) {
             const expect = new Set(
                 Object.entries(groupOf).filter(([_, gg]) => gg === g).map(([n]) => `${n}.png`)
             );
-            const ffDir = path.join(dstDir, g, 'first_frames');
-            const ff = fs.existsSync(ffDir)
-                ? new Set(fs.readdirSync(ffDir).filter(f => f.endsWith('.png'))) : new Set();
-            const ffDiff = [...expect].filter(f => !ff.has(f));
-            if (ffDiff.length > 0) {
-                details.push(`FAIL first_frames ${g}: 缺 ${ffDiff.slice(0, 5).join(',')}`);
-                ok = false;
+            // 检测目标目录下所有非 label 目录（即参考帧目录）
+            const gDir = path.join(dstDir, g);
+            const subDirs = fs.readdirSync(gDir, { withFileTypes: true })
+                .filter(d => d.isDirectory() && !labels.includes(d.name))
+                .map(d => d.name);
+            for (const refDir of subDirs) {
+                const ffPath = path.join(gDir, refDir);
+                const ff = new Set(fs.readdirSync(ffPath).filter(f => f.endsWith('.png')));
+                const ffDiff = [...expect].filter(f => !ff.has(f));
+                if (ffDiff.length > 0) {
+                    details.push(`FAIL ${refDir} ${g}:缺 ${ffDiff.slice(0, 5).join(',')}`);
+                    ok = false;
+                }
             }
         }
     }
@@ -360,10 +372,14 @@ function cmdBuild(cfg) {
     const blind   = cfg.blind !== false;
     const comp    = cfg.companions || null;
 
-    const samples     = resolveSamples(cfg);
+    const samples= resolveSamples(cfg);
     const promptByN   = comp ? loadPrompts(comp, samples) : {};
     const promptCols  = comp ? (comp.prompt_cols || ['Image', 'prompt', 'en_prompt']) : [];
-    const ffDir       = comp ? (comp.first_frames_dir || '.') : '.';
+    //参考帧目录：支持逗号分隔多个路径，每项{ dir: 绝对路径, name: basename }
+    const ffDirs = comp ? (comp.first_frames_dir || '').split(/[,，]+/).map(d => d.trim()).filter(Boolean).map(d => ({
+        dir: d,
+        name: path.basename(d)
+    })) : [];
 
     const seed = cfg.seed || 42;
     const rng  = createRng(seed);
@@ -388,7 +404,7 @@ function cmdBuild(cfg) {
 
     if (blind) {
         const mapRows = copyBlind(samples, groupOf, models, labels, srcDir, dstDir,
-                                  comp, promptByN, promptCols, ffDir, rng);
+                                  comp, promptByN, promptCols, ffDirs, rng);
         writeMap(mapCsv, mapRows, labels);
         const v = verify(dstDir, srcDir, models, labels, groupOf, mapRows, comp);
         return {
