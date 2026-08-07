@@ -571,10 +571,18 @@ function resolveSamples(cfg) {
 // ─────────────────────────────────────────────────────────────────────
 
 function handle(req, res) {
-    const { names, config, action, tag } = req.body || {};
+    const { names, config, action, tag, verify } = req.body || {};
     console.log('[analyze] 收到请求: action=%s, tag=%s, names=%d, config=%j', action, tag, (names || []).length, config);
 
     const act = action || 'rank';
+    const rawVerify = (req.body && (req.body.verify ?? req.body.doVerify)) ?? verify;
+    const doVerify = (() => {
+        if (typeof rawVerify === 'string') {
+            const v = rawVerify.trim().toLowerCase();
+            return ['1', 'true', 'yes', 'on'].includes(v);
+        }
+        return !!rawVerify;
+    })();
     if (!['analyze', 'verify', 'rank'].includes(act)) {
         return res.status(400).json({ ok: false, error: 'invalid action, must be analyze/verify/rank' });
     }
@@ -710,24 +718,37 @@ if (cols.length > 0 && mapLines.length > 1) {
 
         // 3. 执行：rank 前自动先跑 analyze 生成 deanon CSV
         let data;
+        const verifyCfg = { ...cfg };
+        // 未提供 src_model_dir 时自动跳过 L1（避免 path.join(undefined, ...)）
+        if (!verifyCfg.src_model_dir) verifyCfg.skipL1 = true;
+
         if (act === 'analyze') {
             console.log('[analyze] 步骤3: 执行 cmdAnalyze...');
             data = cmdAnalyze(cfg);
         } else if (act === 'verify') {
-            console.log('[analyze] 步骤3: 执行 cmdVerify...');
-            data = cmdVerify(cfg);
+            console.log('[analyze] 步骤3: 先跑 analyze，再执行 cmdVerify...');
+            const analyzeData = cmdAnalyze(cfg);
+            const verifyData = cmdVerify(verifyCfg);
+            data = {
+                ...analyzeData,
+                verify: verifyData,
+                fileCount: resolvedNames.length,
+            };
         } else if (act === 'rank') {
             // 先跑 analyze 生成 deanon CSV，再跑 rank
             console.log('[analyze] 步骤3: 先跑 analyze 生成 deanon CSV...');
             const analyzeData = cmdAnalyze(cfg);
             console.log('[analyze] analyze 完成，执行 cmdRank...');
             const rankData = cmdRank(cfg);
-            // rank 场景合并反解摘要，前端可同时展示「反解 + 排名」
             data = {
                 ...analyzeData,
                 ...rankData,
                 fileCount: resolvedNames.length,
             };
+            if (doVerify) {
+                console.log('[analyze] 执行可选 verify...');
+                data.verify = cmdVerify(verifyCfg);
+            }
         }
         console.log('[analyze] 执行完成');
 

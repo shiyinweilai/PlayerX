@@ -6763,6 +6763,23 @@ td.actions .row-act:hover {
     margin-bottom: 18px;
 }
 
+#pageAnalyze .analyze-check-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #475467;
+    font-weight: 600;
+    margin-left: 4px;
+    user-select: none;
+}
+
+#pageAnalyze .analyze-check-item input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: #3b82f6;
+}
+
 #pageAnalyze .analyze-control-item {
     display: flex;
     flex-direction: column;
@@ -6770,9 +6787,7 @@ td.actions .row-act:hover {
     min-width: 220px;
 }
 
-#pageAnalyze .analyze-control-item-sm {
-    min-width: 210px;
-}
+
 
 #pageAnalyze .analyze-control-item label {
     font-size: 12px;
@@ -6968,52 +6983,6 @@ td.actions .row-act:hover {
     font-size: 13px;
 }
 
-#pageAnalyze .analyze-kv-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(180px, 1fr));
-    gap: 10px;
-    padding: 12px 14px 14px;
-}
-
-#pageAnalyze .analyze-kv-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 12px;
-    border: 1px solid #eef2f7;
-    border-radius: 10px;
-    background: #fbfdff;
-}
-
-#pageAnalyze .analyze-kv-item > span {
-    color: #667085;
-    font-size: 12px;
-}
-
-#pageAnalyze .analyze-kv-item > b {
-    color: #111827;
-    font-size: 13px;
-}
-
-#pageAnalyze .analyze-verify-details {
-    margin: 0 14px 14px;
-    padding: 10px 12px;
-    border-radius: 10px;
-    border: 1px dashed #d9e2ef;
-    background: #f8fbff;
-    color: #344054;
-    font-size: 12px;
-}
-
-#pageAnalyze .analyze-verify-details ul {
-    margin: 0;
-    padding-left: 18px;
-}
-
-#pageAnalyze .analyze-verify-empty {
-    color: #98a2b3;
-}
 
 @media (max-width: 960px) {
     #pageAnalyze .analyze-panel {
@@ -7030,16 +6999,11 @@ td.actions .row-act:hover {
         align-items: stretch;
     }
 
-    #pageAnalyze .analyze-control-item,
-    #pageAnalyze .analyze-control-item-sm {
+    #pageAnalyze .analyze-control-item {
         min-width: 100%;
     }
 
     #pageAnalyze .analyze-stats-grid {
-        grid-template-columns: 1fr;
-    }
-
-    #pageAnalyze .analyze-kv-grid {
         grid-template-columns: 1fr;
     }
 }
