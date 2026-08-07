@@ -2086,29 +2086,35 @@ ApplicationWindow {
                         var obj = modelData.obj || {}
                         return obj.tag || "—"
                     }
-                    // 评测类型：取远程配置本身的 type 字段（友好名，如"配置2 (副本)"），
-                    // 与本地/后台列表展示一致；远程 JSON 无 name 字段，故不用 configName（那是文件名带时间戳）。
-                    readonly property string _nameText: {
-                        var obj = modelData.obj || {}
-                        return obj.type || modelData.configName || "—"
-                    }
-                    // 按"评测类型"（即 obj.type，如"配置1"/"配置2 (副本)"）取一个简约低饱和的区分色（无更新时用）。
-                    //   不同评测类型 → 不同颜色，一眼可分。
-                    readonly property string _modeColor: {
-                        var nm = (modelData.obj && modelData.obj.type) || modelData.configName || ""
-                        var pal = {
-                            "配置1": "#6f9c8a",
-                            "配置2": "#7d8aa8",
-                            "配置3": "#a8927d",
-                            "配置4": "#9a7da8",
-                            "配置5": "#8aa07d",
-                            "配置6": "#a88a7d"
+                    // 评测类型：按绑定模式显示（不再依赖配置 JSON 里的 type 字段）
+                    // 这样可避免显示成配置文件名/历史 type 残留。
+                    readonly property string _modeLabel: {
+                        var m = (modelData.mode || "")
+                        var map = {
+                            "multi_dim": "多维评分",
+                            "subjective": "主观评分",
+                            "quality": "质量比较",
+                            "quality_slide": "质量比较2",
+                            "test": "测试模式"
                         }
-                        if (pal[nm]) return pal[nm]
-                        // 未命中的配置名：用名字做个稳定哈希，落到一组简约色里
+                        return map[m] || m || "—"
+                    }
+                    readonly property string _nameText: _modeLabel
+
+                    // 按模式取一个简约低饱和区分色（无更新时用）
+                    readonly property string _modeColor: {
+                        var key = (modelData.mode || "")
+                        var pal = {
+                            "multi_dim": "#6f9c8a",
+                            "subjective": "#7d8aa8",
+                            "quality": "#a8927d",
+                            "quality_slide": "#9a7da8",
+                            "test": "#8aa07d"
+                        }
+                        if (pal[key]) return pal[key]
                         var pool = ["#6f9c8a", "#7d8aa8", "#a8927d", "#9a7da8", "#8aa07d", "#a88a7d", "#7da8a0", "#a87d8a"]
                         var h = 0
-                        for (var i = 0; i < nm.length; i++) h = (h * 31 + nm.charCodeAt(i)) >>> 0
+                        for (var i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0
                         return pool[h % pool.length]
                     }
 
