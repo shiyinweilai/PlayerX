@@ -1848,13 +1848,23 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
   if (zr.ok && zj.ok) {
         showToast(`✅ 构建完成并已压缩 → ${zj.zipName}`, 'ok');
            if (statusEl) statusEl.textContent = `✅ ${zj.zipName}`;
-        // 自动填写测试源 url 并刷新右侧面板
+        // 自动填写测试源字段并刷新右侧面板
         if (zj.zipName) {
       data.build = build;
             if (!data.testSource) data.testSource = {};
          data.testSource.url = `/testsrc/${zj.zipName}`;
+            // rootDir = zip 包名去掉 .zip 后缀（与解压后目录同名）
+            data.testSource.rootDir = zj.zipName.replace(/\.zip$/i, '');
+            // laneDirs = 从 A 开始按模型数量生成（如 3 个模型 → ["A","B","C"]）
+            const modelCount = (build.models || []).length || 2;
+            const lanes = [];
+            for (let i = 0; i < modelCount; i++) lanes.push(String.fromCharCode(65 + i));
+            data.testSource.laneDirs = lanes;
+            // promptCsv / referenceDirs 构建时已包含在 zip 里，填默认值
+            if (!data.testSource.promptCsv) data.testSource.promptCsv = 'prompt.csv';
+            if (!data.testSource.referenceDirs || data.testSource.referenceDirs.length === 0) data.testSource.referenceDirs = ['first_frames'];
   dimRawData = JSON.stringify(data, null, 2);
-    // 保存配置（含更新后的 testSource.url）
+    // 保存配置（含更新后的 testSource）
       await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {
      method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -1926,31 +1936,26 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             }).join('');
 
             const lanes = Array.isArray(ts.laneDirs) ? ts.laneDirs : [];
-            const laneChips = lanes.map((d, i) =>
-                `<span class="dim-ts-lane-chip">${escHtml(d)}${admin ? `<button class="dim-ts-lane-del" data-lane-idx="${i}" title="移除该路">✕</button>` : ''}</span>`
-            ).join('');
-            const laneAddHtml = admin
-                ? `<input class="dim-ts-lane-input" placeholder="目录名，如 C" title="回车或点 ＋ 添加一路"><button class="dim-ts-lane-add" title="添加一路">＋</button>`
-                : '';
+            const lanesVal = lanes.join(', ');
             const lanesRow = `<div class="dim-ts-row">
-                <span class="dim-ts-fname" title="参与对比的子目录（相对内容根），按顺序对应客户端第 1..N 路">laneDirs</span>
-                <span class="dim-ts-lanes">${laneChips}${laneAddHtml}</span>
+                <span class="dim-ts-fname" title="参与对比的子目录（相对内容根），按顺序对应客户端第 1..N 路；逗号分隔，如 A, B, C">laneDirs</span>
+                ${admin
+                    ? `<span class="dim-ts-val dim-ts-editable${lanesVal ? '' : ' dim-card-placeholder'}" data-ts-field="laneDirs" title="逗号分隔的目录名，如 A, B, C；点击编辑">${escHtml(lanesVal || '（未填写）')}</span>`
+                    : `<span class="dim-ts-val${lanesVal ? '' : ' dim-card-placeholder'}">${escHtml(lanesVal || '—')}</span>`
+                }
             </div>`;
 
-            // 参考图目录：新写法 referenceDirs（数组，最多 2 个，对应客户端两个参考图窗口）；
-            // 兼容展示旧写法 referenceDir（单字符串，视为第 1 个；下次编辑时自动迁移为数组）。
+            // 参考图目录
             const refDirs = Array.isArray(ts.referenceDirs)
                 ? ts.referenceDirs.filter(d => typeof d === 'string' && d.trim())
                 : (ts.referenceDir && String(ts.referenceDir).trim() ? [String(ts.referenceDir).trim()] : []);
-            const refChips = refDirs.map((d, i) =>
-                `<span class="dim-ts-lane-chip dim-ts-ref-chip" title="第 ${i + 1} 张参考图窗口">${escHtml(d)}${admin ? `<button class="dim-ts-ref-del" data-ref-idx="${i}" title="移除该参考图目录">✕</button>` : ''}</span>`
-            ).join('');
-            const refAddHtml = (admin && refDirs.length < 2)
-                ? `<input class="dim-ts-ref-input" placeholder="目录名，如 second_frames" title="回车或点 ＋ 添加（最多 2 个，对应两个参考图窗口）"><button class="dim-ts-ref-add" title="添加参考图目录">＋</button>`
-                : (admin ? `<span class="dim-ts-ref-cap" title="客户端只有两个参考图窗口">（已达 2 张上限）</span>` : '');
+            const refVal = refDirs.join(', ');
             const refsRow = `<div class="dim-ts-row">
-                <span class="dim-ts-fname" title="参考图目录（相对内容根），按顺序对应客户端第 1/2 个参考图窗口；留空则不绑定">referenceDirs</span>
-                <span class="dim-ts-lanes">${refChips || '<span class="dim-card-placeholder">（未配置，不绑定参考图）</span>'}${refAddHtml}</span>
+                <span class="dim-ts-fname" title="参考图目录（相对内容根），逗号分隔，最多 2 个；留空则不绑定参考图">referenceDirs</span>
+                ${admin
+                    ? `<span class="dim-ts-val dim-ts-editable${refVal ? '' : ' dim-card-placeholder'}" data-ts-field="referenceDirs" title="逗号分隔的目录名，如 first_frames, second_frames；点击编辑">${escHtml(refVal || '（未配置，不绑定参考图）')}</span>`
+                    : `<span class="dim-ts-val${refVal ? '' : ' dim-card-placeholder'}">${escHtml(refVal || '—')}</span>`
+                }
             </div>`;
 
             bodyHtml = rowsHtml + lanesRow + refsRow;
@@ -2290,7 +2295,9 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         let data;
         try { data = JSON.parse(dimRawData); } catch (_) { return; }
         const ts = data.testSource || {};
-        const currentVal = ts[field] || '';
+        //数组字段（laneDirs/referenceDirs）展示为逗号分隔字符串供编辑
+        let currentVal = ts[field] || '';
+        if (Array.isArray(currentVal)) currentVal = currentVal.join(', ');
         const placeholders = {
             url:          'https://.../bench_xxx.zip',
             workDir:      '~/Downloads',
@@ -2311,7 +2318,13 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             const newVal = input.value.trim();
             if ((currentVal || '') === newVal) { refreshTestSourceSection(); return; }
             mutateTestSource(ts2 => {
-                if (newVal) ts2[field] = newVal; else delete ts2[field];
+                // laneDirs / referenceDirs：逗号分隔字符串存为数组
+                if (field === 'laneDirs' || field === 'referenceDirs') {
+                    const arr = newVal ? newVal.split(/[,，]+/).map(s => s.trim()).filter(Boolean) : [];
+                    if (arr.length > 0) ts2[field] = arr; else delete ts2[field];
+                } else {
+                    if (newVal) ts2[field] = newVal; else delete ts2[field];
+                }
             });
         });
         input.addEventListener('keydown', e => {

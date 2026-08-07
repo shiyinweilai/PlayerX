@@ -1,6 +1,6 @@
 {
   "type": "测试模式2",
-  "tag": "测试tag",
+  "tag": "subj2",
   "task": "测试任务",
   "scale": "1-5 Likert 整数",
   "dimensions": [
@@ -64,27 +64,33 @@
       "exclusive": true
     }
   ],
-  "testSource": {
-    "url": "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/test_auto.zip",
-    "workDir": "~/Downloads",
-    "rootDir": "test_auto",
-    "laneDirs": [
-      "A",
-      "B"
-    ],
-    "promptCsv": "prompt.csv",
-    "referenceDirs": [
-      "first_frames",
-      "second_frames"
-    ]
-  },
   "build": {
-    "src_model_dir": "",
+    "models": [
+      "/Users/rbyang/Downloads/src/wan2.2_14b_gptc_lora6000x8",
+      "/Users/rbyang/Downloads/src/wan2.2_14b_highonly_sft_aligned_5000x56",
+      "/Users/rbyang/Downloads/src/wan2.2_14b_lowonly_sft_aligned_5000x56"
+    ],
     "n_groups": 5,
     "seed": 42,
     "blind": true,
     "group_mode": "fresh",
-    "models": [],
+    "companions": {
+      "first_frames_dir": "/Users/rbyang/Downloads/first_frames",
+      "prompt_csv": "/Users/rbyang/Downloads/prompt.csv"
+    },
     "sync_to_testsrc": true
+  },
+  "testSource": {
+    "url": "/testsrc/subj2.zip",
+    "rootDir": "subj2",
+    "laneDirs": [
+      "A",
+      "B",
+      "C"
+    ],
+    "promptCsv": "prompt.csv",
+    "referenceDirs": [
+      "first_frames"
+    ]
   }
 }
