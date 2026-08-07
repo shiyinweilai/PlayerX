@@ -93,27 +93,99 @@
         <!-- ═══ 模块：分析结果 ═══ -->
         <section id="pageAnalyze" hidden>
             <div class="analyze-panel">
-                <h2 style="margin:0 0 16px">📊 分析结果</h2>
-                <div class="analyze-controls" style="display:flex;gap:12px;align-items:center;margin-bottom:20px;flex-wrap:wrap">
-                    <label style="font-weight:600">Tag：</label>
-                    <select id="analyzeTagSel" style="padding:6px 12px;border-radius:6px;border:1px solid #ddd;min-width:180px"></select>
-                    <button id="analyzeRunBtn" class="btn btn-primary" style="padding:6px 18px;border-radius:6px">▶ 执行分析</button>
-                    <span id="analyzeStatus" style="color:#888;font-size:13px"></span>
-                </div>
-                <div id="analyzeResult" style="display:none">
-                    <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:20px">
-                        <div class="analyze-stat-card"><div class="analyze-stat-label">评分文件</div><div class="analyze-stat-value" id="azStatFiles">0</div></div>
-                        <div class="analyze-stat-card"><div class="analyze-stat-label">有效评分行</div><div class="analyze-stat-value" id="azStatRows">0</div></div>
-                        <div class="analyze-stat-card"><div class="analyze-stat-label">去重后</div><div class="analyze-stat-value" id="azStatDedup">0</div></div>
-                        <div class="analyze-stat-card"><div class="analyze-stat-label">完整组</div><div class="analyze-stat-value" id="azStatGroups">0</div></div>
+                <div class="analyze-header">
+                    <div>
+                        <h2 class="analyze-title">📊 分析结果</h2>
+                        <p class="analyze-subtitle">按 Tag 聚合评分数据，输出模型排名与显著性检验结论</p>
                     </div>
-                    <h3 style="margin:0 0 10px">模型排名</h3>
-                    <table id="azRankTable" class="analyze-table"><thead><tr><th>#</th><th>模型</th><th>BT 强度</th><th>Elo</th><th>胜率</th></tr></thead><tbody></tbody></table>
-                    <h3 style="margin:20px 0 10px">成对显著性检验</h3>
-                    <table id="azPairTable" class="analyze-table"><thead><tr><th>模型 A</th><th>模型 B</th><th>A 胜</th><th>B 胜</th><th>p 值</th><th>显著</th></tr></thead><tbody></tbody></table>
                 </div>
-                <div id="analyzeEmpty" style="color:#aaa;text-align:center;padding:60px 0">
-                    选择 Tag 后点击"执行分析"，系统将自动按 tag 匹配 map CSV 和评分文件进行反解排名
+
+                <div class="analyze-controls">
+                    <div class="analyze-control-item">
+                        <label for="analyzeTagSel">Tag</label>
+                        <select id="analyzeTagSel"></select>
+                    </div>
+                    <button id="analyzeRunBtn" class="primary-btn">▶ 执行分析</button>
+                    <span id="analyzeStatus" class="analyze-status"></span>
+                </div>
+
+                <div id="analyzeResult" style="display:none">
+                    <div class="analyze-stats-grid">
+                        <div class="analyze-stat-card">
+                            <div class="analyze-stat-label">评分文件</div>
+                            <div class="analyze-stat-value" id="azStatFiles">0</div>
+                        </div>
+                        <div class="analyze-stat-card">
+                            <div class="analyze-stat-label">有效评分行</div>
+                            <div class="analyze-stat-value" id="azStatRows">0</div>
+                        </div>
+                        <div class="analyze-stat-card">
+                            <div class="analyze-stat-label">去重后</div>
+                            <div class="analyze-stat-value" id="azStatDedup">0</div>
+                        </div>
+                        <div class="analyze-stat-card">
+                            <div class="analyze-stat-label">完整组</div>
+                            <div class="analyze-stat-value" id="azStatGroups">0</div>
+                        </div>
+                    </div>
+
+                    <section class="analyze-card-section">
+                        <h3 class="analyze-section-title">模型排名</h3>
+                        <div class="analyze-table-wrap">
+                            <table id="azRankTable" class="analyze-table analyze-table-resizable">
+                                <colgroup>
+                                    <col data-col="rank" style="width:56px">
+                                    <col data-col="model">
+                                    <col data-col="bt" style="width:120px">
+                                    <col data-col="elo" style="width:120px">
+                                    <col data-col="win" style="width:120px">
+                                </colgroup>
+                                <thead>
+                                    <tr>
+                                        <th data-col="rank">#</th>
+                                        <th data-col="model">模型</th>
+                                        <th data-col="bt">BT 强度</th>
+                                        <th data-col="elo">Elo</th>
+                                        <th data-col="win">胜率</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <section class="analyze-card-section">
+                        <h3 class="analyze-section-title">成对显著性检验</h3>
+                        <div class="analyze-table-wrap">
+                            <table id="azPairTable" class="analyze-table analyze-table-resizable">
+                                <colgroup>
+                                    <col data-col="modelA">
+                                    <col data-col="modelB">
+                                    <col data-col="aWins" style="width:120px">
+                                    <col data-col="bWins" style="width:120px">
+                                    <col data-col="p" style="width:120px">
+                                    <col data-col="sig" style="width:120px">
+                                </colgroup>
+                                <thead>
+                                    <tr>
+                                        <th data-col="modelA">模型 A</th>
+                                        <th data-col="modelB">模型 B</th>
+                                        <th data-col="aWins">A 胜</th>
+                                        <th data-col="bWins">B 胜</th>
+                                        <th data-col="p">p 值</th>
+                                        <th data-col="sig">显著</th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+
+                <div id="analyzeEmpty" class="analyze-empty">
+                    <div class="analyze-empty-icon">🧭</div>
+                    <div class="analyze-empty-title">准备开始分析</div>
+                    <div class="analyze-empty-desc">选择 Tag 后点击“执行分析”，系统将自动匹配 map CSV 与评分文件并生成结果</div>
                 </div>
             </div>
         </section>

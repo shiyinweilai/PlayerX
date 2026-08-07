@@ -4490,46 +4490,48 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     const COL_MIN_WIDTH = 60;     // 最小列宽，避免拖到 0 让内容糊在一起
     const COL_MAX_WIDTH = 800;    // 上限，防误操作把单列拉得过宽
 
-    function loadSavedColWidths() {
+    function loadSavedColWidths(storageKey = COL_WIDTHS_KEY) {
         try {
-            const raw = localStorage.getItem(COL_WIDTHS_KEY);
+            const raw = localStorage.getItem(storageKey);
             if (!raw) return {};
             const obj = JSON.parse(raw);
             return (obj && typeof obj === 'object') ? obj : {};
         } catch (_) { return {}; }
     }
-    function saveColWidth(colKey, px) {
-        const cur = loadSavedColWidths();
+    function saveColWidth(colKey, px, storageKey = COL_WIDTHS_KEY) {
+        const cur = loadSavedColWidths(storageKey);
         cur[colKey] = px;
-        try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(cur)); } catch (_) {}
+        try { localStorage.setItem(storageKey, JSON.stringify(cur)); } catch (_) {}
     }
-    function applySavedColWidths(table) {
-        const saved = loadSavedColWidths();
+    function applySavedColWidths(table, options = {}) {
+        const { storageKey = COL_WIDTHS_KEY, skipCols = ['name'] } = options;
+        const skipSet = new Set(skipCols || []);
+        const saved = loadSavedColWidths(storageKey);
         const cols = table.querySelectorAll('colgroup > col[data-col]');
         cols.forEach(col => {
             const k = col.dataset.col;
-            // 文件名列从不写死宽度，让它继续吃剩余空间；即便用户「不小心」改过也忽略
-            if (k === 'name') return;
+            if (skipSet.has(k)) return;
             if (saved[k]) col.style.width = saved[k] + 'px';
         });
     }
 
-    function initColumnResizing(table) {
+    function initColumnResizing(table, options = {}) {
         if (!table || table.dataset.resizableInit === '1') return;
         table.dataset.resizableInit = '1';
 
+        const {
+            storageKey = COL_WIDTHS_KEY,
+            skipCols = ['name', 'actions', 'check'],
+        } = options;
+        const skipSet = new Set(skipCols || []);
+
         // 先把保存过的宽度灌进去
-        applySavedColWidths(table);
+        applySavedColWidths(table, { storageKey, skipCols });
 
         const ths = table.querySelectorAll('thead th[data-col]');
         ths.forEach(th => {
             const colKey = th.dataset.col;
-            // 文件名列不需要拖（它是「弹性列」，由邻列让出来），其余列都给一个手柄
-            if (colKey === 'name') return;
-            // 操作列在最右，再挂手柄会越界出表格右边缘，体验差且没意义，跳过
-            if (colKey === 'actions') return;
-            // 复选列太窄也没必要拖，跳过
-            if (colKey === 'check') return;
+            if (skipSet.has(colKey)) return;
 
             const grip = document.createElement('span');
             grip.className = 'col-resizer';
@@ -4539,13 +4541,13 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             grip.addEventListener('mousedown', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                startColResize(table, colKey, e.clientX, grip);
+                startColResize(table, colKey, e.clientX, grip, storageKey);
             });
             th.appendChild(grip);
         });
     }
 
-    function startColResize(table, colKey, startX, gripEl) {
+    function startColResize(table, colKey, startX, gripEl, storageKey = COL_WIDTHS_KEY) {
         const col = table.querySelector(`colgroup > col[data-col="${colKey}"]`);
         if (!col) return;
         // 起始宽度优先取 col.style.width；没有的话退回到对应 th 的实际宽
@@ -4569,7 +4571,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             gripEl.classList.remove('is-dragging');
             // 落点写入 localStorage
             const finalW = parseInt(col.style.width, 10);
-            if (finalW > 0) saveColWidth(colKey, finalW);
+            if (finalW > 0) saveColWidth(colKey, finalW, storageKey);
         };
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
@@ -4720,6 +4722,49 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         const emptyDiv  = $('analyzeEmpty');
         if (!tagSel || !runBtn) return;
 
+        const ANALYZE_RANK_COL_KEY = 'PlayerX.analyze.rank.colWidths.v1';
+        const ANALYZE_PAIR_COL_KEY = 'PlayerX.analyze.pair.colWidths.v1';
+
+        function ensureAnalyzeDefaultWidths() {
+            const rankDefaults = { rank: 56, bt: 120, elo: 120, win: 120 };
+            const pairDefaults = { aWins: 120, bWins: 120, p: 120, sig: 120 };
+
+            const rankTable = $('azRankTable');
+            const pairTable = $('azPairTable');
+
+            if (rankTable) {
+                const saved = loadSavedColWidths(ANALYZE_RANK_COL_KEY);
+                rankTable.querySelectorAll('colgroup > col[data-col]').forEach(col => {
+                    const k = col.dataset.col;
+                    if (saved[k]) return;
+                    if (rankDefaults[k]) col.style.width = rankDefaults[k] + 'px';
+                });
+            }
+
+            if (pairTable) {
+                const saved = loadSavedColWidths(ANALYZE_PAIR_COL_KEY);
+                pairTable.querySelectorAll('colgroup > col[data-col]').forEach(col => {
+                    const k = col.dataset.col;
+                    if (saved[k]) return;
+                    if (pairDefaults[k]) col.style.width = pairDefaults[k] + 'px';
+                });
+            }
+        }
+
+        function initAnalyzeColumnResizing() {
+            ensureAnalyzeDefaultWidths();
+            initColumnResizing($('azRankTable'), {
+                storageKey: ANALYZE_RANK_COL_KEY,
+                skipCols: [],
+            });
+            initColumnResizing($('azPairTable'), {
+                storageKey: ANALYZE_PAIR_COL_KEY,
+                skipCols: [],
+            });
+        }
+
+        initAnalyzeColumnResizing();
+
         // ── 加载可用 tag（从 uploads/ 目录中扫描所有独立 tag）──
         async function loadTags() {
   try {
@@ -4745,11 +4790,16 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         const sec = $('pageAnalyze');
         if (sec) obs.observe(sec, { attributes: true, attributeFilter: ['hidden'] });
 
+        function setAnalyzeStatus(text, type) {
+            statusEl.textContent = text || '';
+            statusEl.className = `analyze-status ${type ? `is-${type}` : ''}`.trim();
+        }
+
         // ── 执行分析 ──
         runBtn.addEventListener('click', async () => {
             const tag = tagSel.value;
             if (!tag) { showToast('请选择 Tag', 'warn'); return; }
-            statusEl.textContent = '分析中…';
+            setAnalyzeStatus('分析中…', 'loading');
             runBtn.disabled = true;
             resultDiv.style.display = 'none';
             emptyDiv.style.display = 'none';
@@ -4762,10 +4812,10 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
                 const j = await r.json();
                 if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
                 renderAnalyzeResult(j.data, tag);
-                statusEl.textContent = '✅ 完成';
+                setAnalyzeStatus('已完成', 'success');
             } catch(e) {
                 showToast('❌ ' + e.message, 'err');
-                statusEl.textContent = '❌ ' + e.message;
+                setAnalyzeStatus('失败：' + e.message, 'error');
                 emptyDiv.style.display = '';
             } finally { runBtn.disabled = false; }
         });
@@ -4773,30 +4823,35 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         // ── 渲染结果 ──
         function renderAnalyzeResult(data, tag) {
             resultDiv.style.display = '';
-    emptyDiv.style.display = 'none';
-      //统计卡片
-     $('azStatFiles').textContent  = data.fileCount || '-';
-         $('azStatRows').textContent   = data.filtered || data.raw || '-';
- $('azStatDedup').textContent  = data.deduped   || '-';
-   $('azStatGroups').textContent = data.completeGroups || '-';
+            emptyDiv.style.display = 'none';
+
+            // 统计卡片
+            $('azStatFiles').textContent = data.fileCount || '-';
+            $('azStatRows').textContent = data.filtered || data.raw || '-';
+            $('azStatDedup').textContent = data.deduped || '-';
+            $('azStatGroups').textContent = data.completeGroups || '-';
+
             // 排名表
-        const rankTb = document.querySelector('#azRankTable tbody');
-      rankTb.innerHTML = '';
+            const rankTb = document.querySelector('#azRankTable tbody');
+            rankTb.innerHTML = '';
             (data.models || []).forEach((m, i) => {
-   const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${i+1}</td><td><b>${esc(m.name || m.model || '')}</b></td><td>${m.strength != null ? m.strength.toFixed(4) : (m.bt != null ? m.bt.toFixed(3) : '-')}</td><td>${m.elo != null ? Math.round(m.elo) : '-'}</td><td>${m.mean != null ? m.mean.toFixed(2) : (m.winRate != null ? (m.winRate*100).toFixed(1)+'%' : '-')}</td>`;
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td><span class="rank-index">${i + 1}</span></td><td><b>${esc(m.name || m.model || '')}</b></td><td>${m.strength != null ? m.strength.toFixed(4) : (m.bt != null ? m.bt.toFixed(3) : '-')}</td><td>${m.elo != null ? Math.round(m.elo) : '-'}</td><td>${m.mean != null ? m.mean.toFixed(2) : (m.winRate != null ? (m.winRate * 100).toFixed(1) + '%' : '-')}</td>`;
                 rankTb.appendChild(tr);
- });
+            });
+
             // 成对检验表
             const pairTb = document.querySelector('#azPairTable tbody');
- pairTb.innerHTML = '';
-      (data.pairs || []).forEach(p => {
-        const tr = document.createElement('tr');
-          const sig = p.significant === '**' ? '⭐⭐' : p.significant === '*' ? '⭐' : '';
-          tr.innerHTML = `<td>${esc(p.modelA || p.a || '')}</td><td>${esc(p.modelB || p.b || '')}</td><td>${p.aWins}</td><td>${p.bWins}</td><td>${p.signP != null ? p.signP.toFixed(4) : (p.p != null ? p.p.toFixed(4) : '-')}</td><td>${sig || (p.significant || '')}</td>`;
-     pairTb.appendChild(tr);
- });
-    }
+            pairTb.innerHTML = '';
+            (data.pairs || []).forEach(p => {
+                const tr = document.createElement('tr');
+                const sigRaw = p.significant || '';
+                const sigClass = sigRaw === '**' || sigRaw === '*' ? 'is-significant' : 'is-ns';
+                const sigText = sigRaw === '**' ? '显著（p<0.01）' : sigRaw === '*' ? '显著（p<0.05）' : 'ns';
+                tr.innerHTML = `<td>${esc(p.modelA || p.a || '')}</td><td>${esc(p.modelB || p.b || '')}</td><td>${p.aWins}</td><td>${p.bWins}</td><td>${p.signP != null ? p.signP.toFixed(4) : (p.p != null ? p.p.toFixed(4) : '-')}</td><td><span class="sig-badge ${sigClass}">${sigText}</span></td>`;
+                pairTb.appendChild(tr);
+            });
+        }
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     })();
 })();
