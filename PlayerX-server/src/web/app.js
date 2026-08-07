@@ -16,42 +16,42 @@
 
     // ────────── DOM 引用 ──────────
     const $ = (id) => document.getElementById(id);
-    const tbody         = $('filesTbody');
-    const emptyHint     = $('emptyHint');
-    const searchInput   = $('searchInput');
-    const refreshBtn    = $('refreshBtn');
-    const mergeLatest   = $('mergeLatestBtn');
-    const mergeAll      = $('mergeAllBtn');
-    const selAll        = $('selAll');
-    const selInfo       = $('selInfo');
-    const selCount      = $('selCount');
+    const tbody = $('filesTbody');
+    const emptyHint = $('emptyHint');
+    const searchInput = $('searchInput');
+    const refreshBtn = $('refreshBtn');
+    const mergeLatest = $('mergeLatestBtn');
+    const mergeAll = $('mergeAllBtn');
+    const selAll = $('selAll');
+    const selInfo = $('selInfo');
+    const selCount = $('selCount');
     const archiveSelBtn = $('archiveSelBtn');
-    const deleteSelBtn  = $('deleteSelBtn');
+    const deleteSelBtn = $('deleteSelBtn');
 
-    const serverStatus  = $('serverStatus');
+    const serverStatus = $('serverStatus');
     const serverStatusText = $('serverStatusText');
-    const appVer        = $('appVer');
+    const appVer = $('appVer');
 
     // 管理员登录相关
     const adminLoginBtn = $('adminLoginBtn');
-    const loginMask     = $('loginMask');
-    const loginInput    = $('loginInput');
-    const loginErr      = $('loginErr');
-    const loginOkBtn    = $('loginOkBtn');
-    const loginCancelBtn= $('loginCancelBtn');
+    const loginMask = $('loginMask');
+    const loginInput = $('loginInput');
+    const loginErr = $('loginErr');
+    const loginOkBtn = $('loginOkBtn');
+    const loginCancelBtn = $('loginCancelBtn');
 
     // 上传 Token 设置弹窗
     const tokenSettingsBtn = $('tokenSettingsBtn');
-    const tokenMask        = $('tokenMask');
-    const tokenInput       = $('tokenInput');
-    const tokenErr         = $('tokenErr');
-    const tokenSaveBtn     = $('tokenSaveBtn');
-    const tokenCancelBtn   = $('tokenCancelBtn');
+    const tokenMask = $('tokenMask');
+    const tokenInput = $('tokenInput');
+    const tokenErr = $('tokenErr');
+    const tokenSaveBtn = $('tokenSaveBtn');
+    const tokenCancelBtn = $('tokenCancelBtn');
 
     const kpiCount = $('kpiCount');
     const kpiUsers = $('kpiUsers');
-    const kpiTags  = $('kpiTags');
-    const kpiSize  = $('kpiSize');
+    const kpiTags = $('kpiTags');
+    const kpiSize = $('kpiSize');
 
     // ────────── 状态 ──────────
     let state = {
@@ -143,7 +143,7 @@
             } else {
                 adminLoginBtn.hidden = false;
                 if (logged) {
-                         adminLoginBtn.textContent = '已登录（点击退出）';
+                    adminLoginBtn.textContent = '已登录（点击退出）';
                     adminLoginBtn.classList.add('is-logged');
                     adminLoginBtn.title = '点击退出管理员登录';
                 } else {
@@ -216,7 +216,7 @@
             }
         });
         // 归档抽屉的删除/批删按钮
-        const archDelSel    = document.getElementById('archiveDelSelBtn');
+        const archDelSel = document.getElementById('archiveDelSelBtn');
         const archDelFolder = document.getElementById('archiveDelFolderBtn');
         if (auth.enabled && !logged) {
             setLock(archDelSel, true);
@@ -295,11 +295,11 @@
     if (adminLoginBtn) {
         adminLoginBtn.addEventListener('click', () => {
             if (isLoggedIn()) doAdminLogout();
-            else              openLoginDialog();
+            else openLoginDialog();
         });
     }
     if (loginCancelBtn) loginCancelBtn.addEventListener('click', closeLoginDialog);
-    if (loginOkBtn)     loginOkBtn.addEventListener('click', doAdminLogin);
+    if (loginOkBtn) loginOkBtn.addEventListener('click', doAdminLogin);
     if (loginInput) loginInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doAdminLogin();
         if (e.key === 'Escape') closeLoginDialog();
@@ -366,8 +366,8 @@
         }
     }
     if (tokenSettingsBtn) tokenSettingsBtn.addEventListener('click', openTokenDialog);
-    if (tokenCancelBtn)   tokenCancelBtn.addEventListener('click', closeTokenDialog);
-    if (tokenSaveBtn)     tokenSaveBtn.addEventListener('click', saveUploadToken);
+    if (tokenCancelBtn) tokenCancelBtn.addEventListener('click', closeTokenDialog);
+    if (tokenSaveBtn) tokenSaveBtn.addEventListener('click', saveUploadToken);
     if (tokenInput) tokenInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') saveUploadToken();
         if (e.key === 'Escape') closeTokenDialog();
@@ -377,19 +377,19 @@
     });
 
     // ────────── 维度规则独立页面（多配置文件管理）──────────
-    const dimPageBtn        = $('dimPageBtn');
-    const dimPage           = $('dimPage');
-    const dimPageCloseBtn   = $('dimPageCloseBtn');
-    const dimView           = $('dimView');
-    const dimEditorSection  = $('dimEditorSection');
-    const dimEditor         = $('dimEditor');
-    const dimErr            = $('dimErr');
-    const dimEditBtn        = $('dimEditBtn');
-    const dimFormatBtn      = $('dimFormatBtn');
-    const dimSaveBtn        = $('dimSaveBtn');
-    const dimCancelEditBtn  = $('dimCancelEditBtn');
-    const dimSidebarList    = $('dimSidebarList');
-    const dimAddBtn         = $('dimAddBtn');
+    const dimPageBtn = $('dimPageBtn');
+    const dimPage = $('dimPage');
+    const dimPageCloseBtn = $('dimPageCloseBtn');
+    const dimView = $('dimView');
+    const dimEditorSection = $('dimEditorSection');
+    const dimEditor = $('dimEditor');
+    const dimErr = $('dimErr');
+    const dimEditBtn = $('dimEditBtn');
+    const dimFormatBtn = $('dimFormatBtn');
+    const dimSaveBtn = $('dimSaveBtn');
+    const dimCancelEditBtn = $('dimCancelEditBtn');
+    const dimSidebarList = $('dimSidebarList');
+    const dimAddBtn = $('dimAddBtn');
 
     // 主内容区（模式Tab/卡片/工具栏/表格）
     const mainContent = [
@@ -398,19 +398,19 @@
         document.querySelector('.footer'),
     ];
 
-    let dimPageOpen    = false;
-    let dimEditing     = false;
-    let dimRawData     = null;   // 当前选中配置的原始 JSON 字符串
+    let dimPageOpen = false;
+    let dimEditing = false;
+    let dimRawData = null;   // 当前选中配置的原始 JSON 字符串
     let dimCurrentName = null;   // 当前选中的配置文件名（不含 .json）
     let dimActiveBindings = {};  // { mode -> configName } 所有模式的绑定关系
 
     // 模式 id -> 显示标签
     const MODE_LABELS = {
-        multi_dim:     '多维评分',
-        subjective:    '主观评分',
-        quality:       '质量比较',
+        multi_dim: '多维评分',
+        subjective: '主观评分',
+        quality: '质量比较',
         quality_slide: '质量比较2',
-        test:          '测试模式',
+        test: '测试模式',
     };
     const MODE_ORDER = ['multi_dim', 'subjective', 'quality', 'quality_slide', 'test'];
 
@@ -418,13 +418,13 @@
 
     // ── 模块路由（sidebar 导航） ──
     const MODULES = {
-        dashboard:{ section: () => $('pageDashboard'), hash: '#dashboard' },
-        files:    { section: () => $('pageFiles'),hash: '#files' },
-        tasks:    { section: () => dimPage,         hash: '#tasks' },
-        models:   { section: () => $('pageModels'),   hash: '#models' },
-        analyze:  { section: () => $('pageAnalyze'),  hash: '#analyze' },
-        archive:  { section: () => $('pageArchive'),  hash: '#archive' },
-     settings: { section: () => $('pageSettings'), hash: '#settings' },
+        dashboard: { section: () => $('pageDashboard'), hash: '#dashboard' },
+        files: { section: () => $('pageFiles'), hash: '#files' },
+        tasks: { section: () => dimPage, hash: '#tasks' },
+        models: { section: () => $('pageModels'), hash: '#models' },
+        analyze: { section: () => $('pageAnalyze'), hash: '#analyze' },
+        archive: { section: () => $('pageArchive'), hash: '#archive' },
+        settings: { section: () => $('pageSettings'), hash: '#settings' },
     };
     let currentModule = 'files';
 
@@ -445,14 +445,14 @@
         // 各模块进入时的初始化
         if (name === 'tasks') { dimPageOpen = true; loadConfigList(); }
         else { dimPageOpen = false; }
-     if (name === 'archive') { loadArchiveFolders(); }
+        if (name === 'archive') { loadArchiveFolders(); }
         if (name === 'models') { renderModelsPage(); }
         if (name === 'tasks' && window.PXTasks && typeof window.PXTasks.onShow === 'function') {
-   window.PXTasks.onShow();
+            window.PXTasks.onShow();
         }
     }
 
-        // ═══════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
     //模型管理模块
     // ═══════════════════════════════════════════════════════════════
     let modelsData = [];
@@ -482,11 +482,11 @@
             const realIdx = modelsData.indexOf(src);
             const scope = src.scope || 'personal';
             const ownerName = src.owner || '个人';
- const scopeLabel = scope === 'team' ? '团队' : `${ownerName}`;
+            const scopeLabel = scope === 'team' ? '团队' : `${ownerName}`;
             const modelsHtml = (src.models || []).map(m =>
                 `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${realIdx}" data-model="${escHtml(m)}">&times;</button></span>`
             ).join('');
-     return `
+            return `
  <div class="mdl-source-card" data-idx="${realIdx}">
 <div class="mdl-source-header">
       <input class="mdl-source-name-input" data-idx="${realIdx}" value="${escHtml(src.name)}" title="点击编辑名称" />
@@ -511,9 +511,9 @@
                     <p class="mdl-page-desc">管理多个源目录，勾选即添加模型。支持个人/团队分组与多级子目录展开。</p>
                 </div>
                 <div class="mdl-scope-tabs">
-                    <button class="mdl-scope-tab ${modelsScope==='all'?'active':''}" data-scope="all">全部</button>
-        <button class="mdl-scope-tab ${modelsScope==='personal'?'active':''}" data-scope="personal"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 个人</button>
-       <button class="mdl-scope-tab ${modelsScope==='team'?'active':''}" data-scope="team"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> 团队</button>
+                    <button class="mdl-scope-tab ${modelsScope === 'all' ? 'active' : ''}" data-scope="all">全部</button>
+        <button class="mdl-scope-tab ${modelsScope === 'personal' ? 'active' : ''}" data-scope="personal"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 个人</button>
+       <button class="mdl-scope-tab ${modelsScope === 'team' ? 'active' : ''}" data-scope="team"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> 团队</button>
                 </div>
             </div>
             <div class="mdl-add-row">
@@ -547,9 +547,9 @@
     function renderTreeNode(dirs, parentPath, idx, existing, dirsInfo) {
         return dirs.map((d, i) => {
             const fullPath = parentPath + '/' + d;
-   const checked = existing.has(d) || existing.has(fullPath) ? 'checked' : '';
- const hasChildren = dirsInfo ? dirsInfo[i].hasChildren : true;
-return `<div class="mdl-tree-node">
+            const checked = existing.has(d) || existing.has(fullPath) ? 'checked' : '';
+            const hasChildren = dirsInfo ? dirsInfo[i].hasChildren : true;
+            return `<div class="mdl-tree-node">
          <label class="mdl-tree-item">
      <input type="checkbox" class="mdl-tree-cb" value="${escHtml(d)}" data-full="${escHtml(fullPath)}" ${checked}>
              <span class="mdl-tree-name">${escHtml(d)}</span>
@@ -575,7 +575,7 @@ return `<div class="mdl-tree-node">
             const name = container.querySelector('.mdl-add-name').value.trim() || `测试集${modelsData.length + 1}`;
             const dirPath = container.querySelector('.mdl-add-path').value.trim() || '';
             const scope = container.querySelector('.mdl-add-scope').value;
-  const owner = container.querySelector('.mdl-add-owner').value.trim();
+            const owner = container.querySelector('.mdl-add-owner').value.trim();
             try {
                 const r = await adminFetch('/api/models', {
                     method: 'POST',
@@ -589,42 +589,42 @@ return `<div class="mdl-tree-node">
             } catch (e) { alert('添加失败: ' + e.message); }
         });
 
- // 原地编辑测试集名称
-container.querySelectorAll('.mdl-source-name-input').forEach(input => {
+        // 原地编辑测试集名称
+        container.querySelectorAll('.mdl-source-name-input').forEach(input => {
             let saving = false;
             const save = async () => {
-      if (saving) return;
-        const idx = +input.dataset.idx;
-            const src = modelsData[idx];
+                if (saving) return;
+                const idx = +input.dataset.idx;
+                const src = modelsData[idx];
                 const newName = input.value.trim();
-    if (!newName || newName === src.name) { input.value = src.name; return; }
-   saving = true;
-     try {
-     const r = await adminFetch(`/api/models/${src.id}`, {
-           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newName })
-        });
-         const j = await r.json();
+                if (!newName || newName === src.name) { input.value = src.name; return; }
+                saving = true;
+                try {
+                    const r = await adminFetch(`/api/models/${src.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: newName })
+                    });
+                    const j = await r.json();
                     if (!j.ok) throw new Error(j.error);
-              modelsData[idx].name = newName;
-          } catch (e) { alert('修改名称失败: ' + e.message); input.value = src.name; }
-      saving = false;
+                    modelsData[idx].name = newName;
+                } catch (e) { alert('修改名称失败: ' + e.message); input.value = src.name; }
+                saving = false;
             };
-       input.addEventListener('blur', save);
+            input.addEventListener('blur', save);
             input.addEventListener('keydown', (e) => {
-     if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-    if (e.key === 'Escape') { input.value = modelsData[+input.dataset.idx].name; input.blur(); }
-  });
+                if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                if (e.key === 'Escape') { input.value = modelsData[+input.dataset.idx].name; input.blur(); }
+            });
         });
 
         // 删除源目录
         container.querySelectorAll('.mdl-btn-del').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const idx = +btn.dataset.idx;
-         const src = modelsData[idx];
-    try {
-    const r = await adminFetch(`/api/models/${src.id}`, { method: 'DELETE' });
+                const src = modelsData[idx];
+                try {
+                    const r = await adminFetch(`/api/models/${src.id}`, { method: 'DELETE' });
                     const j = await r.json();
                     if (!j.ok) throw new Error(j.error);
                     modelsData.splice(idx, 1);
@@ -633,97 +633,97 @@ container.querySelectorAll('.mdl-source-name-input').forEach(input => {
             });
         });
 
-// 点击模型区域展开树
- container.querySelectorAll('.mdl-models-wrap').forEach(wrap => {
-         wrap.addEventListener('click', async (e) => {
-      // 如果点击的是标签删除按钮，不触发展开
- if (e.target.closest('.mdl-tag-rm')) return;
- const idx = +wrap.dataset.idx;
-    const src = modelsData[idx];
-     const panel = container.querySelector(`.mdl-tree-panel[data-idx="${idx}"]`);
- if (!panel) return;
-    if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+        // 点击模型区域展开树
+        container.querySelectorAll('.mdl-models-wrap').forEach(wrap => {
+            wrap.addEventListener('click', async (e) => {
+                // 如果点击的是标签删除按钮，不触发展开
+                if (e.target.closest('.mdl-tag-rm')) return;
+                const idx = +wrap.dataset.idx;
+                const src = modelsData[idx];
+                const panel = container.querySelector(`.mdl-tree-panel[data-idx="${idx}"]`);
+                if (!panel) return;
+                if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
                 panel.innerHTML = '<span class="mdl-tree-loading">⏳ 扫描目录中...</span>';
- panel.style.display = 'block';
-           try {
-       const r = await adminFetch('/api/models/scan', {
-     method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: src.path })
-   });
-       const j = await r.json();
-           if (!j.ok) throw new Error(j.error);
-    const existing = new Set(src.models || []);
-    const treeHtml = renderTreeNode(j.dirs, src.path, idx, existing, j.dirsInfo);
-    panel.innerHTML = `<div class="mdl-tree-toolbar">
+                panel.style.display = 'block';
+                try {
+                    const r = await adminFetch('/api/models/scan', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: src.path })
+                    });
+                    const j = await r.json();
+                    if (!j.ok) throw new Error(j.error);
+                    const existing = new Set(src.models || []);
+                    const treeHtml = renderTreeNode(j.dirs, src.path, idx, existing, j.dirsInfo);
+                    panel.innerHTML = `<div class="mdl-tree-toolbar">
   <button class="mdl-tree-collapse" data-idx="${idx}" title="收起"><svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg> 收起</button>
     <input class="mdl-tree-filter" data-idx="${idx}" placeholder="输入关键字过滤..." />
     <label class="mdl-tree-selectall-label"><input type="checkbox" class="mdl-tree-selectall-cb" data-idx="${idx}" /> 全选</label>
     </div>
     <div class="mdl-tree-root">${treeHtml}</div>`;
-         bindTreeEvents(panel, idx, container);
-         // 绑定收起按钮
-         panel.querySelector('.mdl-tree-collapse').addEventListener('click', () => {
-panel.style.display = 'none';
-         });
-         // 绑定过滤框
-      panel.querySelector('.mdl-tree-filter').addEventListener('input', function() {
-             const keyword = this.value.trim().toLowerCase();
-   panel.querySelectorAll('.mdl-tree-node').forEach(node => {
-     const name = node.querySelector(':scope > .mdl-tree-item > .mdl-tree-name');
-      if (!name) return;
-     const match = !keyword || name.textContent.toLowerCase().includes(keyword);
-         node.style.display = match ? '' : 'none';
- // 如果匹配，确保所有父节点也可见
-      if (match && keyword) {
-       let parent = node.parentElement;
-         while (parent && !parent.classList.contains('mdl-tree-root')) {
-   if (parent.classList.contains('mdl-tree-node')) parent.style.display = '';
-  if (parent.classList.contains('mdl-tree-children')) parent.style.display = 'block';
-     parent = parent.parentElement;
-       }
-         }
-          });
-     });
- // 绑定全选checkbox
-     panel.querySelector('.mdl-tree-selectall-cb').addEventListener('change', async function() {
- const cbs = panel.querySelectorAll('.mdl-tree-cb');
-   const visibleCbs = Array.from(cbs).filter(cb => cb.closest('.mdl-tree-node').style.display !== 'none');
-    const isChecked = this.checked;
-    const src = modelsData[idx];
-    if (isChecked) {
-        // 全选：将所有可见的加入
-        visibleCbs.forEach(cb => { cb.checked = true; });
-        const newModels = visibleCbs.map(cb => cb.value);
-        src.models = [...new Set([...(src.models || []), ...newModels])];
-    } else {
-    // 取消全选：移除所有可见的
-        const visibleVals = new Set(visibleCbs.map(cb => cb.value));
-        visibleCbs.forEach(cb => { cb.checked = false; });
-        src.models = (src.models || []).filter(m => !visibleVals.has(m));
-    }
-    await saveModels(idx);
-    // 更新标签显示
-    const wrap = container.querySelector(`.mdl-source-card[data-idx="${idx}"] .mdl-models-wrap`);
- if (wrap) {
-      const modelsHtml = src.models.map(m =>
-            `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`
-        ).join('');
-        wrap.innerHTML = '<svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> ' + (modelsHtml || '<span class="mdl-empty">点击展开</span>');
-        wrap.querySelectorAll('.mdl-tag-rm').forEach(btn2 => {
-  btn2.addEventListener('click', async () => {
-          const model2 = btn2.dataset.model;
-                modelsData[idx].models = modelsData[idx].models.filter(m => m !== model2);
-  await saveModels(idx);
-  renderModelsContent(container);
-   });
-        });
-    }
-  });
- } catch (e) {
-         panel.innerHTML = `<span style="color:#ef4444;font-size:12px">扫描失败: ${e.message}</span>`;
-    }
-       });
+                    bindTreeEvents(panel, idx, container);
+                    // 绑定收起按钮
+                    panel.querySelector('.mdl-tree-collapse').addEventListener('click', () => {
+                        panel.style.display = 'none';
+                    });
+                    // 绑定过滤框
+                    panel.querySelector('.mdl-tree-filter').addEventListener('input', function () {
+                        const keyword = this.value.trim().toLowerCase();
+                        panel.querySelectorAll('.mdl-tree-node').forEach(node => {
+                            const name = node.querySelector(':scope > .mdl-tree-item > .mdl-tree-name');
+                            if (!name) return;
+                            const match = !keyword || name.textContent.toLowerCase().includes(keyword);
+                            node.style.display = match ? '' : 'none';
+                            // 如果匹配，确保所有父节点也可见
+                            if (match && keyword) {
+                                let parent = node.parentElement;
+                                while (parent && !parent.classList.contains('mdl-tree-root')) {
+                                    if (parent.classList.contains('mdl-tree-node')) parent.style.display = '';
+                                    if (parent.classList.contains('mdl-tree-children')) parent.style.display = 'block';
+                                    parent = parent.parentElement;
+                                }
+                            }
+                        });
+                    });
+                    // 绑定全选checkbox
+                    panel.querySelector('.mdl-tree-selectall-cb').addEventListener('change', async function () {
+                        const cbs = panel.querySelectorAll('.mdl-tree-cb');
+                        const visibleCbs = Array.from(cbs).filter(cb => cb.closest('.mdl-tree-node').style.display !== 'none');
+                        const isChecked = this.checked;
+                        const src = modelsData[idx];
+                        if (isChecked) {
+                            // 全选：将所有可见的加入
+                            visibleCbs.forEach(cb => { cb.checked = true; });
+                            const newModels = visibleCbs.map(cb => cb.value);
+                            src.models = [...new Set([...(src.models || []), ...newModels])];
+                        } else {
+                            // 取消全选：移除所有可见的
+                            const visibleVals = new Set(visibleCbs.map(cb => cb.value));
+                            visibleCbs.forEach(cb => { cb.checked = false; });
+                            src.models = (src.models || []).filter(m => !visibleVals.has(m));
+                        }
+                        await saveModels(idx);
+                        // 更新标签显示
+                        const wrap = container.querySelector(`.mdl-source-card[data-idx="${idx}"] .mdl-models-wrap`);
+                        if (wrap) {
+                            const modelsHtml = src.models.map(m =>
+                                `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`
+                            ).join('');
+                            wrap.innerHTML = '<svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> ' + (modelsHtml || '<span class="mdl-empty">点击展开</span>');
+                            wrap.querySelectorAll('.mdl-tag-rm').forEach(btn2 => {
+                                btn2.addEventListener('click', async () => {
+                                    const model2 = btn2.dataset.model;
+                                    modelsData[idx].models = modelsData[idx].models.filter(m => m !== model2);
+                                    await saveModels(idx);
+                                    renderModelsContent(container);
+                                });
+                            });
+                        }
+                    });
+                } catch (e) {
+                    panel.innerHTML = `<span style="color:#ef4444;font-size:12px">扫描失败: ${e.message}</span>`;
+                }
+            });
         });
 
         // 删除单个模型标签
@@ -771,7 +771,7 @@ panel.style.display = 'none';
 
         // 展开子目录
         panel.querySelectorAll('.mdl-tree-expand').forEach(btn => {
-            btn.addEventListener('click', async function() {
+            btn.addEventListener('click', async function () {
                 const subPath = this.dataset.path;
                 const childrenDiv = this.nextElementSibling;
                 if (!childrenDiv) return;
@@ -799,14 +799,14 @@ panel.style.display = 'none';
                         this.disabled = true;
                         return;
                     }
-  const existing = new Set(modelsData[idx].models || []);
-      childrenDiv.innerHTML = renderTreeNode(j.dirs, subPath, idx, existing, j.dirsInfo);
+                    const existing = new Set(modelsData[idx].models || []);
+                    childrenDiv.innerHTML = renderTreeNode(j.dirs, subPath, idx, existing, j.dirsInfo);
                     childrenDiv.dataset.loaded = '1';
                     childrenDiv.style.display = 'block';
                     this.textContent = '▼';
                     // 递归绑定子级展开按钮
                     childrenDiv.querySelectorAll('.mdl-tree-expand').forEach(subBtn => {
-                        subBtn.addEventListener('click', async function() {
+                        subBtn.addEventListener('click', async function () {
                             const sp = this.dataset.path;
                             const cd = this.nextElementSibling;
                             if (!cd) return;
@@ -817,9 +817,9 @@ panel.style.display = 'none';
                                 const r2 = await adminFetch('/api/models/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: sp }) });
                                 const j2 = await r2.json();
                                 if (!j2.ok) throw new Error(j2.error);
-         if (j2.dirs.length === 0) { this.textContent = '·'; this.disabled = true; return; }
-          const ex2 = new Set(modelsData[idx].models || []);
-              cd.innerHTML = renderTreeNode(j2.dirs, sp, idx, ex2, j2.dirsInfo);
+                                if (j2.dirs.length === 0) { this.textContent = '·'; this.disabled = true; return; }
+                                const ex2 = new Set(modelsData[idx].models || []);
+                                cd.innerHTML = renderTreeNode(j2.dirs, sp, idx, ex2, j2.dirsInfo);
                                 cd.dataset.loaded = '1';
                                 cd.style.display = 'block';
                                 this.textContent = '▼';
@@ -1012,7 +1012,7 @@ panel.style.display = 'none';
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ order: newOrder }),
                     credentials: 'include',
-                }).catch(() => {});
+                }).catch(() => { });
             });
         });
     }
@@ -1048,11 +1048,11 @@ panel.style.display = 'none';
             const pw = popup.offsetWidth;
             const ph = popup.offsetHeight;
             let left = rect.left;
-            let top  = rect.bottom + 4;
+            let top = rect.bottom + 4;
             if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
             if (top + ph > window.innerHeight - 8) top = rect.top - ph - 4;
             popup.style.left = left + 'px';
-            popup.style.top  = top  + 'px';
+            popup.style.top = top + 'px';
         });
 
         // 点击模式项 → 绑定/解绑
@@ -1202,7 +1202,7 @@ panel.style.display = 'none';
     // ── 选中某个配置，加载并展示 ──
     async function selectConfig(name) {
         dimCurrentName = name;
-        dimActiveTab = 'dims';   // 切换配置时回到「维度」Tab
+        dimActiveTab = 'build';   // 切换配置时回到「维度」Tab
         // 高亮侧边栏
         dimSidebarList.querySelectorAll('.dim-sidebar-item').forEach(el => {
             el.classList.toggle('is-active', el.dataset.name === name);
@@ -1217,7 +1217,7 @@ panel.style.display = 'none';
             const text = await r.text();
             if (!r.ok) {
                 let msg = 'HTTP ' + r.status;
-                try { msg = JSON.parse(text).error || msg; } catch (_) {}
+                try { msg = JSON.parse(text).error || msg; } catch (_) { }
                 throw new Error(msg);
             }
             dimRawData = text;
@@ -1232,15 +1232,15 @@ panel.style.display = 'none';
         return new Promise(resolve => {
             const overlay = document.createElement('div');
             Object.assign(overlay.style, {
-                position:'fixed',top:'0',left:'0',right:'0',bottom:'0',zIndex:'10000',
-                background:'rgba(0,0,0,.35)',backdropFilter:'blur(2px)',
-                display:'flex',alignItems:'center',justifyContent:'center'
+                position: 'fixed', top: '0', left: '0', right: '0', bottom: '0', zIndex: '10000',
+                background: 'rgba(0,0,0,.35)', backdropFilter: 'blur(2px)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center'
             });
             const box = document.createElement('div');
             Object.assign(box.style, {
-                background:'#fff',borderRadius:'14px',padding:'28px 32px 22px',
-                minWidth:'340px',maxWidth:'440px',boxShadow:'0 8px 40px rgba(0,0,0,.18)',
-                animation:'none'
+                background: '#fff', borderRadius: '14px', padding: '28px 32px 22px',
+                minWidth: '340px', maxWidth: '440px', boxShadow: '0 8px 40px rgba(0,0,0,.18)',
+                animation: 'none'
             });
             const okColor = danger ? '#ff4d4f' : '#4a9eff';
             box.innerHTML = `
@@ -1292,13 +1292,15 @@ panel.style.display = 'none';
             task: '',
             scale: '1-5 Likert 整数',
             dimensions: [
-                { key: '维度1', definition: '请填写维度说明', levels: [
-                    { score: 5, label: '优秀', description: '' },
-                    { score: 4, label: '良好', description: '' },
-                    { score: 3, label: '一般', description: '' },
-                    { score: 2, label: '较差', description: '' },
-                    { score: 1, label: '很差', description: '' }
-                ]}
+                {
+                    key: '维度1', definition: '请填写维度说明', levels: [
+                        { score: 5, label: '优秀', description: '' },
+                        { score: 4, label: '良好', description: '' },
+                        { score: 3, label: '一般', description: '' },
+                        { score: 2, label: '较差', description: '' },
+                        { score: 1, label: '很差', description: '' }
+                    ]
+                }
             ]
         }, null, 2);
         dimCurrentName = tmpName;
@@ -1326,7 +1328,7 @@ panel.style.display = 'none';
     function renderDimCards(obj) {
         const admin = isLoggedIn();
         const metaItems = [];
-        if (obj && obj.type)  metaItems.push(`<span class="dim-meta-item dim-meta-type"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
+        if (obj && obj.type) metaItems.push(`<span class="dim-meta-item dim-meta-type"><span class="dim-meta-label">评测类型</span><span class="dim-meta-val">${escHtml(obj.type)}</span></span>`);
         // 评测任务：可内联编辑
         metaItems.push(`<span class="dim-meta-item dim-meta-task"><span class="dim-meta-label">评测任务</span><span class="dim-meta-val dim-meta-editable" data-field="task" title="点击编辑">${escHtml((obj && obj.task) || '（未填写，点击添加）')}</span></span>`);
         // 备注 tag：可内联编辑
@@ -1334,27 +1336,27 @@ panel.style.display = 'none';
         const metaHtml = metaItems.length ? `<div class="dim-cards-meta">${metaItems.join('<span class="dim-meta-sep">·</span>')}</div>` : '';
 
         // ── Tab 栏 ──
-   const tabs = [
- ['dims', '维度'],
-    ['checklist',  'Checklist'],
-     ['testers',    '测试人'],
-     ['build',      '🔨 构建'],
-     ];
+        const tabs = [
+            ['build', '🔨 构建'],
+            ['dims', '维度'],
+            ['checklist', 'Checklist'],
+            ['testers', '测试人'],
+        ];
         const tabsHtml = `<div class="dim-tabbar">${tabs.map(([id, label]) =>
             `<button class="dim-tab${dimActiveTab === id ? ' is-active' : ''}" data-tab="${id}">${label}</button>`
         ).join('')}</div>`;
 
- // ── Tab 内容：只渲染当前 Tab ──
+        // ── Tab 内容：只渲染当前 Tab ──
         let contentHtml = '';
         if (dimActiveTab === 'checklist') {
- contentHtml = renderChecklistPreview(obj ? obj.checklists : null, obj ? obj.checklist_config : null, admin);
-     } else if (dimActiveTab === 'testers') {
-   contentHtml = renderTestersSection(obj, admin);
-    } else if (dimActiveTab === 'build') {
-     contentHtml = renderBuildSection(obj, admin);
+            contentHtml = renderChecklistPreview(obj ? obj.checklists : null, obj ? obj.checklist_config : null, admin);
+        } else if (dimActiveTab === 'testers') {
+            contentHtml = renderTestersSection(obj, admin);
+        } else if (dimActiveTab === 'build') {
+            contentHtml = renderBuildSection(obj, admin);
         } else {
             if (!obj || !Array.isArray(obj.dimensions) || obj.dimensions.length === 0) {
-      contentHtml = `<div class="dim-checklist-section">
+                contentHtml = `<div class="dim-checklist-section">
       <div class="dim-cl-header">
    <span class="dim-cl-title">维度</span>
        <span class="dim-cl-subtitle">评分维度及等级定义</span>
@@ -1364,10 +1366,10 @@ panel.style.display = 'none';
     ${admin ? `<button class="dim-add-dim-btn">＋ 添加维度</button>` : ''}
             </div>
         </div>`;
-  } else {
-     const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
-   const addDimBtn = admin ? `<button class="dim-add-dim-btn">＋ 添加维度</button>` : '';
-     contentHtml = `<div class="dim-checklist-section">
+            } else {
+                const cardsHtml = obj.dimensions.map((d, idx) => renderDimCardHtml(d, idx, obj.dimensions.length, admin)).join('');
+                const addDimBtn = admin ? `<button class="dim-add-dim-btn">＋ 添加维度</button>` : '';
+                contentHtml = `<div class="dim-checklist-section">
         <div class="dim-cl-header">
     <span class="dim-cl-title">维度</span>
               <span class="dim-cl-subtitle">评分维度及等级定义</span>
@@ -1377,121 +1379,121 @@ panel.style.display = 'none';
  <div class="dim-bottom-actions">${addDimBtn}</div>
         </div>
         </div>`;
-      }
+            }
         }
 
         dimView.innerHTML = metaHtml + tabsHtml + contentHtml;
 
         // 渲染后绑定事件（延迟到 innerHTML 写入后）
         setTimeout(() => {
-    bindMetaInlineEdit();
-   bindDimTabs();
+            bindMetaInlineEdit();
+            bindDimTabs();
             if (admin) bindCardEdit(obj || { dimensions: [] });
-         if (dimActiveTab === 'build' && admin) bindBuildTabEvents();
+            if (dimActiveTab === 'build' && admin) bindBuildTabEvents();
         }, 0);
     }
 
     /** Tab 切换绑定：切换后整体重渲染（状态保存在 dimActiveTab） */
     function bindDimTabs() {
         dimView.querySelectorAll('.dim-tab').forEach(btn => {
-         btn.addEventListener('click', () => {
-       const tab = btn.dataset.tab;
-         if (!tab || tab === dimActiveTab) return;
-             dimActiveTab = tab;
-     let data;
-       try { data = JSON.parse(dimRawData); } catch (_) { data = { dimensions: [] }; }
-      renderDimCards(data);
-   });
-      });
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.tab;
+                if (!tab || tab === dimActiveTab) return;
+                dimActiveTab = tab;
+                let data;
+                try { data = JSON.parse(dimRawData); } catch (_) { data = { dimensions: [] }; }
+                renderDimCards(data);
+            });
+        });
     }
 
     /** 构建 Tab 事件绑定 */
     function bindBuildTabEvents() {
-      const runBtn = dimView.querySelector('.dim-build-run-btn');
-      if (runBtn) runBtn.addEventListener('click', runBuildAction);
+        const runBtn = dimView.querySelector('.dim-build-run-btn');
+        if (runBtn) runBtn.addEventListener('click', runBuildAction);
 
-      // ── 展开/折叠右侧测试源面板 ──
-      const toggleBtn = dimView.querySelector('.dim-build-toggle-ts');
-  if (toggleBtn) {
-   toggleBtn.addEventListener('click', () => {
-       const right = dimView.querySelector('.dim-build-right');
-    if (right) {
-          right.classList.toggle('dim-build-right--collapsed');
-  toggleBtn.textContent = right.classList.contains('dim-build-right--collapsed') ? '⚙ 测试源' : '✕ 收起';
- }
-          });
-      }
+        // ── 展开/折叠右侧测试源面板 ──
+        const toggleBtn = dimView.querySelector('.dim-build-toggle-ts');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                const right = dimView.querySelector('.dim-build-right');
+                if (right) {
+                    right.classList.toggle('dim-build-right--collapsed');
+                    toggleBtn.textContent = right.classList.contains('dim-build-right--collapsed') ? '⚙ 测试源' : '✕ 收起';
+                }
+            });
+        }
 
- // ── 从模型管理加载模型列表 ──
-   const loadModelsBtn = dimView.querySelector('.dim-build-load-models');
-   if (loadModelsBtn) {
-      loadModelsBtn.addEventListener('click', async () => {
-      const picker = dimView.querySelector('.dim-build-model-picker');
-    if (!picker) return;
-          if (picker.style.display !== 'none') { picker.style.display = 'none'; return; }
+        // ── 从模型管理加载模型列表 ──
+        const loadModelsBtn = dimView.querySelector('.dim-build-load-models');
+        if (loadModelsBtn) {
+            loadModelsBtn.addEventListener('click', async () => {
+                const picker = dimView.querySelector('.dim-build-model-picker');
+                if (!picker) return;
+                if (picker.style.display !== 'none') { picker.style.display = 'none'; return; }
 
-     picker.innerHTML = '<span class="dim-build-picker-loading">加载中...</span>';
-          picker.style.display = 'block';
+                picker.innerHTML = '<span class="dim-build-picker-loading">加载中...</span>';
+                picker.style.display = 'block';
 
-          try {
-  const resp = await adminFetch('/api/models');
-      const data = await resp.json();
- if (!data.ok) { picker.innerHTML = `<span class="dim-build-picker-err">\u274c ${data.error}</span>`; return; }
+                try {
+                    const resp = await adminFetch('/api/models');
+                    const data = await resp.json();
+                    if (!data.ok) { picker.innerHTML = `<span class="dim-build-picker-err">\u274c ${data.error}</span>`; return; }
 
-    const sources = data.sources || [];
-            if (sources.length === 0) {
-    picker.innerHTML = '<span class="dim-build-picker-err">暂无模型源目录，请先到「模型管理」添加</span>';
-  return;
-            }
+                    const sources = data.sources || [];
+                    if (sources.length === 0) {
+                        picker.innerHTML = '<span class="dim-build-picker-err">暂无模型源目录，请先到「模型管理」添加</span>';
+                        return;
+                    }
 
- // 按测试集名字列出，点击直接导入
-            let listHtml = '<div class="dim-build-picker-list">';
-            sources.forEach((src, idx) => {
-              const modelCount = (src.models || []).length;
-          listHtml += `<div class="dim-build-picker-source-item" data-src-idx="${idx}">
+                    // 按测试集名字列出，点击直接导入
+                    let listHtml = '<div class="dim-build-picker-list">';
+                    sources.forEach((src, idx) => {
+                        const modelCount = (src.models || []).length;
+                        listHtml += `<div class="dim-build-picker-source-item" data-src-idx="${idx}">
     <span class="dim-build-picker-source-name">${escHtml(src.name)}</span>
          <span class="dim-build-picker-source-count">${modelCount} 个模型</span>
     </div>`;
+                    });
+                    listHtml += '</div>';
+
+                    picker.innerHTML = listHtml;
+
+                    // 点击测试集名字直接导入所有模型
+                    const ta = dimView.querySelector('[data-bf="models"]');
+                    picker.querySelectorAll('.dim-build-picker-source-item').forEach(item => {
+                        item.addEventListener('click', () => {
+                            const srcIdx = +item.dataset.srcIdx;
+                            const src = sources[srcIdx];
+                            const models = (src.models || []).map(m => src.path + '/' + m);
+                            if (models.length === 0) {
+                                item.classList.add('dim-build-picker-source-empty');
+                                item.querySelector('.dim-build-picker-source-count').textContent = '暂无模型';
+                                setTimeout(() => item.classList.remove('dim-build-picker-source-empty'), 1500);
+                                return;
+                            }
+                            if (ta) { ta.value = models.join('\n'); ta.dispatchEvent(new Event('change')); }
+                            picker.style.display = 'none';
+                        });
+                    });
+                } catch (e) {
+                    picker.innerHTML = `<span class="dim-build-picker-err">\u274c 请求失败: ${e.message}</span>`;
+                }
             });
-   listHtml += '</div>';
-
-  picker.innerHTML = listHtml;
-
- // 点击测试集名字直接导入所有模型
-    const ta = dimView.querySelector('[data-bf="models"]');
-   picker.querySelectorAll('.dim-build-picker-source-item').forEach(item => {
-         item.addEventListener('click', () => {
-     const srcIdx = +item.dataset.srcIdx;
-        const src = sources[srcIdx];
-  const models = (src.models || []).map(m => src.path + '/' + m);
-      if (models.length === 0) {
-              item.classList.add('dim-build-picker-source-empty');
-                item.querySelector('.dim-build-picker-source-count').textContent = '暂无模型';
-          setTimeout(() => item.classList.remove('dim-build-picker-source-empty'), 1500);
-   return;
-   }
-       if (ta) { ta.value = models.join('\n'); ta.dispatchEvent(new Event('change')); }
-      picker.style.display = 'none';
-     });
-       });
-          } catch (e) {
- picker.innerHTML = `<span class="dim-build-picker-err">\u274c 请求失败: ${e.message}</span>`;
         }
-   });
-      }
 
-      // ── 自动保存：构建配置字段变化时自动持久化到 JSON ──
-      let buildSaveTimer = null;
-  const autosaveBuild = () => {
-          if (buildSaveTimer) clearTimeout(buildSaveTimer);
- buildSaveTimer = setTimeout(() => { saveBuildConfig(true); }, 600);
-      };
-   dimView.querySelectorAll('[data-bf]').forEach(el => {
-          el.addEventListener('change', autosaveBuild);
-          if (el.tagName === 'TEXTAREA' || el.type === 'text' || !el.type) {
-         el.addEventListener('blur', autosaveBuild);
-       }
-    });
+        // ── 自动保存：构建配置字段变化时自动持久化到 JSON ──
+        let buildSaveTimer = null;
+        const autosaveBuild = () => {
+            if (buildSaveTimer) clearTimeout(buildSaveTimer);
+            buildSaveTimer = setTimeout(() => { saveBuildConfig(true); }, 600);
+        };
+        dimView.querySelectorAll('[data-bf]').forEach(el => {
+            el.addEventListener('change', autosaveBuild);
+            if (el.tagName === 'TEXTAREA' || el.type === 'text' || !el.type) {
+                el.addEventListener('blur', autosaveBuild);
+            }
+        });
     }
 
     /** 渲染单张维度卡片 HTML（纯字符串，不绑定事件） */
@@ -1502,11 +1504,11 @@ panel.style.display = 'none';
         const levelsHtml = levels.map((lv, lvIdx) => {
             const score = lv.score != null ? lv.score : '';
             const filledStars = Math.max(0, +score || 0);
-            const emptyStars  = Math.max(0, totalStars - filledStars);
+            const emptyStars = Math.max(0, totalStars - filledStars);
             const starsHtml = admin
                 ? `<span class="dim-level-stars-edit" data-dim="${idx}" data-lv="${lvIdx}" title="点击调整分值">`
-                    + '★'.repeat(filledStars) + '☆'.repeat(emptyStars)
-                    + `</span>`
+                + '★'.repeat(filledStars) + '☆'.repeat(emptyStars)
+                + `</span>`
                 : `<span class="dim-level-stars">${'★'.repeat(filledStars)}${'☆'.repeat(emptyStars)}</span>`;
 
             const labelEl = admin
@@ -1554,7 +1556,7 @@ panel.style.display = 'none';
             : (d.definition ? `<div class="dim-card-def">${escHtml(d.definition)}</div>` : '');
 
         const delDimBtn = admin
-             ? `<button class="dim-del-dim-btn ghost-btn" data-dim="${idx}" title="删除此维度"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> 删除</button>`
+            ? `<button class="dim-del-dim-btn ghost-btn" data-dim="${idx}" title="删除此维度"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> 删除</button>`
             : '';
 
         return `<div class="dim-card${admin ? ' dim-card-draggable' : ''}" data-dim="${idx}" draggable="${admin ? 'true' : 'false'}">
@@ -1587,8 +1589,8 @@ panel.style.display = 'none';
             const delBtn = admin ? `<button class="dim-cl-del-btn" data-idx="${idx}" title="删除">✕</button>` : '';
 
             const labelCls = 'dim-cl-editable dim-cl-label' + (item.label ? '' : ' dim-card-placeholder');
-            const keyCls   = 'dim-cl-editable dim-cl-key'   + (item.key ? '' : ' dim-card-placeholder');
-            const defCls   = 'dim-cl-editable dim-cl-def'   + (item.definition ? '' : ' dim-card-placeholder');
+            const keyCls = 'dim-cl-editable dim-cl-key' + (item.key ? '' : ' dim-card-placeholder');
+            const defCls = 'dim-cl-editable dim-cl-def' + (item.definition ? '' : ' dim-card-placeholder');
 
             const labelHtml = admin
                 ? `<span class="${labelCls}" data-cl-idx="${idx}" data-cl-field="label" title="点击编辑名称">${escHtml(item.label || '点击填写名称')}</span>`
@@ -1642,29 +1644,29 @@ panel.style.display = 'none';
     // ── 构建配置 Tab ──
     function renderBuildSection(obj, admin) {
         const b = (obj && obj.build && typeof obj.build === 'object') ? obj.build : {};
-      const tag = (obj && obj.tag) || '';
+        const tag = (obj && obj.tag) || '';
 
         // size: xs=60px, sm=80px, md=140px, lg=240px, xl=100%
-    const fld = (label, id, val, ph, size) => {
+        const fld = (label, id, val, ph, size) => {
             const szCls = 'dim-build-sz-' + (size || 'md');
-   return `<div class="dim-build-field ${szCls}"><label class="dim-build-label">${escHtml(label)}</label>`
+            return `<div class="dim-build-field ${szCls}"><label class="dim-build-label">${escHtml(label)}</label>`
                 + (admin
-  ? `<input class="dim-build-input" data-bf="${id}" value="${escHtml(val || '')}" placeholder="${escHtml(ph || '')}">`
-     : `<span class="dim-build-val">${escHtml(val || ph || '—')}</span>`)
-    + `</div>`;
+                    ? `<input class="dim-build-input" data-bf="${id}" value="${escHtml(val || '')}" placeholder="${escHtml(ph || '')}">`
+                    : `<span class="dim-build-val">${escHtml(val || ph || '—')}</span>`)
+                + `</div>`;
         };
 
         const selFld = (label, id, val, opts, size) => {
-    const szCls = 'dim-build-sz-' + (size || 'sm');
+            const szCls = 'dim-build-sz-' + (size || 'sm');
             return `<div class="dim-build-field ${szCls}"><label class="dim-build-label">${escHtml(label)}</label>`
-      + (admin
- ? `<select class="dim-build-input" data-bf="${id}">${opts.map(([v, t]) => `<option value="${escHtml(v)}"${val === v ? ' selected' : ''}>${escHtml(t)}</option>`).join('')}</select>`
-         : `<span class="dim-build-val">${escHtml(opts.find(o => o[0] === val)?.[1] || val || '—')}</span>`)
-         + `</div>`;
-     };
+                + (admin
+                    ? `<select class="dim-build-input" data-bf="${id}">${opts.map(([v, t]) => `<option value="${escHtml(v)}"${val === v ? ' selected' : ''}>${escHtml(t)}</option>`).join('')}</select>`
+                    : `<span class="dim-build-val">${escHtml(opts.find(o => o[0] === val)?.[1] || val || '—')}</span>`)
+                + `</div>`;
+        };
 
-     const models = Array.isArray(b.models) ? b.models.join('\n') : '';
-  const samples = Array.isArray(b.samples) ? b.samples.join(',') : '';
+        const models = Array.isArray(b.models) ? b.models.join('\n') : '';
+        const samples = Array.isArray(b.samples) ? b.samples.join(',') : '';
         const excludeSamples = Array.isArray(b.exclude_samples) ? b.exclude_samples.join(',') : '';
 
         const syncToTs = b.sync_to_testsrc !== false; // 默认勾选
@@ -1691,13 +1693,13 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         <div class="dim-build-grp">
                    <div class="dim-build-grp-title">模型列表${admin ? '<button class="dim-build-load-models" title="从模型管理加载"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 从模型管理加载</button>' : ''}</div>
    ${admin
-     ? `<textarea class="dim-build-input dim-build-models" data-bf="models" rows="4" placeholder="每行一个模型（路径格式：源目录/模型名）">${escHtml(models)}</textarea>`
-   : `<pre class="dim-build-val" style="white-space:pre-wrap">${escHtml(models || '（未配置）')}</pre>`}
+                ? `<textarea class="dim-build-input dim-build-models" data-bf="models" rows="4" placeholder="每行一个模型（路径格式：源目录/模型名）">${escHtml(models)}</textarea>`
+                : `<pre class="dim-build-val" style="white-space:pre-wrap">${escHtml(models || '（未配置）')}</pre>`}
             ${admin ? '<div class="dim-build-model-picker" style="display:none"></div>' : ''}
  </div>`;
 
         if (admin) {
-      bodyHtml += `
+            bodyHtml += `
 <div class="dim-build-actions">
      <select class="dim-build-action-sel">
     <option value="build">build（构建盲评包）</option>
@@ -1709,7 +1711,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
     <label class="dim-build-sync-label"><input type="checkbox" class="dim-build-sync-cb" data-bf="sync_to_testsrc" ${syncToTs ? 'checked' : ''}> 同步zip到测试源</label>
     <span class="dim-build-status" id="dimBuildStatus"></span>
      </div>`;
-    }
+        }
 
         // 测试源部分（右列，默认折叠）
         const tsHtml = renderTestSourceSection(obj, admin);
@@ -1733,38 +1735,38 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
 
     /** 从构建 Tab 表单读取 build 配置对象 */
     function readBuildForm() {
-     const get = (id) => {
+        const get = (id) => {
             const el = dimView.querySelector(`[data-bf="${id}"]`);
-         return el ? el.value.trim() : '';
-     };
-   const parseList = (s) => s.split(/[,，\s]+/).filter(Boolean);
+            return el ? el.value.trim() : '';
+        };
+        const parseList = (s) => s.split(/[,，\s]+/).filter(Boolean);
         const parseIntList = (s) => s.split(/[,，\s]+/).filter(Boolean).map(Number).filter(n => !isNaN(n));
 
         const build = {};
         // models 直接保留绝对路径（后端支持绝对路径模型目录，不需要 src_model_dir）
         const modelsRaw = get('models');
         build.models = modelsRaw.split(/\n+/).map(s => s.trim()).filter(Boolean);
-   build.n_groups = parseInt(get('n_groups')) || 5;
+        build.n_groups = parseInt(get('n_groups')) || 5;
         build.seed = parseInt(get('seed'));
         if (isNaN(build.seed)) build.seed = 42;
-    build.blind = get('blind') !== 'false';
+        build.blind = get('blind') !== 'false';
         build.group_mode = 'fresh';
 
- const samplesRaw = get('samples');
-   if (samplesRaw) build.samples = parseIntList(samplesRaw);
+        const samplesRaw = get('samples');
+        if (samplesRaw) build.samples = parseIntList(samplesRaw);
         const exclRaw = get('exclude_samples');
-   if (exclRaw) build.exclude_samples = parseIntList(exclRaw);
+        if (exclRaw) build.exclude_samples = parseIntList(exclRaw);
 
         // companions
-    const ffDir = get('first_frames_dir');
+        const ffDir = get('first_frames_dir');
         const pCsv = get('prompt_csv');
         const pCols = get('prompt_cols');
-    if (ffDir || pCsv || pCols) {
+        if (ffDir || pCsv || pCols) {
             build.companions = {};
-if (ffDir) build.companions.first_frames_dir = ffDir;
-   if (pCsv) build.companions.prompt_csv = pCsv;
-          if (pCols) build.companions.prompt_cols = parseList(pCols);
-  }
+            if (ffDir) build.companions.first_frames_dir = ffDir;
+            if (pCsv) build.companions.prompt_csv = pCsv;
+            if (pCols) build.companions.prompt_cols = parseList(pCols);
+        }
 
         // 同步到测试源选项
         const syncCb = dimView.querySelector('.dim-build-sync-cb');
@@ -1774,141 +1776,141 @@ if (ffDir) build.companions.first_frames_dir = ffDir;
     }
 
     /** 保存构建配置到当前评分规则 JSON 中（silent=true 时不弹提示） */
-async function saveBuildConfig(silent) {
-if (!dimCurrentName) { if (!silent) showToast('❌ 未选择配置', 'err'); return; }
+    async function saveBuildConfig(silent) {
+        if (!dimCurrentName) { if (!silent) showToast('❌ 未选择配置', 'err'); return; }
         let data;
- try { data = JSON.parse(dimRawData); } catch (_) { data = {}; }
+        try { data = JSON.parse(dimRawData); } catch (_) { data = {}; }
         data.build = readBuildForm();
-   try {
+        try {
             const r = await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {
-      method: 'PUT',
-   headers: { 'Content-Type': 'application/json' },
-           body: JSON.stringify(data),
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
             });
-    if (r.status === 401) return;
+            if (r.status === 401) return;
             const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) { if (!silent) showToast('❌ ' + (j.error || '保存失败'), 'err'); return; }
+            if (!r.ok || !j.ok) { if (!silent) showToast('❌ ' + (j.error || '保存失败'), 'err'); return; }
             dimRawData = JSON.stringify(data, null, 2);
-   if (!silent) showToast('✅ 构建配置已保存', 'ok');
+            if (!silent) showToast('✅ 构建配置已保存', 'ok');
         } catch (e) {
-          if (!silent) showToast('❌ 网络错误：' + e.message, 'err');
+            if (!silent) showToast('❌ 网络错误：' + e.message, 'err');
         }
     }
 
     /** 执行构建/分析操作 */
     async function runBuildAction() {
-     if (!dimCurrentName) { showToast('❌ 未选择配置', 'err'); return; }
+        if (!dimCurrentName) { showToast('❌ 未选择配置', 'err'); return; }
         // 先持久化当前表单的 build 配置
-await saveBuildConfig(true);
+        await saveBuildConfig(true);
         let data;
- try { data = JSON.parse(dimRawData); } catch (_) { data = {}; }
+        try { data = JSON.parse(dimRawData); } catch (_) { data = {}; }
         const build = readBuildForm();
         const tag = data.tag || dimCurrentName;
         // 用 tag 作为 dst_dir（相对路径，后端基于 tasks/ 目录解析）
         build.tag = tag;
         if (!build.dst_dir) build.dst_dir = tag;
-  // map_csv 统一放在 tasks/map/ 目录下
+        // map_csv 统一放在 tasks/map/ 目录下
         if (!build.map_csv) build.map_csv = `map/map_${tag}.csv`;
 
         const actionSel = dimView.querySelector('.dim-build-action-sel');
-      const action = actionSel ? actionSel.value : 'build';
+        const action = actionSel ? actionSel.value : 'build';
         const statusEl = dimView.querySelector('#dimBuildStatus');
 
         const actionLabels = { build: '构建中…', analyze: '分析中…', verify: '校验中…', rank: '统计中…' };
-     if (statusEl) statusEl.textContent = actionLabels[action] || '执行中…';
+        if (statusEl) statusEl.textContent = actionLabels[action] || '执行中…';
 
         const apiPath = action === 'build' ? '/api/build' : '/api/analyze';
         const body = action === 'build'
             ? { config: build }
-        : { config: build, action };
+            : { config: build, action };
 
         try {
             const r = await adminFetch(apiPath, {
-    method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-    });
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
             if (r.status === 401) { if (statusEl) statusEl.textContent = ''; return; }
-  const j = await r.json().catch(() => ({}));
+            const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) {
-  showToast('❌ ' + (j.error || '执行失败'), 'err');
-         if (statusEl) statusEl.textContent = '❌ 失败';
-     return;
+                showToast('❌ ' + (j.error || '执行失败'), 'err');
+                if (statusEl) statusEl.textContent = '❌ 失败';
+                return;
             }
-     // 构建成功后根据勾选决定是否 zip 到 testsrc
+            // 构建成功后根据勾选决定是否 zip 到 testsrc
             if (action === 'build' && j.data && j.data.dstDir && build.sync_to_testsrc) {
-             if (statusEl) statusEl.textContent = '压缩中…';
+                if (statusEl) statusEl.textContent = '压缩中…';
                 try {
-           const zr = await adminFetch('/api/build/zip', {
-     method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
-    });
-           const zj = await zr.json().catch(() => ({}));
-  if (zr.ok && zj.ok) {
-        showToast(`✅ 构建完成并已压缩 → ${zj.zipName}`, 'ok');
-           if (statusEl) statusEl.textContent = `✅ ${zj.zipName}`;
-        // 自动填写测试源字段并刷新右侧面板
-        if (zj.zipName) {
-      data.build = build;
-            if (!data.testSource) data.testSource = {};
-         data.testSource.url = `/testsrc/${zj.zipName}`;
-            // rootDir = zip 包名去掉 .zip 后缀（与解压后目录同名）
-            data.testSource.rootDir = zj.zipName.replace(/\.zip$/i, '');
-            // laneDirs = 从 A 开始按模型数量生成（如 3 个模型 → ["A","B","C"]）
-            const modelCount = (build.models || []).length || 2;
-            const lanes = [];
-            for (let i = 0; i < modelCount; i++) lanes.push(String.fromCharCode(65 + i));
-            data.testSource.laneDirs = lanes;
-            // promptCsv / referenceDirs 构建时已包含在 zip 里，自动同步
-            if (!data.testSource.promptCsv) data.testSource.promptCsv = 'prompt.csv';
-            // referenceDirs 始终从构建配置的参考帧目录检测覆盖（取 basename，支持逗号分隔多目录）
-            {
-                const ffDir = (build.companions && build.companions.first_frames_dir) || '';
-                if (ffDir) {
-                    const dirs = ffDir.split(/[,，]+/).map(d => {
-                        const trimmed = d.trim();
-                        const parts = trimmed.replace(/[\/\\]+$/, '').split(/[\/\\]/);
-                        return parts[parts.length - 1] || trimmed;
-                    }).filter(Boolean);
-                    data.testSource.referenceDirs = dirs.length > 0 ? dirs : ['first_frames'];
-                } else if (!data.testSource.referenceDirs || data.testSource.referenceDirs.length === 0) {
-                    data.testSource.referenceDirs = ['first_frames'];
-                }
-            }
-  dimRawData = JSON.stringify(data, null, 2);
-    // 保存配置（含更新后的 testSource）
-      await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {
-     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(data),
-        });
-        // 刷新右侧测试源面板
-        const rightPanel = dimView.querySelector('.dim-build-right-inner');
-     if (rightPanel) {
-        rightPanel.innerHTML = renderTestSourceSection(data, true);
-  bindTestSourceEvents();
-            // 自动展开右侧面板以显示更新
-            const right = dimView.querySelector('.dim-build-right');
-   if (right) right.classList.remove('dim-build-right--collapsed');
-         const toggleBtn = dimView.querySelector('.dim-build-toggle-ts');
-   if (toggleBtn) toggleBtn.textContent = '✕ 收起';
-        }
-  }
-           } else {
-     showToast('⚠️ 构建成功但压缩失败：' + (zj.error || ''), 'err');
-     if (statusEl) statusEl.textContent = '⚠️ 压缩失败';
-          }
-      } catch (ze) {
+                    const zr = await adminFetch('/api/build/zip', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
+                    });
+                    const zj = await zr.json().catch(() => ({}));
+                    if (zr.ok && zj.ok) {
+                        showToast(`✅ 构建完成并已压缩 → ${zj.zipName}`, 'ok');
+                        if (statusEl) statusEl.textContent = `✅ ${zj.zipName}`;
+                        // 自动填写测试源字段并刷新右侧面板
+                        if (zj.zipName) {
+                            data.build = build;
+                            if (!data.testSource) data.testSource = {};
+                            data.testSource.url = `/testsrc/${zj.zipName}`;
+                            // rootDir = zip 包名去掉 .zip 后缀（与解压后目录同名）
+                            data.testSource.rootDir = zj.zipName.replace(/\.zip$/i, '');
+                            // laneDirs = 从 A 开始按模型数量生成（如 3 个模型 → ["A","B","C"]）
+                            const modelCount = (build.models || []).length || 2;
+                            const lanes = [];
+                            for (let i = 0; i < modelCount; i++) lanes.push(String.fromCharCode(65 + i));
+                            data.testSource.laneDirs = lanes;
+                            // promptCsv / referenceDirs 构建时已包含在 zip 里，自动同步
+                            if (!data.testSource.promptCsv) data.testSource.promptCsv = 'prompt.csv';
+                            // referenceDirs 始终从构建配置的参考帧目录检测覆盖（取 basename，支持逗号分隔多目录）
+                            {
+                                const ffDir = (build.companions && build.companions.first_frames_dir) || '';
+                                if (ffDir) {
+                                    const dirs = ffDir.split(/[,，]+/).map(d => {
+                                        const trimmed = d.trim();
+                                        const parts = trimmed.replace(/[\/\\]+$/, '').split(/[\/\\]/);
+                                        return parts[parts.length - 1] || trimmed;
+                                    }).filter(Boolean);
+                                    data.testSource.referenceDirs = dirs.length > 0 ? dirs : ['first_frames'];
+                                } else if (!data.testSource.referenceDirs || data.testSource.referenceDirs.length === 0) {
+                                    data.testSource.referenceDirs = ['first_frames'];
+                                }
+                            }
+                            dimRawData = JSON.stringify(data, null, 2);
+                            // 保存配置（含更新后的 testSource）
+                            await adminFetch(`/api/configs/${encodeURIComponent(dimCurrentName)}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(data),
+                            });
+                            // 刷新右侧测试源面板
+                            const rightPanel = dimView.querySelector('.dim-build-right-inner');
+                            if (rightPanel) {
+                                rightPanel.innerHTML = renderTestSourceSection(data, true);
+                                bindTestSourceEvents();
+                                // 自动展开右侧面板以显示更新
+                                const right = dimView.querySelector('.dim-build-right');
+                                if (right) right.classList.remove('dim-build-right--collapsed');
+                                const toggleBtn = dimView.querySelector('.dim-build-toggle-ts');
+                                if (toggleBtn) toggleBtn.textContent = '✕ 收起';
+                            }
+                        }
+                    } else {
+                        showToast('⚠️ 构建成功但压缩失败：' + (zj.error || ''), 'err');
+                        if (statusEl) statusEl.textContent = '⚠️ 压缩失败';
+                    }
+                } catch (ze) {
                     showToast('⚠️ 构建成功但压缩异常：' + ze.message, 'err');
-              if (statusEl) statusEl.textContent = '⚠️ 压缩异常';
-           }
-     } else {
-       showToast('✅ 执行完成', 'ok');
-        if (statusEl) statusEl.textContent = '✅ 完成';
+                    if (statusEl) statusEl.textContent = '⚠️ 压缩异常';
+                }
+            } else {
+                showToast('✅ 执行完成', 'ok');
+                if (statusEl) statusEl.textContent = '✅ 完成';
             }
         } catch (e) {
-  showToast('❌ 网络错误：' + e.message, 'err');
+            showToast('❌ 网络错误：' + e.message, 'err');
             if (statusEl) statusEl.textContent = '❌ 网络错误';
         }
     }
@@ -1930,11 +1932,11 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
                 + `<button class="dim-cl-add-btn dim-ts-add-btn">＋ 添加测试源配置</button>`;
         } else {
             const fields = [
-                ['url',          'zip 下载地址（必填）：相对路径 /testsrc/xx.zip 随服务器迁移免改；COS 等绝对地址原样使用'],
-                ['workDir',      '下载 + 解压目录（支持 ~ 开头，默认系统 Downloads）'],
-                ['rootDir',      '内容根目录 = zip 内顶层目录名（相对 workDir；"/" 开头视为绝对路径）'],
-                ['group',        '默认组别（可选）：内容根下含 g1/g2 等分组目录时，客户端「接受」后弹窗选组，此处为默认选中组'],
-                ['promptCsv',    '提示词 CSV（相对内容根；留空则不绑定）'],
+                ['url', 'zip 下载地址（必填）：相对路径 /testsrc/xx.zip 随服务器迁移免改；COS 等绝对地址原样使用'],
+                ['workDir', '下载 + 解压目录（支持 ~ 开头，默认系统 Downloads）'],
+                ['rootDir', '内容根目录 = zip 内顶层目录名（相对 workDir；"/" 开头视为绝对路径）'],
+                ['group', '默认组别（可选）：内容根下含 g1/g2 等分组目录时，客户端「接受」后弹窗选组，此处为默认选中组'],
+                ['promptCsv', '提示词 CSV（相对内容根；留空则不绑定）'],
             ];
             const rowsHtml = fields.map(([f, tip]) => {
                 const v = ts[f] || '';
@@ -2312,11 +2314,11 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         let currentVal = ts[field] || '';
         if (Array.isArray(currentVal)) currentVal = currentVal.join(', ');
         const placeholders = {
-            url:          'https://.../bench_xxx.zip',
-            workDir:      '~/Downloads',
-            rootDir:      'bench_xxx（zip 内顶层目录名）',
+            url: 'https://.../bench_xxx.zip',
+            workDir: '~/Downloads',
+            rootDir: 'bench_xxx（zip 内顶层目录名）',
             referenceDir: 'first_frames',
-            promptCsv:    'prompt.csv',
+            promptCsv: 'prompt.csv',
         };
         const input = document.createElement('input');
         input.type = 'text';
@@ -2536,10 +2538,10 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         dimView.querySelectorAll('.dim-level-stars-edit').forEach(el => {
             el.addEventListener('click', (e) => {
                 const dimIdx = +el.dataset.dim;
-                const lvIdx  = +el.dataset.lv;
-                const rect   = el.getBoundingClientRect();
-                const relX   = e.clientX - rect.left;
-                const starW  = rect.width / (el.textContent.length || 1);
+                const lvIdx = +el.dataset.lv;
+                const rect = el.getBoundingClientRect();
+                const relX = e.clientX - rect.left;
+                const starW = rect.width / (el.textContent.length || 1);
                 const clicked = Math.ceil(relX / starW);
                 patchDimData(data => {
                     data.dimensions[dimIdx].levels[lvIdx].score = clicked;
@@ -2559,7 +2561,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         dimView.querySelectorAll('.dim-del-lv-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const dimIdx = +btn.dataset.dim;
-                const lvIdx  = +btn.dataset.lv;
+                const lvIdx = +btn.dataset.lv;
                 patchDimData(data => {
                     data.dimensions[dimIdx].levels.splice(lvIdx, 1);
                     // 删除后重新按降序连续分配 score（1~N）
@@ -2711,7 +2713,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     /** Checklist 单字段行内编辑（label / key / definition） */
     function startChecklistFieldEdit(el) {
         if (el.querySelector('input,textarea')) return;
-        const idx   = +el.dataset.clIdx;
+        const idx = +el.dataset.clIdx;
         const field = el.dataset.clField; // 'label' | 'key' | 'definition'
         const isMultiline = (field === 'definition');
 
@@ -2763,28 +2765,28 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         // 【关键】进入编辑前锁定宿主 span 的实测宽高，编辑结束时释放
         // 这样 input width:100% 完全等于点击前的实际宽度，绝对不跳变
         const rect = el.getBoundingClientRect();
-        const lockedWidth  = rect.width;
+        const lockedWidth = rect.width;
         const lockedHeight = rect.height;
         const prevStyle = {
-            width:     el.style.width,
-            height:    el.style.height,
-            minWidth:  el.style.minWidth,
-            maxWidth:  el.style.maxWidth,
-            padding:   el.style.padding,
+            width: el.style.width,
+            height: el.style.height,
+            minWidth: el.style.minWidth,
+            maxWidth: el.style.maxWidth,
+            padding: el.style.padding,
             boxSizing: el.style.boxSizing,
         };
-        el.style.width     = lockedWidth + 'px';
-        el.style.height    = lockedHeight + 'px';
-        el.style.minWidth  = lockedWidth + 'px';
-        el.style.maxWidth  = lockedWidth + 'px';
-        el.style.padding   = '0';
+        el.style.width = lockedWidth + 'px';
+        el.style.height = lockedHeight + 'px';
+        el.style.minWidth = lockedWidth + 'px';
+        el.style.maxWidth = lockedWidth + 'px';
+        el.style.padding = '0';
         el.style.boxSizing = 'border-box';
         const releaseLock = () => {
-            el.style.width     = prevStyle.width;
-            el.style.height    = prevStyle.height;
-            el.style.minWidth  = prevStyle.minWidth;
-            el.style.maxWidth  = prevStyle.maxWidth;
-            el.style.padding   = prevStyle.padding;
+            el.style.width = prevStyle.width;
+            el.style.height = prevStyle.height;
+            el.style.minWidth = prevStyle.minWidth;
+            el.style.maxWidth = prevStyle.maxWidth;
+            el.style.padding = prevStyle.padding;
             el.style.boxSizing = prevStyle.boxSizing;
         };
 
@@ -2860,8 +2862,8 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             </div>`;
         document.body.appendChild(modal);
         const editor = modal.querySelector('#ck-modal-editor');
-        const errEl  = modal.querySelector('#ck-modal-err');
-        const close  = () => document.body.removeChild(modal);
+        const errEl = modal.querySelector('#ck-modal-err');
+        const close = () => document.body.removeChild(modal);
         modal.querySelector('#ck-modal-close').addEventListener('click', close);
         modal.querySelector('#ck-modal-cancel').addEventListener('click', close);
         modal.querySelector('#ck-modal-save').addEventListener('click', () => {
@@ -2919,15 +2921,15 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         modal.querySelector('#cki-close').addEventListener('click', close);
         modal.querySelector('#cki-cancel').addEventListener('click', close);
         modal.querySelector('#cki-save').addEventListener('click', () => {
-            const key   = modal.querySelector('#cki-key').value.trim();
+            const key = modal.querySelector('#cki-key').value.trim();
             const label = modal.querySelector('#cki-label').value.trim();
-            const def   = modal.querySelector('#cki-def').value.trim();
-            const excl  = modal.querySelector('#cki-exclusive').checked;
-            if (!key)   { errEl.textContent = 'Key 不能为空'; errEl.style.display = ''; return; }
+            const def = modal.querySelector('#cki-def').value.trim();
+            const excl = modal.querySelector('#cki-exclusive').checked;
+            if (!key) { errEl.textContent = 'Key 不能为空'; errEl.style.display = ''; return; }
             if (!label) { errEl.textContent = 'Label 不能为空'; errEl.style.display = ''; return; }
             const newItem = { key, label };
-            if (def)  newItem.definition = def;
-            if (excl) newItem.exclusive  = true;
+            if (def) newItem.definition = def;
+            if (excl) newItem.exclusive = true;
             patchDimData(d => {
                 if (!Array.isArray(d.checklists)) d.checklists = [];
                 if (isNew) {
@@ -2949,7 +2951,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     }
 
     // ── 原 bindCardEdit 结束标记（勿删）──
-    function _bindCardEditEnd() {}
+    function _bindCardEditEnd() { }
 
     /** 拖拽排序：绑定 dim-card 的 drag & drop 事件 */
     function _bindDimDragSort() {
@@ -3089,9 +3091,9 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     /** 内联编辑卡片字段（维度名/说明/level标签/level描述） */
     function startCardFieldEdit(el) {
         if (el.querySelector('input,textarea')) return;
-        const dimIdx  = +el.dataset.dim;
-        const lvIdx   = el.dataset.lv !== undefined ? +el.dataset.lv : -1;
-        const field   = el.dataset.field;
+        const dimIdx = +el.dataset.dim;
+        const lvIdx = el.dataset.lv !== undefined ? +el.dataset.lv : -1;
+        const field = el.dataset.field;
         const isMultiline = (field === 'definition' || field === 'description');
 
         let currentVal = '';
@@ -3102,7 +3104,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             } else {
                 currentVal = (data.dimensions[dimIdx][field]) || '';
             }
-        } catch (_) {}
+        } catch (_) { }
 
         const origHtml = el.innerHTML;
 
@@ -3401,12 +3403,12 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     }
 
     // ── 事件绑定 ──
-    if (dimPageBtn)       dimPageBtn.addEventListener('click', showDimPage);
-    if (dimPageCloseBtn)  dimPageCloseBtn.addEventListener('click', hideDimPage);
-    if (dimEditBtn)       dimEditBtn.addEventListener('click', enterDimEdit);
+    if (dimPageBtn) dimPageBtn.addEventListener('click', showDimPage);
+    if (dimPageCloseBtn) dimPageCloseBtn.addEventListener('click', hideDimPage);
+    if (dimEditBtn) dimEditBtn.addEventListener('click', enterDimEdit);
     if (dimCancelEditBtn) dimCancelEditBtn.addEventListener('click', exitDimEdit);
-    if (dimSaveBtn)       dimSaveBtn.addEventListener('click', saveDimensions);
-    if (dimAddBtn)        dimAddBtn.addEventListener('click', promptNewConfig);
+    if (dimSaveBtn) dimSaveBtn.addEventListener('click', saveDimensions);
+    if (dimAddBtn) dimAddBtn.addEventListener('click', promptNewConfig);
     if (dimFormatBtn) {
         dimFormatBtn.addEventListener('click', () => {
             try {
@@ -3429,8 +3431,8 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
 
     // ── 拖拽上传 JSON（整个左侧区域 + 底部拖拽区，拖入=新增配置） ──
     const dimDropZone = $('dimDropZone');
-    const dimDropSub  = $('dimDropSub');
-    const dimSidebar  = $('dimSidebar');
+    const dimDropSub = $('dimDropSub');
+    const dimSidebar = $('dimSidebar');
 
     async function handleDroppedJson(text) {
         let parsed;
@@ -3531,20 +3533,20 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     // ── 盲评分析：切换到分析模块并传递选中文件 ─────────────
     const analyzeSelBtn = $('analyzeSelBtn');
     if (analyzeSelBtn) {
-     analyzeSelBtn.addEventListener('click', () => {
-      if (!guardWrite()) return;
+        analyzeSelBtn.addEventListener('click', () => {
+            if (!guardWrite()) return;
             const names = [...state.selected];
-  if (names.length === 0) { showToast('请先勾选要分析的文件', 'warn'); return; }
-     switchModule('tasks');
-     // 切换到构建 tab 并选择 analyze
- setTimeout(() => {
-    const buildTab = document.querySelector('.dim-tab[data-tab="build"]');
-      if (buildTab) buildTab.click();
-      setTimeout(() => {
-          const sel = document.querySelector('.dim-build-action-sel');
-          if (sel) { sel.value = 'analyze'; }
-      }, 100);
-    }, 100);
+            if (names.length === 0) { showToast('请先勾选要分析的文件', 'warn'); return; }
+            switchModule('tasks');
+            // 切换到构建 tab 并选择 analyze
+            setTimeout(() => {
+                const buildTab = document.querySelector('.dim-tab[data-tab="build"]');
+                if (buildTab) buildTab.click();
+                setTimeout(() => {
+                    const sel = document.querySelector('.dim-build-action-sel');
+                    if (sel) { sel.value = 'analyze'; }
+                }, 100);
+            }, 100);
         });
     }
 
@@ -3555,7 +3557,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     }
     if (dimPage) {
         dimPage.addEventListener('dragenter', (e) => { if (!_isFileDrag(e)) return; e.preventDefault(); dimPage.classList.add('drag-over'); });
-        dimPage.addEventListener('dragover',  (e) => { if (!_isFileDrag(e)) return; e.preventDefault(); dimPage.classList.add('drag-over'); });
+        dimPage.addEventListener('dragover', (e) => { if (!_isFileDrag(e)) return; e.preventDefault(); dimPage.classList.add('drag-over'); });
         dimPage.addEventListener('dragleave', (e) => {
             if (!dimPage.contains(e.relatedTarget)) dimPage.classList.remove('drag-over');
         });
@@ -3641,7 +3643,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         if (q) {
             arr = arr.filter(it =>
                 (it.user || '').toLowerCase().includes(q) ||
-                (it.tag  || '').toLowerCase().includes(q) ||
+                (it.tag || '').toLowerCase().includes(q) ||
                 (it.name || '').toLowerCase().includes(q));
         }
         const key = state.sortKey;
@@ -3652,7 +3654,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             else if (key === 'mtime') { av = new Date(av).getTime(); bv = new Date(bv).getTime(); }
             else { av = String(av || '').toLowerCase(); bv = String(bv || '').toLowerCase(); }
             if (av < bv) return -1 * dir;
-            if (av > bv) return  1 * dir;
+            if (av > bv) return 1 * dir;
             return 0;
         });
         state.filtered = arr;
@@ -3730,12 +3732,12 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         const arr = state.items;
         const users = new Set(arr.map(x => x.user || ''));
         // (user, tag, mode) 三元组才是一个独立的评分组，不同模式不能被合并计。
-        const tags  = new Set(arr.map(x => `${x.user}__${x.tag}__${x.mode || 'subjective'}`));
+        const tags = new Set(arr.map(x => `${x.user}__${x.tag}__${x.mode || 'subjective'}`));
         const total = arr.reduce((s, x) => s + (+x.size || 0), 0);
         kpiCount.textContent = arr.length;
         kpiUsers.textContent = users.size;
-        kpiTags.textContent  = tags.size;
-        kpiSize.textContent  = fmtSize(total);
+        kpiTags.textContent = tags.size;
+        kpiSize.textContent = fmtSize(total);
     }
 
     // ────────── 下载（POST 形态：把响应直接保存为文件） ──────────
@@ -3795,9 +3797,9 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     function syncSelectionUi() {
         const n = state.selected.size;
         if (selCount) selCount.textContent = String(n);
-        if (selInfo)  selInfo.hidden = (n === 0);
+        if (selInfo) selInfo.hidden = (n === 0);
         if (archiveSelBtn) archiveSelBtn.disabled = (n === 0);
-        if (deleteSelBtn)  deleteSelBtn.disabled  = (n === 0);
+        if (deleteSelBtn) deleteSelBtn.disabled = (n === 0);
         // 合并下载（选中）：未选中时禁用
         if (mergeLatest) mergeLatest.disabled = (n === 0);
         // 分析选中：未选中时禁用
@@ -3813,7 +3815,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             } else {
                 let on = 0;
                 for (const it of visible) if (state.selected.has(it.name)) on++;
-                selAll.checked       = (on === visible.length);
+                selAll.checked = (on === visible.length);
                 selAll.indeterminate = (on > 0 && on < visible.length);
             }
         }
@@ -3830,7 +3832,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         const f = (() => {
             const d = new Date();
             const pad = (x) => String(x).padStart(2, '0');
-            return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
+            return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
         })();
         archiveSelBtn.disabled = true;
         try {
@@ -3927,7 +3929,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         if (chk) {
             const name = chk.dataset.name;
             if (chk.checked) state.selected.add(name);
-            else             state.selected.delete(name);
+            else state.selected.delete(name);
             const tr = chk.closest('tr');
             if (tr) tr.classList.toggle('sel', chk.checked);
             syncSelectionUi();
@@ -3952,7 +3954,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             const on = selAll.checked;
             for (const it of state.filtered) {
                 if (on) state.selected.add(it.name);
-                else    state.selected.delete(it.name);
+                else state.selected.delete(it.name);
             }
             // 重新渲染以同步行内 checkbox 状态
             renderTable();
@@ -3960,14 +3962,14 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     }
 
     if (archiveSelBtn) archiveSelBtn.addEventListener('click', archiveSelected);
-    if (deleteSelBtn)  deleteSelBtn.addEventListener('click', bulkDeleteSelected);
+    if (deleteSelBtn) deleteSelBtn.addEventListener('click', bulkDeleteSelected);
 
     // ────────── CSV 预览（右侧抽屉） ──────────
-    const previewMask     = $('previewMask');     // 这里复用原有 id，实际是抽屉本体
-    const previewTitle    = $('previewTitle');
-    const previewMeta     = $('previewMeta');
-    const previewBody     = $('previewBody');
-    const previewClose    = $('previewClose');
+    const previewMask = $('previewMask');     // 这里复用原有 id，实际是抽屉本体
+    const previewTitle = $('previewTitle');
+    const previewMeta = $('previewMeta');
+    const previewBody = $('previewBody');
+    const previewClose = $('previewClose');
     const previewDownload = $('previewDownload');
     let previewName = '';
     let previewDownloadUrl = '';
@@ -4014,7 +4016,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
 
     function renderPreview(j) {
         const header = Array.isArray(j.header) ? j.header : [];
-        const rows   = Array.isArray(j.rows)   ? j.rows   : [];
+        const rows = Array.isArray(j.rows) ? j.rows : [];
 
         // 顶部 meta：行数 / 大小 / 时间 / 截断提示
         const metaParts = [];
@@ -4063,10 +4065,10 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
 
         previewBody.innerHTML =
             '<div class="preview-table-wrap">' +
-              '<table class="preview-table">' +
-                '<thead><tr>' + thHtml + '</tr></thead>' +
-                '<tbody>' + trHtml + '</tbody>' +
-              '</table>' +
+            '<table class="preview-table">' +
+            '<thead><tr>' + thHtml + '</tr></thead>' +
+            '<tbody>' + trHtml + '</tbody>' +
+            '</table>' +
             '</div>';
     }
 
@@ -4074,21 +4076,21 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         const cap = Number.isFinite(max) && max > 0 ? max : 5;
         if (n < 0) n = 0; if (n > cap) n = cap;
         const filled = '★'.repeat(n);
-        const empty  = '☆'.repeat(cap - n);
+        const empty = '☆'.repeat(cap - n);
         return '<span class="stars" title="' + n + ' / ' + cap + '">' +
-               '<span class="stars-filled">' + filled + '</span>' +
-               '<span class="stars-empty">'  + empty  + '</span>' +
-               '</span>';
+            '<span class="stars-filled">' + filled + '</span>' +
+            '<span class="stars-empty">' + empty + '</span>' +
+            '</span>';
     }
 
     // 从预览表格中推断当前行的最大星级：
     //   - 优先看同行 mode 列（后端 ／merge 输出都会携带）
-        //   - 取不到则回退为 5（主观评分默认）
+    //   - 取不到则回退为 5（主观评分默认）
     function inferMaxStars(header, row) {
         const idx = header.findIndex(h => String(h || '').toLowerCase() === 'mode');
         if (idx >= 0) {
             const m = String((row && row[idx]) || '').trim().toLowerCase();
-            if (m === 'quality')    return 2;
+            if (m === 'quality') return 2;
             if (m === 'subjective') return 5;
         }
         return 5;
@@ -4120,7 +4122,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         );
     });
     // 合并全部：跟随当前 Tab 限定 mode，避免两个模式被一起合出。
-    mergeAll.addEventListener('click',    () => {
+    mergeAll.addEventListener('click', () => {
         const params = new URLSearchParams({ all: '1' });
         if (state.mode) params.set('mode', state.mode);
         const fileTag = state.mode ? `_${state.mode}` : '';
@@ -4128,22 +4130,22 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     });
 
     // ────────── 归档库（页面模块） ──────────
-    const archiveRefreshBtn    = $('archiveRefresh');
-    const openArchiveBtn       = $('openArchiveBtn');
-    const archiveMeta          = $('archiveMeta');
-    const archiveFolderListEl  = $('archiveFolderList');
-    const archiveFoldersEmpty  = $('archiveFoldersEmpty');
-    const archiveFilesHint     = $('archiveFilesHint');
-    const archiveFilesWrap     = $('archiveFilesWrap');
-    const archiveFilesTbody    = $('archiveFilesTbody');
-    const archiveFilesToolbar  = $('archiveFilesToolbar');
-    const archiveSelAll        = $('archiveSelAll');
-    const archiveSelInfo       = $('archiveSelInfo');
-    const archiveSelCount      = $('archiveSelCount');
-    const archiveDelSelBtn     = $('archiveDelSelBtn');
-    const archiveDelFolderBtn  = $('archiveDelFolderBtn');
-    const archiveDownloadSelBtn= $('archiveDownloadSelBtn');
-    const archiveMergeBtn      = $('archiveMergeBtn');
+    const archiveRefreshBtn = $('archiveRefresh');
+    const openArchiveBtn = $('openArchiveBtn');
+    const archiveMeta = $('archiveMeta');
+    const archiveFolderListEl = $('archiveFolderList');
+    const archiveFoldersEmpty = $('archiveFoldersEmpty');
+    const archiveFilesHint = $('archiveFilesHint');
+    const archiveFilesWrap = $('archiveFilesWrap');
+    const archiveFilesTbody = $('archiveFilesTbody');
+    const archiveFilesToolbar = $('archiveFilesToolbar');
+    const archiveSelAll = $('archiveSelAll');
+    const archiveSelInfo = $('archiveSelInfo');
+    const archiveSelCount = $('archiveSelCount');
+    const archiveDelSelBtn = $('archiveDelSelBtn');
+    const archiveDelFolderBtn = $('archiveDelFolderBtn');
+    const archiveDownloadSelBtn = $('archiveDownloadSelBtn');
+    const archiveMergeBtn = $('archiveMergeBtn');
 
     const archive = {
         folders: [],     // [{name,count,size,mtime}]
@@ -4188,7 +4190,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         archiveFoldersEmpty.hidden = (list.length > 0);
         const totalFolders = list.length;
         const totalFiles = list.reduce((s, x) => s + (+x.count || 0), 0);
-        const totalSize  = list.reduce((s, x) => s + (+x.size  || 0), 0);
+        const totalSize = list.reduce((s, x) => s + (+x.size || 0), 0);
         archiveMeta.textContent = `${totalFolders} 个文件夹  ·  ${totalFiles} 份 csv  ·  ${fmtSize(totalSize)}`;
 
         archiveFolderListEl.innerHTML = list.map(f => {
@@ -4274,8 +4276,8 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             // 合并下载：选中时合并所选；未选中时合并整个文件夹（只要文件夹有文件就可用）
             archiveMergeBtn.disabled = (archive.files.length === 0);
             archiveMergeBtn.textContent = (n > 0)
-                   ? `合并下载选中（${n}）`
-      : '合并下载（全部）';
+                ? `合并下载选中（${n}）`
+                : '合并下载（全部）';
         }
         if (archiveSelAll) {
             const visible = archive.files;
@@ -4285,7 +4287,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             } else {
                 let on = 0;
                 for (const it of visible) if (archive.selected.has(it.name)) on++;
-                archiveSelAll.checked       = (on === visible.length);
+                archiveSelAll.checked = (on === visible.length);
                 archiveSelAll.indeterminate = (on > 0 && on < visible.length);
             }
         }
@@ -4304,7 +4306,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         if (chk) {
             const name = chk.dataset.name;
             if (chk.checked) archive.selected.add(name);
-            else             archive.selected.delete(name);
+            else archive.selected.delete(name);
             const tr = chk.closest('tr');
             if (tr) tr.classList.toggle('sel', chk.checked);
             syncArchiveSelUi();
@@ -4319,9 +4321,9 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
             downloadFile(`/api/archive/file/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`, name);
         } else if (btn.dataset.act === 'preview') {
             openPreview(name, {
-                url:         `/api/archive/preview/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`,
+                url: `/api/archive/preview/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`,
                 downloadUrl: `/api/archive/file/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`,
-                title:       `[${folder}] ${name}`,
+                title: `[${folder}] ${name}`,
             });
         } else if (btn.dataset.act === 'delete') {
             deleteArchivedFile(name, btn);
@@ -4332,7 +4334,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         const on = archiveSelAll.checked;
         for (const it of archive.files) {
             if (on) archive.selected.add(it.name);
-            else    archive.selected.delete(it.name);
+            else archive.selected.delete(it.name);
         }
         renderArchiveFiles();
     });
@@ -4501,7 +4503,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     function saveColWidth(colKey, px, storageKey = COL_WIDTHS_KEY) {
         const cur = loadSavedColWidths(storageKey);
         cur[colKey] = px;
-        try { localStorage.setItem(storageKey, JSON.stringify(cur)); } catch (_) {}
+        try { localStorage.setItem(storageKey, JSON.stringify(cur)); } catch (_) { }
     }
     function applySavedColWidths(table, options = {}) {
         const { storageKey = COL_WIDTHS_KEY, skipCols = ['name'] } = options;
@@ -4578,12 +4580,12 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     }
 
     // ── Hash 工具函数 ──
-// 解析 #tasks 或 #tasks/<configName>，返回 { isTasks, configName }
+    // 解析 #tasks 或 #tasks/<configName>，返回 { isTasks, configName }
     function _parseHash() {
         const h = decodeURIComponent(location.hash || '');
- if (h === '#tasks') return { isTasks: true, configName: null };
+        if (h === '#tasks') return { isTasks: true, configName: null };
         const m = h.match(/^#tasks\/(.+)$/);
-     if (m) return { isTasks: true, configName: m[1] };
+        if (m) return { isTasks: true, configName: m[1] };
         return { isTasks: false, configName: null };
     }
     function _getHashConfig() {
@@ -4694,9 +4696,9 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
         initColumnResizing(document.getElementById('filesTable'));
         // 检测 URL hash，支持直达链接
         const h = location.hash || '';
-    if (_parseHash().isTasks) {
-        switchModule('tasks', true);
-      } else if (h === '#dashboard') {
+        if (_parseHash().isTasks) {
+            switchModule('tasks', true);
+        } else if (h === '#dashboard') {
             switchModule('dashboard', true);
         } else if (h === '#analyze') {
             switchModule('analyze', true);
@@ -4715,11 +4717,11 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
     // 分析结果模块 —— 独立面板，按 tag 自动查找 map CSV + 评分文件 → 反解排名
     // ═══════════════════════════════════════════════════════════════════════
     (function initAnalyzeModule() {
-        const tagSel    = $('analyzeTagSel');
-        const runBtn    = $('analyzeRunBtn');
-        const statusEl  = $('analyzeStatus');
+        const tagSel = $('analyzeTagSel');
+        const runBtn = $('analyzeRunBtn');
+        const statusEl = $('analyzeStatus');
         const resultDiv = $('analyzeResult');
-        const emptyDiv  = $('analyzeEmpty');
+        const emptyDiv = $('analyzeEmpty');
         if (!tagSel || !runBtn) return;
 
         const ANALYZE_RANK_COL_KEY = 'PlayerX.analyze.rank.colWidths.v1';
@@ -4767,19 +4769,19 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
 
         // ── 加载可用 tag（从 uploads/ 目录中扫描所有独立 tag）──
         async function loadTags() {
-  try {
-      const r = await fetch('/api/list');
-    if (!r.ok) return;
-        const j = await r.json();
-         const tags = new Set();
-       (j.items || []).forEach(f => { if (f.tag) tags.add(f.tag); });
-    tagSel.innerHTML = '';
+            try {
+                const r = await fetch('/api/list');
+                if (!r.ok) return;
+                const j = await r.json();
+                const tags = new Set();
+                (j.items || []).forEach(f => { if (f.tag) tags.add(f.tag); });
+                tagSel.innerHTML = '';
                 [...tags].sort().forEach(t => {
-           const o = document.createElement('option');
-                o.value = t; o.textContent = t;
-          tagSel.appendChild(o);
-       });
-            } catch(e) { console.warn('loadTags:', e); }
+                    const o = document.createElement('option');
+                    o.value = t; o.textContent = t;
+                    tagSel.appendChild(o);
+                });
+            } catch (e) { console.warn('loadTags:', e); }
         }
 
         // 面板激活时刷新 tag 列表
@@ -4813,7 +4815,7 @@ body: JSON.stringify({ dstDir: j.data.dstDir, tag }),
                 if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
                 renderAnalyzeResult(j.data, tag);
                 setAnalyzeStatus('已完成', 'success');
-            } catch(e) {
+            } catch (e) {
                 showToast('❌ ' + e.message, 'err');
                 setAnalyzeStatus('失败：' + e.message, 'error');
                 emptyDiv.style.display = '';
