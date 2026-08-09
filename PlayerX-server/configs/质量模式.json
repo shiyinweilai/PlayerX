@@ -22,9 +22,9 @@
     }
   ],
   "testSource": {
-    "url": "/testsrc/subj.zip",
+    "url": "/testsrc/quality.zip",
     "workDir": "~/Downloads",
-    "rootDir": "subj",
+    "rootDir": "quality",
     "laneDirs": [
       "A",
       "B"
@@ -51,9 +51,13 @@
     "seed": 42,
     "blind": true,
     "group_mode": "fresh",
+    "samples": [
+      1,
+      2
+    ],
     "sync_to_testsrc": true,
-    "tag": "subj",
-    "dst_dir": "subj",
-    "map_csv": "subj_map/map.csv"
+    "tag": "quality",
+    "dst_dir": "quality",
+    "map_csv": "quality_map/map.csv"
   }
 }

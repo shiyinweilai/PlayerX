@@ -1,0 +1,5 @@
+updated_at,rater,folder,file_name,stars,slide_type,checklist,tag,mode,group,model,eval_mode
+2026-08-09 23:55:15,rbyang,A,1.mp4,2,multi_总分,,quality,quality,g1,wan2.2_14b_highonly_sft_aligned_5000x56,blind
+2026-08-09 23:55:18,rbyang,B,1.mp4,2,multi_总分,,quality,quality,g1,wan2.2_14b_gptc_lora6000x8,blind
+2026-08-09 23:55:23,rbyang,A,2.mp4,2,multi_总分,,quality,quality,g1,wan2.2_14b_gptc_lora6000x8,blind
+2026-08-09 23:55:24,rbyang,B,2.mp4,1,multi_总分,,quality,quality,g1,wan2.2_14b_highonly_sft_aligned_5000x56,blind

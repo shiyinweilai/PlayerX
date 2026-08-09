@@ -4923,7 +4923,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 const tags = new Set();
                 (j.items || []).forEach(f => { if (f.tag) tags.add(f.tag); });
                 analyzeTags = [...tags].sort();
-                if (!tagSel.value && analyzeTags.length) tagSel.value = analyzeTags[0];
+                // 默认保持留空，不自动填充最新/第一个 tag
                 renderTagOptions(tagSel.value || '');
             } catch (e) { console.warn('loadTags:', e); }
         }

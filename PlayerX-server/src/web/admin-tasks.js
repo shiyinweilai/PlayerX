@@ -28,7 +28,7 @@
     // ── Action 切换 ──
     const actionLabels = {
         build: '▶ 执行构建',
-        rank: '▶ 执行排名',
+        rank: '▶ 对比分析',
     };
     function onActionChange() {
         const actionSel = $('tkAction');

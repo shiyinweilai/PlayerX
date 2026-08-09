@@ -100,9 +100,6 @@
       "first_frames_dir": "/Users/rbyang/Downloads/first_frames",
       "prompt_csv": "/Users/rbyang/Downloads/prompt.csv"
     },
-    "sync_to_testsrc": true,
-    "tag": "subj",
-    "dst_dir": "subj",
-    "map_csv": "subj_map/map.csv"
+    "sync_to_testsrc": true
   }
 }
