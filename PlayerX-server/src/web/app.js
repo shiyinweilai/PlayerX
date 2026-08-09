@@ -19,7 +19,6 @@
     const tbody = $('filesTbody');
     const emptyHint = $('emptyHint');
     const searchInput = $('searchInput');
-    const refreshBtn = $('refreshBtn');
     const mergeLatest = $('mergeLatestBtn');
     const mergeAll = $('mergeAllBtn');
     const selAll = $('selAll');
@@ -28,12 +27,11 @@
     const archiveSelBtn = $('archiveSelBtn');
     const deleteSelBtn = $('deleteSelBtn');
 
-    const serverStatus = $('serverStatus');
-    const serverStatusText = $('serverStatusText');
     const appVer = $('appVer');
 
     // 管理员登录相关
     const adminLoginBtn = $('adminLoginBtn');
+    const adminLoginLabel = adminLoginBtn ? adminLoginBtn.querySelector('.label') : null;
     const loginMask = $('loginMask');
     const loginInput = $('loginInput');
     const loginErr = $('loginErr');
@@ -101,12 +99,6 @@
         showToast._tm = setTimeout(() => { t.classList.remove('show'); t.hidden = true; }, 2400);
     }
 
-    function setStatus(kind, text) {
-        serverStatus.classList.remove('ok', 'warn', 'err');
-        if (kind) serverStatus.classList.add(kind);
-        serverStatusText.textContent = text;
-    }
-
     // ────────── 网络 ──────────
     async function api(pathname, opts) {
         return fetch(pathname, Object.assign({
@@ -148,11 +140,13 @@
             } else {
                 adminLoginBtn.hidden = false;
                 if (logged) {
-                    adminLoginBtn.textContent = '已登录（点击退出）';
+                    if (adminLoginLabel) adminLoginLabel.textContent = '已登录（点击退出）';
+                    else adminLoginBtn.textContent = '已登录（点击退出）';
                     adminLoginBtn.classList.add('is-logged');
                     adminLoginBtn.title = '点击退出管理员登录';
                 } else {
-                    adminLoginBtn.textContent = '🔒 用户登录';
+                    if (adminLoginLabel) adminLoginLabel.textContent = '用户登录';
+                    else adminLoginBtn.textContent = '用户登录';
                     adminLoginBtn.classList.remove('is-logged');
                     adminLoginBtn.title = '登录后才能执行删除 / 归档等管理操作';
                 }
@@ -3645,16 +3639,13 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const j = await r.json();
             appVer.textContent = `${j.name} v${j.version}`;
-            setStatus('ok', '已连接');
         } catch (e) {
-            setStatus('err', '服务异常');
         }
     }
 
     async function fetchList() {
         if (state.loading) return;
         state.loading = true;
-        refreshBtn.disabled = true;
         try {
             // 带上当前 Tab 的 mode；空串 = 全部。
             // 后端同时返回 modes 汇总，包含全部模式的计数，以保证 Tab 徽章始终是全量实际值。
@@ -3674,13 +3665,10 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             applyFilterAndSort();
             renderKpi();
             renderModeTabs();
-            setStatus('ok', '已连接');
         } catch (e) {
-            setStatus('err', '加载失败');
             showToast('加载失败：' + e.message, 'err');
         } finally {
             state.loading = false;
-            refreshBtn.disabled = false;
         }
     }
 
@@ -3880,7 +3868,6 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
     // ────────── 下载（POST 形态：把响应直接保存为文件） ──────────
     async function downloadResponse(promiseOrResp, fallbackName) {
         try {
-            setStatus('warn', '下载中…');
             const r = await Promise.resolve(promiseOrResp);
             if (!r.ok) throw new Error('HTTP ' + r.status);
             const blob = await r.blob();
@@ -3894,10 +3881,8 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             document.body.appendChild(a);
             a.click();
             setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
-            setStatus('ok', '下载完成');
             showToast(`已下载：${name}`, 'ok');
         } catch (e) {
-            setStatus('err', '下载失败');
             showToast('下载失败：' + e.message, 'err');
         }
     }
@@ -3913,18 +3898,15 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         if (!window.confirm(`确定删除这份评分文件吗？\n\n${name}\n\n此操作不可恢复。`)) return;
         if (btn) btn.disabled = true;
         try {
-            setStatus('warn', '删除中…');
             const r = await adminFetch('/api/files/' + encodeURIComponent(name), { method: 'DELETE' });
             if (r.status === 401) { if (btn) btn.disabled = false; return; }
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
             // 如果当前抽屉正在预览该文件，一并关闭
             if (previewName === name) closePreview();
-            setStatus('ok', '已删除');
             showToast(`已删除：${name}`, 'ok');
             await fetchList();
         } catch (e) {
-            setStatus('err', '删除失败');
             showToast('删除失败：' + e.message, 'err');
             if (btn) btn.disabled = false;
         }
@@ -3973,7 +3955,6 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         })();
         archiveSelBtn.disabled = true;
         try {
-            setStatus('warn', '归档中…');
             const r = await adminFetch('/api/archive', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3990,7 +3971,6 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             }
             // 清理本地勾选
             for (const m of (j.moved || [])) state.selected.delete(m.name);
-            setStatus('ok', '归档完成');
             showToast(
                 `归档到 archive/${j.folder}/：成功 ${ok}${fail ? `，失败 ${fail}` : ''}`,
                 fail ? 'warn' : 'ok',
@@ -3999,7 +3979,6 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             // 若归档页正打开，顺手刷新它，保证刚归档进去的文件立刻可见
             if (currentModule === 'archive') loadArchiveFolders();
         } catch (e) {
-            setStatus('err', '归档失败');
             showToast('归档失败：' + e.message, 'err');
         } finally {
             archiveSelBtn.disabled = (state.selected.size === 0);
@@ -4013,7 +3992,6 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         if (!window.confirm(`确定删除选中的 ${names.length} 份评分文件吗？\n\n此操作不可恢复。`)) return;
         deleteSelBtn.disabled = true;
         try {
-            setStatus('warn', '删除中…');
             const r = await adminFetch('/api/files/bulk-delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -4027,14 +4005,12 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 if (previewName === n) { closePreview(); break; }
             }
             for (const n of (j.deleted || [])) state.selected.delete(n);
-            setStatus('ok', '已删除');
             showToast(
                 `已删除 ${ok} 份${fail ? `，失败 ${fail}` : ''}`,
                 fail ? 'warn' : 'ok',
             );
             await fetchList();
         } catch (e) {
-            setStatus('err', '删除失败');
             showToast('删除失败：' + e.message, 'err');
         } finally {
             deleteSelBtn.disabled = (state.selected.size === 0);
@@ -4043,10 +4019,6 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
 
     // ────────── 事件绑定 ──────────
     searchInput.addEventListener('input', applyFilterAndSort);
-    refreshBtn.addEventListener('click', () => {
-        if (currentModule === 'dashboard') loadDashboard(true);
-        else fetchList();
-    });
 
     // 列头排序
     document.querySelectorAll('thead th.sortable').forEach(th => {

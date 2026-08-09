@@ -145,43 +145,6 @@ background: rgba(255, 255, 255, 0.78);
     gap: var(--gap-2);
 }
 
-.status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--gap-2);
-    padding: 4px 10px;
-    background: rgba(255, 255, 255, 0.72);
-    border: 1px solid rgba(59, 130, 246, 0.12);
-    border-radius: 999px;
-    font-size: 12px;
-    color: var(--text-soft);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-}
-
-.status-pill .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--text-dim);
-    box-shadow: 0 0 0 0 transparent;
-    transition: background-color .2s;
-}
-
-.status-pill.ok .dot {
-    background: var(--success);
-    box-shadow: 0 0 0 4px rgba(48, 209, 88, .18);
-}
-
-.status-pill.warn .dot {
-    background: var(--warning);
-    box-shadow: 0 0 0 4px rgba(255, 159, 10, .18);
-}
-
-.status-pill.err .dot {
-    background: var(--danger);
-    box-shadow: 0 0 0 4px rgba(255, 69, 58, .20);
-}
 
 /* ────────── 通用按钮 ────────── */
 button {
@@ -1525,6 +1488,90 @@ table.preview-table tbody tr:hover {
 
 #adminLoginBtn.is-logged:hover {
     background: rgba(48, 209, 88, .2);
+}
+
+/* 左侧栏底部：连接/登录操作区 */
+.sidebar-tools {
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid rgba(59, 130, 246, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.admin-sidebar .sidebar-tools .nav-group {
+    padding: 2px 10px 2px;
+}
+
+.sidebar-tool-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(59, 130, 246, 0.10);
+    border: 1px solid rgba(59, 130, 246, 0.14);
+    flex-shrink: 0;
+}
+
+.sidebar-tool-icon .nav-icon {
+    color: #4f74b7;
+    transition: color .2s ease;
+}
+
+.sidebar-tool {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(59, 130, 246, 0.10);
+    background: rgba(255, 255, 255, 0.66);
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 500;
+    text-align: left;
+    transition: background-color .15s ease, transform .05s ease, border-color .15s ease;
+}
+
+.sidebar-tool:hover {
+    background: rgba(59, 130, 246, 0.08);
+    border-color: rgba(59, 130, 246, 0.18);
+}
+
+.sidebar-tool:hover .sidebar-tool-icon .nav-icon {
+    color: #2563eb;
+}
+
+.sidebar-tool:active {
+    transform: translateY(1px);
+}
+
+.sidebar-tool .label {
+    line-height: 1;
+}
+
+#adminLoginBtn.sidebar-tool.is-logged {
+    background: rgba(48, 209, 88, .10);
+    border-color: rgba(48, 209, 88, .32);
+    color: #1f8a3a;
+    font-weight: 600;
+}
+
+#adminLoginBtn.sidebar-tool.is-logged .sidebar-tool-icon {
+    background: rgba(48, 209, 88, .14);
+    border-color: rgba(48, 209, 88, .30);
+}
+
+#adminLoginBtn.sidebar-tool.is-logged .sidebar-tool-icon .nav-icon {
+    color: #22a146;
+}
+
+#adminLoginBtn.sidebar-tool.is-logged:hover {
+    background: rgba(48, 209, 88, .16);
 }
 
 /* 未登录时管理操作按钮的"被禁用 + 提示"视觉 */
@@ -5571,10 +5618,6 @@ min-width: 0;
     font-size: var(--font-sm);
 }
 
-.status-pill {
-    box-shadow: var(--shadow-xs);
-    font-weight: var(--fw-medium);
-}
 
 /* ══════════════ 按钮增强 ══════════════ */
 .primary-btn {
@@ -6236,15 +6279,6 @@ td.actions .row-act:hover {
     box-shadow: var(--glass-border-top),
         var(--glass-border-bottom),
         var(--glass-shadow-lg);
-}
-
-/* ══════════════ 状态徽章 ══════════════ */
-.status-pill {
-    background: var(--glass-bg-light);
-    backdrop-filter: var(--glass-blur-light);
-    -webkit-backdrop-filter: var(--glass-blur-light);
-    border: 1px solid var(--glass-border-color-dim);
-    box-shadow: var(--glass-border-top), var(--glass-shadow-sm);
 }
 
 /* ══════════════ 表单分组卡片 ══════════════ */
