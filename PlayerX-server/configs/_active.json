@@ -1,5 +1,11 @@
 {
   "bindings": {
+    "quality": [
+      "质量模式"
+    ],
+    "quality_slide": [
+      "质量模式2"
+    ],
     "test": [
       "测试模式"
     ]
