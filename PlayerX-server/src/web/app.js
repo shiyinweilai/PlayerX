@@ -4694,6 +4694,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
     // ═══════════════════════════════════════════════════════════════════════
     (function initAnalyzeModule() {
         const tagSel = $('analyzeTagSel');
+        const tagMenu = $('analyzeTagMenu');
         const verifyCb = $('analyzeDoVerify');
         const runBtn = $('analyzeRunBtn');
         const statusEl = $('analyzeStatus');
@@ -4747,6 +4748,43 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
 
         initAnalyzeColumnResizing();
 
+        let analyzeTags = [];
+
+        function renderTagOptions(keyword = '') {
+            if (!tagMenu) return;
+            const kw = String(keyword || '').trim().toLowerCase();
+            const matched = analyzeTags.filter(t => !kw || t.toLowerCase().includes(kw)).slice(0, 200);
+            tagMenu.innerHTML = '';
+            if (!matched.length) {
+                const empty = document.createElement('div');
+                empty.className = 'analyze-tag-option is-empty';
+                empty.textContent = '无匹配 Tag';
+                tagMenu.appendChild(empty);
+                return;
+            }
+            matched.forEach(t => {
+                const opt = document.createElement('button');
+                opt.type = 'button';
+                opt.className = 'analyze-tag-option';
+                opt.textContent = t;
+                opt.addEventListener('mousedown', (e) => e.preventDefault());
+                opt.addEventListener('click', () => {
+                    tagSel.value = t;
+                    closeTagDropdown();
+                });
+                tagMenu.appendChild(opt);
+            });
+        }
+
+        function openTagDropdown() {
+            renderTagOptions(tagSel.value || '');
+            if (tagMenu) tagMenu.hidden = false;
+        }
+
+        function closeTagDropdown() {
+            if (tagMenu) tagMenu.hidden = true;
+        }
+
         // ── 加载可用 tag（从 uploads/ 目录中扫描所有独立 tag）──
         async function loadTags() {
             try {
@@ -4755,12 +4793,9 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 const j = await r.json();
                 const tags = new Set();
                 (j.items || []).forEach(f => { if (f.tag) tags.add(f.tag); });
-                tagSel.innerHTML = '';
-                [...tags].sort().forEach(t => {
-                    const o = document.createElement('option');
-                    o.value = t; o.textContent = t;
-                    tagSel.appendChild(o);
-                });
+                analyzeTags = [...tags].sort();
+                if (!tagSel.value && analyzeTags.length) tagSel.value = analyzeTags[0];
+                renderTagOptions(tagSel.value || '');
             } catch (e) { console.warn('loadTags:', e); }
         }
 
@@ -4771,6 +4806,32 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         });
         const sec = $('pageAnalyze');
         if (sec) obs.observe(sec, { attributes: true, attributeFilter: ['hidden'] });
+
+        tagSel.addEventListener('focus', openTagDropdown);
+        tagSel.addEventListener('click', openTagDropdown);
+        tagSel.addEventListener('input', () => openTagDropdown());
+        tagSel.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                openTagDropdown();
+                const first = tagMenu && tagMenu.querySelector('.analyze-tag-option:not(.is-empty)');
+                if (first) first.focus();
+            } else if (e.key === 'Escape') {
+                closeTagDropdown();
+            } else if (e.key === 'Enter' && tagMenu && !tagMenu.hidden) {
+                const first = tagMenu.querySelector('.analyze-tag-option:not(.is-empty)');
+                if (first) {
+                    e.preventDefault();
+                    first.click();
+                }
+            }
+        });
+
+        document.addEventListener('mousedown', (e) => {
+            const field = tagSel.closest('.analyze-tag-field');
+            if (!field) return;
+            if (!field.contains(e.target)) closeTagDropdown();
+        });
 
         function setAnalyzeStatus(text, type) {
             statusEl.textContent = text || '';
@@ -4817,9 +4878,6 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             $('azStatGroups').textContent = data.completeGroups ?? '-';
             const deanonOk = Number(data.deanonRows || 0) > 0;
             $('azStatDeanonOk').textContent = deanonOk ? `成功（${data.deanonRows}）` : '失败';
-            const verifyText = data.verify ? (data.verify.overall || '-') : '未执行';
-            $('azStatVerify').textContent = verifyText;
-
             if (statsGrid) statsGrid.hidden = false;
             if (rankSection) rankSection.hidden = false;
             if (pairSection) pairSection.hidden = false;
@@ -4831,7 +4889,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             const tag = tagSel.value;
             const doVerify = !!(verifyCb && verifyCb.checked);
             if (!tag) { showToast('请选择 Tag', 'warn'); return; }
-            setAnalyzeStatus(doVerify ? '统计中（含 verify）…' : '统计中…', 'loading');
+            setAnalyzeStatus('', '');
             runBtn.disabled = true;
             resultDiv.style.display = 'none';
             emptyDiv.style.display = 'none';
@@ -4844,7 +4902,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 const j = await r.json();
                 if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
                 renderAnalyzeResult(j.data);
-                setAnalyzeStatus('已完成', 'success');
+                setAnalyzeStatus('', '');
             } catch (e) {
                 showToast('❌ ' + e.message, 'err');
                 setAnalyzeStatus('失败：' + e.message, 'error');

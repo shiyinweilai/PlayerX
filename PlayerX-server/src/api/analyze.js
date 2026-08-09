@@ -10,13 +10,13 @@
  *
  * 核心逻辑与 blind_analyze.py 一一对应，JS 版返回结构化数据而非 stdout。
  */
-const fs       = require('fs');
-const path     = require('path');
-const os       = require('os');
-const crypto   = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 
 const { UPLOAD_DIR, ensureDirs } = require('../lib/paths');
-const { parseName }              = require('../lib/slug');
+const { parseName } = require('../lib/slug');
 
 const NAME_RE = /^[A-Za-z0-9._\-一-龥]+\.csv$/;
 
@@ -73,8 +73,8 @@ function mergeSelectedToTemp(names) {
     const seen = new Set();
     for (const n of names) {
         if (!NAME_RE.test(n)) continue;
-        if (!allFiles.has(n))  continue;
-        if (seen.has(n))       continue;
+        if (!allFiles.has(n)) continue;
+        if (seen.has(n)) continue;
         seen.add(n);
         valid.push(n);
     }
@@ -88,9 +88,9 @@ function mergeSelectedToTemp(names) {
         catch (_) { continue; }
         if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
         const meta = parseName(n) || {};
-        const tag  = meta.tag  || '';
+        const tag = meta.tag || '';
         const mode = meta.mode || 'subjective';
-        const tagCell  = csvCell(tag);
+        const tagCell = csvCell(tag);
         const modeCell = csvCell(mode);
         const rows = txt.split(/\r?\n/);
         for (let i = 0; i < rows.length; i++) {
@@ -117,18 +117,18 @@ function mergeSelectedToTemp(names) {
 // ─────────────────────────────────────────────────────────────────────
 
 function cmdAnalyze(cfg) {
-    const srcDir   = cfg.src_model_dir;
-    const dstDir   = cfg.dst_dir;
-    const mapPath  = cfg.map_csv;
-    const rawPath  = cfg.raw_csv;
+    const srcDir = cfg.src_model_dir;
+    const dstDir = cfg.dst_dir;
+    const mapPath = cfg.map_csv;
+    const rawPath = cfg.raw_csv;
     const deanonCsv = path.join(dstDir, cfg.deanon_csv || 'playerx_selected_deanon.csv');
 
-    const models  = cfg.models;
-    const labels  = models.map((_, i) => String.fromCharCode(65 + i));
-    const dims    = cfg.dimensions || ['multi_总分'];
-    const tag     = cfg.tag || '';
+    const models = cfg.models;
+    const labels = models.map((_, i) => String.fromCharCode(65 + i));
+    const dims = cfg.dimensions || ['multi_总分'];
+    const tag = cfg.tag || '';
     const samples = resolveSamples(cfg);
-    const expect  = new Set(samples.map(n => `${n}.mp4`));
+    const expect = new Set(samples.map(n => `${n}.mp4`));
     const exclude = new Set(cfg.exclude_raters || []);
 
     // 读取 map
@@ -180,8 +180,8 @@ function cmdAnalyze(cfg) {
         const m = srcOf[r.file_name];
         if (!m) continue;
         const row = Object.assign({}, r);
-        row.group    = m.group;
-        row.model    = m[`${r.folder}_source`];
+        row.group = m.group;
+        row.model = m[`${r.folder}_source`];
         row.eval_mode = 'blind';
         deanon.push(row);
     }
@@ -214,18 +214,18 @@ function md5(filePath) {
 }
 
 function cmdVerify(cfg) {
-    const srcDir   = cfg.src_model_dir;
-    const dstDir   = cfg.dst_dir;
-    const mapPath  = cfg.map_csv;
-    const rawPath  = cfg.raw_csv;
+    const srcDir = cfg.src_model_dir;
+    const dstDir = cfg.dst_dir;
+    const mapPath = cfg.map_csv;
+    const rawPath = cfg.raw_csv;
     const deanonCsv = path.join(dstDir, cfg.deanon_csv || 'playerx_selected_deanon.csv');
 
-    const models  = new Set(cfg.models);
-    const labels  = cfg.models.map((_, i) => String.fromCharCode(65 + i));
-    const dims    = cfg.dimensions || ['multi_总分'];
-    const tag     = cfg.tag || '';
+    const models = new Set(cfg.models);
+    const labels = cfg.models.map((_, i) => String.fromCharCode(65 + i));
+    const dims = cfg.dimensions || ['multi_总分'];
+    const tag = cfg.tag || '';
     const samples = resolveSamples(cfg);
-    const expect  = new Set(samples.map(n => `${n}.mp4`));
+    const expect = new Set(samples.map(n => `${n}.mp4`));
     const exclude = new Set(cfg.exclude_raters || []);
 
     // map 基础索引（与 blind_build.py 一致，后续 L1/L2 共用）
@@ -268,7 +268,7 @@ function cmdVerify(cfg) {
             for (const lb of labels) {
                 const model = r[`${lb}_source`];
                 const blindF = path.join(dstDir, g, lb, fn);
-                const srcF   = path.join(srcDir, model, fn);
+                const srcF = path.join(srcDir, model, fn);
                 if (!fs.existsSync(blindF)) {
                     details.push(`MISSING ${blindF}`);
                     ok = false;
@@ -424,7 +424,7 @@ function bradleyTerry(modelSet, wins, ties) {
             const a = modelSet[i], b = modelSet[j];
             const wi = wins[`${a}|${b}`] || 0;
             const wj = wins[`${b}|${a}`] || 0;
-            const t  = ties[[a, b].sort().join('|')] || 0;
+            const t = ties[[a, b].sort().join('|')] || 0;
             W[a] += wi + 0.5 * t;
             W[b] += wj + 0.5 * t;
             N[[a, b].sort().join('|')] = wi + wj + t;
@@ -457,7 +457,7 @@ function bradleyTerry(modelSet, wins, ties) {
 }
 
 function cmdRank(cfg) {
-    const dstDir   = cfg.dst_dir;
+    const dstDir = cfg.dst_dir;
     const deanonCsv = path.join(dstDir, cfg.deanon_csv || 'playerx_selected_deanon.csv');
 
     const rows = loadCsv(deanonCsv);
@@ -535,7 +535,7 @@ function cmdRank(cfg) {
             const key = [a, b].sort().join('|');
             const wi = wins[`${a}|${b}`] || 0;
             const wj = wins[`${b}|${a}`] || 0;
-            const t  = ties[key] || 0;
+            const t = ties[key] || 0;
             const sp = (wi + wj) > 0 ? signTestP(wi, wi + wj) : 1.0;
             pairs.push({
                 modelA: a, modelB: b,
@@ -562,7 +562,7 @@ function cmdRank(cfg) {
     const pairHeader = `模型A,模型B,A胜,B胜,平,A胜率,B胜率,signP,显著.05,显著${bonf.toFixed(4)}`;
     const pairRows = pairs.map(p =>
         [p.modelA, p.modelB, p.aWins, p.bWins, p.ties, p.aWinRate, p.bWinRate, p.signP,
-         p.significant !== 'ns' ? 1 : 0, p.significant === '**' ? 1 : 0].map(csvCell).join(','));
+        p.significant !== 'ns' ? 1 : 0, p.significant === '**' ? 1 : 0].map(csvCell).join(','));
     fs.writeFileSync(pairCsv, '﻿' + [pairHeader, ...pairRows].join('\n'), 'utf8');
 
     return {
@@ -611,22 +611,22 @@ function handle(req, res) {
         const { UPLOAD_DIR, TASKS_DIR } = require('../lib/paths');
 
         // 自动联动配置文件：扫描 configs/ 目录，找到 build.tag === tag 的配置
-    const CONFIGS_DIR = path.join(path.dirname(path.dirname(__dirname)), 'configs');
+        const CONFIGS_DIR = path.join(path.dirname(path.dirname(__dirname)), 'configs');
         if (fs.existsSync(CONFIGS_DIR)) {
-         const configFiles = fs.readdirSync(CONFIGS_DIR).filter(f => f.endsWith('.json'));
-for (const cf of configFiles) {
-    try {
-          const cfgData = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, cf), 'utf8'));
-  if (cfgData.build && cfgData.build.tag === tag) {
-autoConfig = cfgData;
-             console.log('[analyze] 自动联动配置文件: %s (build.tag=%s)', cf, tag);
-     break;
-        }
-        } catch(e) { /* skip invalid json */ }
-    }
+            const configFiles = fs.readdirSync(CONFIGS_DIR).filter(f => f.endsWith('.json'));
+            for (const cf of configFiles) {
+                try {
+                    const cfgData = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, cf), 'utf8'));
+                    if (cfgData.build && cfgData.build.tag === tag) {
+                        autoConfig = cfgData;
+                        console.log('[analyze] 自动联动配置文件: %s (build.tag=%s)', cf, tag);
+                        break;
+                    }
+                } catch (e) { /* skip invalid json */ }
+            }
         }
 
-   //扫描 uploads/ 下所有该 tag 的评分 CSV
+        //扫描 uploads/ 下所有该 tag 的评分 CSV
         const allFiles = fs.readdirSync(UPLOAD_DIR).filter(f => f.endsWith('.csv'));
         resolvedNames = allFiles.filter(f => {
             // 文件名格式：user__tag__mode__ts.csv（双下划线分割）
@@ -668,67 +668,67 @@ autoConfig = cfgData;
         tmpCsv = mergeSelectedToTemp(resolvedNames);
         console.log('[analyze] 合并完成: %s (%d bytes)', tmpCsv, fs.statSync(tmpCsv).size);
 
-      // 2. 构建配置（解析相对路径 + 自动检测 tag）
+        // 2. 构建配置（解析相对路径 + 自动检测 tag）
         console.log('[analyze] 步骤2: 构建配置...');
         const cfg = Object.assign({}, config || {});
-  cfg.raw_csv = tmpCsv;
+        cfg.raw_csv = tmpCsv;
         if (tag) cfg.tag = tag;
         // map_csv 优先用 auto检测到的
-   if (autoMapCsv && !cfg.map_csv) cfg.map_csv = autoMapCsv;
+        if (autoMapCsv && !cfg.map_csv) cfg.map_csv = autoMapCsv;
 
-    // 合并自动联动的配置文件中的 build 字段（提供 samples/exclude_samples/n_groups 等）
+        // 合并自动联动的配置文件中的 build 字段（提供 samples/exclude_samples/n_groups 等）
         if (autoConfig && autoConfig.build) {
-          const bc = autoConfig.build;
-        if (bc.samples && !cfg.samples) cfg.samples = bc.samples;
-  if (bc.exclude_samples && !cfg.exclude_samples) cfg.exclude_samples = bc.exclude_samples;
-  if (bc.n_groups && !cfg.n_groups) cfg.n_groups = bc.n_groups;
-        if (bc.models && !cfg.models) cfg.models = bc.models;
+            const bc = autoConfig.build;
+            if (bc.samples && !cfg.samples) cfg.samples = bc.samples;
+            if (bc.exclude_samples && !cfg.exclude_samples) cfg.exclude_samples = bc.exclude_samples;
+            if (bc.n_groups && !cfg.n_groups) cfg.n_groups = bc.n_groups;
+            if (bc.models && !cfg.models) cfg.models = bc.models;
             if (bc.map_csv && !cfg.map_csv) cfg.map_csv = bc.map_csv;
-     if (bc.dst_dir && !cfg.dst_dir) cfg.dst_dir = bc.dst_dir;
+            if (bc.dst_dir && !cfg.dst_dir) cfg.dst_dir = bc.dst_dir;
             if (bc.seed != null && cfg.seed == null) cfg.seed = bc.seed;
             console.log('[analyze] 已合并 build 配置: samples=%j, exclude=%j, n_groups=%s',
-     cfg.samples, cfg.exclude_samples, cfg.n_groups);
-      }
-   // map_csv 若为相对路径，从 tasks 目录解析
-    const { TASKS_DIR } = require('../lib/paths');
+                cfg.samples, cfg.exclude_samples, cfg.n_groups);
+        }
+        // map_csv 若为相对路径，从 tasks 目录解析
+        const { TASKS_DIR } = require('../lib/paths');
         // dst_dir 默认放到 tasks/map/ 目录下（反解码文件统一存放）
         if (!cfg.dst_dir) cfg.dst_dir = path.join(TASKS_DIR, 'map');
         // 所有产物文件名都跟 tag 绑定，方便区分校验
-   if (!cfg.deanon_csv) cfg.deanon_csv = `deanon_${tag || 'selected'}.csv`;
-      if (cfg.map_csv && !path.isAbsolute(cfg.map_csv)) {
+        if (!cfg.deanon_csv) cfg.deanon_csv = `deanon_${tag || 'selected'}.csv`;
+        if (cfg.map_csv && !path.isAbsolute(cfg.map_csv)) {
             const candidate = path.join(TASKS_DIR, cfg.map_csv);
             console.log('[analyze] map_csv 相对路径解析: %s → %s (存在: %s)', cfg.map_csv, candidate, fs.existsSync(candidate));
-  if (fs.existsSync(candidate)) cfg.map_csv = candidate;
+            if (fs.existsSync(candidate)) cfg.map_csv = candidate;
         }
 
-     // 将合并后的 CSV 拷贝一份到 tasks/map/ 以便校验（用 tag 命名）
+        // 将合并后的 CSV 拷贝一份到 tasks/map/ 以便校验（用 tag 命名）
         const mergedDst = path.join(cfg.dst_dir, `merged_${tag || 'selected'}.csv`);
         fs.mkdirSync(cfg.dst_dir, { recursive: true });
         fs.copyFileSync(tmpCsv, mergedDst);
- console.log('[analyze] 合并 CSV 已保存到: %s', mergedDst);
+        console.log('[analyze] 合并 CSV 已保存到: %s', mergedDst);
 
-  console.log('[analyze] 最终配置: %j', cfg);
+        console.log('[analyze] 最终配置: %j', cfg);
 
-      // 如果 cfg.models 缺失（独立分析面板不传 models），从 map CSV 自动推断：
-  // map CSV 表头含 A_source / B_source / C_source ...，列数即模型数，
+        // 如果 cfg.models 缺失（独立分析面板不传 models），从 map CSV 自动推断：
+        // map CSV 表头含 A_source / B_source / C_source ...，列数即模型数，
         // 取第一行数据的各 *_source 值作为 models 名称。
-   if (!cfg.models && cfg.map_csv && fs.existsSync(cfg.map_csv)) {
-     const mapLines = fs.readFileSync(cfg.map_csv, 'utf8').replace(/\r/g, '').split('\n');
-     const mapHeader = mapLines[0] || '';
-  const cols = mapHeader.split(',').map(c => c.trim()).filter(c => c.endsWith('_source'));
-if (cols.length > 0 && mapLines.length > 1) {
-     // 从第一行数据中提取模型名
-     const vals = mapLines[1].split(',').map(v => v.trim());
- const headerArr = mapHeader.split(',').map(c => c.trim());
-        cfg.models = cols.map(c => {
-    const idx = headerArr.indexOf(c);
-      return idx >= 0 ? vals[idx] : c.replace('_source', '');
-       });
-       console.log('[analyze] 从 map CSV 自动推断 models: %j', cfg.models);
-   }
-    }
+        if (!cfg.models && cfg.map_csv && fs.existsSync(cfg.map_csv)) {
+            const mapLines = fs.readFileSync(cfg.map_csv, 'utf8').replace(/\r/g, '').split('\n');
+            const mapHeader = mapLines[0] || '';
+            const cols = mapHeader.split(',').map(c => c.trim()).filter(c => c.endsWith('_source'));
+            if (cols.length > 0 && mapLines.length > 1) {
+                // 从第一行数据中提取模型名
+                const vals = mapLines[1].split(',').map(v => v.trim());
+                const headerArr = mapHeader.split(',').map(c => c.trim());
+                cfg.models = cols.map(c => {
+                    const idx = headerArr.indexOf(c);
+                    return idx >= 0 ? vals[idx] : c.replace('_source', '');
+                });
+                console.log('[analyze] 从 map CSV 自动推断 models: %j', cfg.models);
+            }
+        }
         if (!cfg.models || cfg.models.length === 0) {
-      throw new Error('无法确定 models：请确保 map CSV 存在且包含 A_source/B_source 等列');
+            throw new Error('无法确定 models：请确保 map CSV 存在且包含 A_source/B_source 等列');
         }
 
         // 3. 执行：rank 前自动先跑 analyze 生成 deanon CSV
@@ -768,12 +768,12 @@ if (cols.length > 0 && mapLines.length > 1) {
         console.log('[analyze] 执行完成');
 
         // 4. 清理临时文件
-        try { fs.unlinkSync(tmpCsv); } catch (_) {}
+        try { fs.unlinkSync(tmpCsv); } catch (_) { }
 
         res.json({ ok: true, action: act, data });
     } catch (e) {
         console.error('[analyze] 错误:', e.message, e.stack);
-        if (tmpCsv) try { fs.unlinkSync(tmpCsv); } catch (_) {}
+        if (tmpCsv) try { fs.unlinkSync(tmpCsv); } catch (_) { }
         return res.status(400).json({ ok: false, error: e.message });
     }
 }

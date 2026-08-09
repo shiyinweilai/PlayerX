@@ -101,14 +101,11 @@
                 </div>
 
                 <div class="analyze-controls">
-                    <div class="analyze-control-item">
+                    <div class="analyze-control-item analyze-tag-field">
                         <label for="analyzeTagSel">Tag</label>
-                        <select id="analyzeTagSel"></select>
+                        <input id="analyzeTagSel" type="text" placeholder="点击展开并输入关键字过滤 Tag" autocomplete="off">
+                        <div id="analyzeTagMenu" class="analyze-tag-menu" hidden></div>
                     </div>
-                    <label class="analyze-check-item">
-                        <input id="analyzeDoVerify" type="checkbox">
-                        执行 verify（L2 审计）
-                    </label>
                     <button id="analyzeRunBtn" class="primary-btn">▶ 执行排名</button>
                     <span id="analyzeStatus" class="analyze-status"></span>
                 </div>
@@ -134,10 +131,6 @@
                         <div class="analyze-stat-pill">
                             <span class="analyze-stat-label">反解状态</span>
                             <span class="analyze-stat-value" id="azStatDeanonOk">-</span>
-                        </div>
-                        <div class="analyze-stat-pill">
-                            <span class="analyze-stat-label">verify</span>
-                            <span class="analyze-stat-value" id="azStatVerify">未执行</span>
                         </div>
                     </div>
 

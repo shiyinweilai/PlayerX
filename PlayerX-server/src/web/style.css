@@ -6763,28 +6763,16 @@ td.actions .row-act:hover {
     margin-bottom: 18px;
 }
 
-#pageAnalyze .analyze-check-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    color: #475467;
-    font-weight: 600;
-    margin-left: 4px;
-    user-select: none;
-}
-
-#pageAnalyze .analyze-check-item input[type="checkbox"] {
-    width: 14px;
-    height: 14px;
-    accent-color: #3b82f6;
-}
 
 #pageAnalyze .analyze-control-item {
     display: flex;
     flex-direction: column;
     gap: 6px;
     min-width: 220px;
+}
+
+#pageAnalyze .analyze-tag-field {
+    position: relative;
 }
 
 
@@ -6795,20 +6783,58 @@ td.actions .row-act:hover {
     font-weight: 600;
 }
 
-#pageAnalyze #analyzeTagSel,
-#pageAnalyze #analyzeActionSel {
+#pageAnalyze #analyzeTagSel {
     height: 34px;
     border: 1px solid #d5dbe7;
     border-radius: 8px;
     padding: 0 10px;
     outline: none;
     background: #fff;
+    min-width: 280px;
 }
 
-#pageAnalyze #analyzeTagSel:focus,
-#pageAnalyze #analyzeActionSel:focus {
+#pageAnalyze #analyzeTagSel:focus {
     border-color: #5b8def;
     box-shadow: 0 0 0 3px rgba(91, 141, 239, .14);
+}
+
+#pageAnalyze .analyze-tag-menu {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 100%;
+    max-height: 240px;
+    overflow: auto;
+    background: #fff;
+    border: 1px solid #d5dbe7;
+    border-radius: 10px;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, .12);
+    padding: 6px;
+}
+
+#pageAnalyze .analyze-tag-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+    color: #111827;
+    cursor: pointer;
+}
+
+#pageAnalyze .analyze-tag-option:hover,
+#pageAnalyze .analyze-tag-option:focus {
+    background: #eef4ff;
+    outline: none;
+}
+
+#pageAnalyze .analyze-tag-option.is-empty {
+    color: #98a2b3;
+    cursor: default;
 }
 
 #pageAnalyze #analyzeRunBtn {
@@ -6829,14 +6855,13 @@ td.actions .row-act:hover {
     background: #f3f4f6;
 }
 
+#pageAnalyze .analyze-status:empty {
+    display: none;
+}
+
 #pageAnalyze .analyze-status.is-loading {
     color: #1d4ed8;
     background: #e8f0ff;
-}
-
-#pageAnalyze .analyze-status.is-success {
-    color: #027a48;
-    background: #e8f8ef;
 }
 
 #pageAnalyze .analyze-status.is-error {
