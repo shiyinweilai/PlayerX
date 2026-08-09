@@ -3515,14 +3515,27 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         });
     }
 
-    // ── 盲评分析：直接切换到「分析结果」页 ─────────────
+    // ── 分析选中：切换到分析页并直接执行排名 ─────────────
     const analyzeSelBtn = $('analyzeSelBtn');
     if (analyzeSelBtn) {
-        analyzeSelBtn.addEventListener('click', () => {
+        analyzeSelBtn.addEventListener('click', async () => {
             if (!guardWrite()) return;
             const names = [...state.selected];
             if (names.length === 0) { showToast('请先勾选要分析的文件', 'warn'); return; }
+
+            // 尝试从选中项推断 tag（仅当且仅当选中项 tag 唯一时）
+            const selectedItems = state.items.filter(it => names.includes(it.name));
+            const tagSet = new Set(selectedItems.map(it => (it.tag || '').trim()).filter(Boolean));
+            const inferredTag = tagSet.size === 1 ? [...tagSet][0] : '';
+
             switchModule('analyze');
+            if (window.PXAnalyze && typeof window.PXAnalyze.runRankNow === 'function') {
+                await window.PXAnalyze.runRankNow({
+                    names,
+                    tag: inferredTag,
+                    silentNoTag: true,
+                });
+            }
         });
     }
 
@@ -4884,20 +4897,37 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             renderRankTables(data || {});
         }
 
-        // ── 执行 rank（可选 verify）──
-        runBtn.addEventListener('click', async () => {
-            const tag = tagSel.value;
-            const doVerify = !!(verifyCb && verifyCb.checked);
-            if (!tag) { showToast('请选择 Tag', 'warn'); return; }
+        async function runRankNow(opts = {}) {
+            const names = Array.isArray(opts.names) ? opts.names.filter(Boolean) : null;
+            const tag = (opts.tag != null ? String(opts.tag) : String(tagSel.value || '')).trim();
+            const fromSelected = !!(names && names.length > 0);
+
+            // 手动触发（非“分析选中”）时要求有 tag
+            if (!fromSelected && !tag) {
+                if (!opts.silentNoTag) showToast('请选择 Tag', 'warn');
+                return;
+            }
+
+            if (tag && tagSel.value !== tag) tagSel.value = tag;
+
             setAnalyzeStatus('', '');
             runBtn.disabled = true;
             resultDiv.style.display = 'none';
             emptyDiv.style.display = 'none';
+
             try {
+                const payload = { action: 'rank' };
+                if (fromSelected) {
+                    payload.names = names;
+                    if (tag) payload.tag = tag;
+                } else {
+                    payload.tag = tag;
+                }
+
                 const r = await adminFetch('/api/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tag, action: 'rank', verify: doVerify, doVerify })
+                    body: JSON.stringify(payload)
                 });
                 const j = await r.json();
                 if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
@@ -4907,8 +4937,18 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 showToast('❌ ' + e.message, 'err');
                 setAnalyzeStatus('失败：' + e.message, 'error');
                 emptyDiv.style.display = '';
-            } finally { runBtn.disabled = false; }
-        });
+            } finally {
+                runBtn.disabled = false;
+            }
+        }
+
+        // ── 手动执行 rank（按 Tag）──
+        runBtn.addEventListener('click', () => runRankNow());
+
+        // 暴露给“分析选中”按钮：切页后直接执行
+        window.PXAnalyze = {
+            runRankNow,
+        };
 
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     })();

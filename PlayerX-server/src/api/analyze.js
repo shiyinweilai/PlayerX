@@ -602,12 +602,12 @@ function handle(req, res) {
         return res.status(400).json({ ok: false, error: 'invalid action, must be analyze/verify/rank' });
     }
 
-    //── 按 tag 自动搜集评分文件 + 查找 map CSV ──
+    //── 按 tag 自动联动配置 + 查找 map CSV；names 为空时再按 tag 自动搜集评分文件 ──
     let resolvedNames = names;
     let autoMapCsv = null;
     let autoConfig = null;  // 从 configs/ 目录自动定位到的配置
 
-    if (tag && (!Array.isArray(names) || names.length === 0)) {
+    if (tag) {
         const { UPLOAD_DIR, TASKS_DIR } = require('../lib/paths');
 
         // 自动联动配置文件：扫描 configs/ 目录，找到 build.tag === tag 的配置
@@ -626,17 +626,6 @@ function handle(req, res) {
             }
         }
 
-        //扫描 uploads/ 下所有该 tag 的评分 CSV
-        const allFiles = fs.readdirSync(UPLOAD_DIR).filter(f => f.endsWith('.csv'));
-        resolvedNames = allFiles.filter(f => {
-            // 文件名格式：user__tag__mode__ts.csv（双下划线分割）
-            const parts = f.split('__');
-            return parts.length >= 2 && parts[1] === tag;
-        });
-        if (resolvedNames.length === 0) {
-            return res.status(400).json({ ok: false, error: `没有找到 tag="${tag}" 的评分文件` });
-        }
-        console.log('[analyze] tag=%s 自动匹配到 %d 个评分文件', tag, resolvedNames.length);
         // 自动查找 map CSV：tasks/map/map_{tag}.csv 或 tasks/{tag}/map.csv
         const mapCandidates = [
             path.join(TASKS_DIR, 'map', `map_${tag}.csv`),
@@ -647,7 +636,7 @@ function handle(req, res) {
             if (fs.existsSync(c)) { autoMapCsv = c; break; }
         }
         if (!autoMapCsv) {
-            //兜底：扫描 tasks/map/ 下含该 tag 的 map 文件
+            // 兜底：扫描 tasks/map/ 下含该 tag 的 map 文件
             const mapDir = path.join(TASKS_DIR, 'map');
             if (fs.existsSync(mapDir)) {
                 const maps = fs.readdirSync(mapDir).filter(f => f.includes(tag) && f.startsWith('map'));
@@ -655,6 +644,20 @@ function handle(req, res) {
             }
         }
         console.log('[analyze] 自动定位 map CSV: %s', autoMapCsv || '未找到');
+
+        // names 缺失时，才按 tag 自动匹配评分文件
+        if (!Array.isArray(names) || names.length === 0) {
+            const allFiles = fs.readdirSync(UPLOAD_DIR).filter(f => f.endsWith('.csv'));
+            resolvedNames = allFiles.filter(f => {
+                // 文件名格式：user__tag__mode__ts.csv（双下划线分割）
+                const parts = f.split('__');
+                return parts.length >= 2 && parts[1] === tag;
+            });
+            if (resolvedNames.length === 0) {
+                return res.status(400).json({ ok: false, error: `没有找到 tag="${tag}" 的评分文件` });
+            }
+            console.log('[analyze] tag=%s 自动匹配到 %d 个评分文件', tag, resolvedNames.length);
+        }
     }
 
     if (!Array.isArray(resolvedNames) || resolvedNames.length === 0) {
