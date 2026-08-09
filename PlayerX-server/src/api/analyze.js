@@ -227,15 +227,30 @@ function cmdVerify(cfg) {
     const samples = resolveSamples(cfg);
     const expect  = new Set(samples.map(n => `${n}.mp4`));
     const exclude = new Set(cfg.exclude_raters || []);
+
+    // map 基础索引（与 blind_build.py 一致，后续 L1/L2 共用）
+    const mapRows = loadCsv(mapPath);
+    const srcOf = {};
+    for (const r of mapRows) srcOf[r.filename] = r;
+
+    // 组优先从 map 推导；若 map 异常为空再回退 n_groups
+    const groupsFromMap = [...new Set(mapRows.map(r => r.group).filter(Boolean))]
+        .sort((a, b) => {
+            const ai = parseInt(String(a).replace(/^\D+/, ''), 10);
+            const bi = parseInt(String(b).replace(/^\D+/, ''), 10);
+            if (!Number.isNaN(ai) && !Number.isNaN(bi)) return ai - bi;
+            return String(a).localeCompare(String(b));
+        });
     const nGroups = cfg.n_groups || 1;
-    const groups  = Array.from({ length: nGroups }, (_, i) => `g${i + 1}`);
+    const groups = groupsFromMap.length > 0
+        ? groupsFromMap
+        : Array.from({ length: nGroups }, (_, i) => `g${i + 1}`);
 
     const details = [];
     let ok = true;
     const skipL1 = !!cfg.skipL1;   // 跳过 L1 磁盘文件审计（仅做 L2 数据校验）
 
     // ── L1: map ↔ 磁盘文件 ──
-    const mapRows = loadCsv(mapPath);
     let l1 = 'SKIPPED';
 
     if (!skipL1) {

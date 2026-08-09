@@ -6845,30 +6845,40 @@ td.actions .row-act:hover {
 }
 
 #pageAnalyze .analyze-stats-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(160px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border: 1px solid #e8ecf3;
+    border-radius: 10px;
+    background: #fbfcff;
 }
 
-#pageAnalyze .analyze-stat-card {
-    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+#pageAnalyze .analyze-stat-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 4px 10px;
+    border-radius: 999px;
     border: 1px solid #e8edf6;
-    border-radius: 12px;
-    padding: 14px 16px;
+    background: #ffffff;
+    line-height: 1.2;
 }
 
 #pageAnalyze .analyze-stat-label {
-    font-size: 12px;
+    font-size: 11px;
     color: #667085;
-    margin-bottom: 8px;
+    white-space: nowrap;
 }
 
 #pageAnalyze .analyze-stat-value {
-    font-size: 24px;
+    font-size: 12px;
     font-weight: 700;
-    line-height: 1;
     color: #111827;
+    white-space: nowrap;
 }
 
 #pageAnalyze .analyze-card-section {
