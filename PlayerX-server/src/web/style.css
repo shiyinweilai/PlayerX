@@ -2697,6 +2697,7 @@ background: rgba(0, 113, 227, 0.06);
     align-items: center;
     gap: 12px;
     padding: 14px 20px;
+    min-height: 40px;
     background: linear-gradient(90deg, rgba(23, 162, 184, .10), rgba(10, 132, 255, .08));
     border-bottom: 1px solid var(--border-soft, #1f2027);
 }
@@ -4145,20 +4146,185 @@ textarea.dim-build-input {
 .dim-build-head-left {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
+}
+
+.dim-build-trigger {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    transition: transform .12s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease, filter .18s ease;
+}
+
+.dim-build-trigger:hover {
+    background: linear-gradient(180deg, rgba(23, 162, 184, .28), rgba(10, 132, 255, .20));
+    border-color: rgba(14, 165, 233, .62);
+    box-shadow: 0 4px 14px rgba(14, 165, 233, .28);
+    filter: saturate(1.08);
+}
+
+.dim-build-trigger:active {
+    transform: translateY(2px) scale(.972);
+    background: linear-gradient(180deg, rgba(23, 162, 184, .34), rgba(10, 132, 255, .26));
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .22) inset, 0 2px 5px rgba(14, 165, 233, .22) inset;
+}
+
+.dim-build-trigger:focus-visible {
+    outline: 2px solid rgba(14, 165, 233, .65);
+    outline-offset: 2px;
 }
 
 .dim-build-head-actions {
     margin-left: auto;
     display: inline-flex;
     align-items: center;
+    justify-content: flex-end;
+    align-self: stretch;
     gap: 12px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-height: 40px;
 }
 
 .dim-build-status {
-    font-size: 12px;
-    color: var(--text-dim);
+    display: inline-flex;
+    align-items: center;
+    align-self: stretch;
+    min-height: 40px;
+}
+
+.dim-build-progress {
+    position: relative;
+    width: 240px;
+    max-width: 28vw;
+    height: 26px;
+    border-radius: 999px;
+    overflow: hidden;
+    border: 1px solid rgba(73, 177, 227, .28);
+    background: radial-gradient(circle at 30% 0%, rgba(20, 35, 58, .95), rgba(10, 16, 30, .96));
+    box-shadow: 0 6px 16px rgba(2, 8, 23, .35);
+}
+
+.dim-build-progress-track {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(34, 211, 238, .08), rgba(59, 130, 246, .1));
+}
+
+.dim-build-progress-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 40%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #22d3ee, #3b82f6);
+    box-shadow: 0 0 12px rgba(34, 211, 238, .35), 0 0 22px rgba(59, 130, 246, .25);
+    animation: dim-build-bar-grow 2.2s ease-in-out infinite;
+}
+
+.dim-build-progress-ripple {
+    position: absolute;
+    left: 28%;
+    top: 50%;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, rgba(255, 255, 255, .25), transparent 65%);
+    animation: dim-build-ripple 1.8s ease-out infinite;
+}
+
+.dim-build-progress-particles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.dim-build-particle {
+    position: absolute;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .9);
+    opacity: .6;
+    animation: dim-build-float 3.2s ease-in-out infinite;
+}
+
+.dim-build-particle:nth-child(1) { top: 20%; left: 18%; animation-delay: 0s; }
+.dim-build-particle:nth-child(2) { top: 65%; left: 32%; animation-delay: .45s; }
+.dim-build-particle:nth-child(3) { top: 40%; left: 52%; animation-delay: .9s; }
+.dim-build-particle:nth-child(4) { top: 70%; left: 72%; animation-delay: 1.3s; }
+.dim-build-particle:nth-child(5) { top: 26%; left: 86%; animation-delay: 1.7s; }
+
+.dim-build-progress-text {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .4px;
+    color: #eaf6ff;
+    text-shadow: 0 1px 4px rgba(2, 8, 23, .65);
+}
+
+.dim-build-status.is-success .dim-build-progress-bar {
+    width: 100%;
+    animation: none;
+    background: linear-gradient(90deg, #34d399, #10b981);
+    box-shadow: 0 0 14px rgba(16, 185, 129, .35);
+}
+
+.dim-build-status.is-success .dim-build-progress-ripple {
+    animation-duration: 2.4s;
+    background: radial-gradient(circle, rgba(52, 211, 153, .28), transparent 68%);
+}
+
+.dim-build-status.is-warn .dim-build-progress-bar {
+    width: 78%;
+    animation: dim-build-bar-grow-warn 1.5s ease-in-out infinite;
+    background: linear-gradient(90deg, #fbbf24, #f59e0b);
+    box-shadow: 0 0 14px rgba(245, 158, 11, .32);
+}
+
+.dim-build-status.is-warn .dim-build-progress-ripple {
+    background: radial-gradient(circle, rgba(251, 191, 36, .24), transparent 68%);
+}
+
+.dim-build-status.is-error .dim-build-progress-bar {
+    width: 100%;
+    animation: none;
+    background: linear-gradient(90deg, #fb7185, #ef4444);
+    box-shadow: 0 0 14px rgba(239, 68, 68, .34);
+}
+
+.dim-build-status.is-error .dim-build-progress-ripple {
+    animation-duration: 1.2s;
+    background: radial-gradient(circle, rgba(251, 113, 133, .26), transparent 68%);
+}
+
+@keyframes dim-build-bar-grow {
+    0% { width: 20%; }
+    50% { width: 62%; }
+    100% { width: 34%; }
+}
+
+@keyframes dim-build-bar-grow-warn {
+    0% { width: 60%; }
+    50% { width: 84%; }
+    100% { width: 68%; }
+}
+
+@keyframes dim-build-ripple {
+    0% { transform: translate(-50%, -50%) scale(.45); opacity: .7; }
+    100% { transform: translate(-50%, -50%) scale(1.8); opacity: 0; }
+}
+
+@keyframes dim-build-float {
+    0%, 100% { transform: translateY(0) translateX(0); }
+    50% { transform: translateY(-8px) translateX(4px); }
 }
 
 /* ─── 测试人（组别名单，独立 Tab） ─── */

@@ -1407,8 +1407,8 @@
 
     /** 构建 Tab 事件绑定 */
     function bindBuildTabEvents() {
-        const runBtn = dimView.querySelector('.dim-build-run-btn');
-        if (runBtn) runBtn.addEventListener('click', runBuildAction);
+        const buildTrigger = dimView.querySelector('.dim-build-trigger');
+        if (buildTrigger) buildTrigger.addEventListener('click', runBuildAction);
 
         // ── 展开/折叠右侧测试源面板 ──
         const toggleBtn = dimView.querySelector('.dim-build-toggle-ts');
@@ -1696,12 +1696,11 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
           <div class="dim-build-left">
  <div class="dim-build-section dim-checklist-section">
      <div class="dim-cl-header">
-   <div class="dim-build-head-left">
-     <span class="dim-cl-title">🔨 构建配置</span>
-     ${admin ? `<button class="primary-btn dim-build-run-btn">▶ 执行构建</button>` : ''}
-   </div>
+  <div class="dim-build-head-left">
+    <span class="dim-cl-title ${admin ? 'dim-build-trigger' : ''}" ${admin ? 'title="点击执行构建"' : ''}>🔨 构建配置</span>
+    ${admin ? `<span class="dim-build-status" id="dimBuildStatus"></span>` : ''}
+  </div>
    ${admin ? `<div class="dim-build-head-actions">
-     <span class="dim-build-status" id="dimBuildStatus"></span>
      <button class="dim-build-toggle-ts" title="展开测试源配置">⚙ 测试源</button>
    </div>` : ''}
    </div>
@@ -1794,7 +1793,38 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
 
         const action = 'build';
         const statusEl = dimView.querySelector('#dimBuildStatus');
-        if (statusEl) statusEl.textContent = '构建中…';
+        const ensureBuildStatusUi = () => {
+            if (!statusEl) return null;
+            if (!statusEl.querySelector('.dim-build-progress')) {
+                statusEl.innerHTML = `
+                    <span class="dim-build-progress">
+                        <span class="dim-build-progress-track"></span>
+                        <span class="dim-build-progress-bar"></span>
+                        <span class="dim-build-progress-ripple"></span>
+                        <span class="dim-build-progress-particles">
+                            <i class="dim-build-particle"></i>
+                            <i class="dim-build-particle"></i>
+                            <i class="dim-build-particle"></i>
+                            <i class="dim-build-particle"></i>
+                            <i class="dim-build-particle"></i>
+                        </span>
+                        <span class="dim-build-progress-text"></span>
+                    </span>`;
+            }
+            return statusEl.querySelector('.dim-build-progress-text');
+        };
+        const setBuildStatus = (state, text) => {
+            if (!statusEl) return;
+            statusEl.classList.remove('is-pending', 'is-success', 'is-warn', 'is-error');
+            if (!text) {
+                statusEl.innerHTML = '';
+                return;
+            }
+            const textEl = ensureBuildStatusUi();
+            if (state) statusEl.classList.add(state);
+            if (textEl) textEl.textContent = text;
+        };
+        setBuildStatus('is-pending', '构建中…');
 
         const apiPath = '/api/build';
         const body = { config: build };
@@ -1805,16 +1835,16 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
-            if (r.status === 401) { if (statusEl) statusEl.textContent = ''; return; }
+            if (r.status === 401) { setBuildStatus('', ''); return; }
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j.ok) {
                 showToast('❌ ' + (j.error || '执行失败'), 'err');
-                if (statusEl) statusEl.textContent = '❌ 失败';
+                setBuildStatus('is-error', '❌ 失败');
                 return;
             }
-            // 构建成功后根据勾选决定是否 zip 到 testsrc
+            // 构建成功后默认 zip 到 testsrc
             if (action === 'build' && j.data && j.data.dstDir) {
-                if (statusEl) statusEl.textContent = '压缩中…';
+                setBuildStatus('is-pending', '压缩中…');
                 try {
                     const zr = await adminFetch('/api/build/zip', {
                         method: 'POST',
@@ -1824,7 +1854,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                     const zj = await zr.json().catch(() => ({}));
                     if (zr.ok && zj.ok) {
                         showToast(`✅ 构建完成并已压缩 → ${zj.zipName}`, 'ok');
-                        if (statusEl) statusEl.textContent = `✅ ${zj.zipName}`;
+                        setBuildStatus('is-success', `✅ ${zj.zipName}`);
                         // 自动填写测试源字段并刷新右侧面板
                         if (zj.zipName) {
                             data.build = build;
@@ -1874,19 +1904,19 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                         }
                     } else {
                         showToast('⚠️ 构建成功但压缩失败：' + (zj.error || ''), 'err');
-                        if (statusEl) statusEl.textContent = '⚠️ 压缩失败';
+                        setBuildStatus('is-warn', '⚠️ 压缩失败');
                     }
                 } catch (ze) {
                     showToast('⚠️ 构建成功但压缩异常：' + ze.message, 'err');
-                    if (statusEl) statusEl.textContent = '⚠️ 压缩异常';
+                    setBuildStatus('is-warn', '⚠️ 压缩异常');
                 }
             } else {
                 showToast('✅ 执行完成', 'ok');
-                if (statusEl) statusEl.textContent = '✅ 完成';
+                setBuildStatus('is-success', '✅ 完成');
             }
         } catch (e) {
             showToast('❌ 网络错误：' + e.message, 'err');
-            if (statusEl) statusEl.textContent = '❌ 网络错误';
+            setBuildStatus('is-error', '❌ 网络错误');
         }
     }
 

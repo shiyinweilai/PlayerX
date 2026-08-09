@@ -92,7 +92,7 @@
       "/Users/rbyang/Downloads/src/wan2.2_14b_highonly_sft_aligned_5000x56",
       "/Users/rbyang/Downloads/src/wan2.2_14b_lowonly_sft_aligned_5000x56"
     ],
-    "n_groups": 5,
+    "n_groups": 1,
     "seed": 42,
     "blind": true,
     "group_mode": "fresh",
