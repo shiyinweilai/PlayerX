@@ -3434,6 +3434,46 @@ min-width: 0;
     min-height: calc(100vh - 60px);
     background: transparent;
 }
+
+.mdl-login-guard {
+    margin: 48px auto 0;
+    max-width: 520px;
+    text-align: center;
+    padding: 28px 24px;
+    border-radius: 14px;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(239,246,255,0.82));
+    box-shadow: 0 8px 24px rgba(59, 130, 246, 0.12);
+    animation: mdl-guard-pop .26s ease-out;
+}
+
+.mdl-login-guard-icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+}
+
+.mdl-login-guard-title {
+    font-size: 19px;
+    font-weight: 800;
+    color: #1d4ed8;
+    margin-bottom: 8px;
+}
+
+.mdl-login-guard-desc {
+    font-size: 13px;
+    color: #64748b;
+    line-height: 1.6;
+    margin-bottom: 16px;
+}
+
+.mdl-login-guard-btn {
+    min-width: 120px;
+}
+
+@keyframes mdl-guard-pop {
+    from { opacity: 0; transform: translateY(6px) scale(.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
 .mdl-header-row {
     display: flex;
     align-items: center;

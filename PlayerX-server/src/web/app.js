@@ -266,6 +266,7 @@
             closeLoginDialog();
             updateAuthUi();
             showToast('登录成功，可以执行管理操作了', 'ok');
+            if (currentModule === 'models') renderModelsPage();
         } catch (e) {
             loginErr.textContent = '网络错误：' + e.message;
             loginErr.hidden = false;
@@ -464,12 +465,36 @@
     let modelsData = [];
     let modelsScope = 'all'; // 'all' | 'personal' | 'team'
 
+    function renderModelsNeedLogin(container) {
+        if (!container) return;
+        container.innerHTML = `
+            <div class="mdl-login-guard">
+                <div class="mdl-login-guard-icon">🔒</div>
+                <div class="mdl-login-guard-title">需要登录后访问模型管理</div>
+                <div class="mdl-login-guard-desc">请先输入管理员密码，再进行模型目录查看与管理</div>
+                <button class="mdl-btn mdl-btn-add mdl-login-guard-btn">立即登录</button>
+            </div>`;
+        const btn = container.querySelector('.mdl-login-guard-btn');
+        if (btn) btn.addEventListener('click', () => openLoginDialog());
+    }
+
     async function renderModelsPage() {
         const container = document.querySelector('.models-page');
         if (!container) return;
+
+        if (auth.enabled && !isLoggedIn()) {
+            renderModelsNeedLogin(container);
+            openLoginDialog();
+            return;
+        }
+
         container.innerHTML = '<div style="padding:40px;color:#64748b;text-align:center">加载中...</div>';
         try {
             const r = await adminFetch('/api/models');
+            if (r.status === 401) {
+                renderModelsNeedLogin(container);
+                return;
+            }
             const j = await r.json();
             if (!j.ok) throw new Error(j.error || 'Failed');
             modelsData = j.sources || [];
@@ -1440,7 +1465,17 @@
                 picker.style.display = 'block';
 
                 try {
+                    if (auth.enabled && !isLoggedIn()) {
+                        picker.innerHTML = '<span class="dim-build-picker-err">请先登录后再加载模型</span>';
+                        showToast('请先登录后再加载模型', 'warn');
+                        openLoginDialog();
+                        return;
+                    }
                     const resp = await adminFetch('/api/models');
+                    if (resp.status === 401) {
+                        picker.innerHTML = '<span class="dim-build-picker-err">请先登录后再加载模型</span>';
+                        return;
+                    }
                     const data = await resp.json();
                     if (!data.ok) { picker.innerHTML = `<span class="dim-build-picker-err">\u274c ${data.error}</span>`; return; }
 
