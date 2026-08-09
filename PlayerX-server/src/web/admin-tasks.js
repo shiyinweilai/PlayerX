@@ -28,18 +28,18 @@
     // ── Action 切换 ──
     const actionLabels = {
         build: '▶ 执行构建',
-        analyze: '▶ 执行分析',
-        verify: '▶ 执行校验',
         rank: '▶ 执行排名',
     };
     function onActionChange() {
-        currentAction = $('tkAction').value;
+        const actionSel = $('tkAction');
+        const selected = actionSel ? actionSel.value : currentAction;
+        currentAction = selected === 'rank' ? 'rank' : 'build';
         const btn = $('tkRun');
         btn.textContent = actionLabels[currentAction] || '▶ 执行';
         // 更新 loading 文案
         const loadingText = $('tkLoadingText');
         if (loadingText) {
-            const labels = { build: '构建中…', analyze: '分析中…', verify: '校验中…', rank: '统计中…' };
+            const labels = { build: '构建中…', rank: '统计中…' };
             loadingText.textContent = labels[currentAction] || '执行中…';
         }
     }
@@ -346,7 +346,7 @@
         detail.innerHTML = html;
     }
 
-    // ── 执行操作（build/analyze/verify/rank） ──
+    // ── 执行操作（build/rank） ──
     async function runAction() {
         if (!isLoggedIn()) { toast('请先登录', 'warn'); openLogin(); return; }
         if (!currentConfig) { toast('请先选择一个配置', 'warn'); return; }
@@ -360,8 +360,8 @@
         }
         $('tkJsonErr').style.display = 'none';
 
-        const action = currentAction;
-        const actionNames = { build: '构建', analyze: '分析', verify: '校验', rank: '排名' };
+        const action = currentAction === 'rank' ? 'rank' : 'build';
+        const actionNames = { build: '构建', rank: '排名' };
         const actionName = actionNames[action] || action;
 
         // build 会清空输出目录，确认一下
@@ -434,54 +434,27 @@
         }
     }
 
-    // ── 渲染分析/校验/排名结果 ──
+    // ── 渲染排名结果 ──
     function renderAnalyzeResults(data, action) {
         const kpiCards = $('tkKpis');
         const detail = $('tkDetail');
 
-        if (action === 'analyze') {
-            const kpis = [
-                { label: '评分员数', value: data.raters || '-' },
-                { label: '维度数', value: data.dimensions || '-' },
-                { label: '样本数', value: data.samples || '-' },
-                { label: '平均分', value: data.avgScore != null ? data.avgScore.toFixed(2) : '-' },
-                { label: '状态', value: data.success ? '✅ 完成' : '❌ 失败' },
-            ];
-            kpiCards.innerHTML = kpis.map(k =>
-                `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
-            ).join('');
-
-            let html = '';
-            if (data.outputPath) {
-                html += `<div class="an-sec"><div class="sec-h">输出路径</div><p style="font-size:12px;color:var(--text-sec)">${esc(data.outputPath)}</p></div>`;
-            }
-            if (data.summary) {
-                html += `<div class="an-sec"><div class="sec-h">分析摘要</div><pre style="font-size:12px;white-space:pre-wrap">${esc(data.summary)}</pre></div>`;
-            }
-            detail.innerHTML = html || '<div class="an-sec">分析完成</div>';
-        } else if (action === 'verify') {
-            const kpis = [
-                { label: '检查项', value: data.checks || '-' },
-                { label: '通过', value: data.passed || '-' },
-                { label: '失败', value: data.failed || 0 },
-                { label: '状态', value: (data.failed || 0) === 0 ? '✅ 全部通过' : '❌ 有异常' },
-            ];
-            kpiCards.innerHTML = kpis.map(k =>
-                `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
-            ).join('');
-            detail.innerHTML = data.details ? `<div class="an-sec"><pre style="font-size:12px;white-space:pre-wrap">${esc(data.details)}</pre></div>` : '';
-        } else if (action === 'rank') {
-            const kpis = [
-                { label: '模型数', value: data.models || '-' },
-                { label: '维度', value: data.dimension || '-' },
-                { label: '最高分', value: data.topScore != null ? data.topScore.toFixed(2) : '-' },
-                { label: '状态', value: data.success ? '✅ 完成' : '❌ 失败' },
-            ];
-            kpiCards.innerHTML = kpis.map(k =>
-                `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
-            ).join('');
-            detail.innerHTML = data.ranking ? `<div class="an-sec"><div class="sec-h">排名结果</div><pre style="font-size:12px;white-space:pre-wrap">${esc(data.ranking)}</pre></div>` : '';
+        if (action !== 'rank') {
+            kpiCards.innerHTML = '';
+            detail.innerHTML = '<div class="an-sec">仅支持执行排名</div>';
+            return;
         }
+
+        const kpis = [
+            { label: '模型数', value: data.models || '-' },
+            { label: '维度', value: data.dimension || '-' },
+            { label: '最高分', value: data.topScore != null ? data.topScore.toFixed(2) : '-' },
+            { label: '状态', value: data.success ? '✅ 完成' : '❌ 失败' },
+        ];
+        kpiCards.innerHTML = kpis.map(k =>
+            `<div class="an-kpi"><div class="l">${k.label}</div><div class="v">${k.value}</div></div>`
+        ).join('');
+        detail.innerHTML = data.ranking ? `<div class="an-sec"><div class="sec-h">排名结果</div><pre style="font-size:12px;white-space:pre-wrap">${esc(data.ranking)}</pre></div>` : '';
     }
 
     // ── 文件选择 ──
@@ -523,8 +496,9 @@
         $('tkSaveCfg').addEventListener('click', saveConfig);
         // 新建配置
         $('tkAddCfg').addEventListener('click', addConfig);
-        // Action 切换
-        $('tkAction').addEventListener('change', onActionChange);
+        // Action 切换（仅 build/rank；无选择器时默认 build）
+        const actionSel = $('tkAction');
+        if (actionSel) actionSel.addEventListener('change', onActionChange);
         // 文件选择
         const pickBtn = $('tkPickBtn');
         if (pickBtn) pickBtn.addEventListener('click', pickFile);
