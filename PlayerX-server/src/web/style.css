@@ -2712,6 +2712,13 @@ background: rgba(0, 113, 227, 0.06);
     border-radius: 999px;
 }
 
+.dim-cl-header-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
 .dim-cl-subtitle {
     font-size: 13px;
     color: var(--text-dim, #6f707a);
@@ -3248,7 +3255,7 @@ min-width: 0;
     font-weight: 500;
     cursor: pointer;
     white-space: nowrap;
- margin-left: auto;
+    margin-left: 0;
     transition: background 0.15s, box-shadow 0.15s;
 }
 .dim-build-toggle-ts:hover {
@@ -4135,41 +4142,23 @@ textarea.dim-build-input {
     min-height: 80px;
 }
 
-.dim-build-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 16px 24px;
-    border-top: 1px solid var(--border-soft, #eee);
-    background: var(--bg-elev-1, #f4f5f7);
-    border-radius: 0 0 12px 12px;
-    flex-wrap: wrap;
-}
-
-.dim-build-sync-label {
+.dim-build-head-left {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    font-size: 13px;
-    color: var(--text-muted, #666);
-    cursor: pointer;
-    user-select: none;
+    gap: 10px;
 }
 
-.dim-build-sync-label input[type="checkbox"] {
-    width: 14px;
-    height: 14px;
-    accent-color: var(--primary, #0ea5e9);
-    cursor: pointer;
+.dim-build-head-actions {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
 }
 
 .dim-build-status {
     font-size: 12px;
     color: var(--text-dim);
-}
-
-.dim-build-run-btn {
-    margin-left: auto;
 }
 
 /* ─── 测试人（组别名单，独立 Tab） ─── */

@@ -1667,19 +1667,12 @@
         const samples = Array.isArray(b.samples) ? b.samples.join(',') : '';
         const excludeSamples = Array.isArray(b.exclude_samples) ? b.exclude_samples.join(',') : '';
 
-        const syncToTs = b.sync_to_testsrc !== false; // 默认勾选
-
         let bodyHtml = `
         <div class="dim-build-grp">
-        <div class="dim-build-grp-title">路径配置</div>
+        <div class="dim-build-grp-title">参数配置</div>
    <div class="dim-build-grid">
        ${fld('参考帧目录', 'first_frames_dir', b.companions ? b.companions.first_frames_dir : '', 'first_frames', 'half')}
        ${fld('Prompt CSV', 'prompt_csv', b.companions ? b.companions.prompt_csv : '', 'prompt.csv', 'half')}
-      </div>
-        </div>
-        <div class="dim-build-grp">
-        <div class="dim-build-grp-title">构建参数</div>
-   <div class="dim-build-grid">
              ${fld('组数', 'n_groups', String(b.n_groups || 5), '5', 'xs')}
     ${fld('种子', 'seed', String(b.seed != null ? b.seed : 42), '42', 'xs')}
 ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false', '否']], 'xs')}
@@ -1696,15 +1689,6 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             ${admin ? '<div class="dim-build-model-picker" style="display:none"></div>' : ''}
  </div>`;
 
-        if (admin) {
-            bodyHtml += `
-<div class="dim-build-actions">
-    <label class="dim-build-sync-label"><input type="checkbox" class="dim-build-sync-cb" data-bf="sync_to_testsrc" ${syncToTs ? 'checked' : ''}> 同步zip到测试源</label>
-    <span class="dim-build-status" id="dimBuildStatus"></span>
-    <button class="primary-btn dim-build-run-btn">▶ 执行构建</button>
-     </div>`;
-        }
-
         // 测试源部分（右列，默认折叠）
         const tsHtml = renderTestSourceSection(obj, admin);
 
@@ -1712,9 +1696,14 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
           <div class="dim-build-left">
  <div class="dim-build-section dim-checklist-section">
      <div class="dim-cl-header">
- <span class="dim-cl-title">🔨 构建配置</span>
-    <span class="dim-cl-subtitle">Tag 自动使用「备注 tag」字段；输出目录 = tag 同名；构建后自动 zip 到 testsrc</span>
-    <button class="dim-build-toggle-ts" title="展开测试源配置">⚙ 测试源</button>
+   <div class="dim-build-head-left">
+     <span class="dim-cl-title">🔨 构建配置</span>
+     ${admin ? `<button class="primary-btn dim-build-run-btn">▶ 执行构建</button>` : ''}
+   </div>
+   ${admin ? `<div class="dim-build-head-actions">
+     <span class="dim-build-status" id="dimBuildStatus"></span>
+     <button class="dim-build-toggle-ts" title="展开测试源配置">⚙ 测试源</button>
+   </div>` : ''}
    </div>
  <div class="dim-cl-body dim-build-body">${bodyHtml}</div>
 </div>
@@ -1760,9 +1749,8 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             if (pCols) build.companions.prompt_cols = parseList(pCols);
         }
 
-        // 同步到测试源选项
-        const syncCb = dimView.querySelector('.dim-build-sync-cb');
-        build.sync_to_testsrc = syncCb ? syncCb.checked : true;
+        // 默认始终同步到测试源
+        build.sync_to_testsrc = true;
 
         return build;
     }
@@ -1825,7 +1813,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 return;
             }
             // 构建成功后根据勾选决定是否 zip 到 testsrc
-            if (action === 'build' && j.data && j.data.dstDir && build.sync_to_testsrc) {
+            if (action === 'build' && j.data && j.data.dstDir) {
                 if (statusEl) statusEl.textContent = '压缩中…';
                 try {
                     const zr = await adminFetch('/api/build/zip', {
