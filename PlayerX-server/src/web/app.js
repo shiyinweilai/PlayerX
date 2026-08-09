@@ -65,6 +65,11 @@
         modes: {},          // 后端返回的各模式计数，用于 Tab 徽章
     };
 
+    let dashboardState = {
+        loading: false,
+        data: null,
+    };
+
     // ────────── 工具 ──────────
     function fmtSize(n) {
         if (!Number.isFinite(n) || n < 0) return '—';
@@ -447,6 +452,7 @@
         else { dimPageOpen = false; }
         if (name === 'archive') { loadArchiveFolders(); }
         if (name === 'models') { renderModelsPage(); }
+        if (name === 'dashboard') { loadDashboard(); }
         if (name === 'tasks' && window.PXTasks && typeof window.PXTasks.onShow === 'function') {
             window.PXTasks.onShow();
         }
@@ -3643,6 +3649,95 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         }
     }
 
+    // ────────── 数据大盘 ──────────
+    function renderDashboardLoading(text) {
+        const summary = $('dashSummary');
+        const tagTbody = document.querySelector('#dashTagTable tbody');
+        const taskTbody = document.querySelector('#dashTaskTable tbody');
+        if (summary) {
+            summary.innerHTML = `<div class="dash-empty">${escHtml(text || '加载中...')}</div>`;
+        }
+        if (tagTbody) tagTbody.innerHTML = '';
+        if (taskTbody) taskTbody.innerHTML = '';
+    }
+
+    function renderDashboard(data) {
+        const summary = $('dashSummary');
+        const tagTbody = document.querySelector('#dashTagTable tbody');
+        const taskTbody = document.querySelector('#dashTaskTable tbody');
+        if (!summary || !tagTbody || !taskTbody) return;
+
+        const s = (data && data.summary) || {};
+        const tags = Array.isArray(data && data.tags) ? data.tags : [];
+        const tasks = Array.isArray(data && data.tasks) ? data.tasks : [];
+
+        summary.innerHTML = `
+            <div class="dash-kpi"><div class="k">激活配置</div><div class="v">${s.activeConfigCount || 0}</div></div>
+            <div class="dash-kpi"><div class="k">激活 Tag</div><div class="v">${s.activeTagCount || 0}</div></div>
+            <div class="dash-kpi"><div class="k">预期提交</div><div class="v">${s.expectedTotal || 0}</div></div>
+            <div class="dash-kpi"><div class="k">已提交</div><div class="v">${s.submittedTotal || 0}</div></div>
+            <div class="dash-kpi"><div class="k">整体完成率</div><div class="v">${(s.completionRate || 0).toFixed(1)}%</div></div>
+            <div class="dash-kpi"><div class="k">未提交人次</div><div class="v warn">${s.missingPeopleCount || 0}</div></div>
+        `;
+
+        tagTbody.innerHTML = tags.length ? tags.map(t => {
+            const miss = (t.missingUsers || []).length
+                ? t.missingUsers.map(u => `<span class="dash-chip miss">${escHtml(u)}</span>`).join('')
+                : '<span class="dash-chip ok">已齐</span>';
+            const rate = Number(t.completionRate || 0);
+            return `
+                <tr>
+                    <td><span class="dash-tag">${escHtml(t.tag || '未设置')}</span></td>
+                    <td>${t.expectedCount || 0}</td>
+                    <td>${t.submittedCount || 0}</td>
+                    <td>
+                        <div class="dash-rate">
+                            <div class="dash-rate-bar"><i style="width:${Math.max(0, Math.min(100, rate))}%"></i></div>
+                            <span>${rate.toFixed(1)}%</span>
+                        </div>
+                    </td>
+                    <td class="dash-chip-cell">${miss}</td>
+                </tr>`;
+        }).join('') : '<tr><td colspan="5" class="dash-empty">当前激活配置暂无可统计任务</td></tr>';
+
+        taskTbody.innerHTML = tasks.length ? tasks.map(t => {
+            const miss = (t.missingUsers || []).length
+                ? t.missingUsers.map(u => `<span class="dash-chip miss">${escHtml(u)}</span>`).join('')
+                : '<span class="dash-chip ok">已齐</span>';
+            return `
+                <tr>
+                    <td>${escHtml(t.modeLabel || t.mode || '-')}</td>
+                    <td>${escHtml(t.configName || '-')}</td>
+                    <td><span class="dash-tag">${escHtml(t.tag || '未设置')}</span></td>
+                    <td>${t.expectedCount || 0}</td>
+                    <td>${t.submittedCount || 0}</td>
+                    <td class="dash-chip-cell">${miss}</td>
+                </tr>`;
+        }).join('') : '<tr><td colspan="6" class="dash-empty">暂无激活任务</td></tr>';
+    }
+
+    async function loadDashboard(force) {
+        if (dashboardState.loading) return;
+        if (!force && dashboardState.data) {
+            renderDashboard(dashboardState.data);
+            return;
+        }
+        dashboardState.loading = true;
+        renderDashboardLoading('数据加载中...');
+        try {
+            const r = await api('/api/dashboard');
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const j = await r.json();
+            if (!j.ok) throw new Error(j.error || '加载失败');
+            dashboardState.data = j.data || {};
+            renderDashboard(dashboardState.data);
+        } catch (e) {
+            renderDashboardLoading('加载失败：' + e.message);
+        } finally {
+            dashboardState.loading = false;
+        }
+    }
+
     // ────────── 过滤 / 排序 / 渲染 ──────────
     function applyFilterAndSort() {
         const q = (searchInput.value || '').trim().toLowerCase();
@@ -3913,7 +4008,10 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
 
     // ────────── 事件绑定 ──────────
     searchInput.addEventListener('input', applyFilterAndSort);
-    refreshBtn.addEventListener('click', () => { fetchList(); });
+    refreshBtn.addEventListener('click', () => {
+        if (currentModule === 'dashboard') loadDashboard(true);
+        else fetchList();
+    });
 
     // 列头排序
     document.querySelectorAll('thead th.sortable').forEach(th => {

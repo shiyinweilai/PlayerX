@@ -6389,36 +6389,161 @@ td.actions .row-act:hover {
  * 布局统一增强 v3 — 占位页 / 子侧边栏面板化 / 主侧边栏精化
  * ══════════════════════════════════════════════════════════════ */
 
-/* ── 占位页（数据大盘 / 任务管理） ── */
-.placeholder-page {
+/* ── 数据大盘 ── */
+.dashboard-page {
     display: flex;
     flex-direction: column;
+    gap: 14px;
+    padding: 14px;
+}
+
+.dashboard-head {
+    background: rgba(255, 255, 255, .72);
+    border: 1px solid rgba(59, 130, 246, .14);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+
+.dashboard-title {
+    font-size: 22px;
+    font-weight: 800;
+    color: #1d4ed8;
+    margin-bottom: 6px;
+}
+
+.dashboard-sub {
+    font-size: 13px;
+    color: #64748b;
+}
+
+.dashboard-summary {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(120px, 1fr));
+    gap: 10px;
+}
+
+.dash-kpi {
+    background: rgba(255, 255, 255, .85);
+    border: 1px solid rgba(59, 130, 246, .14);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.dash-kpi .k {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.dash-kpi .v {
+    margin-top: 2px;
+    font-size: 22px;
+    font-weight: 800;
+    color: #1e3a8a;
+}
+
+.dash-kpi .v.warn {
+    color: #d97706;
+}
+
+.dashboard-card {
+    background: rgba(255, 255, 255, .82);
+    border: 1px solid rgba(59, 130, 246, .14);
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.dashboard-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e3a8a;
+    margin-bottom: 10px;
+}
+
+.dashboard-table-wrap {
+    overflow: auto;
+}
+
+.dashboard-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+}
+
+.dashboard-table th,
+.dashboard-table td {
+    padding: 9px 10px;
+    border-bottom: 1px solid rgba(226, 232, 240, .9);
+    text-align: left;
+    vertical-align: top;
+}
+
+.dashboard-table th {
+    color: #475569;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.dash-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(59, 130, 246, .12);
+    color: #1d4ed8;
+    font-weight: 700;
+}
+
+.dash-chip-cell {
+    min-width: 220px;
+}
+
+.dash-chip {
+    display: inline-block;
+    margin: 2px 4px 2px 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+}
+
+.dash-chip.ok {
+    color: #166534;
+    background: rgba(34, 197, 94, .14);
+}
+
+.dash-chip.miss {
+    color: #b45309;
+    background: rgba(251, 191, 36, .2);
+}
+
+.dash-rate {
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
+    gap: 8px;
+}
+
+.dash-rate-bar {
+    width: 96px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, .28);
+    overflow: hidden;
+}
+
+.dash-rate-bar i {
+    display: block;
     height: 100%;
-    padding: 40px;
-    color: var(--text-dim);
-    text-align: center;
+    background: linear-gradient(90deg, #22d3ee, #3b82f6);
 }
 
-.placeholder-icon {
-    font-size: 56px;
-    margin-bottom: 16px;
-    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, .1));
-    opacity: 0.6;
+.dash-empty {
+    color: #64748b;
+    padding: 12px 0;
 }
 
-.placeholder-title {
-    font-size: var(--font-xl);
-    font-weight: var(--fw-bold);
-    color: var(--text);
-    margin-bottom: 8px;
-}
-
-.placeholder-sub {
-    font-size: var(--font-base);
-    line-height: 1.8;
-    color: var(--text-dim);
+@media (max-width: 1360px) {
+    .dashboard-summary {
+        grid-template-columns: repeat(3, minmax(120px, 1fr));
+    }
 }
 
 /* ══════════════ 主侧边栏精化 ══════════════ */

@@ -78,10 +78,50 @@
     <div class="admin-content">
         <!-- ═══ 模块：数据大盘 ═══ -->
         <section id="pageDashboard" hidden>
-            <div class="placeholder-page">
-                <div class="placeholder-icon">📊</div>
-                <div class="placeholder-title">数据大盘</div>
-                <div class="placeholder-sub">任务进度、完成度、评分统计等数据概览<br>即将上线，敬请期待</div>
+            <div class="dashboard-page">
+                <div class="dashboard-head">
+                    <div class="dashboard-title">📊 数据大盘</div>
+                    <div class="dashboard-sub">基于当前激活配置统计：按 Tag 追踪预期任务、提交进度与未提交人员</div>
+                </div>
+
+                <div id="dashSummary" class="dashboard-summary"></div>
+
+                <div class="dashboard-card">
+                    <div class="dashboard-card-title">Tag 任务进度</div>
+                    <div class="dashboard-table-wrap">
+                        <table class="dashboard-table" id="dashTagTable">
+                            <thead>
+                                <tr>
+                                    <th>Tag</th>
+                                    <th>预期</th>
+                                    <th>已提交</th>
+                                    <th>完成率</th>
+                                    <th>未提交人员</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="dashboard-card">
+                    <div class="dashboard-card-title">激活任务明细</div>
+                    <div class="dashboard-table-wrap">
+                        <table class="dashboard-table" id="dashTaskTable">
+                            <thead>
+                                <tr>
+                                    <th>模式</th>
+                                    <th>配置</th>
+                                    <th>Tag</th>
+                                    <th>预期</th>
+                                    <th>已提交</th>
+                                    <th>未提交人员</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </section>
 

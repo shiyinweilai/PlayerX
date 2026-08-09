@@ -1,6 +1,6 @@
 {
   "type": "质量比较2",
-  "tag": "subj",
+  "tag": "quality2",
   "task": "测试任务",
   "scale": "1-5 Likert 整数",
   "dimensions": [

@@ -26,10 +26,12 @@ const settings   = require('./settings');
 const dimensions = require('./dimensions');
 const testsrc    = require('./testsrc');
 const models     = require('./models');
+const dashboard  = require('./dashboard');
 
 function mountApi(app) {
     // ── 公开接口 ─────────────────────────────────────────────
     app.get('/api/status', status.makeHandler());
+    app.get('/api/dashboard', dashboard.handle);
 
     // ── 上传路径兼容 ──────────────────────────────────────────
     // 用户在播放器「上传设置」里很容易只填基址（如 http://host:2026 或带尾斜杠），
