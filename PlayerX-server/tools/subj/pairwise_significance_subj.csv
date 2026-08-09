@@ -1,4 +1,0 @@
-﻿模型A,模型B,A胜,B胜,平,A胜率,B胜率,signP,显著.05,显著0.0167
-wan2.2_14b_gptc_lora6000x8,wan2.2_14b_highonly_sft_aligned_5000x56,3,1,1,0.6,0.2,0.625,0,0
-wan2.2_14b_gptc_lora6000x8,wan2.2_14b_lowonly_sft_aligned_5000x56,2,1,2,0.4,0.2,1,0,0
-wan2.2_14b_highonly_sft_aligned_5000x56,wan2.2_14b_lowonly_sft_aligned_5000x56,1,2,2,0.2,0.4,1,0,0

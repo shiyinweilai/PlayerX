@@ -76,7 +76,15 @@
     "promptCsv": "prompt.csv",
     "referenceDirs": [
       "first_frames"
-    ]
+    ],
+    "groups": {
+      "g1": [
+        "rbyang"
+      ],
+      "g2": [
+        "codeczhang"
+      ]
+    }
   },
   "build": {
     "models": [
