@@ -465,7 +465,7 @@ function handle(req, res) {
    if (fs.existsSync(c)) cfg.companions.first_frames_dir = c;
    }
     }
-    // dst_dir 若为相对路径，基于 tasks 目录解析（产物 → <ROOT>/tasks/<tag>/）
+    // dst_dir 若为相对路径，基于 tasks 目录解析（产物 → <ROOT>/tasks/<tag>/，如 subj）
     if (cfg.dst_dir && !path.isAbsolute(cfg.dst_dir)) {
         cfg.dst_dir = path.join(TASKS_DIR, cfg.dst_dir);
     }

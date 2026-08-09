@@ -1801,8 +1801,8 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         // 用 tag 作为 dst_dir（相对路径，后端基于 tasks/ 目录解析）
         build.tag = tag;
         if (!build.dst_dir) build.dst_dir = tag;
-        // map_csv 统一放在 tasks/map/ 目录下
-        if (!build.map_csv) build.map_csv = `map/map_${tag}.csv`;
+        // map_csv 新规则：按 tag 放在 tasks/{tag}_map/map.csv
+        if (!build.map_csv) build.map_csv = `${tag}_map/map.csv`;
 
         const action = 'build';
         const statusEl = dimView.querySelector('#dimBuildStatus');

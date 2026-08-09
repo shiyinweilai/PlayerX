@@ -548,11 +548,21 @@ function cmdRank(cfg) {
         }
     }
 
-    // 写 CSV（兼容 Python 版输出格式）—— 文件名用 tag 区分
-    const rankTag = cfg.tag || 'selected';
-    const rankCsv = path.join(dstDir, `model_ranking_${rankTag}.csv`);
-    const pairCsv = path.join(dstDir, `pairwise_significance_${rankTag}.csv`);
-    fs.mkdirSync(dstDir, { recursive: true });
+    // 写 CSV（兼容 Python 版输出格式）
+    // 新规则：有 tag 时写入 tasks/{tag}_map/ 下固定文件名；无 tag 仍用历史时间戳命名
+    let rankCsv;
+    let pairCsv;
+    if (cfg.tag) {
+        const { TASKS_DIR } = require('../lib/paths');
+        const mapDir = path.join(TASKS_DIR, `${cfg.tag}_map`);
+        fs.mkdirSync(mapDir, { recursive: true });
+        rankCsv = path.join(mapDir, 'model_ranking.csv');
+        pairCsv = path.join(mapDir, 'pairwise_significance.csv');
+    } else {
+        rankCsv = path.join(dstDir, `model_ranking_${Date.now()}.csv`);
+        pairCsv = path.join(dstDir, `pairwise_significance_${Date.now()}.csv`);
+        fs.mkdirSync(dstDir, { recursive: true });
+    }
 
     const rankHeader = '模型,样本数,均值,CI95下,CI95上,BT强度,BT_Elo,BT排名';
     const rankRows = models.map(m =>
@@ -626,8 +636,11 @@ function handle(req, res) {
             }
         }
 
-        // 自动查找 map CSV：tasks/map/map_{tag}.csv 或 tasks/{tag}/map.csv
+        // 自动查找 map CSV（新规则优先，兼容旧规则）
+        // 新：tasks/{tag}_map/map.csv
+        // 旧：tasks/map/map_{tag}.csv / tasks/{tag}/map.csv / tasks/{tag}/map_{tag}.csv
         const mapCandidates = [
+            path.join(TASKS_DIR, `${tag}_map`, 'map.csv'),
             path.join(TASKS_DIR, 'map', `map_${tag}.csv`),
             path.join(TASKS_DIR, tag, 'map.csv'),
             path.join(TASKS_DIR, tag, `map_${tag}.csv`),
@@ -636,7 +649,7 @@ function handle(req, res) {
             if (fs.existsSync(c)) { autoMapCsv = c; break; }
         }
         if (!autoMapCsv) {
-            // 兜底：扫描 tasks/map/ 下含该 tag 的 map 文件
+            // 兜底：扫描 tasks/map/ 下含该 tag 的历史 map 文件
             const mapDir = path.join(TASKS_DIR, 'map');
             if (fs.existsSync(mapDir)) {
                 const maps = fs.readdirSync(mapDir).filter(f => f.includes(tag) && f.startsWith('map'));
@@ -694,18 +707,20 @@ function handle(req, res) {
         }
         // map_csv 若为相对路径，从 tasks 目录解析
         const { TASKS_DIR } = require('../lib/paths');
-        // dst_dir 默认放到 tasks/map/ 目录下（反解码文件统一存放）
-        if (!cfg.dst_dir) cfg.dst_dir = path.join(TASKS_DIR, 'map');
-        // 所有产物文件名都跟 tag 绑定，方便区分校验
-        if (!cfg.deanon_csv) cfg.deanon_csv = `deanon_${tag || 'selected'}.csv`;
+        // dst_dir 默认放到 tasks/{tag}_map（新规则）或 tasks/map（兼容无 tag 场景）
+        if (!cfg.dst_dir) cfg.dst_dir = tag ? path.join(TASKS_DIR, `${tag}_map`) : path.join(TASKS_DIR, 'map');
+        // 新规则：有 tag 时 deanon 固定名，目录按 tag 隔离；无 tag 时保留历史命名
+        if (!cfg.deanon_csv) cfg.deanon_csv = tag ? 'deanon.csv' : `deanon_${Date.now()}.csv`;
         if (cfg.map_csv && !path.isAbsolute(cfg.map_csv)) {
             const candidate = path.join(TASKS_DIR, cfg.map_csv);
             console.log('[analyze] map_csv 相对路径解析: %s → %s (存在: %s)', cfg.map_csv, candidate, fs.existsSync(candidate));
             if (fs.existsSync(candidate)) cfg.map_csv = candidate;
         }
 
-        // 将合并后的 CSV 拷贝一份到 tasks/map/ 以便校验（用 tag 命名）
-        const mergedDst = path.join(cfg.dst_dir, `merged_${tag || 'selected'}.csv`);
+        // 将合并后的 CSV 拷贝到输出目录：有 tag 时固定名 merged.csv（按 {tag}_map 隔离）
+        const mergedDst = tag
+            ? path.join(cfg.dst_dir, 'merged.csv')
+            : path.join(cfg.dst_dir, `merged_${Date.now()}.csv`);
         fs.mkdirSync(cfg.dst_dir, { recursive: true });
         fs.copyFileSync(tmpCsv, mergedDst);
         console.log('[analyze] 合并 CSV 已保存到: %s', mergedDst);

@@ -44,7 +44,7 @@
         $('af_srcDir').value = obj.src_model_dir || '';
         $('af_dstDir').value = obj.dst_dir || '';
         $('af_mapCsv').value = obj.map_csv || '';
-        $('af_deanonCsv').value = obj.deanon_csv || 'playerx_selected_deanon.csv';
+        $('af_deanonCsv').value = obj.deanon_csv || 'deanon.csv';
         $('af_samples').value = (obj.samples || []).join(',');
         $('af_excludeSamples').value = (obj.exclude_samples || []).join(',');
         $('af_excludeRaters').value = (obj.exclude_raters || []).join(',');
@@ -67,7 +67,11 @@
         if (dstDir) obj.dst_dir = dstDir;
         const mapCsv = $('af_mapCsv').value.trim();
         if (mapCsv) obj.map_csv = mapCsv;
-        obj.deanon_csv = $('af_deanonCsv').value.trim() || 'playerx_selected_deanon.csv';
+        else if (tag) obj.map_csv = `${tag}_map/map.csv`;
+
+        const deanonCsv = $('af_deanonCsv').value.trim();
+        if (deanonCsv) obj.deanon_csv = deanonCsv;
+        else if (tag) obj.deanon_csv = 'deanon.csv';
         const samples = parseNumList($('af_samples').value);
         if (samples.length > 0) obj.samples = samples;
         const excludeSamples = parseNumList($('af_excludeSamples').value);
@@ -188,8 +192,8 @@
                 models: [
                 ],
                 n_groups: 5,
-                map_csv: 'map_subj.csv',
-                deanon_csv: 'playerx_selected_deanon.csv',
+                map_csv: 'subj_map/map.csv',
+                deanon_csv: 'deanon.csv',
             };
             const r = await adminFetch(`/api/analyze-configs/${encodeURIComponent(trimmed)}`, {
                 method: 'PUT',
