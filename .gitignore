@@ -30,3 +30,5 @@ PlayerX/release/remote-url.json
 PlayerX-server/testsrc
 PlayerX-server/package-lock.json
 PlayerX-server/tasks
+PlayerX-server/configs
+PlayerX-server/shares
