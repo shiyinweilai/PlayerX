@@ -691,16 +691,17 @@ function handle(req, res) {
             if (bc.n_groups && !cfg.n_groups) cfg.n_groups = bc.n_groups;
             if (bc.models && !cfg.models) cfg.models = bc.models;
             if (bc.map_csv && !cfg.map_csv) cfg.map_csv = bc.map_csv;
-            if (bc.dst_dir && !cfg.dst_dir) cfg.dst_dir = bc.dst_dir;
+            // 注意：永远忽略 build.dst_dir，强制统一写到 tasks/{tag}_map，
+            // 避免与 build 产物 (map.csv / model_ranking.csv 等) 分裂到不同目录。
             if (bc.seed != null && cfg.seed == null) cfg.seed = bc.seed;
             console.log('[analyze] 已合并 build 配置: samples=%j, exclude=%j, n_groups=%s',
                 cfg.samples, cfg.exclude_samples, cfg.n_groups);
         }
         // map_csv 若为相对路径，从 tasks 目录解析
         const { TASKS_DIR } = require('../lib/paths');
-        // dst_dir 默认放到 tasks/{tag}_map；无 tag 兜底到 _default_map（统一 {tag}_map 命名）
-        if (!cfg.dst_dir) cfg.dst_dir = path.join(TASKS_DIR, tag ? `${tag}_map` : '_default_map');
-        // deanon 固定名（统一按 {tag}_map 隔离），无 tag 兜底为 _default_map
+        // dst_dir 强制为 tasks/{tag}_map（无 tag 兜底到 _default_map），保证所有产物集中
+        cfg.dst_dir = path.join(TASKS_DIR, tag ? `${tag}_map` : '_default_map');
+        // deanon 固定名（统一按 {tag}_map 隔离）
         if (!cfg.deanon_csv) cfg.deanon_csv = 'deanon.csv';
         if (cfg.map_csv && !path.isAbsolute(cfg.map_csv)) {
             const candidate = path.join(TASKS_DIR, cfg.map_csv);
@@ -708,7 +709,7 @@ function handle(req, res) {
             if (fs.existsSync(candidate)) cfg.map_csv = candidate;
         }
 
-        // 将合并后的 CSV 拷贝到输出目录：有 tag 时固定名 merged.csv（按 {tag}_map 隔离）
+        // 将合并后的 CSV 拷贝到输出目录：固定名 merged.csv（无 tag 兜底用时间戳）
         const mergedDst = tag
             ? path.join(cfg.dst_dir, 'merged.csv')
             : path.join(cfg.dst_dir, `merged_${Date.now()}.csv`);
