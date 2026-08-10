@@ -12,11 +12,23 @@ cd "$SCRIPT_DIR"
 nohup node ./server.js > nohup.log 2>&1 &
 disown
 
+# 探测 LAN IP（同 server.js 优先策略）
+LAN_IP=$(ifconfig 2>/dev/null | awk '/inet / && !/127\.0\.0\.1|169\.254/ {
+    ip=$2
+    if (ip ~ /^192\.168\./)   rank=0
+    else if (ip ~ /^10\./)    rank=1
+    else if (ip ~ /^172\.(1[6-9]|2[0-9]|3[01])\./) rank=2
+    else rank=3
+    printf "%d %s\n", rank, ip
+}' | sort -n | head -1 | awk '{print $2}')
+
 echo "[3/3] 等待服务就绪…"
 for i in 1 2 3 4 5; do
     sleep 1
     if curl -s http://localhost:2026/ > /dev/null 2>&1; then
-        echo "✅ PlayerX 服务已启动 → http://localhost:2026/"
+        echo "✅ PlayerX 服务已启动"
+        echo "   Web 面板  : http://localhost:2026/"
+        [ -n "$LAN_IP" ] && echo "   LAN 访问  : http://${LAN_IP}:2026/"
         exit 0
     fi
     echo "  等待中… (${i}/5)"
