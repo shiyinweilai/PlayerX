@@ -12,6 +12,14 @@ cd "$SCRIPT_DIR"
 nohup node ./server.js > nohup.log 2>&1 &
 disown
 
+# 平台检测：Linux 用 eth1，macOS 用 en0
+if [ "$(uname -s)" = "Darwin" ]; then
+    LAN_IF="en0"
+else
+    LAN_IF="eth1"
+fi
+LAN_IP=$(ifconfig "$LAN_IF" 2>/dev/null | grep 'inet ' | awk '{print $2}')
+
 echo "[3/3] 等待服务就绪…"
 for i in 1 2 3 4 5; do
     sleep 1
@@ -19,9 +27,7 @@ for i in 1 2 3 4 5; do
         echo ""
         echo "✅ PlayerX 服务已启动"
         echo "   Web 面板  : http://localhost:2026/"
-        # 从 nohup.log 取 server 自己打印的 LAN 地址（跨平台零依赖）
-        LAN_URL=$(grep "LAN access" nohup.log | head -1 | grep -oE 'http://[0-9.]+:[0-9]+')
-        [ -n "$LAN_URL" ] && echo "   LAN 访问  : ${LAN_URL}/"
+        [ -n "$LAN_IP" ] && echo "   LAN 访问  : http://${LAN_IP}:2026/"
         exit 0
     fi
     echo "  等待中… (${i}/5)"
