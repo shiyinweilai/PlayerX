@@ -16,15 +16,34 @@ PlayerX-server/
 │   │   ├── list.js        # GET  /list
 │   │   ├── merge.js       # GET  /merge
 │   │   ├── files.js       # GET  /files/:name
-│   │   └── status.js      # GET  /api/status (不鉴权)
+│   │   ├── status.js      # GET  /api/status (不鉴权)
+│   │   ├── dashboard.js   # GET  /api/dashboard 数据大盘
+│   │   ├── analyze.js     # POST /api/analyze 盲评分析
+│   │   ├── verify.js      # POST /api/verify 盲评校验
+│   │   ├── build.js       # POST /api/build 构建任务
+│   │   ├── models.js      # GET  /api/models  模型管理
+│   │   └── config.js      # GET/POST /api/config 配置管理
 │   ├── lib/
 │   │   ├── paths.js       # 目录与配置常量
 │   │   ├── slug.js        # safeSlug / tsNow / parseName
 │   │   └── store.js       # uploads/archive 扫描与归档
-│   └── web/               # Web 面板（HTML / CSS / JS 三件套）
+│   └── web/               # Web 面板
 │       ├── index.html
-│       ├── style.css
-│       └── app.js
+│       ├── admin-analyze.js   # 管理页：分析结果交互
+│       ├── admin-tasks.js     # 管理页：任务管理
+│       ├── app-core.js        # 基础设施（DOM、状态、工具、鉴权、模块路由）
+│       ├── app-models.js      # 模型管理模块
+│       ├── app-config-editor.js  # 配置编辑器（维度/构建/测试/评分）
+│       ├── app-files.js       # 文件列表 + 大盘 + CSV预览 + 归档
+│       ├── app-init.js        # 初始化（列宽/Hash/启动） + window.PX API
+│       ├── app-analyze.js     # 分析结果模块（window.PXAnalyze）
+│       ├── style-base.css          # CSS 变量 + 全局重置
+│       ├── style-components.css    # 核心组件（顶栏/按钮/表格/弹窗/Toast）
+│       ├── style-dim-editor.css    # 维度规则编辑器样式
+│       ├── style-admin-layout.css  # 后台布局（侧栏/导航/归档页）
+│       ├── style-enhance.css       # 设计令牌 + 毛玻璃质感层
+│       ├── style-dashboard.css     # 数据大盘 + 小屏适配
+│       └── style-analyze.css       # 分析结果 + 确认弹窗
 ├── uploads/               # 落盘目录（运行期自动建）
 └── archive/               # 历史归档（每槽位最多保留 20 份）
 ```

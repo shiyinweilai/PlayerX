@@ -1,0 +1,109 @@
+/* ============================================================
+ * PlayerX-server Web Panel — 极简 / 深色优先 / 系统语义色
+ *
+ * 设计要点：
+ *   - 默认深色，浅色模式跟随系统 (prefers-color-scheme: light)
+ *   - 全部颜色 / 间距 / 圆角通过 CSS Variables 定义，便于主题切换
+ *   - 文件名超长用 `direction: rtl` 左侧省略，确保 .csv 后缀始终可见
+ *   - 不引入任何前端框架，原生即可
+ * ============================================================ */
+
+/* inline SVG icon 通用 */
+.inline-icon {
+    display: inline-block;
+    vertical-align: -0.15em;
+    flex-shrink: 0;
+}
+
+:root {
+    /* 间距 / 圆角 */
+    --gap-1: 4px;
+    --gap-2: 8px;
+    --gap-3: 12px;
+    --gap-4: 16px;
+    --gap-5: 24px;
+    --gap-6: 32px;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+
+    /* 浅色蓝白调色板（默认） */
+    --bg: #f0f6ff;
+    --bg-elev-1: rgba(255, 255, 255, 0.85);
+    --bg-elev-2: rgba(255, 255, 255, 0.72);
+    --bg-hover: rgba(59, 130, 246, 0.06);
+    --border: rgba(59, 130, 246, 0.12);
+    --border-soft: rgba(59, 130, 246, 0.06);
+
+    --text: #1e293b;
+    --text-soft: #475569;
+    --text-dim: #94a3b8;
+
+    /* 系统语义色 */
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --success: #16a34a;
+    --warning: #d97706;
+    --danger: #dc2626;
+
+    --shadow: 0 4px 18px rgba(37, 99, 235, .06);
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: linear-gradient(160deg, #e8f1fd 0%, #f0f6ff 40%, #f8fbff 100%);
+        --bg-flat: #f0f6ff;
+        --bg-elev-1: rgba(255, 255, 255, 0.85);
+        --bg-elev-2: rgba(255, 255, 255, 0.72);
+        --bg-hover: rgba(59, 130, 246, 0.06);
+        --border: rgba(59, 130, 246, 0.12);
+        --border-soft: rgba(59, 130, 246, 0.06);
+
+        --text: #1e293b;
+        --text-soft: #475569;
+        --text-dim: #94a3b8;
+
+        --accent: #2563eb;
+        --accent-hover: #1d4ed8;
+        --success: #16a34a;
+        --warning: #d97706;
+        --danger: #dc2626;
+
+        --shadow: 0 4px 18px rgba(37, 99, 235, .06);
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: linear-gradient(160deg, #e8f1fd 0%, #f0f6ff 40%, #f8fbff 100%);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft Yahei", sans-serif;
+    font-size: 13.5px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--accent-hover);
+}

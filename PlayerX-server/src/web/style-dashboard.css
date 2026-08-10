@@ -1,0 +1,619 @@
+/* ══════════════════════════════════════════════════════════════
+ * 布局统一增强 v3 — 占位页 / 子侧边栏面板化 / 主侧边栏精化
+ * ══════════════════════════════════════════════════════════════ */
+
+/* ── 数据大盘 ── */
+.dashboard-page {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px;
+}
+
+.dashboard-head {
+    background: rgba(255, 255, 255, .72);
+    border: 1px solid rgba(59, 130, 246, .14);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+
+.dashboard-title {
+    font-size: 22px;
+    font-weight: 800;
+    color: #1d4ed8;
+    margin-bottom: 6px;
+}
+
+.dashboard-sub {
+    font-size: 13px;
+    color: #64748b;
+}
+
+.dashboard-summary {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(120px, 1fr));
+    gap: 10px;
+}
+
+.dash-kpi {
+    background: rgba(255, 255, 255, .85);
+    border: 1px solid rgba(59, 130, 246, .14);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.dash-kpi .k {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.dash-kpi .v {
+    margin-top: 2px;
+    font-size: 22px;
+    font-weight: 800;
+    color: #1e3a8a;
+}
+
+.dash-kpi .v.warn {
+    color: #d97706;
+}
+
+.dashboard-card {
+    background: rgba(255, 255, 255, .82);
+    border: 1px solid rgba(59, 130, 246, .14);
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.dashboard-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e3a8a;
+    margin-bottom: 10px;
+}
+
+.dashboard-table-wrap {
+    overflow: auto;
+}
+
+.dashboard-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+}
+
+.dashboard-table th,
+.dashboard-table td {
+    padding: 9px 10px;
+    border-bottom: 1px solid rgba(226, 232, 240, .9);
+    text-align: left;
+    vertical-align: top;
+}
+
+.dashboard-table th {
+    color: #475569;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.dash-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(59, 130, 246, .12);
+    color: #1d4ed8;
+    font-weight: 700;
+}
+
+.dash-chip-cell {
+    min-width: 220px;
+}
+
+.dash-chip {
+    display: inline-block;
+    margin: 2px 4px 2px 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+}
+
+.dash-chip.ok {
+    color: #166534;
+    background: rgba(34, 197, 94, .14);
+}
+
+.dash-chip.miss {
+    color: #b45309;
+    background: rgba(251, 191, 36, .2);
+}
+
+.dash-rate {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.dash-rate-bar {
+    width: 96px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, .28);
+    overflow: hidden;
+}
+
+.dash-rate-bar i {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #22d3ee, #3b82f6);
+}
+
+.dash-empty {
+    color: #64748b;
+    padding: 12px 0;
+}
+
+@media (max-width: 1360px) {
+    .dashboard-summary {
+        grid-template-columns: repeat(3, minmax(120px, 1fr));
+    }
+}
+
+/* ══════════════ 主侧边栏精化 ══════════════ */
+.admin-sidebar {
+    width: 208px;
+    padding: 16px 12px;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(16px) saturate(160%);
+    -webkit-backdrop-filter: blur(16px) saturate(160%);
+    border-right: 1px solid rgba(59, 130, 246, 0.08);
+    box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.6), 1px 0 8px rgba(37, 99, 235, 0.03);
+}
+
+.admin-sidebar .nav-group {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 14px 10px 6px;
+    opacity: 0.6;
+}
+
+.admin-sidebar .nav-group:first-child {
+    padding-top: 4px;
+}
+
+.admin-sidebar .nav-item {
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    font-size: 13.5px;
+    font-weight: 500;
+    transition: background-color .15s ease;
+    position: relative;
+    border: 1px solid transparent;
+}
+
+.admin-sidebar .nav-item:hover {
+    background: rgba(59, 130, 246, 0.06);
+}
+
+.admin-sidebar .nav-item.active {
+    background: rgba(255, 255, 255, 0.88);
+    color: var(--accent);
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 var(--accent),
+        0 4px 12px rgba(37, 99, 235, 0.1),
+        0 2px 4px rgba(37, 99, 235, 0.04),
+        inset 0 1px 0 rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(37, 99, 235, 0.1);
+    border-top-color: rgba(255, 255, 255, 0.7);
+}
+
+/* ══════════════ 子侧边栏面板化（去导航感） ══════════════
+ * 原则：子侧边栏是"内容面板"，不是"导航"。
+ *   更窄、更透明、列表行更紧凑、无左侧色条。
+ * ══════════════════════════════════════════════════════════════ */
+
+/* 通用子侧边栏面板 */
+.an-side,
+.dim-sidebar {
+    width: 200px;
+    /* 比主侧边栏窄，拉开层级 */
+    background: rgba(255, 255, 255, 0.35);
+    /* 更透明，弱化存在感 */
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+}
+
+.an-side {
+    border-right: 1px solid rgba(59, 130, 246, 0.06);
+}
+
+.dim-sidebar {
+    border-left: 1px solid var(--glass-border-color-dim);
+}
+
+@media (prefers-color-scheme: light) {
+
+    .an-side,
+    .dim-sidebar {
+        background: rgba(246, 247, 251, 0.45);
+    }
+}
+
+/* 子侧边栏头部：更小、更轻 */
+.an-side-head,
+.dim-sidebar-head {
+    padding: 10px 12px 6px;
+    border-bottom: 1px solid var(--glass-border-color-dim);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.3px;
+}
+
+/* 子侧边栏列表项：紧凑行，非导航按钮 */
+.an-cfg-item,
+.dim-sb-item {
+    padding: 7px 12px;
+    margin: 1px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    border-left: none;
+    /* 去掉导航式左色条 */
+    transition: background-color .12s;
+    position: relative;
+}
+
+.an-cfg-item:hover,
+.dim-sb-item:hover {
+    background: rgba(255, 255, 255, 0.25);
+    box-shadow: none;
+    /* 不加阴影，保持轻量 */
+}
+
+.an-cfg-item.active,
+.dim-sb-item.active {
+    background: rgba(10, 132, 255, 0.08);
+    color: var(--accent);
+    border-left: none;
+    /* 不用左色条 */
+    border: 1px solid rgba(10, 132, 255, 0.10);
+    box-shadow: none;
+    font-weight: 500;
+}
+
+/* 子项元信息更小 */
+.an-cfg-item .m,
+.dim-sb-item .config-meta {
+    font-size: 10.5px;
+    color: var(--text-dim);
+    opacity: 0.7;
+}
+
+/* 子侧边栏新增按钮：更小更轻 */
+.an-add,
+.dim-sidebar-add {
+    width: 22px;
+    height: 22px;
+    font-size: 14px;
+    line-height: 20px;
+    border-radius: 4px;
+    opacity: 0.6;
+}
+
+.an-add:hover,
+.dim-sidebar-add:hover {
+    opacity: 1;
+}
+
+/* ══════════════ 统一工具栏高度 ══════════════ */
+.an-toolbar,
+.dim-toolbar,
+.archive-page-head {
+    min-height: 44px;
+    padding: 8px 18px;
+}
+
+/* ══════════════ 统一内容区间距 ══════════════ */
+.an-results,
+.analyze-results-section,
+.dim-content {
+    padding: 16px 20px;
+}
+
+/* ══════════════ 统一表单分组间距 ══════════════ */
+.an-form .grp,
+.form-group {
+    margin-bottom: 10px;
+    padding: 12px 16px;
+}
+
+/* ══════════════ 统一表格斑马纹（可选增强可读性） ══════════════ */
+.an-tbl tbody tr:nth-child(even),
+.archive-files-table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+@media (prefers-color-scheme: light) {
+
+    .an-tbl tbody tr:nth-child(even),
+    .archive-files-table tbody tr:nth-child(even) {
+        background: rgba(0, 0, 0, 0.015);
+    }
+}
+
+/* ══════════════ 统一卡片圆角 ══════════════ */
+.card,
+.an-kpi,
+.st-card,
+.an-form .grp,
+.form-group,
+.table-wrap {
+    border-radius: var(--radius-lg);
+}
+
+/* ══════════════ 统一按钮高度 ══════════════ */
+.primary-btn,
+.ghost-btn {
+    height: 32px;
+    line-height: 30px;
+}
+
+/* ══════════════ 小屏适配 ══════════════ */
+@media (max-width: 860px) {
+
+    .an-side,
+    .dim-sidebar {
+        width: 100%;
+        max-height: 180px;
+    }
+
+    .placeholder-icon {
+        font-size: 40px;
+    }
+
+    .placeholder-title {
+        font-size: var(--font-lg);
+    }
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * 任务管理 v2 — 右侧栏 / 确认弹窗 / 颜色美化
+ * ══════════════════════════════════════════════════════════════ */
+
+/* ── 右侧配置栏 ── */
+.an-side-right {
+    border-right: none;
+    border-left: 1px solid var(--glass-border-color-dim);
+    order: 2;
+}
+
+.an-side-right .an-cfg-item.active {
+    border-left: none;
+    border-right: none;
+    box-shadow: inset -3px 0 0 var(--accent),
+        var(--glass-border-top),
+        var(--glass-shadow-sm);
+}
+
+/* ── 自定义确认弹窗 ── */
+.confirm-box {
+    width: 380px;
+    text-align: center;
+    padding: 28px 32px;
+}
+
+.confirm-icon {
+    font-size: 40px;
+    margin-bottom: 12px;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .1));
+}
+
+.confirm-msg {
+    font-size: var(--font-base);
+    color: var(--text);
+    line-height: 1.7;
+    margin-bottom: 8px;
+    white-space: pre-line;
+    word-break: break-all;
+}
+
+.confirm-box .login-actions {
+    justify-content: center;
+    gap: 12px;
+}
+
+.confirm-box .login-actions button {
+    min-width: 100px;
+}
+
+/* ══════════════ 颜色美化 ══════════════ */
+
+/* Tab 激活态：蓝色下划线 + 淡蓝底 */
+.an-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background: rgba(10, 132, 255, 0.04);
+}
+
+/* 表单分组标题：蓝色 */
+.an-form .grp-t {
+    color: var(--accent);
+    opacity: 0.8;
+}
+
+/* 构建成功 KPI：绿色 */
+.an-kpi .v {
+    color: var(--text);
+}
+
+.an-kpi .v[style*="color:green"],
+.an-kpi .v[style*="color: green"] {
+    color: var(--success) !important;
+}
+
+/* 自检通过徽章：绿色 */
+.an-badge.ok {
+    background: rgba(48, 209, 88, .12);
+    color: var(--success);
+    box-shadow: var(--glass-border-top), var(--glass-shadow-sm);
+}
+
+/* 自检失败徽章：红色 */
+.an-badge.fail {
+    background: rgba(255, 69, 58, .12);
+    color: var(--danger);
+    box-shadow: var(--glass-border-top), var(--glass-shadow-sm);
+}
+
+/* 显著性徽章 */
+.an-badge.sig {
+    background: rgba(48, 209, 88, .12);
+    color: var(--success);
+    box-shadow: var(--glass-border-top), var(--glass-shadow-sm);
+}
+
+.an-badge.ns {
+    background: rgba(0, 0, 0, .04);
+    color: var(--text-dim);
+}
+
+/* 配置列表 active 项：淡蓝 + 微光 */
+.an-cfg-item.active {
+    background: rgba(10, 132, 255, 0.08);
+    color: var(--accent);
+    border: 1px solid rgba(10, 132, 255, 0.12);
+    box-shadow: var(--glass-border-top),
+        var(--glass-shadow-sm),
+        0 0 0 1px rgba(10, 132, 255, 0.05);
+}
+
+/* 新建按钮：hover 变蓝 */
+.an-add:hover {
+    background: rgba(10, 132, 255, 0.1);
+    color: var(--accent);
+    border-color: rgba(10, 132, 255, 0.3);
+}
+
+/* 编辑工具栏按钮 */
+.an-editor-bar button.primary-btn {
+    background: rgba(10, 132, 255, 0.85);
+}
+
+/* 构建结果表格表头：淡蓝 */
+.an-tbl th {
+    background: rgba(10, 132, 255, 0.04);
+    color: var(--text-dim);
+}
+
+/* 输出路径：等宽字体 + 淡蓝底 */
+.an-out {
+    background: rgba(10, 132, 255, 0.03);
+    border: 1px solid rgba(10, 132, 255, 0.08);
+    color: var(--text-dim);
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * 表单 v3 — 紧凑定宽 + 大字体
+ * ══════════════════════════════════════════════════════════════ */
+
+/* 网格改为定宽 flex 布局，字段按内容定宽，不随屏幕拉伸 */
+.an-form .grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 16px;
+}
+
+.an-form .fld {
+    flex: 0 0 auto;
+}
+
+.an-form .s1 {
+    width: 100px;
+}
+
+.an-form .s2 {
+    width: 220px;
+}
+
+.an-form .s3 {
+    width: 340px;
+}
+
+.an-form .s4 {
+    width: 480px;
+}
+
+.an-form .s6 {
+    width: 100%;
+}
+
+/* 分组标题更大更醒目 */
+.an-form .grp-t {
+    font-size: 15px;
+    margin-bottom: 12px;
+}
+
+/* 字段标签加大 */
+.an-form .fld label {
+    font-size: 14px;
+}
+
+/* 输入框加大字号、加高 */
+.an-form .fld input,
+.an-form .fld select,
+.an-form .fld textarea {
+    height: 36px;
+    font-size: 15px;
+    padding: 0 12px;
+}
+
+.an-form .fld textarea {
+    height: auto;
+    min-height: 72px;
+    padding: 9px 12px;
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+/* 工具栏下拉与按钮字号加大 */
+.an-toolbar select {
+    height: 32px;
+    font-size: 14px;
+    padding: 0 10px;
+}
+
+.an-toolbar .lbl {
+    font-size: 14px;
+}
+
+/* Tab 字号加大 */
+.an-tab {
+    font-size: 14px;
+    padding: 10px 16px;
+}
+
+/* 编辑栏标题与按钮加大 */
+.an-editor-bar .t {
+    font-size: 14px;
+}
+
+.an-editor-bar button {
+    height: 30px;
+    padding: 0 14px;
+    font-size: 13px;
+}
+
+/* 小屏：字段全部占满一行 */
+@media (max-width: 860px) {
+
+    .an-form .s1,
+    .an-form .s2,
+    .an-form .s3,
+    .an-form .s4,
+    .an-form .s6 {
+        width: 100%;
+    }
+}

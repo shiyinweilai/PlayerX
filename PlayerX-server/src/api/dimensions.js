@@ -22,7 +22,7 @@
  *   兼容旧格式：{ "name": "配置名" } → 自动迁移为 { "bindings": { "multi_dim": ["配置名"] } }
  *   兼容旧格式：bindings 中字符串值 → 自动转为单元素数组
  */
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 
 // configs/ 目录存放在项目根目录（server.js 同级）
@@ -83,7 +83,7 @@ function getActiveBindings() {
             }
             return normalizeBindingsExclusive(normalized);
         }
-    } catch (_) {}
+    } catch (_) { }
     return {};
 }
 
@@ -95,7 +95,7 @@ function setActiveBindings(bindings) {
         if (fs.existsSync(ACTIVE_CONFIG_FILE)) {
             prev = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8')) || {};
         }
-    } catch (_) {}
+    } catch (_) { }
     fs.writeFileSync(ACTIVE_CONFIG_FILE, JSON.stringify({ ...prev, bindings }, null, 2), 'utf8');
 }
 
@@ -166,10 +166,10 @@ function ensureConfigsDir() {
                     raw = JSON.stringify(obj, null, 2);
                 }
                 fs.writeFileSync(dest, raw, 'utf8');
-            } catch (_) {}
+            } catch (_) { }
         }
         // 迁移完成后删除旧文件，防止每次请求都触发重建
-        try { fs.unlinkSync(LEGACY_DIM_FILE); } catch (_) {}
+        try { fs.unlinkSync(LEGACY_DIM_FILE); } catch (_) { }
     }
 }
 
@@ -208,7 +208,7 @@ function handleList(_req, res) {
                 const obj = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8'));
                 orderList = Array.isArray(obj.order) ? obj.order : [];
             }
-        } catch (_) {}
+        } catch (_) { }
 
         const allFiles = fs.readdirSync(CONFIGS_DIR)
             .filter(f => f.endsWith('.json') && f !== '_active.json')
@@ -216,18 +216,18 @@ function handleList(_req, res) {
                 const name = f.replace(/\.json$/, '');
                 let meta = { name, type: getTypeFromBindings(bindings, name), task: '', activeForModes: configModes[name] || [] };
                 try {
-          const obj = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, f), 'utf8'));
-     meta.type = obj.type || meta.type;
-          meta.task = obj.task || '';
-    meta.tag  = obj.tag  || '';
-          // 返回 build 摘要供任务管理使用
-          if (obj.build) {
-   meta.build = {
-   models: obj.build.models || [],
-       src_model_dir: obj.build.src_model_dir || '',
-};
-         }
-           } catch (_) {}
+                    const obj = JSON.parse(fs.readFileSync(path.join(CONFIGS_DIR, f), 'utf8'));
+                    meta.type = obj.type || meta.type;
+                    meta.task = obj.task || '';
+                    meta.tag = obj.tag || '';
+                    // 返回 build 摘要供任务管理使用
+                    if (obj.build) {
+                        meta.build = {
+                            models: obj.build.models || [],
+                            src_model_dir: obj.build.src_model_dir || '',
+                        };
+                    }
+                } catch (_) { }
                 return meta;
             });
 
@@ -502,7 +502,7 @@ function handleReorder(req, res) {
     try {
         let active = {};
         if (fs.existsSync(ACTIVE_CONFIG_FILE)) {
-            try { active = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8')); } catch (_) {}
+            try { active = JSON.parse(fs.readFileSync(ACTIVE_CONFIG_FILE, 'utf8')); } catch (_) { }
         }
         active.order = order;
         fs.writeFileSync(ACTIVE_CONFIG_FILE, JSON.stringify(active, null, 2), 'utf8');
