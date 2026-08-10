@@ -6,6 +6,7 @@
     const tagMenu = $('analyzeTagMenu');
     const verifyCb = $('analyzeDoVerify');
     const runBtn = $('analyzeRunBtn');
+    const shareBtn = $('analyzeShareBtn');
     const statusEl = $('analyzeStatus');
     const resultDiv = $('analyzeResult');
     const emptyDiv = $('analyzeEmpty');
@@ -31,8 +32,7 @@
                 if (saved[k]) return;
                 if (rankDefaults[k]) col.style.width = rankDefaults[k] + 'px';
             });
-        }
-
+    }
         if (pairTable) {
             const saved = loadSavedColWidths(ANALYZE_PAIR_COL_KEY);
             pairTable.querySelectorAll('colgroup > col[data-col]').forEach(col => {
@@ -191,12 +191,137 @@
         if (rankSection) rankSection.hidden = false;
         if (pairSection) pairSection.hidden = false;
         renderRankTables(data || {});
+        // 启用分享按钮（仅非分享快照模式）
+        if (shareBtn && !window.__PX_SHARE_MODE__) shareBtn.disabled = false;
     }
+
+    // ── 分享功能 ──────────────────────────────────────────
+    // 维护当前 share 模式状态：URL 携带 ?share=xxx 时进入只读展示
+    let _currentShareId = null;
+    let _lastAnalyzeData = null;
+    let _lastShareInfo = null; // { id, shareUrl, createdAt, tag }
+
+    function setShareMode(on) {
+        window.__PX_SHARE_MODE__ = !!on;
+        if (shareBtn) shareBtn.style.display = on ? 'none' : '';
+        // 关闭必要控件
+        if (tagSel)    tagSel.disabled = on;
+        if (runBtn)    runBtn.disabled = on;
+        if (emptyDiv)  emptyDiv.style.display = on ? 'none' : '';
+    }
+
+    function fmtShareTime(iso) {
+        if (!iso) return '—';
+        try {
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return iso;
+            const pad = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        } catch (_) { return iso; }
+    }
+
+    // ── 管理员：保存快照 + 复制链接 ──────────────────────────
+    async function copyShareLink() {
+        const data = _lastAnalyzeData;
+        if (!data) { showToast('请先执行分析', 'warn'); return; }
+        if (shareBtn) shareBtn.disabled = true;
+        try {
+            const tag = (tagSel.value || '').trim();
+            const r = await adminFetch('/api/analyze/share', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    tag,
+                    data,
+                    filesNames: (data.items || []).map(it => it.name).filter(Boolean),
+                }),
+            });
+            const j = await r.json();
+            if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            _lastShareInfo = { id: j.id, shareUrl: j.shareUrl, createdAt: j.createdAt, tag };
+            const fullUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?share=${j.id}`;
+            const ok = await _copyToClipboard(fullUrl);
+            showToast(ok ? (`✅ 已复制分享链接：${fullUrl}`) : (`分享已创建：${fullUrl}`), 'ok');
+        } catch (e) {
+            showToast('❌ 创建分享失败：' + e.message, 'err');
+        } finally {
+            if (shareBtn) shareBtn.disabled = false;
+        }
+    }
+
+    async function _copyToClipboard(text) {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch (_) {}
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        } catch (_) { return false; }
+    }
+
+    // ── 公开：根据 ?share= 加载只读快照 ───────────────────────
+    async function loadShareSnapshot(id) {
+        setShareMode(true);
+        _currentShareId = id;
+        try {
+            const r = await fetch(`/api/analyze/share/${id}`);
+            const j = await r.json();
+            if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+            const snap = j.snapshot;
+            if (tagSel) tagSel.value = snap.tag || '';
+            renderAnalyzeResult(snap.data);
+        } catch (e) {
+            showToast('❌ 分享加载失败：' + e.message, 'err');
+            emptyDiv.style.display = '';
+        }
+    }
+
+    // ── 路由：URL 含 ?share=xxx 时进入只读模式 ─────────────────
+    function tryEnterShareFromUrl() {
+        const m = window.location.search.match(/[?&]share=([A-Za-z0-9]{6,16})/);
+        if (!m) return false;
+        const id = m[1];
+        // 切换到分析模块（确保可见）
+        try {
+            if (typeof currentModule !== 'undefined' && currentModule !== 'analyze') {
+                if (typeof switchModule === 'function') switchModule('analyze');
+            }
+        } catch (_) {}
+        loadShareSnapshot(id);
+        return true;
+    }
+
+    // 绑定分享按钮
+    if (shareBtn) shareBtn.addEventListener('click', copyShareLink);
+
+    // 当面板激活时尝试 URL 分享 + 刷新分享列表
+    const _obs2 = new MutationObserver(() => {
+        const sec = $('pageAnalyze');
+        if (sec && !sec.hidden) {
+            tryEnterShareFromUrl();
+        }
+    });
+    if (sec) _obs2.observe(sec, { attributes: true, attributeFilter: ['hidden'] });
+    // 启动时也跑一次（防止当前就在 analyze 模块）
+    setTimeout(() => { tryEnterShareFromUrl(); }, 50);
 
     async function runRankNow(opts = {}) {
         const names = Array.isArray(opts.names) ? opts.names.filter(Boolean) : null;
         const tag = (opts.tag != null ? String(opts.tag) : String(tagSel.value || '')).trim();
         const fromSelected = !!(names && names.length > 0);
+
+        // 分享快照模式下不允许手动执行
+        if (window.__PX_SHARE_MODE__) return;
 
         // 手动触发（非“分析选中”）时要求有 tag
         if (!fromSelected && !tag) {
@@ -208,6 +333,7 @@
 
         setAnalyzeStatus('', '');
         runBtn.disabled = true;
+        if (shareBtn) shareBtn.disabled = true;
         resultDiv.style.display = 'none';
         emptyDiv.style.display = 'none';
 
@@ -227,6 +353,7 @@
             });
             const j = await r.json();
             if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
+            _lastAnalyzeData = j.data;
             renderAnalyzeResult(j.data);
             setAnalyzeStatus('', '');
         } catch (e) {
@@ -235,6 +362,7 @@
             emptyDiv.style.display = '';
         } finally {
             runBtn.disabled = false;
+            // 分享按钮在 renderAnalyzeResult 中已根据状态启用
         }
     }
 
@@ -244,6 +372,7 @@
     // 暴露给“分析选中”按钮：切页后直接执行
     window.PXAnalyze = {
         runRankNow,
+        loadShareSnapshot,
     };
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }

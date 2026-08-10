@@ -17,6 +17,8 @@ const WEB_DIR     = path.join(ROOT_DIR, 'src', 'web');
 const TASKS_DIR = path.join(ROOT_DIR, 'tasks');
 // 测试源安装包（zip）托管目录：客户端按 testSource.url 直接从此下载
 const TESTSRC_DIR = path.join(ROOT_DIR, 'testsrc');
+// 分析结果分享快照（任意人通过链接即可查看，永久有效直到管理员删除）
+const SHARES_DIR = path.join(ROOT_DIR, 'shares');
 
 // 运行时可变配置（管理面板修改后会写入此文件，重启也生效）
 const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
@@ -84,16 +86,18 @@ function ensureDirs() {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
     fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
     fs.mkdirSync(TASKS_DIR, { recursive: true });
- fs.mkdirSync(TESTSRC_DIR, { recursive: true });
+    fs.mkdirSync(TESTSRC_DIR, { recursive: true });
+    fs.mkdirSync(SHARES_DIR, { recursive: true });
 }
 
 module.exports = {
     ROOT_DIR,
     UPLOAD_DIR,
-ARCHIVE_DIR,
+    ARCHIVE_DIR,
     WEB_DIR,
     TASKS_DIR,
     TESTSRC_DIR,
+    SHARES_DIR,
     CONFIG_FILE,
     MAX_BYTES,
     ARCHIVE_KEEP,

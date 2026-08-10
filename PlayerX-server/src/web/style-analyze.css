@@ -316,6 +316,140 @@
     }
 }
 
+/* ═══ 分享功能 ═══ */
+#pageAnalyze .analyze-share-btn {
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 8px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#pageAnalyze .analyze-share-btn:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+}
+
+#pageAnalyze .analyze-share-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    background: linear-gradient(180deg, #eef6ff, #f6faff);
+    border: 1px solid #c7ddf7;
+    border-radius: 12px;
+    color: #1d4ed8;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+#pageAnalyze .analyze-share-banner-icon {
+    font-size: 16px;
+    line-height: 1;
+}
+
+#pageAnalyze .analyze-share-banner-text {
+    flex: 1;
+}
+
+#pageAnalyze .analyze-share-banner-text span {
+    color: #1f2937;
+    font-weight: 700;
+}
+
+#pageAnalyze .analyze-share-banner .ghost-btn {
+    height: 26px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+/* 我的分享列表 */
+#pageAnalyze .analyze-shares-panel {
+    background: #fff;
+    border: 1px solid #e8ecf3;
+    border-radius: 12px;
+    margin-top: 4px;
+    padding: 12px 14px;
+}
+
+#pageAnalyze .analyze-shares-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+#pageAnalyze .analyze-shares-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+#pageAnalyze .analyze-share-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid #e8ecf3;
+    border-radius: 10px;
+    background: #fbfcff;
+}
+
+#pageAnalyze .analyze-share-row-main {
+    flex: 1;
+    min-width: 0;
+}
+
+#pageAnalyze .analyze-share-tag {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+#pageAnalyze .analyze-share-meta {
+    font-size: 11px;
+    color: #667085;
+    margin-top: 2px;
+}
+
+#pageAnalyze .analyze-share-link {
+    margin-top: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #1d4ed8;
+    background: #f3f6fc;
+    border: 1px solid #e3eaf5;
+    padding: 3px 8px;
+    border-radius: 6px;
+    word-break: break-all;
+    max-width: 100%;
+}
+
+#pageAnalyze .analyze-share-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+#pageAnalyze .analyze-share-row-actions .ghost-btn {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+#pageAnalyze .analyze-shares-empty {
+    padding: 14px;
+    text-align: center;
+    color: #98a2b3;
+    font-size: 13px;
+    border: 1px dashed #d0d8e5;
+    border-radius: 10px;
+    background: #fbfcfe;
+}
+
 /*═══ 自定义确认弹窗 ═══ */
 .px-confirm-overlay {
     position: fixed;

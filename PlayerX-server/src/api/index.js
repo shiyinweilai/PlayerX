@@ -12,6 +12,7 @@ const express = require('express');
 const upload       = require('./upload');
 const manualUpload  = require('./manual-upload');
 const analyze      = require('./analyze');
+const analyzeShare = require('./analyze-share');
 const analyzeCfgs  = require('./analyze-configs');
 const build        = require('./build');
 const list     = require('./list');
@@ -89,6 +90,17 @@ function mountApi(app) {
 
     // 盲评分析（仅登录管理员可用）
     app.post('/api/analyze', auth.requireAdmin, express.json({ limit: '1mb' }), analyze.handle);
+
+    // 盲评分析结果分享快照（公开读，登录写）
+    //   GET    /api/analyze/share/:id  公开（带链接者皆可查看）
+    //   POST   /api/analyze/share      登录管理员创建快照
+    //   GET    /api/analyze/shares     登录管理员列出所有快照
+    //   DELETE /api/analyze/share/:id  登录管理员删除快照
+    const jsonShare = express.json({ limit: '1mb' });
+    app.get('/api/analyze/share/:id',                  analyzeShare.handleGetShare);
+    app.post('/api/analyze/share',   auth.requireAdmin, jsonShare,     analyzeShare.handleCreateShare);
+    app.get('/api/analyze/shares',   auth.requireAdmin,                  analyzeShare.handleListShares);
+    app.delete('/api/analyze/share/:id', auth.requireAdmin,             analyzeShare.handleDeleteShare);
 
     // 盲评构建（仅登录管理员可用）
     app.post('/api/build', auth.requireAdmin, express.json({ limit: '1mb' }), build.handle);
