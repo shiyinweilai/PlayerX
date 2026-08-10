@@ -636,25 +636,16 @@ function handle(req, res) {
             }
         }
 
-        // 自动查找 map CSV（新规则优先，兼容旧规则）
+        // 自动查找 map CSV（新规则优先，保留极少量历史回退）
         // 新：tasks/{tag}_map/map.csv
-        // 旧：tasks/map/map_{tag}.csv / tasks/{tag}/map.csv / tasks/{tag}/map_{tag}.csv
+        // 旧：tasks/{tag}/map.csv / tasks/{tag}/map_{tag}.csv
         const mapCandidates = [
             path.join(TASKS_DIR, `${tag}_map`, 'map.csv'),
-            path.join(TASKS_DIR, 'map', `map_${tag}.csv`),
             path.join(TASKS_DIR, tag, 'map.csv'),
             path.join(TASKS_DIR, tag, `map_${tag}.csv`),
         ];
         for (const c of mapCandidates) {
             if (fs.existsSync(c)) { autoMapCsv = c; break; }
-        }
-        if (!autoMapCsv) {
-            // 兜底：扫描 tasks/map/ 下含该 tag 的历史 map 文件
-            const mapDir = path.join(TASKS_DIR, 'map');
-            if (fs.existsSync(mapDir)) {
-                const maps = fs.readdirSync(mapDir).filter(f => f.includes(tag) && f.startsWith('map'));
-                if (maps.length > 0) autoMapCsv = path.join(mapDir, maps[0]);
-            }
         }
         console.log('[analyze] 自动定位 map CSV: %s', autoMapCsv || '未找到');
 
@@ -707,10 +698,10 @@ function handle(req, res) {
         }
         // map_csv 若为相对路径，从 tasks 目录解析
         const { TASKS_DIR } = require('../lib/paths');
-        // dst_dir 默认放到 tasks/{tag}_map（新规则）或 tasks/map（兼容无 tag 场景）
-        if (!cfg.dst_dir) cfg.dst_dir = tag ? path.join(TASKS_DIR, `${tag}_map`) : path.join(TASKS_DIR, 'map');
-        // 新规则：有 tag 时 deanon 固定名，目录按 tag 隔离；无 tag 时保留历史命名
-        if (!cfg.deanon_csv) cfg.deanon_csv = tag ? 'deanon.csv' : `deanon_${Date.now()}.csv`;
+        // dst_dir 默认放到 tasks/{tag}_map；无 tag 兜底到 _default_map（统一 {tag}_map 命名）
+        if (!cfg.dst_dir) cfg.dst_dir = path.join(TASKS_DIR, tag ? `${tag}_map` : '_default_map');
+        // deanon 固定名（统一按 {tag}_map 隔离），无 tag 兜底为 _default_map
+        if (!cfg.deanon_csv) cfg.deanon_csv = 'deanon.csv';
         if (cfg.map_csv && !path.isAbsolute(cfg.map_csv)) {
             const candidate = path.join(TASKS_DIR, cfg.map_csv);
             console.log('[analyze] map_csv 相对路径解析: %s → %s (存在: %s)', cfg.map_csv, candidate, fs.existsSync(candidate));

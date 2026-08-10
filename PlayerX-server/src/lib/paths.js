@@ -15,8 +15,6 @@ const ARCHIVE_DIR = path.join(ROOT_DIR, 'archive');
 const WEB_DIR     = path.join(ROOT_DIR, 'src', 'web');
 // 构建任务产物目录：每个 tag 一个子目录
 const TASKS_DIR = path.join(ROOT_DIR, 'tasks');
-// 映射文件统一目录：map CSV 和反解码文件集中存放
-const MAP_DIR     = path.join(TASKS_DIR, 'map');
 // 测试源安装包（zip）托管目录：客户端按 testSource.url 直接从此下载
 const TESTSRC_DIR = path.join(ROOT_DIR, 'testsrc');
 
@@ -86,7 +84,6 @@ function ensureDirs() {
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
     fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
     fs.mkdirSync(TASKS_DIR, { recursive: true });
-    fs.mkdirSync(MAP_DIR, { recursive: true });
  fs.mkdirSync(TESTSRC_DIR, { recursive: true });
 }
 
@@ -96,7 +93,6 @@ module.exports = {
 ARCHIVE_DIR,
     WEB_DIR,
     TASKS_DIR,
-    MAP_DIR,
     TESTSRC_DIR,
     CONFIG_FILE,
     MAX_BYTES,
