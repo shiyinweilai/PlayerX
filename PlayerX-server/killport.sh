@@ -28,7 +28,9 @@ for i in 1 2 3 4 5; do
     if curl -s http://localhost:2026/ > /dev/null 2>&1; then
         echo "✅ PlayerX 服务已启动"
         echo "   Web 面板  : http://localhost:2026/"
-        [ -n "$LAN_IP" ] && echo "   LAN 访问  : http://${LAN_IP}:2026/"
+        # 从 nohup.log 取 server 自己打出的真实 IP（比 awk 探测更可靠）
+        LAN_URL=$(grep -m1 "LAN access" nohup.log | grep -oE 'https?://[0-9.]+:[0-9]+')
+        [ -n "$LAN_URL" ] && echo "   LAN 访问  : ${LAN_URL}/"
         exit 0
     fi
     echo "  等待中… (${i}/5)"
