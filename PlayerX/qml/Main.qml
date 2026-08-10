@@ -3739,11 +3739,20 @@ ApplicationWindow {
                     root._pendingRemoteConfig = merged
                     // 开发者模式未开启时，若待应用项全是「测试模式」则不弹出卡片
                     //（测试配置仅开发者可见）；pending 数据保留，开启开发者模式后可见。
+                    // 但手动点 🔔 时，_remoteAllConfigs 中可能还有非测试模式的"当前最新"项
+                    // 值得展示给用户主动选择应用，因此只要卡片列表非空就打开。
                     var _visiblePending = merged.filter(function(it) { return root.developerMode || it.mode !== "test" })
-                    root._taskUpdateVisible = _visiblePending.length > 0
+                    if (_visiblePending.length > 0) {
+                        root._taskUpdateVisible = true
+                    } else if (openCardOnNoUpdate && root._remoteConfigCardList.length > 0) {
+                        // 无可见 pending，但有非测试模式的远程项可应用 → 弹卡片
+                        root._taskUpdateVisible = true
+                    } else {
+                        root._taskUpdateVisible = false
+                    }
                     root._remoteHasUpdate = _visiblePending.length > 0
-                    // 手动点🔔但可见项为空（有更新的全是测试模式）→ 轻提示，不静默
-                    if (openCardOnNoUpdate && _visiblePending.length === 0)
+                    // 手动点🔔但卡片确实为空（全是被过滤的测试模式）→ 轻提示
+                    if (openCardOnNoUpdate && !root._taskUpdateVisible)
                         root._hintRemoteTaskEmpty(merged.length)
                     console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新，当前待应用", merged.length, "个（可见", _visiblePending.length, "个）")
                 }
@@ -6592,8 +6601,15 @@ ApplicationWindow {
                         Behavior on opacity { NumberAnimation { duration: 200 } }
                     }
                     // 红色数字角标，贴在 🔔 右上角
+                    // 与 ToolTip / 卡片显示一致：开发者模式未开启时，测试模式任务
+                    // 不计入角标数字（不显示、不提醒），让普通用户不被打扰。
                     Rectangle {
-                        visible: Array.isArray(root._pendingRemoteConfig) && root._pendingRemoteConfig.length > 0
+                        visible: {
+                            var _pend = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+                            var _cnt = root.developerMode ? _pend.length
+                                                          : _pend.filter(function(it) { return it.mode !== "test" }).length
+                            return _cnt > 0
+                        }
                         x: bellIcon.x + bellIcon.width - 4
                         y: bellIcon.y - 3
                         width: 13
@@ -6602,7 +6618,11 @@ ApplicationWindow {
                         color: "#e05050"
                         Text {
                             anchors.centerIn: parent
-                            text: Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig.length : 0
+                            text: {
+                                var _pend = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+                                return root.developerMode ? _pend.length
+                                                          : _pend.filter(function(it) { return it.mode !== "test" }).length
+                            }
                             color: "#ffffff"
                             font.pixelSize: 8
                             font.bold: true
