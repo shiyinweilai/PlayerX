@@ -185,6 +185,8 @@
     border-radius: 12px;
     margin-bottom: 14px;
     overflow: hidden;
+    width: fit-content;
+    max-width: 100%;
 }
 
 #pageAnalyze .analyze-section-title {
@@ -197,12 +199,15 @@
 }
 
 #pageAnalyze .analyze-table-wrap {
-    width: 100%;
-    overflow: auto;
+    width: auto;
+    overflow-x: auto;
+    max-width: 100%;
 }
 
 #pageAnalyze .analyze-table {
-    width: 100%;
+    /* 列宽按内容自适应：宽超过容器时允许横向滚动 */
+    width: auto;
+    max-width: 100%;
     border-collapse: separate;
     border-spacing: 0;
     font-size: 13px;
@@ -224,6 +229,11 @@
     border-bottom: 1px solid #eef2f7;
     color: #1f2937;
     vertical-align: middle;
+    /* 覆盖通用 tbody td 的 ellipsis/overflow，让模型名按内容撑开不截断 */
+    overflow: visible;
+    white-space: nowrap;
+    text-overflow: clip;
+    max-width: none;
 }
 
 #pageAnalyze .analyze-table tbody tr:hover td {

@@ -19,39 +19,38 @@
     const ANALYZE_PAIR_COL_KEY = 'PlayerX.analyze.pair.colWidths.v1';
 
     function ensureAnalyzeDefaultWidths() {
-        const rankDefaults = { rank: 56, bt: 120, elo: 120, win: 120 };
-        const pairDefaults = { aWins: 120, bWins: 120, p: 120, sig: 120 };
-
+        // 不再设默认列宽，统一让浏览器按内容自适应；
+        // 表格 width: 100% 改为 auto，避免剩余列被强制拉伸。
+        // 已保存的用户自定义宽度（localStorage）仍生效。
         const rankTable = $('azRankTable');
         const pairTable = $('azPairTable');
-
-        if (rankTable) {
-            const saved = loadSavedColWidths(ANALYZE_RANK_COL_KEY);
-            rankTable.querySelectorAll('colgroup > col[data-col]').forEach(col => {
-                const k = col.dataset.col;
-                if (saved[k]) return;
-                if (rankDefaults[k]) col.style.width = rankDefaults[k] + 'px';
-            });
-    }
-        if (pairTable) {
-            const saved = loadSavedColWidths(ANALYZE_PAIR_COL_KEY);
-            pairTable.querySelectorAll('colgroup > col[data-col]').forEach(col => {
-                const k = col.dataset.col;
-                if (saved[k]) return;
-                if (pairDefaults[k]) col.style.width = pairDefaults[k] + 'px';
-            });
-        }
+        if (rankTable) rankTable.style.width = 'auto';
+        if (pairTable) pairTable.style.width = 'auto';
     }
 
     function initAnalyzeColumnResizing() {
+        // 模型名列表不参与列宽持久化与拖拽，按内容自动撑开
+        const rankSkip = ['model'];
+        const pairSkip = ['modelA', 'modelB'];
+        // 清掉旧版本可能存档的旧宽度（这些列后续改为自适应）
+        try {
+            const r = JSON.parse(localStorage.getItem(ANALYZE_RANK_COL_KEY) || '{}');
+            let rk = false;
+            rankSkip.forEach(k => { if (r[k]) { delete r[k]; rk = true; } });
+            if (rk) localStorage.setItem(ANALYZE_RANK_COL_KEY, JSON.stringify(r));
+            const p = JSON.parse(localStorage.getItem(ANALYZE_PAIR_COL_KEY) || '{}');
+            let pk = false;
+            pairSkip.forEach(k => { if (p[k]) { delete p[k]; pk = true; } });
+            if (pk) localStorage.setItem(ANALYZE_PAIR_COL_KEY, JSON.stringify(p));
+        } catch (_) {}
         ensureAnalyzeDefaultWidths();
         initColumnResizing($('azRankTable'), {
             storageKey: ANALYZE_RANK_COL_KEY,
-            skipCols: [],
+            skipCols: rankSkip,
         });
         initColumnResizing($('azPairTable'), {
             storageKey: ANALYZE_PAIR_COL_KEY,
-            skipCols: [],
+            skipCols: pairSkip,
         });
     }
 
@@ -153,6 +152,18 @@
     }
 
     function renderRankTables(data) {
+        // 渲染前先清掉模型列可能残留的 inline width（之前版本或拖拽存进 col.style.width
+        // 都会强制截断），让浏览器按本次数据里最长的名字自动撑开。
+        const rankTable = $('azRankTable');
+        const pairTable = $('azPairTable');
+        if (rankTable) {
+            const c = rankTable.querySelector('colgroup > col[data-col="model"]');
+            if (c) c.style.width = '';
+        }
+        if (pairTable) {
+            pairTable.querySelectorAll('colgroup > col[data-col="modelA"], colgroup > col[data-col="modelB"]').forEach(c => c.style.width = '');
+        }
+
         // 排名表
         const rankTb = document.querySelector('#azRankTable tbody');
         rankTb.innerHTML = '';
