@@ -98,8 +98,8 @@ ApplicationWindow {
         // 同时清掉历史版本可能残留的持久化值，避免旧机器上一直"被勾选"。
         root.developerMode = false
         try { Rating.saveString("ui/developerMode", "0") } catch (e) {}
-        // 恢复自动更新开关（持久化）：默认勾选（重启后自动检测并安装新版本）
-        try { root.autoUpdate = (Rating.loadString("ui/autoUpdate", "1") === "1") } catch (e) {}
+        // 恢复自动更新开关（持久化）：首次安装默认不勾选，之后以用户选择为准
+        try { root.autoUpdate = (Rating.loadString("ui/autoUpdate", "0") === "1") } catch (e) {}
         // 开发者模式未开启时，若历史记忆（rating.mode）停留在「测试模式」，强制回退为
         // 「关闭评分」——避免普通用户在不知情下处于测试模式（评分会写入测试 CSV）。
         if (!root.developerMode && typeof Rating !== "undefined" && Rating.currentMode === "test") {
@@ -708,7 +708,7 @@ ApplicationWindow {
                 onTriggered: root._setDeveloperMode(!root.developerMode)
             }
 
-            // ── 自动更新 ──（默认勾选）
+            // ── 自动更新 ──（默认不勾选）
             // 勾选：重启软件后自动检测并下载安装新版本，全程无需点击；
             // 不勾选：维持原逻辑 —— 右上角胶囊提醒，用户手动选择更新。
             DarkMenuItem {
@@ -1254,10 +1254,10 @@ ApplicationWindow {
     // 状态持久化到 QSettings（ui/developerMode），重启保持。
     property bool developerMode: false
 
-    // 自动更新（默认勾选）：勾选时启动静默自检发现新版本后直接自动下载安装，
+    // 自动更新（默认不勾选）：勾选时启动静默自检发现新版本后直接自动下载安装，
     // 全程无需用户点击；不勾选则维持原逻辑（右上角胶囊提醒，手动更新）。
     // 持久化 QSettings（ui/autoUpdate），重启保持。
-    property bool autoUpdate: true
+    property bool autoUpdate: false
     function _setAutoUpdate(on) {
         if (root.autoUpdate === on) return
         root.autoUpdate = on
