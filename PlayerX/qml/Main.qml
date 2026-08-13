@@ -299,6 +299,10 @@ ApplicationWindow {
     // 用法：菜单「帮助 → 教程…」点击时，会通过 Qt.openUrlExternally(tutorialUrl) 打开默认浏览器
     property url tutorialUrl: "https://iwiki.woa.com/p/4020492089"
 
+    // YUV 分析工具是否嵌入显示（"帮助 → YUV 分析工具"切换）。
+    // 由菜单开启，由 YuvWindow 的"← 返回"关闭。
+    property bool showYuvWindow: false
+
     // ─── 系统菜单栏（macOS 全局菜单 / Windows 窗口菜单） ──────────────────
     // 仅作为系统级入口，与现有 ToolBar 上的"打开 ▾ / ⚙ 设置 ▾"按钮共存。
     // macOS：自动适配为顶部全局菜单栏（系统原生样式，不接受自定义 background）。
@@ -6356,7 +6360,7 @@ ApplicationWindow {
         title: "添加视频文件（可多选）"
         fileMode: FileDialog.OpenFiles
         nameFilters: [
-            "视频文件 (*.mp4 *.mov *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv)",
+            "视频文件 (*.mp4 *.mov *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv *.y4m *.yuv *.h264 *.h265 *.hevc)",
             "所有文件 (*)"
         ]
         onAccepted: {
@@ -6392,7 +6396,7 @@ ApplicationWindow {
         title: "替换本路视频文件"
         fileMode: FileDialog.OpenFile
         nameFilters: [
-            "视频文件 (*.mp4 *.mov *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv)",
+            "视频文件 (*.mp4 *.mov *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv *.y4m *.yuv *.h264 *.h265 *.hevc)",
             "所有文件 (*)"
         ]
         onAccepted: {
@@ -10088,7 +10092,7 @@ ApplicationWindow {
         Item {
             id: emptyHero
             anchors.fill: parent
-            visible: Engine.fileCount <= 0 && !root.compareSliderActive
+            visible: Engine.fileCount <= 0 && !root.compareSliderActive && !root.showYuvWindow
 
             // 拖拽高亮态：DropArea 进入时整块面板加柔和高亮边框
             property bool dragHover: dropZone.containsDrag
@@ -10283,6 +10287,69 @@ ApplicationWindow {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: multiGroupDialog.showAndRefresh()
+                        }
+                    }
+
+                    // ③ YUV 分析工具
+                    // 用 Y/U/V 三平面色块代替 emoji，更直观表达「裸 YUV 数据逐帧查看」
+                    Rectangle {
+                        id: heroBtnYuv
+                        Layout.preferredWidth: 240
+                        Layout.preferredHeight: 132
+                        radius: 10
+                        color: heroBtnYuvMA.containsMouse ? "#2a3a55"
+                              : heroBtnYuvMA.pressed     ? "#1e2a40"
+                                                         : "#1e1e22"
+                        border.color: heroBtnYuvMA.containsMouse ? "#3a78c8" : "#3a3a42"
+                        border.width: 1
+                        Behavior on color { ColorAnimation { duration: 120 } }
+                        Behavior on border.color { ColorAnimation { duration: 120 } }
+
+                        ColumnLayout {
+                            anchors.centerIn: parent
+                            spacing: 8
+
+                            // YUV 三平面图标（4:2:0 布局示意）
+                            Item {
+                                Layout.alignment: Qt.AlignHCenter
+                                width: 60; height: 36
+                                // Y 平面（最亮，灰白色）
+                                Rectangle {
+                                    x: 0; y: 0; width: 34; height: 36; radius: 3
+                                    color: "#e8e8ec"
+                                }
+                                // U 平面（蓝色调，半尺寸）
+                                Rectangle {
+                                    x: 38; y: 0; width: 22; height: 16; radius: 3
+                                    color: "#5a7fb8"
+                                }
+                                // V 平面（红色调，半尺寸）
+                                Rectangle {
+                                    x: 38; y: 20; width: 22; height: 16; radius: 3
+                                    color: "#b85a5a"
+                                }
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "YUV 分析"
+                                color: "#e8e8ec"
+                                font.pixelSize: 16
+                                font.bold: true
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "裸数据逐帧查看"
+                                color: "#9aa0a6"
+                                font.pixelSize: 12
+                            }
+                        }
+
+                        MouseArea {
+                            id: heroBtnYuvMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.showYuvWindow = true
                         }
                     }
                 }
@@ -11920,6 +11987,28 @@ ApplicationWindow {
                     event.accepted = true; break
             }
             autoHideTimer.restart()
+        }
+    }
+
+    // ── YUV 分析工具视图（内嵌主界面，由"帮助 → YUV 分析工具"菜单切换）──
+    Item {
+        id: yuvView
+        anchors.fill: parent
+        visible: root.showYuvWindow
+        z: 100  // 浮在主内容之上
+        // Loader 懒加载 qrc 资源，不参与 qt_add_qml_module AOT 编译
+        Loader {
+            id: yuvViewLoader
+            anchors.fill: parent
+            active: root.showYuvWindow
+            source: "qrc:/yuv/YuvWindow.qml"
+            onLoaded: {
+                if (item && item.closeRequested) {
+                    item.closeRequested.connect(function() {
+                        root.showYuvWindow = false
+                    })
+                }
+            }
         }
     }
 }

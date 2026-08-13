@@ -94,10 +94,31 @@ RBDemuxer::~RBDemuxer() {
 bool RBDemuxer::rbOpen(const std::string& filePath) {
     rbClose();
 
-    if (avformat_open_input(&m_fmtCtx, filePath.c_str(), nullptr, nullptr) < 0) {
+    AVDictionary* opts = nullptr;
+    const AVInputFormat* forceFmt = nullptr;
+
+    // 检测裸 YUV 文件（无容器头）：需要用 rawvideo 解复用器，并指定分辨率/像素格式/帧率。
+    // 使用最常见的默认参数：1920x1080 yuv420p 30fps。后续可扩展为从文件名或外部参数传入。
+    if (filePath.size() >= 4) {
+        std::string suffix = filePath.substr(filePath.size() - 4);
+        bool isYuv = (suffix == ".yuv" || suffix == ".YUV");
+        if (isYuv) {
+            forceFmt = av_find_input_format("rawvideo");
+            if (forceFmt) {
+                av_dict_set(&opts, "video_size", "1920x1080", 0);
+                av_dict_set(&opts, "pixel_format", "yuv420p", 0);
+                av_dict_set(&opts, "framerate", "30", 0);
+            }
+        }
+    }
+
+    if (avformat_open_input(&m_fmtCtx, filePath.c_str(), forceFmt, &opts) < 0) {
+        av_dict_free(&opts);
         std::cerr << "[RBDemuxer] 无法打开文件: " << filePath << std::endl;
         return false;
     }
+    av_dict_free(&opts);
+
     if (avformat_find_stream_info(m_fmtCtx, nullptr) < 0) {
         std::cerr << "[RBDemuxer] 无法获取流信息" << std::endl;
         avformat_close_input(&m_fmtCtx);

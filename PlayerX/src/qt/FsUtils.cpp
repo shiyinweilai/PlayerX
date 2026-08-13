@@ -42,8 +42,8 @@ namespace rbqt {
 static const QStringList kVideoExts = {
     "mp4", "mov", "mkv", "avi", "webm", "flv", "ts", "m4v", "wmv",
     "mpg", "mpeg", "m2ts", "mts", "vob", "ogv", "3gp", "asf",
-    // 原始码流与 YUV 序列也允许（rb_demuxer 支持）
-    "h264", "h265", "hevc", "264", "265", "y4m"
+    // 原始码流与 YUV 序列也允许（rb_demuxer 支持 rawvideo / y4m）
+    "h264", "h265", "hevc", "264", "265", "y4m", "yuv"
 };
 
 static bool isVideoFile(const QFileInfo& fi) {

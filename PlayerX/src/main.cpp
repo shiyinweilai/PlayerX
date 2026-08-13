@@ -44,6 +44,8 @@
 #include "qt/ReferenceStore.h"
 #include "qt/ScreenProbe.h"
 #include "qt/Updater.h"
+#include "yuv/YuvBridge.h"
+#include "yuv/YuvDisplayItem.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -224,6 +226,9 @@ int main(int argc, char* argv[]) {
     // 在 macOS 外接屏切档位时的缓存丢信号问题）。无状态、轻量。
     rbqt::ScreenProbe screenProbe;
 
+    // YuvBridge：YUV 裸数据分析工具桥接（独立窗口，不与主播放器联动）
+    YuvBridge yuvBridge;
+
     QQmlApplicationEngine engine;
 
     // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
@@ -234,6 +239,11 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty("Reference",   &referenceStore);
     engine.rootContext()->setContextProperty("Updater",     &updater);
     engine.rootContext()->setContextProperty("ScreenProbe", &screenProbe);
+    engine.rootContext()->setContextProperty("YuvBridge",   &yuvBridge);
+
+    // 注册 YuvDisplayItem 为 QML 类型（供 YuvWindow.qml 使用）。
+    // URI 用独立前缀，避免和 qt_add_qml_module(URI PlayerX) 冲突。
+    qmlRegisterType<YuvDisplayItem>("PlayerX.YuvTools", 1, 0, "YuvDisplayItem");
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,

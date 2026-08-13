@@ -89,6 +89,8 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     # 让 Windows 任务栏 / Alt-Tab / Linux WM 都能拿到图标（exe 内 .rsrc 只管
     # 静态文件图标，不管运行中窗口的 HICON）。CMake 已开 AUTORCC 自动处理。
     resources/app_icon.qrc
+    # YUV 分析窗口 QML（独立 qrc，不参与 qt_add_qml_module AOT 编译）
+    resources/yuv/yuv_window.qrc
     # 共享核心（与旧 SDL 版同源，已拷贝到 PlayerX/src/core 与 player）
     src/core/rb_demuxer.cpp
     src/core/rb_decoder.cpp
@@ -102,6 +104,10 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/qt/SliderCompareItem.cpp
     # 多组对比模式辅助工具（仅供 QML 配置面板使用，不触达播放内核）
     src/qt/FsUtils.cpp
+    # YUV 裸数据分析工具（独立模块，复用 sws_scale 但不依赖播放管线）
+    src/yuv/YuvAnalyzer.cpp
+    src/yuv/YuvBridge.cpp
+    src/yuv/YuvDisplayItem.cpp
     # 异步文件下载器（供 QML 测试源下载使用，不阻塞 UI 线程）
     src/qt/FileDownloader.cpp
     # 平台原生多选文件夹对话框：仅 macOS 走 NSOpenPanel。
@@ -156,6 +162,7 @@ target_include_directories(PlayerX PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/player
     ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yuv
     ${FFMPEG_INSTALL_DIR}/include
 )
 
