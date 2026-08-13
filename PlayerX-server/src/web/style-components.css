@@ -707,6 +707,108 @@ td.actions .row-act:disabled {
     color: var(--danger);
 }
 
+/* ────────── 顶部明显弹窗（重要提示，位于菜单栏下方居中） ────────── */
+.top-alert {
+    position: fixed;
+    top: 80px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-16px);
+    z-index: 1000;
+    min-width: 360px;
+    max-width: 640px;
+    background: #fff;
+    border: 1px solid #fcd34d;
+    border-left: 4px solid #f59e0b;
+    border-radius: 10px;
+    padding: 12px 14px 12px 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    box-shadow:
+        0 12px 28px -8px rgba(245, 158, 11, 0.35),
+        0 4px 12px -4px rgba(0, 0, 0, 0.10);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s ease, transform .25s ease;
+}
+.top-alert.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+}
+.top-alert-icon {
+    font-size: 22px;
+    line-height: 1;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+.top-alert-body {
+    flex: 1;
+    min-width: 0;
+}
+.top-alert-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #92400e;
+    line-height: 1.4;
+    margin-bottom: 2px;
+}
+.top-alert-detail {
+    font-size: 12px;
+    color: #78350f;
+    line-height: 1.5;
+    word-break: break-all;
+}
+.top-alert-close {
+    background: none;
+    border: none;
+    color: #92400e;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.55;
+    flex-shrink: 0;
+    transition: opacity .15s ease;
+}
+.top-alert-close:hover {
+    opacity: 1;
+}
+/* 严重错误：红色 */
+.top-alert.top-alert-err {
+    border-color: #fca5a5;
+    border-left-color: #ef4444;
+    box-shadow:
+        0 12px 28px -8px rgba(239, 68, 68, 0.35),
+        0 4px 12px -4px rgba(0, 0, 0, 0.10);
+}
+.top-alert.top-alert-err .top-alert-title {
+    color: #991b1b;
+}
+.top-alert.top-alert-err .top-alert-detail {
+    color: #7f1d1d;
+}
+.top-alert.top-alert-err .top-alert-close {
+    color: #991b1b;
+}
+/* 成功：绿色 */
+.top-alert.top-alert-ok {
+    border-color: #86efac;
+    border-left-color: #10b981;
+    box-shadow:
+        0 12px 28px -8px rgba(16, 185, 129, 0.30),
+        0 4px 12px -4px rgba(0, 0, 0, 0.10);
+}
+.top-alert.top-alert-ok .top-alert-title {
+    color: #065f46;
+}
+.top-alert.top-alert-ok .top-alert-detail {
+    color: #047857;
+}
+.top-alert.top-alert-ok .top-alert-close {
+    color: #065f46;
+}
+
 /* ────────── 预览抽屉（CSV 在线查看，右侧滑出，无遮罩） ────────── */
 /* 主题跟随主面板（CSS 变量），系统切浅色时同步浅色 */
 /* 注意：z-index 必须高于归档抽屉（60），否则会被归档遮挡 */

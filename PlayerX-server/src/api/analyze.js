@@ -187,7 +187,11 @@ function cmdAnalyze(cfg) {
     }
 
     // 写 deanon CSV
-    const cols = [...new Set([...Object.keys(clean[0] || {}), 'group', 'model', 'eval_mode'])];
+    const cols = [...new Set([
+        ...Object.keys(clean[0] || {}),
+        'group', 'model', 'eval_mode',
+        'checklist',  // 多维问题标记（来自客户端，JSON 数组字符串）
+    ])];
     fs.mkdirSync(dstDir, { recursive: true });
     const out = [cols.map(csvCell).join(',')];
     for (const r of deanon) out.push(cols.map(c => csvCell(r[c] || '')).join(','));
@@ -465,12 +469,18 @@ function cmdRank(cfg) {
     const modelSet = [...new Set(blind.map(r => r.model))].sort();
     if (modelSet.length < 2) throw new Error('至少需要 2 个模型');
 
-    // 按 (评分员, 样本) 分组，只保留完整组
+    // 按 (评分员, 样本) 分组，只保留完整组。
+    // 同一 (rater, file_name) 下有多个 model（A/B/C 对比组），每个 model 的
+    // checklist 可能不同（评分员对每个视频分别勾选），所以用 _checklists
+    // 按 model 分别存，统计时按 model 独立累加。
     const groups = {};
     for (const r of blind) {
         const key = `${r.rater}|${r.file_name}`;
-        if (!groups[key]) groups[key] = {};
+        if (!groups[key]) {
+            groups[key] = { _checklists: {} };
+        }
         groups[key][r.model] = parseInt(r.stars, 10);
+        groups[key]._checklists[r.model] = r.checklist || '[]';
     }
     const complete = Object.values(groups).filter(sc =>
         modelSet.every(m => m in sc));
@@ -503,7 +513,10 @@ function cmdRank(cfg) {
     const btPct = {}, btElo = {}, btRank = {};
     for (const m of modelSet) {
         btPct[m] = bt[m] / btSum;
-        btElo[m] = 400 * Math.log10(bt[m]);
+        // BT Elo = 400 * log10(bt) + 1500：
+        //   原始定义下，BT 强度几何均值归一化（Π bt = 1），所以平均 Elo = 0，
+        //   显示上不直观。加 +1500 偏移对齐 chess Elo 心智模型（基准 1500）。
+        btElo[m] = 400 * Math.log10(bt[m]) + 1500;
     }
     const sorted = [...modelSet].sort((a, b) => bt[b] - bt[a]);
     sorted.forEach((m, i) => { btRank[m] = i + 1; });
@@ -528,6 +541,69 @@ function cmdRank(cfg) {
     // 对比表
     const nPairs = modelSet.length * (modelSet.length - 1) / 2;
     const bonf = 0.05 / nPairs;
+
+    // ── 问题维度诊断：每个模型在每个 checklist key 上的被勾选率 ──
+    //   - 维度 = 完整组内所有出现过的 checklist key 集合
+    //   - 单元格值 = 该模型在完整组中"该 key 被勾选"的样本数 / 该模型在完整组中的总样本数
+    //   - 同一 (rater, file_name) 下每个 model（A/B/C 对比组）有独立的 checklist，
+    //     所以按 model 累加时严格按 _checklists[m] 取值。
+    //   - 字段为空时（客户端未同步）→ keys=[]，perModel 全 0，UI 显示空状态即可
+    //
+    // checklist 字段格式兼容两种：
+    //   1) 逗号连接字符串（客户端 C++ 写 CSV 时用 readChecklistCsvCell 输出的格式）：
+    //      "person_issue,product_issue" → split(',') → ["person_issue","product_issue"]
+    //   2) JSON 数组字符串（保留兼容）：
+    //      '["person_issue","product_issue"]' → JSON.parse
+    const problemStats = { keys: [], perModel: {} };
+    {
+        const allKeys = new Set();
+        const checklistCounts = {};
+        for (const m of modelSet) checklistCounts[m] = {};
+        const parseChecklist = (raw) => {
+            if (!raw) return [];
+            const s = String(raw).trim();
+            if (!s) return [];
+            if (s.startsWith('[')) {
+                try {
+                    const arr = JSON.parse(s);
+                    return Array.isArray(arr) ? arr : [];
+                } catch (_) { return []; }
+            }
+            return s.split(',').map(x => x.trim()).filter(Boolean);
+        };
+        for (const sc of complete) {
+            const lists = sc._checklists || {};
+            for (const m of Object.keys(sc)) {
+                if (m === '_checklists') continue;
+                const cl = lists[m];
+                if (!cl) continue;
+                const arr = parseChecklist(cl);
+                if (!arr.length) continue;
+                for (const k of arr) {
+                    if (!k) continue;
+                    allKeys.add(k);
+                    checklistCounts[m][k] = (checklistCounts[m][k] || 0) + 1;
+                }
+            }
+        }
+        problemStats.keys = [...allKeys].sort();
+        for (const m of modelSet) {
+            const total = scores[m].length || 1;
+            const rates = {};
+            for (const k of problemStats.keys) {
+                rates[k] = +((checklistCounts[m][k] || 0) / total).toFixed(4);
+            }
+            problemStats.perModel[m] = rates;
+        }
+        // 调试日志：每次跑 cmdRank 时输出 problemStats 摘要
+        //   若 keys.length === 0：deanon.csv 里没有 checklist 数据（客户端没传 / 旧版本）
+        //   若 keys.length > 0：perModel 给每个模型最高的勾选问题
+        const sample = Object.entries(problemStats.perModel).map(([m, r]) => {
+            const top = Object.entries(r).sort((a, b) => b[1] - a[1])[0];
+            return `${m}=${top ? top[0] + ':' + top[1] : 'none'}`;
+        }).slice(0, 3);
+        console.log(`[cmdRank ${path.basename(deanonCsv)}] completeGroups=${G} blind=${blind.length} problemKeys=[${problemStats.keys.join(',')}] models=${Object.keys(problemStats.perModel).length} sample=${sample.join(' | ')}`);
+    }
     const pairs = [];
     for (let i = 0; i < modelSet.length; i++) {
         for (let j = i + 1; j < modelSet.length; j++) {
@@ -577,6 +653,7 @@ function cmdRank(cfg) {
 
     return {
         models, pairs, completeGroups: G,
+        problemStats,
         rankCsv, pairCsv, bonf: +bonf.toFixed(4),
     };
 }

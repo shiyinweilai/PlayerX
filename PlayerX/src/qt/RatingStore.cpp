@@ -31,7 +31,7 @@ namespace rbqt {
 
 namespace {
 constexpr const char* kCsvHeader =
-    "updated_at,rater,file_name,file_path,file_size,quick_hash,stars,slide_type";
+    "updated_at,rater,file_name,file_path,file_size,quick_hash,stars,slide_type,checklist";
 constexpr const char* kSettingsUserKey      = "rating/user";
 constexpr const char* kSettingsModeKey      = "rating/mode";
 constexpr const char* kSettingsUploadUrlKey = "rating/uploadUrl";
@@ -358,6 +358,29 @@ QString RatingStore::filterChecklistKeysForExport(const QStringList& rawKeys) co
     return out.join(QLatin1Char(','));
 }
 
+// 从 QSettings 读回某文件的 checklist（JSON 数组），经白名单过滤后返回逗号连接的字符串。
+// 存储由 QML 端 Rating.saveString("checklist:<filePath>", JSON.stringify(keys)) 写入。
+// 空 / 格式错误 / 非数组 → 交给 filterChecklistKeysForExport(空列表) 处理（返回空或按白名单）。
+QString RatingStore::readChecklistCell(const QString& filePath) const {
+    if (filePath.isEmpty()) return filterChecklistKeysForExport(QStringList{});
+    QSettings s;
+    const QString raw = s.value(QStringLiteral("checklist:") + filePath).toString();
+    if (raw.isEmpty()) return filterChecklistKeysForExport(QStringList{});
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isArray()) {
+        return filterChecklistKeysForExport(QStringList{});
+    }
+    QStringList keys;
+    const QJsonArray arr = doc.array();
+    keys.reserve(arr.size());
+    for (const auto& v : arr) {
+        const QString k = v.toString();
+        if (!k.isEmpty()) keys.push_back(k);
+    }
+    return filterChecklistKeysForExport(keys);
+}
+
 // 返回导出 CSV 时 FileDialog 默认落脚的目录：系统下载文件夹（~/Downloads）。
 // 如果 QStandardPaths 拿不到（极端定制环境）则退到家目录，避免 Qt 默认落到文件系统根。
 QUrl RatingStore::defaultExportDir() const {
@@ -430,6 +453,7 @@ QVariantList RatingStore::getAllRatingsForMode(const QString& mode) const {
         row["quick_hash"] = cols.value(5);
         row["stars"]      = cols.value(6).toInt();
         row["slide_type"] = cols.size() >= 8 ? cols.value(7) : QString();
+        row["checklist"]  = cols.size() >= 9 ? cols.value(8) : QString();
         rows.push_back(row);
     }
 
@@ -529,6 +553,10 @@ bool RatingStore::recordRating(const QString& filePath,
                              ? QStringLiteral("normal") : QString();
     }
 
+    // checklist：从 QSettings（key = "checklist:<filePath>"）读回当前勾选，
+    // 经当前模式白名单过滤后写入 CSV 的 checklist 列，与上传 CSV 保持一致。
+    row["checklist"] = readChecklistCell(filePath);
+
     QList<QVariantMap> rows = readAll();
     bool replaced = false;
     for (auto& r : rows) {
@@ -600,6 +628,8 @@ bool RatingStore::recordRatingToFile(const QString& csvPath,
             r["file_size"]  = cols.value(4).toLongLong();
             r["quick_hash"] = cols.value(5);
             r["stars"]      = cols.value(6).toInt();
+            r["slide_type"] = cols.size() >= 8 ? cols.value(7) : QString();
+            r["checklist"]  = cols.size() >= 9 ? cols.value(8) : QString();
             rows.push_back(r);
         }
     }
@@ -630,7 +660,8 @@ bool RatingStore::recordRatingToFile(const QString& csvPath,
            << r.value("file_size").toLongLong()           << ","
            << csvEscape(r.value("quick_hash").toString()) << ","
            << r.value("stars").toInt()                    << ","
-           << csvEscape(r.value("slide_type").toString()) << "\n";
+           << csvEscape(r.value("slide_type").toString()) << ","
+           << csvEscape(r.value("checklist").toString())  << "\n";
     }
     emit changed();
     return true;
@@ -1721,6 +1752,9 @@ QList<QVariantMap> readBatchCsv(const QString& csvPath) {
         row["file_size"]  = cols.value(4).toLongLong();
         row["quick_hash"] = cols.value(5);
         row["stars"]      = cols.value(6).toInt();
+        // 第8/9列 slide_type/checklist（向后兼容：旧归档无这些列时留空）
+        row["slide_type"] = cols.size() >= 8 ? cols.value(7) : QString();
+        row["checklist"]  = cols.size() >= 9 ? cols.value(8) : QString();
         out.push_back(row);
     }
     return out;
@@ -1740,7 +1774,9 @@ bool writeBatchCsv(const QString& csvPath, const QList<QVariantMap>& rows) {
            << RatingStore::csvEscape(r.value("file_path").toString())  << ","
            << r.value("file_size").toLongLong()                        << ","
            << RatingStore::csvEscape(r.value("quick_hash").toString()) << ","
-           << r.value("stars").toInt()                                 << "\n";
+           << r.value("stars").toInt()                                 << ","
+           << RatingStore::csvEscape(r.value("slide_type").toString()) << ","
+           << RatingStore::csvEscape(r.value("checklist").toString())  << "\n";
     }
     return true;
 }
@@ -2033,7 +2069,8 @@ bool RatingStore::writeAll(const QList<QVariantMap>& rows) const {
            << r.value("file_size").toLongLong()            << ","
            << csvEscape(r.value("quick_hash").toString())  << ","
            << r.value("stars").toInt()                     << ","
-           << csvEscape(r.value("slide_type").toString())  << "\n";
+           << csvEscape(r.value("slide_type").toString())  << ","
+           << csvEscape(r.value("checklist").toString())   << "\n";
     }
     return true;
 }
@@ -2064,6 +2101,8 @@ QList<QVariantMap> RatingStore::readAll() const {
         row["stars"]      = cols.value(6).toInt();
         // 第8列 slide_type（向后兼容：旧行无此列时视为 normal）
         row["slide_type"] = cols.size() >= 8 ? cols.value(7) : QString();
+        // 第9列 checklist（向后兼容：旧行无此列时留空）
+        row["checklist"]  = cols.size() >= 9 ? cols.value(8) : QString();
         out.push_back(row);
     }
     return out;

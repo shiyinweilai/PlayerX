@@ -428,6 +428,9 @@ private:
     // 私有 helper：给定文件在 QSettings 里存的 keys（已解析为 QStringList），
     // 按当前 whitelist 状态过滤后返回逗号连接的字符串（供 CSV 单元格用）。
     QString filterChecklistKeysForExport(const QStringList& rawKeys) const;
+    // 私有 helper：从 QSettings 读回某文件的 checklist（JSON 数组），
+    // 经白名单过滤后返回逗号连接的字符串。主 CSV 的 checklist 列用它。
+    QString readChecklistCell(const QString& filePath) const;
 };
 
 } // namespace rbqt

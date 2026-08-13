@@ -407,6 +407,12 @@
     gap: 12px;
     flex-wrap: wrap;
 }
+/* 多 Tag 排名对照 / 问题维度诊断：hint 保持在标题同侧（靠左），
+   不被 space-between 推到最右。 */
+#pageAnalyze #azMatrixSection .analyze-section-header,
+#pageAnalyze #azProblemSection .analyze-section-header {
+    justify-content: flex-start;
+}
 
 /* ── Tag 切换标签（纯文字链接，浅色，无下划线） ── */
 #pageAnalyze .analyze-tag-tabs {
@@ -432,7 +438,10 @@
     font-weight: 500;
 }
 
-/* ── 多 Tag 排名对照表（替代原折线图） ── */
+/* ── 多 Tag 排名对照表（替代原折线图，转置版） ── */
+/* 行 = Tag，列 = 排名位（#1 #2 #3…）。
+   Tag 名首列冻结，排名位表头冻结；
+   纵向滚动看新 Tag，横向滚动看更多排名位，sticky 让你始终知道「谁、第几名」。 */
 #pageAnalyze .analyze-matrix-hint {
     font-size: 12px;
     color: #6b7280;
@@ -453,6 +462,7 @@
     vertical-align: middle;
     white-space: nowrap;
 }
+/* 表头冻结：#1 #2 #3… 排名位列（深色渐变，与下方"模型排名"/"成对检验"表风格统一） */
 #pageAnalyze .analyze-matrix-table thead th {
     font-weight: 700;
     font-size: 12px;
@@ -460,28 +470,51 @@
     text-transform: uppercase;
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 3;
+    background: linear-gradient(180deg, #e0e7ef 0%, #c7d2dd 100%);
+    color: #0f172a;
+    border-bottom: 1px solid #cbd5e1;
     box-shadow: inset 0 -1px 0 rgba(0,0,0,0.04);
-}
-#pageAnalyze .analyze-matrix-table .matrix-th-rank {
-    width: 64px;
     text-align: center !important;
-    background: #eef2f7 !important;
-    color: #475569 !important;
+    min-width: 200px;
+    width: 200px;
 }
-#pageAnalyze .analyze-matrix-table .matrix-th-tag {
-    min-width: 180px;
-}
-#pageAnalyze .analyze-matrix-table .matrix-td-rank {
-    text-align: center;
+/* 首列冻结：Tag 名（统一灰白背景，与右侧内容区视觉协调） */
+#pageAnalyze .analyze-matrix-table .matrix-td-tagcol {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    min-width: 140px;
     font-weight: 700;
-    color: #334155;
-    background: #fafbfc;
-    font-size: 14px;
-    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    text-align: left;
+    background: #f5f7fa;
+    color: #475569;
+    /* 轻微描边感：与右侧内容区有视觉切分 */
+    box-shadow: inset -1px 0 0 rgba(0,0,0,0.04);
 }
+/* 表头首列「Tag」：角落元素，z-index 最高；继承同款深色渐变，与表头同色 */
+#pageAnalyze .analyze-matrix-table .matrix-th-tagcol {
+    position: sticky;
+    left: 0;
+    top: 0;
+    z-index: 4;
+    background: linear-gradient(180deg, #e0e7ef 0%, #c7d2dd 100%) !important;
+    color: #0f172a !important;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    min-width: 140px;
+    width: 140px;
+    text-align: left;
+    box-shadow: inset -1px 0 0 rgba(0,0,0,0.04);
+}
+/* 数据单元格 */
 #pageAnalyze .analyze-matrix-table .matrix-td-cell {
-    min-width: 180px;
+    min-width: 200px;
     transition: background 120ms ease;
 }
 #pageAnalyze .analyze-matrix-table .matrix-td-empty {
@@ -490,24 +523,24 @@
     font-size: 18px;
     background: #fafbfc;
 }
-#pageAnalyze .analyze-matrix-table tbody tr:hover td {
-    background: #f1f5f9;
+/* 斑马纹（与 .analyze-table 一致：#f4f6fa 隔行淡色 + #e6efff hover） */
+#pageAnalyze .analyze-matrix-table tbody tr:nth-child(even) td:not(.matrix-td-tagcol):not(.matrix-td-empty) {
+    background: #f4f6fa;
 }
-/* 前三名背景：金 / 银 / 铜（弱化版，避免抢主色） */
+#pageAnalyze .analyze-matrix-table tbody tr:hover td:not(.matrix-td-tagcol):not(.matrix-cell-rank-1):not(.matrix-cell-rank-2):not(.matrix-cell-rank-3) {
+    background: #e6efff;
+}
+/* 前三名背景：金 / 银 / 铜（弱化版，覆盖斑马纹） */
 #pageAnalyze .analyze-matrix-table .matrix-cell-rank-1 {
-    background: linear-gradient(90deg, #fffbeb 0%, #fef3c7 100%);
+    background: linear-gradient(90deg, #fffbeb 0%, #fef3c7 100%) !important;
 }
 #pageAnalyze .analyze-matrix-table .matrix-cell-rank-2 {
-    background: linear-gradient(90deg, #f8fafc 0%, #f1f5f9 100%);
+    background: linear-gradient(90deg, #f8fafc 0%, #f1f5f9 100%) !important;
 }
 #pageAnalyze .analyze-matrix-table .matrix-cell-rank-3 {
-    background: linear-gradient(90deg, #fff7ed 0%, #ffedd5 100%);
+    background: linear-gradient(90deg, #fff7ed 0%, #ffedd5 100%) !important;
 }
-#pageAnalyze .analyze-matrix-table .matrix-cell-rank-1:hover,
-#pageAnalyze .analyze-matrix-table .matrix-cell-rank-2:hover,
-#pageAnalyze .analyze-matrix-table .matrix-cell-rank-3:hover {
-    filter: brightness(0.97);
-}
+/* 单元格内容：列宽按模型名长度自适应撑开（无 max-width / 无 ellipsis） */
 #pageAnalyze .analyze-matrix-table .matrix-cell-name {
     display: flex;
     align-items: center;
@@ -516,9 +549,8 @@
     color: #0f172a;
     font-size: 13px;
     line-height: 1.3;
-    max-width: 280px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* 不限制 max-width，长模型名直接撑开列宽；
+       表格整体宽度 = 各列"内容最大宽度"之和，超出容器时整表横向滚动，sticky 冻结仍生效。 */
 }
 #pageAnalyze .analyze-matrix-table .matrix-medal {
     font-size: 14px;
@@ -526,10 +558,14 @@
     flex-shrink: 0;
 }
 #pageAnalyze .analyze-matrix-table .matrix-name-text {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* flex: 1 占主空间，min-width: 0 允许收缩到 0（不撑开主轴），
+       overflow: visible + nowrap 让长模型名撑开列宽（自适应），
+       badge 用 margin-left: auto 推到右。 */
     flex: 1;
     min-width: 0;
+    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
 }
 #pageAnalyze .analyze-matrix-table .matrix-cell-rank-badge {
     margin-left: auto;
@@ -541,6 +577,17 @@
     font-weight: 600;
     font-family: 'SF Mono', Menlo, Consolas, monospace;
     flex-shrink: 0;
+}
+#pageAnalyze .analyze-matrix-table .matrix-cell-meta {
+    font-size: 11px;
+    color: #64748b;
+    margin-top: 4px;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    letter-spacing: 0.02em;
+}
+#pageAnalyze .analyze-matrix-table .matrix-cell-meta b {
+    color: #0f172a;
+    font-weight: 600;
 }
 #pageAnalyze .analyze-matrix-table .matrix-cell-meta {
     font-size: 11px;
@@ -954,4 +1001,135 @@
 
 .px-confirm-ok:hover {
     background: #3080e0;
+}
+/* ── 问题维度诊断报告（每个 Tag 一张热力表） ── */
+#pageAnalyze .analyze-problem-hint {
+    font-size: 12px;
+    color: #6b7280;
+    font-weight: 400;
+}
+#pageAnalyze .analyze-problem-card {
+    margin: 0 0 12px;
+    background: #fff;
+    border: 1px solid #eef2f7;
+    border-radius: 8px;
+    overflow: hidden;
+    /* 按内容收缩：表格自适应宽度后，卡片跟着收缩到表格宽度 */
+    width: fit-content;
+    max-width: 100%;
+}
+#pageAnalyze .analyze-problem-card-head {
+    padding: 8px 14px;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: #f5f7fa;
+    color: #475569;
+}
+#pageAnalyze .analyze-problem-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    /* 不强制 width: 100%，让列宽由内容撑开（最长模型名 / 最长 key 名决定） */
+    width: auto;
+    font-size: 12px;
+    table-layout: auto;
+}
+#pageAnalyze .analyze-problem-table th,
+#pageAnalyze .analyze-problem-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #eef2f7;
+    border-right: 1px solid #f1f5f9;
+    text-align: left;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+#pageAnalyze .analyze-problem-table th {
+    background: #f5f7fa;
+    color: #475569;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+#pageAnalyze .analyze-problem-table .problem-th-rank-cell {
+    width: 40px;
+    min-width: 40px;
+    text-align: center !important;
+}
+#pageAnalyze .analyze-problem-table .analyze-problem-td-rank {
+    text-align: center;
+    font-weight: 700;
+    color: #475569;
+    background: #fafbfc;
+    font-size: 12px;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+#pageAnalyze .analyze-problem-table .problem-th-model {
+    /* 不限 min-width，模型名按内容撑开列宽 */
+}
+#pageAnalyze .analyze-problem-table .problem-th-key {
+    min-width: 70px;
+    text-align: center !important;
+}
+#pageAnalyze .analyze-problem-table .analyze-problem-td-model {
+    font-weight: 600;
+    color: #0f172a;
+    background: #fafbfc;
+}
+#pageAnalyze .analyze-problem-table .analyze-problem-td-cell {
+    text-align: center;
+    font-weight: 600;
+    color: #0f172a;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    transition: filter 120ms ease;
+}
+#pageAnalyze .analyze-problem-table .analyze-problem-td-cell:hover {
+    filter: brightness(0.95);
+}
+#pageAnalyze .analyze-problem-table .problem-pct {
+    font-size: 13px;
+}
+#pageAnalyze .analyze-problem-table .problem-pct-pct {
+    font-size: 10px;
+    opacity: 0.6;
+    margin-left: 1px;
+}
+#pageAnalyze .analyze-problem-table .analyze-problem-td-empty {
+    text-align: center;
+    color: #94a3b8;
+    font-size: 12px;
+    padding: 14px;
+    font-style: italic;
+}
+/* 空状态 */
+#pageAnalyze .analyze-problem-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: #6b7280;
+    background: #fafbfc;
+    border-radius: 8px;
+    border: 1px dashed #e2e8f0;
+}
+#pageAnalyze .analyze-problem-empty .icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+    opacity: 0.6;
+}
+#pageAnalyze .analyze-problem-empty .title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 4px;
+}
+#pageAnalyze .analyze-problem-empty .sub {
+    font-size: 12px;
+    line-height: 1.6;
+}
+#pageAnalyze .analyze-problem-empty code {
+    background: #e2e8f0;
+    color: #475569;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
 }

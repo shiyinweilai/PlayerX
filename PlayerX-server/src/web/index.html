@@ -245,7 +245,7 @@
                             <div class="analyze-section-header">
                                 <h3 class="analyze-section-title">多 Tag 排名对照</h3>
                                 <div class="analyze-section-header-right">
-                                    <span class="analyze-matrix-hint">行=各 Tag 排名列表中的同一位置（按下标对齐），列=Tag；单元格=该 Tag 下该位置的模型 + Mean · BT_Elo</span>
+                                    <span class="analyze-matrix-hint">行=Tag，列=排名位（#1 #2 #3…）；单元格=该 Tag 下该排名位的模型 + BT 排名 #N · Mean · Elo；Tag 多数时纵向滚动天然友好</span>
                                 </div>
                             </div>
                             <div class="analyze-table-wrap">
@@ -254,6 +254,17 @@
                                     <tbody id="azMatrixTbody"></tbody>
                                 </table>
                             </div>
+                        </section>
+
+                        <!-- 问题维度诊断报告：每个 Tag 一张表，行=模型，列=问题 key，单元格=该模型在该问题 key 上的被勾选率（颜色+百分比）。 -->
+                        <section id="azProblemSection" class="analyze-card-section" hidden>
+                            <div class="analyze-section-header">
+                                <h3 class="analyze-section-title">问题维度诊断</h3>
+                                <div class="analyze-section-header-right">
+                                    <span class="analyze-problem-hint">每个模型在每个问题类别（提示词/物理/商品/人物/无问题）上的被勾选率；颜色越深 = 越多评分员认为该模型在该维度有缺陷</span>
+                                </div>
+                            </div>
+                            <div id="azProblemBody"></div>
                         </section>
 
                         <!-- 共享 Tag 切换栏（独立于两个表格，两个表格数据同步切换） -->
@@ -727,6 +738,16 @@
 
     <!-- ────────── Toast ────────── -->
     <div class="toast" id="toast" hidden></div>
+
+    <!-- ────────── 顶部明显弹窗（重要提示用） ────────── -->
+    <div class="top-alert" id="topAlert" hidden>
+        <div class="top-alert-icon">⚠️</div>
+        <div class="top-alert-body">
+            <div class="top-alert-title">提示</div>
+            <div class="top-alert-detail"></div>
+        </div>
+        <button class="top-alert-close" type="button" aria-label="关闭">×</button>
+    </div>
 
     <!-- ────────── 分析文件选择弹窗 ────────── -->
     <div class="login-mask" id="anFileMask" hidden>

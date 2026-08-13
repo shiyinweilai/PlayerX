@@ -96,6 +96,26 @@ function showToast(msg, kind) {
     showToast._tm = setTimeout(() => { t.classList.remove('show'); t.hidden = true; }, 2400);
 }
 
+// ────────── 顶部明显弹窗 ──────────
+// 用于"自动过滤无效 tag"等重要提示。位置：顶部居中（菜单栏下方），
+// 样式：图标 + 标题 + 详情 + 关闭按钮；停留 8 秒或可手动关闭。
+function showTopAlert(title, detail, kind) {
+    const el = $('topAlert');
+    if (!el) return;
+    el.querySelector('.top-alert-title').textContent = title || '提示';
+    el.querySelector('.top-alert-detail').textContent = detail || '';
+    el.className = 'top-alert show top-alert-' + (kind || 'warn');
+    el.hidden = false;
+    clearTimeout(showTopAlert._tm);
+    showTopAlert._tm = setTimeout(hideTopAlert, 8000);
+}
+function hideTopAlert() {
+    const el = $('topAlert');
+    if (!el || el.hidden) return;
+    el.classList.remove('show');
+    setTimeout(() => { el.hidden = true; }, 250);
+}
+
 // ────────── 网络 ──────────
 async function api(pathname, opts) {
     return fetch(pathname, Object.assign({
