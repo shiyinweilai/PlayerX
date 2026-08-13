@@ -14,7 +14,7 @@
     const statsGrid = $('azStatsGrid');
     const rankSection = $('azRankSection');
     const pairSection = $('azPairSection');
-    const chartSection = $('azChartSection');
+    const matrixSection = $('azMatrixSection');
     const tagTabs = $('azTagTabs');
     const pairTagTabs = $('azPairTagTabs');
     if (!tagSel || !runBtn) return;
@@ -271,7 +271,7 @@
     function hideAnalyzeSections() {
         if (rankSection) rankSection.hidden = true;
         if (pairSection) pairSection.hidden = true;
-        if (chartSection) chartSection.hidden = true;
+        if (matrixSection) matrixSection.hidden = true;
     }
 
     // ── 配色方案持久化 + 重渲染 ──────────────────────────────
@@ -461,100 +461,125 @@
         });
     }
 
-    // ── Chart.js 折线图 ───────────────────────────────────────
+    // ── 多 Tag 排名对照表（替代原折线图）───────────────────────
+    // 行 = 排名（rank 1..N），列 = 每个 Tag，
+    // 单元格 = 该 Tag 下该排名的模型 + Mean / BT_Elo。
+    // Rank 1/2/3 用金/银/铜色背景 + 🥇🥈🥉 标识。
 
-    let chartInstances = {};
+    const MATRIX_TAG_PALETTE = [
+        { bg: 'linear-gradient(180deg, #eff6ff, #dbeafe)', fg: '#1e3a8a' }, // 蓝
+        { bg: 'linear-gradient(180deg, #fef3c7, #fde68a)', fg: '#78350f' }, // 琥珀
+        { bg: 'linear-gradient(180deg, #dcfce7, #bbf7d0)', fg: '#14532d' }, // 绿
+        { bg: 'linear-gradient(180deg, #fce7f3, #fbcfe8)', fg: '#831843' }, // 粉
+        { bg: 'linear-gradient(180deg, #f3e8ff, #e9d5ff)', fg: '#581c87' }, // 紫
+        { bg: 'linear-gradient(180deg, #cffafe, #a5f3fc)', fg: '#155e75' }, // 青
+        { bg: 'linear-gradient(180deg, #ffedd5, #fed7aa)', fg: '#7c2d12' }, // 橙
+        { bg: 'linear-gradient(180deg, #f1f5f9, #e2e8f0)', fg: '#334155' }, // 石板
+    ];
 
-    function destroyCharts() {
-        Object.values(chartInstances).forEach(c => { try { c.destroy(); } catch (_) {} });
-        chartInstances = {};
-    }
-
-    function renderCharts() {
+    function renderMatrixTable() {
         if (multiTagResults.length < 2) {
-            if (chartSection) chartSection.hidden = true;
-            destroyCharts();
+            if (matrixSection) matrixSection.hidden = true;
             return;
         }
-        if (chartSection) chartSection.hidden = false;
+        if (matrixSection) matrixSection.hidden = false;
 
-        const tags = multiTagResults.map(r => r.tag);
-
-        // 收集所有模型（跨 Tag 去重）
-        const allModels = new Set();
-        multiTagResults.forEach(r => (r.models || []).forEach(m => allModels.add(m.name || m.model)));
-        const modelList = [...allModels];
-
-        // 构建每个指标的数据：{ model: [val_per_tag, ...] }
-        function buildSeries(accessor) {
-            return modelList.map(model => {
-                const data = multiTagResults.map(r => {
-                    const m = (r.models || []).find(x => (x.name || x.model) === model);
-                    return m ? accessor(m) : null;
-                });
-                return { label: model, data };
-            });
+        const maxRank = Math.max(...multiTagResults.map(r => (r.models || []).length), 0);
+        if (maxRank <= 0) {
+            if (matrixSection) matrixSection.hidden = true;
+            return;
         }
 
-        const eloSeries = buildSeries(m => m.elo);
-        const shareSeries = buildSeries(m => m.strength);
-        const meanSeries = buildSeries(m => m.mean);
+        // 表头：排名 | tag1 | tag2 | tag3 ...
+        const thead = $('azMatrixThead');
+        if (!thead) return;
+        thead.innerHTML = '';
+        const headTr = document.createElement('tr');
+        headTr.appendChild(makeMatrixTh('排名', 'matrix-th-rank'));
+        multiTagResults.forEach((r, idx) => {
+            const color = MATRIX_TAG_PALETTE[idx % MATRIX_TAG_PALETTE.length];
+            headTr.appendChild(makeMatrixTh(
+                r.tag || `tag${idx + 1}`,
+                `matrix-th-tag matrix-th-tag-${idx % MATRIX_TAG_PALETTE.length}`
+            ));
+            // inline 写色，避免循环选择器难维护
+            const th = headTr.lastChild;
+            if (th) {
+                th.style.background = color.bg;
+                th.style.color = color.fg;
+            }
+        });
+        thead.appendChild(headTr);
 
-        const chartColors = [
-            '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
-            '#ec4899', '#06b6d4', '#f97316', '#14b8a6', '#6366f1',
-            '#84cc16', '#d946ef',
-        ];
-
-        function makeChart(canvasId, series, yLabel) {
-            const ctx = document.getElementById(canvasId);
-            if (!ctx) return;
-            const canvas = ctx.getContext('2d');
-            const datasets = series.map((s, i) => ({
-                label: s.label,
-                data: s.data,
-                borderColor: chartColors[i % chartColors.length],
-                backgroundColor: chartColors[i % chartColors.length] + '20',
-                tension: 0.3,
-                spanGaps: false,
-                pointRadius: 5,
-                pointHoverRadius: 8,
-            }));
-            chartInstances[canvasId] = new Chart(canvas, {
-                type: 'line',
-                data: { labels: tags, datasets },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    onClick: (e, els) => {
-                        // 点击数据点 → 切换表格当前 Tag
-                        if (!els || !els.length) return;
-                        const idx = els[0].index;
-                        if (idx >= 0 && idx < multiTagResults.length) {
-                            currentRankTagIdx = idx;
-                            currentPairTagIdx = idx;
-                            renderCurrentRankTable();
-                            renderCurrentPairTable();
-                        }
-                    },
-                    plugins: {
-                        legend: {
-                            position: 'bottom',
-                            labels: { boxWidth: 12, padding: 12, font: { size: 11 }, usePointStyle: true },
-                        },
-                    },
-                    scales: {
-                        x: { title: { display: true, text: 'Tag', font: { size: 12 } } },
-                        y: { title: { display: true, text: yLabel, font: { size: 12 } } },
-                    },
-                },
+        // tbody：每行 = 各 Tag 排名列表中的同一位置（按下标对齐，不是按 m.n 匹配）。
+        // 这样下方"模型排名"切换 tag 看到的所有模型，都能逐行对位到上方多维表格。
+        const tbody = $('azMatrixTbody');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        for (let rowIdx = 0; rowIdx < maxRank; rowIdx++) {
+            const displayRank = rowIdx + 1;
+            const row = document.createElement('tr');
+            row.className = `matrix-row matrix-row-rank-${displayRank}`;
+            const rankTd = document.createElement('td');
+            rankTd.className = 'matrix-td-rank';
+            rankTd.textContent = String(displayRank);
+            row.appendChild(rankTd);
+            multiTagResults.forEach((r) => {
+                // 按数组下标取（"该 Tag 排名列表的第 rowIdx 项"），
+                // 不再按 m.n 严格匹配 —— 否则 N=2,N=2 这种并列数据会让 rank 1,3 整行空。
+                const m = (r.models || [])[rowIdx];
+                row.appendChild(makeMatrixTd(m, displayRank));
             });
+            tbody.appendChild(row);
         }
+    }
 
-        destroyCharts();
-        makeChart('azChartElo', eloSeries, 'BT_Elo');
-        makeChart('azChartShare', shareSeries, 'BT_share');
-        makeChart('azChartMean', meanSeries, 'Mean');
+    function makeMatrixTh(text, cls) {
+        const th = document.createElement('th');
+        th.className = cls;
+        th.textContent = text;
+        return th;
+    }
+
+    function makeMatrixTd(m, displayRank) {
+        const td = document.createElement('td');
+        td.className = 'matrix-td-cell';
+        if (!m) {
+            td.classList.add('matrix-td-empty');
+            td.textContent = '—';
+            return td;
+        }
+        // 排名用 m.rank（后端 Bradley-Terry 排名），不是 m.n（n 是样本数）。
+        // 行号 displayRank 是位置（按下标对齐），m.rank 才是该 Tag 内的真实 BT 排名。
+        const actualRank = (m.rank != null) ? m.rank : displayRank;
+        const medal = actualRank === 1 ? '🥇' : actualRank === 2 ? '🥈' : actualRank === 3 ? '🥉' : '';
+        const fullName = m.name || m.model || '—';
+        const short = shortModelName(fullName);
+        const mean = m.mean != null ? m.mean.toFixed(3) : '—';
+        const elo = m.elo != null ? Math.round(m.elo) : '—';
+
+        td.title = `${fullName}\nBT 排名: ${actualRank} · 样本数: ${m.n != null ? m.n : '—'}`;
+        td.innerHTML =
+            `<div class="matrix-cell-name">` +
+                (medal ? `<span class="matrix-medal">${medal}</span>` : '') +
+                `<span class="matrix-name-text">${escapeHtmlMatrix(short)}</span>` +
+                `<span class="matrix-cell-rank-badge">#${actualRank}</span>` +
+            `</div>` +
+            `<div class="matrix-cell-meta">Mean <b>${mean}</b> · Elo ${elo}</div>`;
+        return td;
+    }
+
+    function shortModelName(name) {
+        if (!name) return '—';
+        // 取最后一段路径（去掉多级目录前缀）
+        const last = String(name).split('/').pop() || String(name);
+        return last;
+    }
+
+    function escapeHtmlMatrix(s) {
+        return String(s).replace(/[&<>"']/g, c => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+        ));
     }
 
     // ── 主渲染入口 ───────────────────────────────────────────
@@ -581,7 +606,7 @@
         currentPairTagIdx = 0;
         renderCurrentRankTable();
         renderCurrentPairTable();
-        renderCharts();
+        renderMatrixTable();
 
         if (shareBtn && !window.__PX_SHARE_MODE__) shareBtn.disabled = false;
     }
@@ -694,9 +719,18 @@
         const fromSelected = !!(names && names.length > 0);
         if (window.__PX_SHARE_MODE__) return;
 
-        let tagsToUse = fromSelected ? [] : [...selectedTags];
+        // 默认从用户在分析页选中的 tag 出发
+        let tagsToUse = [...selectedTags];
 
-        // 如果输入框有值但不在 selectedTags 中，追加
+        // 来自"分析选中"等外部入口：若传入了 tag（且非空），用它覆盖。
+        // 修复：从评分文件页"分析选中"跳转过来时，opts.tag 之前被忽略，
+        // 导致 tagsToUse 为空、函数静默 return，页面卡在"准备开始分析"。
+        if (fromSelected && opts.tag != null) {
+            const t = String(opts.tag).trim();
+            if (t) tagsToUse = [t];
+        }
+
+        // 如果输入框有值但不在 tagsToUse 中，追加
         const inputTag = String(tagSel.value || '').trim();
         if (inputTag && !tagsToUse.includes(inputTag)) {
             tagsToUse = [inputTag];

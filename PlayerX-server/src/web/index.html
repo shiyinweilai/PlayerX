@@ -240,22 +240,19 @@
                             </div>
                         </div>
 
-                        <!-- 排名变化图（多 Tag 时显示） -->
-                        <section id="azChartSection" class="analyze-card-section" hidden>
-                            <h3 class="analyze-section-title">排名变化趋势</h3>
-                            <div class="analyze-charts-grid">
-                                <div class="analyze-chart-card">
-                                    <h4 class="analyze-chart-title">BT_Elo</h4>
-                                    <canvas id="azChartElo"></canvas>
+                        <!-- 多 Tag 排名对照表（多 Tag 时显示）：行=排名，列=Tag，单元格=该 Tag 下该排名的模型 -->
+                        <section id="azMatrixSection" class="analyze-card-section" hidden>
+                            <div class="analyze-section-header">
+                                <h3 class="analyze-section-title">多 Tag 排名对照</h3>
+                                <div class="analyze-section-header-right">
+                                    <span class="analyze-matrix-hint">行=各 Tag 排名列表中的同一位置（按下标对齐），列=Tag；单元格=该 Tag 下该位置的模型 + Mean · BT_Elo</span>
                                 </div>
-                                <div class="analyze-chart-card">
-                                    <h4 class="analyze-chart-title">BT_share</h4>
-                                    <canvas id="azChartShare"></canvas>
-                                </div>
-                                <div class="analyze-chart-card">
-                                    <h4 class="analyze-chart-title">Mean</h4>
-                                    <canvas id="azChartMean"></canvas>
-                                </div>
+                            </div>
+                            <div class="analyze-table-wrap">
+                                <table id="azMatrixTable" class="analyze-table analyze-matrix-table">
+                                    <thead id="azMatrixThead"></thead>
+                                    <tbody id="azMatrixTbody"></tbody>
+                                </table>
                             </div>
                         </section>
 
@@ -773,7 +770,6 @@
     </aside>
 
     <!-- 按依赖顺序加载：核心 → 模型 → 配置编辑 → 文件管理 → 初始化 → 分析 -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <script src="/web/app-core.js?v=20260812"></script>
     <script src="/web/app-models.js?v=20260812l"></script>
     <script src="/web/app-terminal.js?v=20260812m"></script>
