@@ -1,9 +1,6 @@
 {
   "ignore": [
-    "configs/**",
-    "uploads/**",
-    "testsrc/**",
-    "archive/**",
+    "data/**",
     "*.log"
   ]
 }

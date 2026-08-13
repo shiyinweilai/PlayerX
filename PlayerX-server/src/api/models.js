@@ -28,7 +28,9 @@ function genId() { return Date.now().toString(36) + Math.random().toString(36).s
 function normalizeIncomingPath(p) {
     if (!p) return '';
     const t = String(p).trim();
-    return path.isAbsolute(t) ? t : path.resolve(ROOT_DIR, t);
+    // 相对路径（含 assets/ 前缀）统一走 resolveSourcePath，保证 assets 迁入
+    // data/ 后依然能定位到正确位置。
+    return path.isAbsolute(t) ? t : resolveSourcePath(t);
 }
 function sanitizeFolderName(raw) {
     let s = String(raw || '').trim();
@@ -117,7 +119,7 @@ function handleScan(req, res) {
 //
 // 字段：file=<任意文件>
 //
-// 行为：直接把文件存到 <ROOT_DIR>/assets/<filename>。
+// 行为：直接把文件存到 <DATA_DIR>/assets/<filename>（data/assets）。
 //       不做任何解压、拍平、MD5、models-config.json 修改。
 //       后续若要添加到源列表，用户自行到"模型管理"页面添加。
 // ─────────────────────────────────────────────────────────────

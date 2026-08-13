@@ -2,8 +2,8 @@ const fs = require('fs');
 const path = require('path');
 
 const { listAll } = require('../lib/store');
+const { CONFIGS_DIR } = require('../lib/paths');
 
-const CONFIGS_DIR = path.join(__dirname, '../../configs');
 const ACTIVE_CONFIG_FILE = path.join(CONFIGS_DIR, '_active.json');
 
 function setCors(res) {

@@ -54,6 +54,19 @@ function md5(filePath) {
     return crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
 }
 
+// 解析模型目录路径：
+//   - 绝对路径 → 直接返回
+//   - assets/ 前缀 → 相对 DATA_DIR 解析（assets 已迁入 data/assets）
+//   - 其他相对路径 → 相对 anchor（srcDir 或 ROOT_DIR）解析
+function resolveModelDir(m, anchor) {
+    if (path.isAbsolute(m)) return m;
+    if (m.startsWith('assets/') || m.startsWith('assets\\')) {
+        const { DATA_DIR } = require('../lib/paths');
+        return path.join(DATA_DIR, m);
+    }
+    return path.join(anchor, m);
+}
+
 function resolveSamples(cfg) {
     if (cfg.samples && cfg.samples.length > 0) return [...cfg.samples].sort((a, b) => a - b);
 
@@ -63,8 +76,9 @@ function resolveSamples(cfg) {
     // 扫描所有模型目录的并集，确保一个样本在所有模型中至少都存在（这是构建的前提）。
     // 解析每个 model 项：
     //   1) srcDir 明确给出 → 相对 srcDir 解析
-    //   2) srcDir 缺失但 model 是相对路径且包含 / → 自动按 ROOT_DIR 解析
-    //      （前端"从模型管理加载"时就是这种：models = ["assets/quality/quality/g1/A", ...]）
+    //   2) srcDir 缺失但 model 是相对路径且包含 / → 自动解析
+    //      （前端"从模型管理加载"时就是这种：models = ["assets/quality/quality/g1/A", ...]，
+    //      assets/ 前缀会按 DATA_DIR 解析到 data/assets/）
     const srcDir = cfg.src_model_dir;
     const models = cfg.models || [];
     if (models.length > 0) {
@@ -73,7 +87,7 @@ function resolveSamples(cfg) {
         // 取所有模型的交集：每个样本在每个模型目录下都要有同名文件
         let common = null;
         for (const m of models) {
-            const d = path.isAbsolute(m) ? m : path.join(anchor, m);
+            const d = resolveModelDir(m, anchor);
             if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) continue;
             const nums = new Set(
                 fs.readdirSync(d)
@@ -237,7 +251,7 @@ function copyBlind(samples, groupOf, models, labels, srcDir, dstDir, comp,
         for (let i = 0; i < labels.length; i++) {
             const lb = labels[i];
             const model = perm[i];
-            const modelDir = path.isAbsolute(model) ? model : path.join(anchor, model);
+            const modelDir = resolveModelDir(model, anchor);
             fs.copyFileSync(path.join(modelDir, fn), path.join(dstDir, g, lb, fn));
             row[`${lb}_source`] = path.basename(model);
         }
@@ -277,7 +291,7 @@ function copyDirect(samples, models, srcDir, dstDir, rng) {
     for (const n of samples) {
         const fn = `${n}.mp4`;
         for (const model of models) {
-            const modelDir = path.isAbsolute(model) ? model : path.join(anchor, model);
+            const modelDir = resolveModelDir(model, anchor);
             const d = path.join(dstDir, path.basename(model));
             fs.mkdirSync(d, { recursive: true });
             fs.copyFileSync(path.join(modelDir, fn), path.join(d, fn));

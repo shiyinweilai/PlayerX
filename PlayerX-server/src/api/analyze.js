@@ -729,10 +729,9 @@ function handle(req, res) {
     let autoConfig = null;  // 从 configs/ 目录自动定位到的配置
 
     if (tag) {
-        const { UPLOAD_DIR, TASKS_DIR } = require('../lib/paths');
+        const { UPLOAD_DIR, TASKS_DIR, CONFIGS_DIR } = require('../lib/paths');
 
         // 自动联动配置文件：扫描 configs/ 目录，找到 build.tag === tag 的配置
-        const CONFIGS_DIR = path.join(path.dirname(path.dirname(__dirname)), 'configs');
         if (fs.existsSync(CONFIGS_DIR)) {
             const configFiles = fs.readdirSync(CONFIGS_DIR).filter(f => f.endsWith('.json'));
             for (const cf of configFiles) {

@@ -44,8 +44,15 @@ PlayerX-server/
 │       ├── style-enhance.css       # 设计令牌 + 毛玻璃质感层
 │       ├── style-dashboard.css     # 数据大盘 + 小屏适配
 │       └── style-analyze.css       # 分析结果 + 确认弹窗
-├── uploads/               # 落盘目录（运行期自动建）
-└── archive/               # 历史归档（每槽位最多保留 20 份）
+├── data/                  # 运行时数据根目录（运行期自动建，已 gitignore）
+│   ├── uploads/           # 评分 CSV 落盘
+│   ├── archive/           # 历史归档（每槽位最多保留 20 份）
+│   ├── tasks/             # 构建任务产物
+│   ├── testsrc/           # 测试源安装包
+│   ├── shares/            # 分析结果分享快照
+│   ├── assets/            # 管理员上传的模型资源
+│   └── configs/           # 评分配置 / 构建配置
+└── config.json            # 运行时可变配置
 ```
 
 ## 启动
@@ -96,9 +103,9 @@ restart.sh         # 使用的是nohup
 
 ## 文件落盘规则
 
-`uploads/<user>__<tag>__<yyyy-MM-dd_HH-mm-ss>.csv`
+`data/uploads/<user>__<tag>__<yyyy-MM-dd_HH-mm-ss>.csv`
 
 - user / tag 做了字符净化（仅留字母数字、下划线、横线、点、汉字）
-- 同 (user, tag) 重复上传：默认 409 让客户端弹"覆盖确认"；带 `force=1` 时把旧文件搬到 `archive/<user>__<tag>/`
+- 同 (user, tag) 重复上传：默认 409 让客户端弹"覆盖确认"；带 `force=1` 时把旧文件搬到 `data/archive/<user>__<tag>/`
 - 每个槽位归档最多保留 20 份，更早的物理删除
 - 单文件最大 10MB（CSV 远远到不了这个量级）

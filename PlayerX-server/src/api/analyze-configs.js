@@ -1,7 +1,7 @@
 /**
  * src/api/analyze-configs.js — 盲评分析配置管理接口
  *
- * 存储：服务器根目录 analyze-configs/ 目录，每个 .json 文件为一份分析配置。
+ * 存储：data/analyze-configs/ 目录，每个 .json 文件为一份分析配置。
  * JSON 格式与 blind_analyze.py 的 config 兼容（tag, models, map_csv, src_model_dir, ...）
  *
  * 接口：
@@ -13,7 +13,8 @@
 const fs   = require('fs');
 const path = require('path');
 
-const CONFIGS_DIR = path.join(__dirname, '../../analyze-configs');
+const { ANALYZE_CONFIGS_DIR } = require('../lib/paths');
+const CONFIGS_DIR = ANALYZE_CONFIGS_DIR;
 
 /** 确保目录存在，并迁移 bench_config.json（如果存在） */
 function ensureDir() {

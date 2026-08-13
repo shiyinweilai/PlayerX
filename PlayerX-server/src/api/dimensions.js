@@ -1,7 +1,7 @@
 /**
  * src/api/dimensions.js — 评分配置管理接口
  *
- * 存储：服务器根目录 configs/ 目录，每个 .json 文件为一份配置
+ * 存储：data/configs/ 目录，每个 .json 文件为一份配置
  * JSON 格式：{ "type": "多维评分", "task": "...", "scale": "...", "dimensions": [...] }
  *
  * 接口：
@@ -25,14 +25,13 @@
 const fs = require('fs');
 const path = require('path');
 
-// configs/ 目录存放在项目根目录（server.js 同级）
-const CONFIGS_DIR = path.join(__dirname, '../../configs');
+const { CONFIGS_DIR } = require('../lib/paths');
 
 // 旧版单文件路径（兼容迁移）
 const LEGACY_DIM_FILE = path.join(__dirname, '../../dimensions.json');
 
 // 激活配置记录文件（存在 configs/ 目录下）
-const ACTIVE_CONFIG_FILE = path.join(__dirname, '../../configs/_active.json');
+const ACTIVE_CONFIG_FILE = path.join(CONFIGS_DIR, '_active.json');
 
 // 模式顺序与显示文案（用于根据绑定同步 json.type）
 const MODE_LABELS = {
