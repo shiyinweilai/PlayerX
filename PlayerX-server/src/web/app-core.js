@@ -422,6 +422,7 @@ const MODULES = {
     analyze: { section: () => $('pageAnalyze'), hash: '#analyze' },
     archive: { section: () => $('pageArchive'), hash: '#archive' },
     settings: { section: () => $('pageSettings'), hash: '#settings' },
+    terminal: { section: () => $('pageTerminal'), hash: '#terminal' },
 };
 let currentModule = 'files';
 
@@ -444,6 +445,12 @@ function switchModule(name, skipHashUpdate) {
     else { dimPageOpen = false; }
     if (name === 'archive') { loadArchiveFolders(); }
     if (name === 'models') { renderModelsPage(); }
+    if (name === 'terminal') {
+        const sec = document.getElementById('pageTerminal');
+        if (sec && typeof window.renderTerminalPage === 'function') {
+            window.renderTerminalPage(sec);
+        }
+    }
     if (name === 'dashboard') { loadDashboard(); }
     if (name === 'tasks' && window.PXTasks && typeof window.PXTasks.onShow === 'function') {
         window.PXTasks.onShow();

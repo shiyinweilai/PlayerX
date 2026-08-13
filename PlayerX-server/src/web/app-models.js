@@ -54,9 +54,10 @@ function renderModelsContent(container) {
         const scope = src.scope || 'personal';
         const ownerName = src.owner || '个人';
         const scopeLabel = scope === 'team' ? '团队' : `${ownerName}`;
-        const modelsHtml = (src.models || []).map(m =>
-            `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${realIdx}" data-model="${escHtml(m)}">&times;</button></span>`
-        ).join('');
+        const modelsHtml = (src.models || []).map(m => {
+            const label = m.includes('/') ? m.split('/').filter(Boolean).pop() || m : m;
+            return `<span class="mdl-tag" title="${escHtml(m)}">${escHtml(label)}<button class="mdl-tag-rm" data-src="${realIdx}" data-model="${escHtml(m)}">&times;</button></span>`;
+        }).join('');
         return `
  <div class="mdl-source-card" data-idx="${realIdx}">
 <div class="mdl-source-header">
@@ -89,7 +90,7 @@ function renderModelsContent(container) {
             </div>
             <div class="mdl-add-row">
                 <input class="mdl-add-name" placeholder="测试集名称" />
-                <input class="mdl-add-path" placeholder="源目录路径（如：/data/models/daxin）" />
+                <input class="mdl-add-path" placeholder="源目录路径（如：/data/models/daxin 或 assets/xxx）" />
                 <input class="mdl-add-owner" placeholder="归属人（如：张三）" />
                 <select class="mdl-add-scope">
         <option value="personal">个人</option>
@@ -116,8 +117,10 @@ async function saveModels(idx) {
 
 // 渲染目录树节点
 function renderTreeNode(dirs, parentPath, idx, existing, dirsInfo) {
+    // 规范化 parentPath：去掉尾部斜杠，避免拼出"//"
+    const cleanParent = parentPath.replace(/\/+$/, '');
     return dirs.map((d, i) => {
-        const fullPath = parentPath + '/' + d;
+        const fullPath = cleanParent + '/' + d;
         const checked = existing.has(d) || existing.has(fullPath) ? 'checked' : '';
         const hasChildren = dirsInfo ? dirsInfo[i].hasChildren : true;
         return `<div class="mdl-tree-node">
@@ -155,7 +158,11 @@ function bindModelsEvents(container) {
             });
             const j = await r.json();
             if (!j.ok) throw new Error(j.error);
-            modelsData.push(j.source);
+            // 新建置顶，与后端保持一致
+            modelsData.unshift(j.source);
+            // 清空输入框
+            container.querySelector('.mdl-add-name').value = '';
+            container.querySelector('.mdl-add-path').value = '';
             renderModelsContent(container);
         } catch (e) { alert('添加失败: ' + e.message); }
     });
@@ -265,11 +272,11 @@ function bindModelsEvents(container) {
                     if (isChecked) {
                         // 全选：将所有可见的加入
                         visibleCbs.forEach(cb => { cb.checked = true; });
-                        const newModels = visibleCbs.map(cb => cb.value);
+                        const newModels = visibleCbs.map(cb => cb.dataset.full || cb.value);
                         src.models = [...new Set([...(src.models || []), ...newModels])];
                     } else {
                         // 取消全选：移除所有可见的
-                        const visibleVals = new Set(visibleCbs.map(cb => cb.value));
+                        const visibleVals = new Set(visibleCbs.map(cb => cb.dataset.full || cb.value));
                         visibleCbs.forEach(cb => { cb.checked = false; });
                         src.models = (src.models || []).filter(m => !visibleVals.has(m));
                     }
@@ -277,9 +284,10 @@ function bindModelsEvents(container) {
                     // 更新标签显示
                     const wrap = container.querySelector(`.mdl-source-card[data-idx="${idx}"] .mdl-models-wrap`);
                     if (wrap) {
-                        const modelsHtml = src.models.map(m =>
-                            `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`
-                        ).join('');
+                        const modelsHtml = src.models.map(m => {
+                            const label = m.includes('/') ? m.split('/').filter(Boolean).pop() || m : m;
+                            return `<span class="mdl-tag" title="${escHtml(m)}">${escHtml(label)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`;
+                        }).join('');
                         wrap.innerHTML = '<svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> ' + (modelsHtml || '<span class="mdl-empty">点击展开</span>');
                         wrap.querySelectorAll('.mdl-tag-rm').forEach(btn2 => {
                             btn2.addEventListener('click', async () => {
@@ -313,7 +321,8 @@ function bindTreeEvents(panel, idx, container) {
     //勾选即时添加/移除模型
     panel.addEventListener('change', async (e) => {
         if (!e.target.classList.contains('mdl-tree-cb')) return;
-        const val = e.target.value;
+        // 优先使用 data-full（含完整路径，包括中间层级目录）；兼容老数据用 value
+        const val = e.target.dataset.full || e.target.value;
         const src = modelsData[idx];
         if (!src.models) src.models = [];
         if (e.target.checked) {
@@ -325,9 +334,10 @@ function bindTreeEvents(panel, idx, container) {
         // 更新标签显示
         const wrap = container.querySelector(`.mdl-source-card[data-idx="${idx}"] .mdl-models-wrap`);
         if (wrap) {
-            const modelsHtml = src.models.map(m =>
-                `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`
-            ).join('');
+            const modelsHtml = src.models.map(m => {
+                const label = m.includes('/') ? m.split('/').filter(Boolean).pop() || m : m;
+                return `<span class="mdl-tag" title="${escHtml(m)}">${escHtml(label)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`;
+            }).join('');
             wrap.innerHTML = '<svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> ' + (modelsHtml || '<span class="mdl-empty">点击展开</span>');
             wrap.querySelectorAll('.mdl-tag-rm').forEach(btn2 => {
                 btn2.addEventListener('click', async () => {

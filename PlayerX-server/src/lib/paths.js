@@ -19,6 +19,11 @@ const TASKS_DIR = path.join(ROOT_DIR, 'tasks');
 const TESTSRC_DIR = path.join(ROOT_DIR, 'testsrc');
 // 分析结果分享快照（任意人通过链接即可查看，永久有效直到管理员删除）
 const SHARES_DIR = path.join(ROOT_DIR, 'shares');
+// 管理员手动上传的模型文件夹根（用于"模型管理"页面的"上传文件夹"功能）
+// 所有通过上传接口创建的源目录都会放在这里；路径以 "assets/<name>" 的相对
+// 形式存储到 models-config.json，这样整个目录被迁到其他机器上后无需改配置
+// 也能正确解析到 assets/<name>。
+const ASSETS_DIR = path.join(ROOT_DIR, 'assets');
 
 // 运行时可变配置（管理面板修改后会写入此文件，重启也生效）
 const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
@@ -88,6 +93,39 @@ function ensureDirs() {
     fs.mkdirSync(TASKS_DIR, { recursive: true });
     fs.mkdirSync(TESTSRC_DIR, { recursive: true });
     fs.mkdirSync(SHARES_DIR, { recursive: true });
+    fs.mkdirSync(ASSETS_DIR, { recursive: true });
+}
+
+// ─────────────────────────────────────────────────────────────
+// 路径解析助手：把存储在配置里的 path 统一还原为绝对路径
+//
+// 规则：
+//   - 以 / 开头 → 当作绝对路径直接返回（兼容老数据）
+//   - 以 assets/ 开头 → 相对 ROOT_DIR 解析（推荐：服务器迁移后无需改）
+//   - 其他相对路径 → 相对 ROOT_DIR 解析（兜底）
+//
+// 解析后的路径再做一次 realpath（如果存在），避免符号链接导致的相对路径歧义。
+// 不存在时不抛错，原样返回调用方处理。
+// ─────────────────────────────────────────────────────────────
+function resolveSourcePath(storedPath) {
+    if (!storedPath) return '';
+    if (path.isAbsolute(storedPath)) {
+        try { return fs.realpathSync(storedPath); } catch (_) { return storedPath; }
+    }
+    const abs = path.resolve(ROOT_DIR, storedPath);
+    try { return fs.realpathSync(abs); } catch (_) { return abs; }
+}
+
+// 把绝对路径转回相对 ROOT_DIR 的存储形式（如 "assets/foo"），用于写入
+// models-config.json。如果该绝对路径就在 ROOT_DIR 下，就用相对形式；
+// 否则保留绝对路径（外部挂载的目录无法用相对形式表达）。
+function relativizeSourcePath(absPath) {
+    if (!absPath) return '';
+    const rel = path.relative(ROOT_DIR, absPath);
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
+        return rel.replace(/\\/g, '/');
+    }
+    return absPath;
 }
 
 module.exports = {
@@ -98,6 +136,7 @@ module.exports = {
     TASKS_DIR,
     TESTSRC_DIR,
     SHARES_DIR,
+    ASSETS_DIR,
     CONFIG_FILE,
     MAX_BYTES,
     ARCHIVE_KEEP,
@@ -105,4 +144,6 @@ module.exports = {
     setUploadToken,
     resolveToken,
     ensureDirs,
+    resolveSourcePath,
+    relativizeSourcePath,
 };

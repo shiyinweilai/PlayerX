@@ -641,7 +641,17 @@ function bindBuildTabEvents() {
                     item.addEventListener('click', () => {
                         const srcIdx = +item.dataset.srcIdx;
                         const src = sources[srcIdx];
-                        const models = (src.models || []).map(m => src.path + '/' + m);
+                        const cleanSrc = src.path.replace(/\/+$/, '');
+                        // src.models 三种情况都要兼容：
+                        //   1) 已经是绝对路径（老数据 / data-full） → 原样
+                        //   2) 是相对路径且以 cleanSrc 开头（"assets/foo/subdir"） → 原样
+                        //      （这种是相对 ROOT_DIR 的相对路径，让 build.js 自行解析）
+                        //   3) 只是叶子名（"subdir"） → 拼上 src.path
+                        const models = (src.models || []).map(m => {
+                            if (m.startsWith('/')) return m;
+                            if (cleanSrc && m.startsWith(cleanSrc + '/')) return m;
+                            return cleanSrc + '/' + m;
+                        });
                         if (models.length === 0) {
                             item.classList.add('dim-build-picker-source-empty');
                             item.querySelector('.dim-build-picker-source-count').textContent = '暂无模型';
@@ -854,7 +864,7 @@ function renderBuildSection(obj, admin) {
              ${fld('组数', 'n_groups', String(b.n_groups || 5), '5', 'xs')}
     ${fld('种子', 'seed', String(b.seed != null ? b.seed : 42), '42', 'xs')}
 ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false', '否']], 'xs')}
-    ${fld('样本列表', 'samples', samples, '留空默认1~100，如1,2,3,5', 'md')}
+    ${fld('样本列表', 'samples', samples, '留空 = 自动扫描所有模型目录的 *.mp4 取交集', 'md')}
     ${fld('排除样本', 'exclude_samples', excludeSamples, '如 10,20', 'sm')}
     ${fld('Prompt 列名', 'prompt_cols', b.companions && b.companions.prompt_cols ? b.companions.prompt_cols.join(',') : '', 'image,prompt,en_prompt', 'lg')}
       </div>

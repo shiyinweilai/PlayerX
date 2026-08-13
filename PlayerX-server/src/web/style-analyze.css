@@ -26,12 +26,12 @@
 
 #pageAnalyze .analyze-controls {
     display: flex;
-    align-items: end;
+    align-items: center;
     gap: 12px;
     flex-wrap: wrap;
     background: #fff;
-    border: 1px solid #e8ecf3;
-    border-radius: 12px;
+    border: none;
+    border-radius: 0;
     padding: 14px 16px;
     margin-bottom: 18px;
 }
@@ -39,13 +39,165 @@
 
 #pageAnalyze .analyze-control-item {
     display: flex;
+    flex: 1 1 auto;
     flex-direction: column;
     gap: 6px;
-    min-width: 220px;
+    min-width: 0;
 }
 
 #pageAnalyze .analyze-tag-field {
     position: relative;
+}
+
+/* ── Tag 输入框容器：chips 与 input 在同一行（输入框撑满） ── */
+#pageAnalyze .analyze-tag-input-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    min-height: 34px;
+    border: 1px solid #d5dbe7;
+    border-radius: 8px;
+    padding: 4px 8px;
+    background: #fff;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    box-sizing: border-box;
+    width: 100%;
+    cursor: text;
+}
+#pageAnalyze .analyze-tag-input-wrap:focus-within {
+    border-color: #5b8def;
+    box-shadow: 0 0 0 3px rgba(91, 141, 239, .14);
+}
+#pageAnalyze .analyze-tag-clear {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    color: #9ca3af;
+    font-size: 18px;
+    line-height: 1;
+    border-radius: 50%;
+    cursor: pointer;
+    margin-left: auto;
+    padding: 0;
+    transition: all 0.15s;
+}
+#pageAnalyze .analyze-tag-clear:hover {
+    background: #f3f4f6;
+    color: #ef4444;
+}
+
+/* ── Tag 多选芯片 ── */
+#pageAnalyze .analyze-tag-chips {
+    display: contents;  /* 让 chip 直接成为 wrap 的 flex 子项 */
+}
+#pageAnalyze .analyze-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 8px;
+    font-size: 12px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+    white-space: nowrap;
+}
+#pageAnalyze .analyze-tag-chip-rm {
+    background: none;
+    border: none;
+    color: #60a5fa;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+}
+#pageAnalyze .analyze-tag-chip-rm:hover {
+    color: #ef4444;
+}
+
+/* ── Tag 选项勾选 ── */
+#pageAnalyze .analyze-tag-check {
+    display: inline-block;
+    width: 16px;
+    font-size: 13px;
+}
+#pageAnalyze .analyze-tag-option.is-checked {
+    background: #eff6ff;
+}
+#pageAnalyze .analyze-tag-time {
+    margin-left: 6px;
+    color: #b4b9c4;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+}
+
+/* ── Tag 下拉工具条（时间过滤） ── */
+#pageAnalyze .analyze-tag-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #eef2f7;
+    background: #f8fafc;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+#pageAnalyze .analyze-tag-presets {
+    display: flex;
+    gap: 4px;
+}
+#pageAnalyze .analyze-tag-presets button {
+    flex: 1;
+    padding: 4px 0;
+    font-size: 12px;
+    border: 1px solid #d5dbe7;
+    border-radius: 4px;
+    background: #fff;
+    color: #6b7280;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+#pageAnalyze .analyze-tag-presets button:hover {
+    border-color: #5b8def;
+    color: #3b82f6;
+}
+#pageAnalyze .analyze-tag-presets button.is-active {
+    background: #3b82f6;
+    color: #fff;
+    border-color: #3b82f6;
+}
+#pageAnalyze .analyze-tag-presets button.analyze-tag-select-all {
+    margin-left: auto;
+    border-color: #c7d2fe;
+    color: #4f46e5;
+}
+#pageAnalyze .analyze-tag-presets button.analyze-tag-select-all:hover {
+    background: #eef2ff;
+    border-color: #818cf8;
+    color: #4338ca;
+}
+#pageAnalyze .analyze-tag-dates {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #6b7280;
+}
+#pageAnalyze .analyze-tag-dates input[type="date"] {
+    flex: 1;
+    padding: 3px 6px;
+    font-size: 12px;
+    border: 1px solid #d5dbe7;
+    border-radius: 4px;
+    background: #fff;
+    outline: none;
+}
+#pageAnalyze .analyze-tag-dates input[type="date"]:focus {
+    border-color: #5b8def;
 }
 
 
@@ -57,18 +209,15 @@
 }
 
 #pageAnalyze #analyzeTagSel {
-    height: 34px;
-    border: 1px solid #d5dbe7;
-    border-radius: 8px;
-    padding: 0 10px;
+    flex: 1;
+    min-width: 120px;
+    height: 24px;
+    border: none;
     outline: none;
-    background: #fff;
-    min-width: 280px;
-}
-
-#pageAnalyze #analyzeTagSel:focus {
-    border-color: #5b8def;
-    box-shadow: 0 0 0 3px rgba(91, 141, 239, .14);
+    background: transparent;
+    padding: 0;
+    font-size: 13px;
+    color: #1f2937;
 }
 
 #pageAnalyze .analyze-tag-menu {
@@ -76,8 +225,9 @@
     z-index: 30;
     top: calc(100% + 6px);
     left: 0;
-    min-width: 100%;
-    max-height: 240px;
+    width: 520px;
+    max-width: 90vw;
+    max-height: 360px;
     overflow: auto;
     background: #fff;
     border: 1px solid #d5dbe7;
@@ -149,8 +299,8 @@
     gap: 8px;
     margin: 0 0 12px;
     padding: 8px 10px;
-    border: 1px solid #e8ecf3;
-    border-radius: 10px;
+    border: none;
+    border-radius: 0;
     background: #fbfcff;
 }
 
@@ -185,8 +335,48 @@
     border-radius: 12px;
     margin-bottom: 14px;
     overflow: hidden;
+    box-sizing: border-box;
+}
+
+/* 趋势图卡片撑满 */
+#pageAnalyze #azChartSection {
+    width: 100%;
+}
+
+/* 排名 + 成对检验：左右并排（按内容自适应宽度，不撑满整行） */
+#pageAnalyze .analyze-tables-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: start;
+}
+#pageAnalyze .analyze-tables-row > .analyze-card-section {
+    margin-bottom: 0;
     width: fit-content;
     max-width: 100%;
+}
+@media (max-width: 1100px) {
+    #pageAnalyze .analyze-tables-row > .analyze-card-section {
+        width: 100%;
+    }
+}
+
+/* 共享 Tag 切换栏（独立放在表格上方） */
+#pageAnalyze .analyze-tables-shared-tabs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 4px 4px 10px;
+    font-size: 12px;
+    color: #6b7280;
+}
+#pageAnalyze .analyze-tables-shared-tabs .label {
+    color: #9ca3af;
+}
+#pageAnalyze .analyze-tables-shared-tabs .analyze-tag-tabs {
+    display: inline-flex;
+    gap: 14px;
 }
 
 #pageAnalyze .analyze-section-title {
@@ -197,6 +387,110 @@
     font-weight: 700;
     color: #1f2937;
 }
+
+#pageAnalyze .analyze-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid #eef2f7;
+}
+#pageAnalyze .analyze-section-header .analyze-section-title {
+    padding: 0;
+    border: none;
+}
+#pageAnalyze .analyze-section-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* ── Tag 切换标签（纯文字链接，浅色，无下划线） ── */
+#pageAnalyze .analyze-tag-tabs {
+    display: inline-flex;
+    gap: 14px;
+}
+#pageAnalyze .analyze-tag-tab {
+    padding: 0;
+    font-size: 13px;
+    border: none;
+    border-radius: 0;
+    background: none;
+    color: #b4b9c4;
+    cursor: pointer;
+    transition: color 0.15s;
+    white-space: nowrap;
+}
+#pageAnalyze .analyze-tag-tab:hover {
+    color: #4b5563;
+}
+#pageAnalyze .analyze-tag-tab.is-active {
+    color: #6b7280;
+    font-weight: 500;
+}
+
+/* ── 折线图区域 ── */
+#pageAnalyze .analyze-charts-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    padding: 16px;
+}
+#pageAnalyze .analyze-chart-card {
+    background: #fff;
+    border: 1px solid #eef2f7;
+    border-radius: 8px;
+    padding: 12px;
+    position: relative;
+    height: 320px;
+}
+#pageAnalyze .analyze-chart-title {
+    margin: 0 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+#pageAnalyze .analyze-chart-card canvas {
+    width: 100% !important;
+    height: calc(100% - 28px) !important;
+}
+
+@media (max-width: 900px) {
+    #pageAnalyze .analyze-charts-grid {
+        grid-template-columns: 1fr;
+    }
+    #pageAnalyze .analyze-chart-card {
+        height: 260px;
+    }
+}
+
+#pageAnalyze .analyze-color-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #64748b;
+}
+#pageAnalyze .analyze-color-select {
+    padding: 3px 8px;
+    font-size: 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #1f2937;
+    cursor: pointer;
+    outline: none;
+}
+#pageAnalyze .analyze-color-select:focus {
+    border-color: #3b82f6;
+}
+
+/* ─── 绿→红渐变着色：.clr 标记用于跳过 hover ─── */
 
 #pageAnalyze .analyze-table-wrap {
     width: auto;
@@ -218,10 +512,13 @@
     text-align: left;
     white-space: nowrap;
     padding: 10px 12px;
-    background: #f8fafc;
-    color: #475467;
+    background: linear-gradient(180deg, #e0e7ef 0%, #c7d2dd 100%);
+    color: #0f172a;
     font-weight: 700;
-    border-bottom: 1px solid #e8ecf3;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-bottom: 1px solid #cbd5e1;
 }
 
 #pageAnalyze .analyze-table td {
@@ -236,8 +533,17 @@
     max-width: none;
 }
 
+/* 隔行淡色背景（与表头渐变 #e0e7ef→#c7d2dd 区分；hover 仍可正常显示） */
+#pageAnalyze .analyze-table tbody tr:nth-child(even) td {
+    background: #f4f6fa;
+}
+
 #pageAnalyze .analyze-table tbody tr:hover td {
-    background: #f7fbff;
+    background: #e6efff;
+}
+/* 着色单元格不受 hover 影响 */
+#pageAnalyze .analyze-table tbody tr:hover td.clr {
+    background: inherit;
 }
 
 #pageAnalyze .rank-index {
@@ -271,8 +577,14 @@
 }
 
 #pageAnalyze .sig-badge.is-ns {
-    color: #475467;
-    background: #f2f4f7;
+    color: #98a2b3;
+    /* 不显著：彻底扁平，去掉底色、边框、圆角、padding */
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    min-width: 0;
+    font-weight: 600;
 }
 
 #pageAnalyze .analyze-empty {

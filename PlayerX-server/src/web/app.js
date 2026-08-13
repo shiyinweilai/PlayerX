@@ -508,9 +508,11 @@
             const scope = src.scope || 'personal';
             const ownerName = src.owner || '个人';
             const scopeLabel = scope === 'team' ? '团队' : `${ownerName}`;
-            const modelsHtml = (src.models || []).map(m =>
-                `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${realIdx}" data-model="${escHtml(m)}">&times;</button></span>`
-            ).join('');
+            const modelsHtml = (src.models || []).map(m => {
+                // chip 文本仅显示末级目录名（老数据里 m 就是末级名；新数据 m 是绝对路径）
+                const label = m.startsWith('/') ? m.split('/').filter(Boolean).pop() || m : m;
+                return `<span class="mdl-tag" title="${escHtml(m)}">${escHtml(label)}<button class="mdl-tag-rm" data-src="${realIdx}" data-model="${escHtml(m)}">&times;</button></span>`;
+            }).join('');
             return `
  <div class="mdl-source-card" data-idx="${realIdx}">
 <div class="mdl-source-header">
@@ -569,18 +571,22 @@
     }
 
     // 渲染目录树节点
-    function renderTreeNode(dirs, parentPath, idx, existing, dirsInfo) {
+    // dirs: 子目录名数组；parentPath: 父目录的完整路径；parentRel: 从 src.path 起的相对路径段（用于 cb 的 rel 字段）
+    function renderTreeNode(dirs, parentPath, idx, existing, dirsInfo, parentRel = []) {
+        // 规范化 parentPath：去掉尾部斜杠，避免拼出"//"
+        const cleanParent = parentPath.replace(/\/+$/, '');
         return dirs.map((d, i) => {
-            const fullPath = parentPath + '/' + d;
-            const checked = existing.has(d) || existing.has(fullPath) ? 'checked' : '';
+            const fullPath = cleanParent + '/' + d;
+            const rel = [...parentRel, d];  // 相对 src.path 的路径段
+            const checked = existing.has(d) || existing.has(fullPath) || existing.has(rel.join('/')) ? 'checked' : '';
             const hasChildren = dirsInfo ? dirsInfo[i].hasChildren : true;
             return `<div class="mdl-tree-node">
          <label class="mdl-tree-item">
-     <input type="checkbox" class="mdl-tree-cb" value="${escHtml(d)}" data-full="${escHtml(fullPath)}" ${checked}>
+     <input type="checkbox" class="mdl-tree-cb" value="${escHtml(d)}" data-full="${escHtml(fullPath)}" data-rel="${escHtml(rel.join('/'))}" ${checked}>
              <span class="mdl-tree-name">${escHtml(d)}</span>
           </label>
-    ${hasChildren ? `<button class="mdl-tree-expand" data-path="${escHtml(fullPath)}" title="展开子目录">▶</button>` : ''}
-   <div class="mdl-tree-children" data-parent="${escHtml(fullPath)}" style="display:none"></div>
+    ${hasChildren ? `<button class="mdl-tree-expand" data-path="${escHtml(fullPath)}" data-rel="${escHtml(rel.join('/'))}" title="展开子目录">▶</button>` : ''}
+   <div class="mdl-tree-children" data-parent="${escHtml(fullPath)}" data-rel="${escHtml(rel.join('/'))}" style="display:none"></div>
             </div>`;
         }).join('');
     }
@@ -679,7 +685,7 @@
                     const j = await r.json();
                     if (!j.ok) throw new Error(j.error);
                     const existing = new Set(src.models || []);
-                    const treeHtml = renderTreeNode(j.dirs, src.path, idx, existing, j.dirsInfo);
+                    const treeHtml = renderTreeNode(j.dirs, src.path, idx, existing, j.dirsInfo, []);
                     panel.innerHTML = `<div class="mdl-tree-toolbar">
   <button class="mdl-tree-collapse" data-idx="${idx}" title="收起"><svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg> 收起</button>
     <input class="mdl-tree-filter" data-idx="${idx}" placeholder="输入关键字过滤..." />
@@ -731,9 +737,10 @@
                         // 更新标签显示
                         const wrap = container.querySelector(`.mdl-source-card[data-idx="${idx}"] .mdl-models-wrap`);
                         if (wrap) {
-                            const modelsHtml = src.models.map(m =>
-                                `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`
-                            ).join('');
+                            const modelsHtml = src.models.map(m => {
+                                const label = m.startsWith('/') ? m.split('/').filter(Boolean).pop() || m : m;
+                                return `<span class="mdl-tag" title="${escHtml(m)}">${escHtml(label)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`;
+                            }).join('');
                             wrap.innerHTML = '<svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> ' + (modelsHtml || '<span class="mdl-empty">点击展开</span>');
                             wrap.querySelectorAll('.mdl-tag-rm').forEach(btn2 => {
                                 btn2.addEventListener('click', async () => {
@@ -767,7 +774,10 @@
         //勾选即时添加/移除模型
         panel.addEventListener('change', async (e) => {
             if (!e.target.classList.contains('mdl-tree-cb')) return;
-            const val = e.target.value;
+            // 优先使用 data-full（绝对路径，含中间层级）；兼容老数据用 cb.value
+            const val = e.target.dataset.full || e.target.value;
+            // 调试：暴露到 window 便于排查路径拼接
+            window.__pxLastSavedModel = { val, dataset: e.target.dataset, value: e.target.value, hasDataFull: !!e.target.dataset.full };
             const src = modelsData[idx];
             if (!src.models) src.models = [];
             if (e.target.checked) {
@@ -779,9 +789,10 @@
             // 更新标签显示
             const wrap = container.querySelector(`.mdl-source-card[data-idx="${idx}"] .mdl-models-wrap`);
             if (wrap) {
-                const modelsHtml = src.models.map(m =>
-                    `<span class="mdl-tag">${escHtml(m)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`
-                ).join('');
+                const modelsHtml = src.models.map(m => {
+                    const label = m.startsWith('/') ? m.split('/').filter(Boolean).pop() || m : m;
+                    return `<span class="mdl-tag" title="${escHtml(m)}">${escHtml(label)}<button class="mdl-tag-rm" data-src="${idx}" data-model="${escHtml(m)}">&times;</button></span>`;
+                }).join('');
                 wrap.innerHTML = '<svg class="inline-icon mdl-wrap-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg> ' + (modelsHtml || '<span class="mdl-empty">点击展开</span>');
                 wrap.querySelectorAll('.mdl-tag-rm').forEach(btn2 => {
                     btn2.addEventListener('click', async () => {
@@ -825,7 +836,8 @@
                         return;
                     }
                     const existing = new Set(modelsData[idx].models || []);
-                    childrenDiv.innerHTML = renderTreeNode(j.dirs, subPath, idx, existing, j.dirsInfo);
+                    const subRel = this.dataset.rel ? this.dataset.rel.split('/') : [];
+                    childrenDiv.innerHTML = renderTreeNode(j.dirs, subPath, idx, existing, j.dirsInfo, subRel);
                     childrenDiv.dataset.loaded = '1';
                     childrenDiv.style.display = 'block';
                     this.textContent = '▼';
@@ -844,7 +856,8 @@
                                 if (!j2.ok) throw new Error(j2.error);
                                 if (j2.dirs.length === 0) { this.textContent = '·'; this.disabled = true; return; }
                                 const ex2 = new Set(modelsData[idx].models || []);
-                                cd.innerHTML = renderTreeNode(j2.dirs, sp, idx, ex2, j2.dirsInfo);
+                                const spRel = this.dataset.rel ? this.dataset.rel.split('/') : [];
+                                cd.innerHTML = renderTreeNode(j2.dirs, sp, idx, ex2, j2.dirsInfo, spRel);
                                 cd.dataset.loaded = '1';
                                 cd.style.display = 'block';
                                 this.textContent = '▼';
@@ -1498,7 +1511,14 @@
                         item.addEventListener('click', () => {
                             const srcIdx = +item.dataset.srcIdx;
                             const src = sources[srcIdx];
-                            const models = (src.models || []).map(m => src.path + '/' + m);
+                            // src.models 现已存绝对路径（来自 data-full），直接使用即可。
+                            // 老数据可能只是末级目录名，做向后兼容补全。
+                            const cleanSrc = src.path.replace(/\/+$/, '');
+                            const models = (src.models || []).map(m =>
+                                m.startsWith('/') ? m : (m.includes('/') ? cleanSrc + '/' + m : cleanSrc + '/' + m)
+                            );
+                            // 调试用：点击加载时把 models 暴露给开发者工具，便于确认 src.models 实际值
+                            window.__pxLastLoadedModels = { raw: src.models, joined: models, srcPath: src.path };
                             if (models.length === 0) {
                                 item.classList.add('dim-build-picker-source-empty');
                                 item.querySelector('.dim-build-picker-source-count').textContent = '暂无模型';
@@ -1506,6 +1526,21 @@
                                 return;
                             }
                             if (ta) { ta.value = models.join('\n'); ta.dispatchEvent(new Event('change')); }
+                            // textarea 鼠标移动：动态设置 title 为当前行内容，便于 hover 看完整路径
+                            if (ta && !ta._pxHoverBound) {
+                                ta._pxHoverBound = true;
+                                ta.addEventListener('mousemove', () => {
+                                    const start = ta.selectionStart, end = ta.selectionEnd;
+                                    if (start !== end) return;
+                                    // 找到当前光标所在行的范围
+                                    const val = ta.value;
+                                    let lineStart = val.lastIndexOf('\n', start - 1) + 1;
+                                    let lineEnd = val.indexOf('\n', start);
+                                    if (lineEnd < 0) lineEnd = val.length;
+                                    const line = val.substring(lineStart, lineEnd);
+                                    ta.title = line || '（空行）';
+                                });
+                            }
                             picker.style.display = 'none';
                         });
                     });
@@ -1711,7 +1746,7 @@
              ${fld('组数', 'n_groups', String(b.n_groups || 5), '5', 'xs')}
     ${fld('种子', 'seed', String(b.seed != null ? b.seed : 42), '42', 'xs')}
 ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false', '否']], 'xs')}
-    ${fld('样本列表', 'samples', samples, '留空默认1~100，如1,2,3,5', 'md')}
+    ${fld('样本列表', 'samples', samples, '留空 = 自动扫描所有模型目录的 *.mp4 取交集', 'md')}
     ${fld('排除样本', 'exclude_samples', excludeSamples, '如 10,20', 'sm')}
     ${fld('Prompt 列名', 'prompt_cols', b.companions && b.companions.prompt_cols ? b.companions.prompt_cols.join(',') : '', 'image,prompt,en_prompt', 'lg')}
       </div>
@@ -1719,8 +1754,9 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         <div class="dim-build-grp">
                    <div class="dim-build-grp-title">模型列表${admin ? '<button class="dim-build-load-models" title="从模型管理加载"><svg class="inline-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 从模型管理加载</button>' : ''}</div>
    ${admin
-                ? `<textarea class="dim-build-input dim-build-models" data-bf="models" rows="4" placeholder="每行一个模型（路径格式：只支持绝对路径）">${escHtml(models)}</textarea>`
+                ? `<textarea class="dim-build-input dim-build-models" data-bf="models" rows="4" placeholder="每行一个模型（路径格式：只支持绝对路径）" title="每行的完整路径">${escHtml(models)}</textarea>`
                 : `<pre class="dim-build-val" style="white-space:pre-wrap">${escHtml(models || '（未配置）')}</pre>`}
+            ${admin ? '<div class="dim-build-model-preview" style="display:none"></div>' : ''}
             ${admin ? '<div class="dim-build-model-picker" style="display:none"></div>' : ''}
  </div>`;
 
@@ -4845,7 +4881,7 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
         const ANALYZE_PAIR_COL_KEY = 'PlayerX.analyze.pair.colWidths.v1';
 
         function ensureAnalyzeDefaultWidths() {
-            const rankDefaults = { rank: 56, bt: 120, elo: 120, win: 120 };
+            const rankDefaults = { n: 60, mean: 80, ci: 160, btShare: 100, btElo: 100 };
             const pairDefaults = { aWins: 120, bWins: 120, p: 120, sig: 120 };
 
             const rankTable = $('azRankTable');
@@ -4979,15 +5015,88 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
             if (pairSection) pairSection.hidden = true;
         }
 
-        function renderRankTables(data) {
-            // 排名表
-            const rankTb = document.querySelector('#azRankTable tbody');
-            rankTb.innerHTML = '';
-            (data.models || []).forEach((m, i) => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `<td><span class="rank-index">${i + 1}</span></td><td><b>${esc(m.name || m.model || '')}</b></td><td>${m.strength != null ? m.strength.toFixed(4) : (m.bt != null ? m.bt.toFixed(3) : '-')}</td><td>${m.elo != null ? Math.round(m.elo) : '-'}</td><td>${m.mean != null ? m.mean.toFixed(2) : (m.winRate != null ? (m.winRate * 100).toFixed(1) + '%' : '-')}</td>`;
-                rankTb.appendChild(tr);
-            });
+        // 持久化当前排名数据，用于配色方案切换时重渲染
+                let lastRankData = null;
+                const colorSchemeSel0 = document.getElementById('azRankColorScheme');
+
+                function renderRankTables(data) {
+                    lastRankData = data;
+                    // 读取配色方案
+                    const colorScheme = document.getElementById('azRankColorScheme');
+                    const scheme = colorScheme ? colorScheme.value : 'none';
+                    const applyGrade = scheme === 'grade' || scheme === 'all';
+                    const applyReliability = scheme === 'reliability' || scheme === 'all';
+
+                    // 计算 CI 宽度用于可靠性评估
+                    const ciWidths = (data.models || []).map(m =>
+                        (m.ciLower != null && m.ciUpper != null) ? (m.ciUpper - m.ciLower) : null);
+                    const validWidths = ciWidths.filter(w => w != null);
+                    const minW = Math.min(...validWidths);
+                    const maxW = Math.max(...validWidths);
+
+                    // 等级判断函数（基于 BT_share 和 BT_Elo 综合）
+                    function gradeClass(share, elo) {
+                        if (share == null && elo == null) return '';
+                        // 取两者中较好的等级（或按主指标 share）
+                        if (share != null) {
+                            if (share >= 0.5 || elo >= 400) return 'grade-sp';
+                            if (share >= 0.3 || elo >= 150) return 'grade-s';
+                            if (share >= 0.2 || elo >= 50) return 'grade-a';
+                            if (share >= 0.1 || elo >= -50) return 'grade-b';
+                            if (share >= 0.05 || elo >= -150) return 'grade-c';
+                            return 'grade-d';
+                        }
+                        if (elo != null) {
+                            if (elo >= 400) return 'grade-sp';
+                            if (elo >= 150) return 'grade-s';
+                            if (elo >= 50) return 'grade-a';
+                            if (elo >= -50) return 'grade-b';
+                            if (elo >= -150) return 'grade-c';
+                            return 'grade-d';
+                        }
+                        return '';
+                    }
+
+                    // 可靠性判断函数（基于 n 和 CI 宽度）
+                    function relClass(n, width) {
+                        if (n == null && width == null) return '';
+                        const nScore = n != null ? (n >= 30 ? 4 : n >= 15 ? 3 : n >= 5 ? 2 : 1) : 2;
+                        // CI 宽度相对评估（越小越好）
+                        let wScore = 2;
+                        if (validWidths.length > 1 && width != null) {
+                            const range = maxW - minW;
+                            const norm = range > 0 ? (width - minW) / range : 0;
+                            wScore = norm <= 0.25 ? 4 : norm <= 0.5 ? 3 : norm <= 0.75 ? 2 : 1;
+                        }
+                        const score = Math.min(nScore, wScore);
+                        return score >= 4 ? 'rel-high' : score >= 3 ? 'rel-high' : score >= 2 ? 'rel-mid' : 'rel-low';
+                    }
+
+                    // 排名表
+                    const rankTb = document.querySelector('#azRankTable tbody');
+                    rankTb.innerHTML = '';
+                    (data.models || []).forEach((m, i) => {
+                        const tr = document.createElement('tr');
+                        const n = m.n != null ? m.n : '-';
+                        const mean = m.mean != null ? m.mean.toFixed(3) : '-';
+                        const ciLower = m.ciLower != null ? m.ciLower.toFixed(3) : null;
+                        const ciUpper = m.ciUpper != null ? m.ciUpper.toFixed(3) : null;
+                        const ci = (ciLower != null && ciUpper != null) ? `[${ciLower}, ${ciUpper}]` : '-';
+                        const btShare = m.strength != null ? m.strength.toFixed(3) : '-';
+                        const btElo = m.elo != null ? (m.elo >= 0 ? '+' : '') + m.elo.toFixed(1) : '-';
+
+                        // 计算着色 class
+                        const gCls = applyGrade ? gradeClass(m.strength, m.elo) : '';
+                        const rClsN = applyReliability ? relClass(m.n, ciWidths[i]) : '';
+                        const rClsCi = applyReliability && ciWidths[i] != null ? relClass(m.n, ciWidths[i]) : '';
+
+                        const meanCls = applyGrade ? gradeClass(m.strength, m.elo) : '';
+                        const shareCls = applyGrade ? gradeClass(m.strength, m.elo) : '';
+                        const eloCls = applyGrade ? gradeClass(m.strength, m.elo) : '';
+
+                        tr.innerHTML = `<td><b>${esc(m.name || m.model || '')}</b></td><td class="${rClsN}">${n}</td><td class="${meanCls}">${mean}</td><td class="${rClsCi}">${ci}</td><td class="${shareCls}">${btShare}</td><td class="${eloCls}">${btElo}</td>`;
+                        rankTb.appendChild(tr);
+                    });
 
             // 成对检验表
             const pairTb = document.querySelector('#azPairTable tbody');
@@ -4999,6 +5108,14 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
                 const sigText = sigRaw === '**' ? '显著（p<0.01）' : sigRaw === '*' ? '显著（p<0.05）' : 'ns';
                 tr.innerHTML = `<td>${esc(p.modelA || p.a || '')}</td><td>${esc(p.modelB || p.b || '')}</td><td>${p.aWins}</td><td>${p.bWins}</td><td>${p.signP != null ? p.signP.toFixed(4) : (p.p != null ? p.p.toFixed(4) : '-')}</td><td><span class="sig-badge ${sigClass}">${sigText}</span></td>`;
                 pairTb.appendChild(tr);
+            });
+        }
+
+        // 绑定配色方案切换事件
+        if (colorSchemeSel0 && !colorSchemeSel0._bound) {
+            colorSchemeSel0._bound = true;
+            colorSchemeSel0.addEventListener('change', () => {
+                if (lastRankData) renderRankTables(lastRankData);
             });
         }
 

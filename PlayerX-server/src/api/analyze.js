@@ -595,8 +595,119 @@ function resolveSamples(cfg) {
 //  主入口
 // ─────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────
+//  批量分析：多个 Tag 一次请求返回
+// ─────────────────────────────────────────────────────────────────────
+
+function handleBatch(req, res) {
+    const { tags, names, config, action } = req.body || {};
+    console.log('[analyze/batch] 收到请求: action=%s, tags=%j, names=%d', action, tags, (names || []).length);
+
+    if (!Array.isArray(tags) || tags.length === 0) {
+        return res.status(400).json({ ok: false, error: 'missing tags array' });
+    }
+    if (tags.length > 20) {
+        return res.status(400).json({ ok: false, error: 'tags 数量不能超过 20' });
+    }
+
+    const act = action || 'rank';
+    if (!['analyze', 'verify', 'rank'].includes(act)) {
+        return res.status(400).json({ ok: false, error: 'invalid action' });
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (const tag of tags) {
+        const tagStr = String(tag).trim();
+        if (!tagStr) continue;
+        try {
+            const reqBody = { names, config, action: act, tag: tagStr };
+            // 直接调用内部方法：merge + analyze + rank
+            let resolvedNames = names;
+            const { UPLOAD_DIR } = require('../lib/paths');
+            if (!Array.isArray(resolvedNames) || resolvedNames.length === 0) {
+                const allFiles = fs.readdirSync(UPLOAD_DIR).filter(f => f.endsWith('.csv'));
+                resolvedNames = allFiles.filter(f => {
+                    const parts = f.split('__');
+                    return parts.length >= 2 && parts[1] === tagStr;
+                });
+                if (resolvedNames.length === 0) {
+                    errors.push({ tag: tagStr, error: '未找到评分文件' });
+                    continue;
+                }
+            }
+
+            let tmpCsv = null;
+            try {
+                tmpCsv = mergeSelectedToTemp(resolvedNames);
+                const cfg = Object.assign({}, config || {});
+                cfg.raw_csv = tmpCsv;
+                cfg.tag = tagStr;
+
+                // 自动定位 map CSV
+                const { TASKS_DIR } = require('../lib/paths');
+                const mapCandidates = [
+                    path.join(TASKS_DIR, `${tagStr}_map`, 'map.csv'),
+                    path.join(TASKS_DIR, tagStr, 'map.csv'),
+                    path.join(TASKS_DIR, tagStr, `map_${tagStr}.csv`),
+                ];
+                for (const c of mapCandidates) {
+                    if (fs.existsSync(c)) { cfg.map_csv = c; break; }
+                }
+                cfg.dst_dir = path.join(TASKS_DIR, `${tagStr}_map`);
+                cfg.deanon_csv = cfg.deanon_csv || 'deanon.csv';
+
+                // 从 map CSV 自动推断 models
+                if (!cfg.models && cfg.map_csv && fs.existsSync(cfg.map_csv)) {
+                    const mapLines = fs.readFileSync(cfg.map_csv, 'utf8').replace(/\r/g, '').split('\n');
+                    const cols = (mapLines[0] || '').split(',').map(c => c.trim()).filter(c => c.endsWith('_source'));
+                    if (cols.length > 0 && mapLines.length > 1) {
+                        const vals = mapLines[1].split(',').map(v => v.trim());
+                        const headerArr = (mapLines[0] || '').split(',').map(c => c.trim());
+                        cfg.models = cols.map(c => {
+                            const idx = headerArr.indexOf(c);
+                            return idx >= 0 ? vals[idx] : c.replace('_source', '');
+                        });
+                    }
+                }
+                if (!cfg.models || cfg.models.length === 0) {
+                    errors.push({ tag: tagStr, error: '无法确定 models' });
+                    continue;
+                }
+
+                const analyzeData = cmdAnalyze(cfg);
+                const rankData = cmdRank(cfg);
+                results.push({
+                    tag: tagStr,
+                    fileCount: resolvedNames.length,
+                    ...analyzeData,
+                    ...rankData,
+                });
+            } finally {
+                if (tmpCsv) try { fs.unlinkSync(tmpCsv); } catch (_) { }
+            }
+        } catch (e) {
+            console.error(`[analyze/batch] tag=${tagStr} 错误:`, e.message);
+            errors.push({ tag: tagStr, error: e.message });
+        }
+    }
+
+    res.json({
+        ok: true,
+        results,
+        errors: errors.length > 0 ? errors : undefined,
+    });
+}
+
 function handle(req, res) {
     const { names, config, action, tag, verify } = req.body || {};
+
+    // 批量分析路由
+    if (req.body && Array.isArray(req.body.tags)) {
+        return handleBatch(req, res);
+    }
+
     console.log('[analyze] 收到请求: action=%s, tag=%s, names=%d, config=%j', action, tag, (names || []).length, config);
 
     const act = action || 'rank';
@@ -697,6 +808,14 @@ function handle(req, res) {
             console.log('[analyze] 已合并 build 配置: samples=%j, exclude=%j, n_groups=%s',
                 cfg.samples, cfg.exclude_samples, cfg.n_groups);
         }
+
+        // src_model_dir 支持相对路径（相对 ROOT_DIR 解析），方便服务器迁移后仍可定位。
+        if (cfg.src_model_dir && !path.isAbsolute(cfg.src_model_dir)) {
+            const { resolveSourcePath } = require('../lib/paths');
+            cfg.src_model_dir = resolveSourcePath(cfg.src_model_dir);
+            console.log('[analyze] src_model_dir 相对路径解析: %s', cfg.src_model_dir);
+        }
+
         // map_csv 若为相对路径，从 tasks 目录解析
         const { TASKS_DIR } = require('../lib/paths');
         // dst_dir 强制为 tasks/{tag}_map（无 tag 兜底到 _default_map），保证所有产物集中

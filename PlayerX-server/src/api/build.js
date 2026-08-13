@@ -56,7 +56,42 @@ function md5(filePath) {
 
 function resolveSamples(cfg) {
     if (cfg.samples && cfg.samples.length > 0) return [...cfg.samples].sort((a, b) => a - b);
+
     const exclude = new Set(cfg.exclude_samples || []);
+
+    // 自动从模型目录扫描 *.mp4 文件名，提取数字作为样本编号。
+    // 扫描所有模型目录的并集，确保一个样本在所有模型中至少都存在（这是构建的前提）。
+    // 解析每个 model 项：
+    //   1) srcDir 明确给出 → 相对 srcDir 解析
+    //   2) srcDir 缺失但 model 是相对路径且包含 / → 自动按 ROOT_DIR 解析
+    //      （前端"从模型管理加载"时就是这种：models = ["assets/quality/quality/g1/A", ...]）
+    const srcDir = cfg.src_model_dir;
+    const models = cfg.models || [];
+    if (models.length > 0) {
+        const { ROOT_DIR } = require('../lib/paths');
+        const anchor = srcDir || ROOT_DIR;
+        // 取所有模型的交集：每个样本在每个模型目录下都要有同名文件
+        let common = null;
+        for (const m of models) {
+            const d = path.isAbsolute(m) ? m : path.join(anchor, m);
+            if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) continue;
+            const nums = new Set(
+                fs.readdirSync(d)
+                    .filter(f => /\.mp4$/.test(f))
+                    .map(f => parseInt(f.replace(/\.mp4$/i, ''), 10))
+                    .filter(n => !isNaN(n))
+            );
+            if (common === null) common = nums;
+            else common = new Set([...common].filter(n => nums.has(n)));
+        }
+        if (common && common.size > 0) {
+            return [...common].filter(n => !exclude.has(n)).sort((a, b) => a - b);
+        }
+        // 目录都读不到时，给出更明确的提示
+        throw new Error('样本列表为空：未指定 samples，且所有模型目录下都找不到 *.mp4 文件（请检查 src_model_dir / models 配置或手动填写 samples）');
+    }
+
+    // 兜底：兼容历史行为（理论上不会走到这里，因为 build 必然传 models）
     return Array.from({ length: 100 }, (_, i) => i + 1).filter(n => !exclude.has(n));
 }
 
@@ -137,10 +172,12 @@ function reuseGroups(samples, reuseCsv) {
 // ─────────────────────────────────────────────────────────────────────
 
 function checkSources(srcDir, models, samples) {
+    const { ROOT_DIR } = require('../lib/paths');
+    const anchor = srcDir || ROOT_DIR;
     const need = new Set(samples.map(n => `${n}.mp4`));
     for (const m of models) {
         // 模型路径如果本身就是绝对路径则直接使用，否则拼 srcDir
-        const d = path.isAbsolute(m) ? m : path.join(srcDir, m);
+        const d = path.isAbsolute(m) ? m : path.join(anchor, m);
         if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) {
             throw new Error(`模型目录不存在: ${d}`);
         }
@@ -170,6 +207,8 @@ function loadPrompts(comp, samples) {
 
 function copyBlind(samples, groupOf, models, labels, srcDir, dstDir, comp,
                    promptByN, promptCols, ffDirs, rng) {
+    const { ROOT_DIR } = require('../lib/paths');
+    const anchor = srcDir || ROOT_DIR;
     const groups = [...new Set(Object.values(groupOf))].sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
 
     // 创建目录（先清空旧目录）
@@ -198,7 +237,7 @@ function copyBlind(samples, groupOf, models, labels, srcDir, dstDir, comp,
         for (let i = 0; i < labels.length; i++) {
             const lb = labels[i];
             const model = perm[i];
-            const modelDir = path.isAbsolute(model) ? model : path.join(srcDir, model);
+            const modelDir = path.isAbsolute(model) ? model : path.join(anchor, model);
             fs.copyFileSync(path.join(modelDir, fn), path.join(dstDir, g, lb, fn));
             row[`${lb}_source`] = path.basename(model);
         }
@@ -233,10 +272,12 @@ function copyBlind(samples, groupOf, models, labels, srcDir, dstDir, comp,
 }
 
 function copyDirect(samples, models, srcDir, dstDir, rng) {
+    const { ROOT_DIR } = require('../lib/paths');
+    const anchor = srcDir || ROOT_DIR;
     for (const n of samples) {
         const fn = `${n}.mp4`;
         for (const model of models) {
-            const modelDir = path.isAbsolute(model) ? model : path.join(srcDir, model);
+            const modelDir = path.isAbsolute(model) ? model : path.join(anchor, model);
             const d = path.join(dstDir, path.basename(model));
             fs.mkdirSync(d, { recursive: true });
             fs.copyFileSync(path.join(modelDir, fn), path.join(d, fn));
@@ -363,10 +404,24 @@ function writeMap(mapCsv, mapRows, labels) {
 // ─────────────────────────────────────────────────────────────────────
 
 function cmdBuild(cfg) {
+    // src_model_dir 支持相对 ROOT_DIR 的相对路径（如 "assets/foo"），
+    // 这里解析为绝对路径并写回 cfg，避免路径迁移后构建失败。
+    //
+    // models 不在这里预解析：每个 model 项可能是
+    //   - 相对于 srcDir 的子路径（前端构建表单传入的"quality/g1/A"）
+    //   - 已经是绝对路径（模型管理页面保存的 data-full）
+    //   - 相对 ROOT_DIR 的完整路径（前端"从模型管理加载"传的 "assets/quality/quality/g1/A"）
+    // 下游所有函数 (checkSources / copyBlind / copyDirect) 都用
+    //   `path.isAbsolute(m) ? m : path.join(anchor, m)`
+    // 其中 anchor = srcDir 或 ROOT_DIR（前者缺失时兜底），兼容所有三种情况。
+    const { ROOT_DIR } = require('../lib/paths');
+    const { resolveSourcePath } = require('../lib/paths');
+    if (cfg.src_model_dir && !path.isAbsolute(cfg.src_model_dir)) {
+        cfg.src_model_dir = resolveSourcePath(cfg.src_model_dir);
+    }
     const srcDir  = cfg.src_model_dir;
     const dstDir  = cfg.dst_dir;
-    const mapCsv  = cfg.map_csv;
-    const models  = cfg.models;
+    const models  = cfg.models || [];
     const labels  = labelNames(models.length);
     const nGroups = cfg.n_groups || 1;
     const blind   = cfg.blind !== false;
@@ -383,6 +438,19 @@ function cmdBuild(cfg) {
 
     const seed = cfg.seed || 42;
     const rng  = createRng(seed);
+
+    // map_csv 兜底：若前端没传（或者路径不合法），按 dst_dir + '/map.csv' 派生；
+    // 同时再支持相对 ROOT_DIR 解析。
+    let mapCsv = cfg.map_csv;
+    if (!mapCsv && dstDir) {
+        mapCsv = path.join(dstDir, 'map.csv');
+    }
+    if (mapCsv && !path.isAbsolute(mapCsv)) {
+        // 优先按 dst_dir 解析（产物都在 tasks/ 下），否则按 ROOT_DIR
+        const anchor = dstDir ? path.dirname(dstDir) : ROOT_DIR;
+        mapCsv = path.join(anchor, mapCsv);
+    }
+    cfg.map_csv = mapCsv;
 
     const info = {
         samples: samples.length,

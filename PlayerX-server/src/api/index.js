@@ -28,6 +28,7 @@ const dimensions = require('./dimensions');
 const testsrc    = require('./testsrc');
 const models     = require('./models');
 const dashboard  = require('./dashboard');
+const terminal   = require('./terminal');
 
 function mountApi(app) {
     // ── 公开接口 ─────────────────────────────────────────────
@@ -113,6 +114,17 @@ function mountApi(app) {
     app.post('/api/models',auth.requireAdmin, express.json({ limit: '1mb' }), models.handleCreate);
     app.put('/api/models/:id',      auth.requireAdmin, express.json({ limit: '1mb' }), models.handleUpdate);
     app.delete('/api/models/:id',   auth.requireAdmin, models.handleDelete);
+    // 上传模型文件夹（zip 包，解压到 assets/<name> 并自动建源）
+    app.post('/api/models/upload-folder',
+        auth.requireAdmin,
+        models.zipUploadMiddleware,
+        models.handleUploadFolder);
+
+    // 在线终端（管理员登录后才可用）
+    app.get ('/api/terminal/meta',    auth.requireAdmin, terminal.metaInfo);
+    app.post('/api/terminal/exec',    auth.requireAdmin, express.json({ limit: '16kb' }), terminal.execCommand);
+    app.post('/api/terminal/refresh', auth.requireAdmin, express.json({ limit: '4kb' }),  terminal.refreshLoginShell);
+    app.post('/api/terminal/kill',    auth.requireAdmin, terminal.handleKill);
 
     // 盲评分析配置管理（GET 公开，写操作需管理员）
     app.get('/api/analyze-configs',              analyzeCfgs.handleList);

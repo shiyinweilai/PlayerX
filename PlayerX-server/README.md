@@ -53,14 +53,7 @@ PlayerX-server/
 ```bash
 cd PlayerX-server
 npm install        # 仅首次
-npm start          # 默认监听 0.0.0.0:2026, token=123456
-```
-
-自定义端口 / 鉴权：
-
-```bash
-PORT=9000 PLAYERX_TOKEN=mySecret123 node server.js   # 自定义 token
-PLAYERX_TOKEN=- node server.js                       # 关闭鉴权
+restart.sh         # 使用的是nohup
 ```
 
 启动成功后浏览器打开 `http://<本机 IP>:2026/` 即可看到 Web 面板。
@@ -109,13 +102,3 @@ PLAYERX_TOKEN=- node server.js                       # 关闭鉴权
 - 同 (user, tag) 重复上传：默认 409 让客户端弹"覆盖确认"；带 `force=1` 时把旧文件搬到 `archive/<user>__<tag>/`
 - 每个槽位归档最多保留 20 份，更早的物理删除
 - 单文件最大 10MB（CSV 远远到不了这个量级）
-
-## 部署到团队服务器
-
-把这个目录整体拷过去，`npm install && npm start` 即可。建议用 `pm2` 守护：
-
-```bash
-npm i -g pm2
-pm2 start server.js --name playerx-server
-pm2 save
-```
