@@ -105,8 +105,10 @@
             <div class="nav-group">系统</div>
             <div class="nav-item" data-module="terminal"><svg class="nav-icon" width="18" height="18"
                     viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M3 4h18v14H3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>
-                    <path d="M6 9l3 3-3 3M11 15h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                    <path d="M3 4h18v14H3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"
+                        fill="none" />
+                    <path d="M6 9l3 3-3 3M11 15h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                        stroke-linejoin="round" fill="none" />
                 </svg> 终端</div>
             <div class="nav-item" data-module="settings"><svg class="nav-icon" width="18" height="18"
                     viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -202,17 +204,20 @@
                             <div class="analyze-tag-input-wrap">
                                 <div class="analyze-tag-chips" id="analyzeTagChips"></div>
                                 <input id="analyzeTagSel" type="text" placeholder="选择 Tag（可多选）" autocomplete="off">
-                                <button id="analyzeTagClear" class="analyze-tag-clear" type="button" title="清空已选">×</button>
+                                <button id="analyzeTagClear" class="analyze-tag-clear" type="button"
+                                    title="清空已选">×</button>
                             </div>
                             <div id="analyzeTagMenu" class="analyze-tag-menu" hidden></div>
                         </div>
-                        <button id="analyzeShareBtn" class="ghost-btn analyze-share-btn" disabled title="保存当前分析结果为可分享链接">
-                            <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <circle cx="18" cy="5" r="3"/>
-                                <circle cx="6" cy="12" r="3"/>
-                                <circle cx="18" cy="19" r="3"/>
-                                <line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/>
-                                <line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/>
+                        <button id="analyzeShareBtn" class="ghost-btn analyze-share-btn" disabled
+                            title="保存当前分析结果为可分享链接">
+                            <svg class="inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="18" cy="5" r="3" />
+                                <circle cx="6" cy="12" r="3" />
+                                <circle cx="18" cy="19" r="3" />
+                                <line x1="8.6" y1="13.5" x2="15.4" y2="17.5" />
+                                <line x1="15.4" y1="6.5" x2="8.6" y2="10.5" />
                             </svg>
                             <span class="label">复制分享</span>
                         </button>
@@ -220,128 +225,140 @@
                     </div>
 
                     <div id="analyzeResult" style="display:none">
-                        <!-- 统计概览 -->
-                        <div class="analyze-stats-grid" id="azStatsGrid" aria-label="分析摘要">
-                            <div class="analyze-stat-pill">
-                                <span class="analyze-stat-label">选中 Tag</span>
-                                <span class="analyze-stat-value" id="azStatTagCount">0</span>
-                            </div>
-                            <div class="analyze-stat-pill">
-                                <span class="analyze-stat-label">评分文件</span>
-                                <span class="analyze-stat-value" id="azStatFiles">0</span>
-                            </div>
-                            <div class="analyze-stat-pill">
-                                <span class="analyze-stat-label">有效评分行</span>
-                                <span class="analyze-stat-value" id="azStatRows">0</span>
-                            </div>
-                            <div class="analyze-stat-pill">
-                                <span class="analyze-stat-label">完整组</span>
-                                <span class="analyze-stat-value" id="azStatGroups">0</span>
+                        <!-- 统计概览 + 一级 tab 导航：同一行 -->
+                        <div class="analyze-overview-row">
+                            <div class="analyze-stats-grid" id="azStatsGrid" aria-label="分析摘要">
+                                <div class="analyze-page-tabs" id="azPageTabs" role="tablist">
+                                    <button class="analyze-page-tab is-active" type="button" data-page="rank"
+                                        role="tab">📊 多 Tag 排名对照</button>
+                                    <button class="analyze-page-tab" type="button" data-page="detail" role="tab">🔍
+                                        问题诊断与详细排名</button>
+                                </div>
+                                <div class="analyze-stat-pill">
+                                    <span class="analyze-stat-label">选中 Tag</span>
+                                    <span class="analyze-stat-value" id="azStatTagCount">0</span>
+                                </div>
+                                <div class="analyze-stat-pill">
+                                    <span class="analyze-stat-label">评分文件</span>
+                                    <span class="analyze-stat-value" id="azStatFiles">0</span>
+                                </div>
+                                <div class="analyze-stat-pill">
+                                    <span class="analyze-stat-label">有效评分行</span>
+                                    <span class="analyze-stat-value" id="azStatRows">0</span>
+                                </div>
+                                <div class="analyze-stat-pill">
+                                    <span class="analyze-stat-label">完整组</span>
+                                    <span class="analyze-stat-value" id="azStatGroups">0</span>
+                                </div>
                             </div>
                         </div>
 
-                        <!-- 多 Tag 排名对照表（多 Tag 时显示）：行=排名，列=Tag，单元格=该 Tag 下该排名的模型 -->
-                        <section id="azMatrixSection" class="analyze-card-section" hidden>
-                            <div class="analyze-section-header">
-                                <h3 class="analyze-section-title">多 Tag 排名对照</h3>
-                                <div class="analyze-section-header-right">
-                                    <span class="analyze-matrix-hint">行=Tag，列=排名位（#1 #2 #3…）；单元格=该 Tag 下该排名位的模型 + BT 排名 #N · Mean · Elo；Tag 多数时纵向滚动天然友好</span>
+                        <!-- Tab 1：多 Tag 排名对照（多 Tag 时显示，单 Tag 时内部自动隐藏） -->
+                        <div class="analyze-page-panel" data-page="rank" id="azPagePanelRank">
+                            <section id="azMatrixSection" class="analyze-card-section" hidden>
+                                <div class="analyze-section-header">
+                                    <h3 class="analyze-section-title">多 Tag 排名对照</h3>
                                 </div>
-                            </div>
-                            <div class="analyze-table-wrap">
-                                <table id="azMatrixTable" class="analyze-table analyze-matrix-table">
-                                    <thead id="azMatrixThead"></thead>
-                                    <tbody id="azMatrixTbody"></tbody>
-                                </table>
-                            </div>
-                        </section>
-
-                        <!-- 问题维度诊断报告：每个 Tag 一张表，行=模型，列=问题 key，单元格=该模型在该问题 key 上的被勾选率（颜色+百分比）。 -->
-                        <section id="azProblemSection" class="analyze-card-section" hidden>
-                            <div class="analyze-section-header">
-                                <h3 class="analyze-section-title">问题维度诊断</h3>
-                                <div class="analyze-section-header-right">
-                                    <span class="analyze-problem-hint">每个模型在每个问题类别（提示词/物理/商品/人物/无问题）上的被勾选率；颜色越深 = 越多评分员认为该模型在该维度有缺陷</span>
+                                <div class="analyze-table-wrap">
+                                    <table id="azMatrixTable" class="analyze-table analyze-matrix-table">
+                                        <thead id="azMatrixThead"></thead>
+                                        <tbody id="azMatrixTbody"></tbody>
+                                    </table>
                                 </div>
-                            </div>
-                            <div id="azProblemBody"></div>
-                        </section>
+                            </section>
 
-                        <!-- 共享 Tag 切换栏（独立于两个表格，两个表格数据同步切换） -->
-                        <div class="analyze-tables-shared-tabs" id="azSharedTabsBar" hidden>
-                            <span class="label">查看：</span>
-                            <div class="analyze-tag-tabs" id="azSharedTagTabs"></div>
+                            <!-- Tab 1 结束 -->
                         </div>
 
-                        <!-- 模型排名表格 -->
-                        <div class="analyze-tables-row">
-                        <section id="azRankSection" class="analyze-card-section" hidden>
-                            <div class="analyze-section-header">
-                                <h3 class="analyze-section-title">模型排名</h3>
-                                <div class="analyze-section-header-right">
-                                    <label class="analyze-color-pick">
-                                        <span>配色</span>
-                                        <select id="azRankColorScheme" class="analyze-color-select">
-                                            <option value="none" selected>无</option>
-                                            <option value="bg">绿→红（背景）</option>
-                                            <option value="text">绿→红（文字）</option>
-                                        </select>
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="analyze-table-wrap">
-                                <table id="azRankTable" class="analyze-table analyze-table-resizable">
-                                    <colgroup>
-                                        <col data-col="model">
-                                        <col data-col="n">
-                                        <col data-col="mean">
-                                        <col data-col="ci">
-                                        <col data-col="btShare">
-                                        <col data-col="btElo">
-                                    </colgroup>
-                                    <thead>
-                                        <tr>
-                                            <th data-col="model">model</th>
-                                            <th data-col="n">n</th>
-                                            <th data-col="mean">mean</th>
-                                            <th data-col="ci">95% CI</th>
-                                            <th data-col="btShare">BT_share</th>
-                                            <th data-col="btElo">BT_Elo</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody></tbody>
-                                </table>
-                            </div>
-                        </section>
+                        <!-- Tab 2：问题维度诊断 + 模型排名 + 成对显著性检验 -->
+                        <div class="analyze-page-panel" data-page="detail" id="azPagePanelDetail" hidden>
 
-                        <section id="azPairSection" class="analyze-card-section" hidden>
-                            <div class="analyze-section-header">
-                                <h3 class="analyze-section-title">成对显著性检验</h3>
+                            <!-- Tag tab 导航：切换「问题诊断 / 模型排名 / 成对检验」绑定的 Tag。
+                             单 Tag 时隐藏（renderSharedTagTabs 内部判断），多 Tag 时每个 Tag 一个 tab。 -->
+                            <div class="analyze-tables-shared-tabs" id="azSharedTabsBar" hidden>
+                                <span class="label">详情 Tag：</span>
+                                <div class="analyze-tag-tabs" id="azSharedTagTabs"></div>
                             </div>
-                            <div class="analyze-table-wrap">
-                                <table id="azPairTable" class="analyze-table analyze-table-resizable">
-                                    <colgroup>
-                                        <col data-col="modelA">
-                                        <col data-col="modelB">
-                                        <col data-col="aWins">
-                                        <col data-col="bWins">
-                                        <col data-col="p">
-                                        <col data-col="sig">
-                                    </colgroup>
-                                    <thead>
-                                        <tr>
-                                            <th data-col="modelA">模型 A</th>
-                                            <th data-col="modelB">模型 B</th>
-                                            <th data-col="aWins">A 胜</th>
-                                            <th data-col="bWins">B 胜</th>
-                                            <th data-col="p">p 值</th>
-                                            <th data-col="sig">显著</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody></tbody>
-                                </table>
+
+                            <!-- 问题维度诊断报告：每个 Tag 一张表，行=模型，列=问题 key，单元格=该模型在该问题 key 上的被勾选率（颜色+百分比）。 -->
+                            <section id="azProblemSection" class="analyze-card-section" hidden>
+                                <div class="analyze-section-header">
+                                    <h3 class="analyze-section-title">问题维度诊断</h3>
+                                </div>
+                                <div id="azProblemBody"></div>
+                            </section>
+
+                            <!-- 模型排名表格 -->
+                            <div class="analyze-tables-row">
+                                <section id="azRankSection" class="analyze-card-section" hidden>
+                                    <div class="analyze-section-header">
+                                        <h3 class="analyze-section-title">模型排名</h3>
+                                        <div class="analyze-section-header-right">
+                                            <label class="analyze-color-pick">
+                                                <span>配色</span>
+                                                <select id="azRankColorScheme" class="analyze-color-select">
+                                                    <option value="none" selected>无</option>
+                                                    <option value="bg">绿→红（背景）</option>
+                                                    <option value="text">绿→红（文字）</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="analyze-table-wrap">
+                                        <table id="azRankTable" class="analyze-table analyze-table-resizable">
+                                            <colgroup>
+                                                <col data-col="model">
+                                                <col data-col="n">
+                                                <col data-col="mean">
+                                                <col data-col="ci">
+                                                <col data-col="btShare">
+                                                <col data-col="btElo">
+                                            </colgroup>
+                                            <thead>
+                                                <tr>
+                                                    <th data-col="model">model</th>
+                                                    <th data-col="n">n</th>
+                                                    <th data-col="mean">mean</th>
+                                                    <th data-col="ci">95% CI</th>
+                                                    <th data-col="btShare">BT_share</th>
+                                                    <th data-col="btElo">BT_Elo</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody></tbody>
+                                        </table>
+                                    </div>
+                                </section>
+
+                                <section id="azPairSection" class="analyze-card-section" hidden>
+                                    <div class="analyze-section-header">
+                                        <h3 class="analyze-section-title">成对显著性检验</h3>
+                                    </div>
+                                    <div class="analyze-table-wrap">
+                                        <table id="azPairTable" class="analyze-table analyze-table-resizable">
+                                            <colgroup>
+                                                <col data-col="modelA">
+                                                <col data-col="modelB">
+                                                <col data-col="aWins">
+                                                <col data-col="bWins">
+                                                <col data-col="p">
+                                                <col data-col="sig">
+                                            </colgroup>
+                                            <thead>
+                                                <tr>
+                                                    <th data-col="modelA">模型 A</th>
+                                                    <th data-col="modelB">模型 B</th>
+                                                    <th data-col="aWins">A 胜</th>
+                                                    <th data-col="bWins">B 胜</th>
+                                                    <th data-col="p">p 值</th>
+                                                    <th data-col="sig">显著</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody></tbody>
+                                        </table>
+                                    </div>
+                                </section>
                             </div>
-                        </section>
+                            <!-- Tab 2 结束 -->
                         </div>
                     </div>
 
@@ -682,7 +699,8 @@
                             </svg>
                             终端 · 服务器命令行
                         </div>
-                        <div class="term-sub">通过浏览器直接对部署服务器执行 shell 命令（仅管理员可用，默认 cwd 为 <code id="termRootDir">/data/...</code>）</div>
+                        <div class="term-sub">通过浏览器直接对部署服务器执行 shell 命令（仅管理员可用，默认 cwd 为 <code
+                                id="termRootDir">/data/...</code>）</div>
                     </div>
 
                     <div class="term-toolbar">
@@ -697,8 +715,7 @@
                         <div class="term-output" id="termOutput" tabindex="0" aria-label="终端输出"></div>
                         <div class="term-input-row">
                             <span class="term-prompt" id="termPrompt">$</span>
-                            <input type="text" class="term-input" id="termInput"
-                                placeholder="输入命令后回车（↑↓ 翻历史，Tab 补全）"
+                            <input type="text" class="term-input" id="termInput" placeholder="输入命令后回车（↑↓ 翻历史，Tab 补全）"
                                 spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" />
                             <button class="term-btn term-btn-primary" id="termRunBtn">执行 ↵</button>
                         </div>
@@ -738,6 +755,9 @@
 
     <!-- ────────── Toast ────────── -->
     <div class="toast" id="toast" hidden></div>
+
+    <!-- ────────── 全局悬浮提示（fixed 定位，不受任何父容器 overflow 影响） ────────── -->
+    <div class="analyze-tooltip" id="analyzeTooltip" hidden></div>
 
     <!-- ────────── 顶部明显弹窗（重要提示用） ────────── -->
     <div class="top-alert" id="topAlert" hidden>

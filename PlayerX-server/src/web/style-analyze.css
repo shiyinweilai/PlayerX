@@ -9,6 +9,11 @@
 #pageAnalyze .analyze-header {
     margin-bottom: 18px;
 }
+#pageAnalyze .analyze-header > div {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+}
 
 #pageAnalyze .analyze-title {
     margin: 0;
@@ -19,7 +24,7 @@
 }
 
 #pageAnalyze .analyze-subtitle {
-    margin: 8px 0 0;
+    margin: 0;
     color: #6b7280;
     font-size: 13px;
 }
@@ -292,12 +297,21 @@
     background: #feeeec;
 }
 
+/* 统计概览 + 一级 tab 导航：同一行 */
+#pageAnalyze .analyze-overview-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 0 0 16px;
+}
+
 #pageAnalyze .analyze-stats-grid {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
-    margin: 0 0 12px;
+    margin: 0;
     padding: 8px 10px;
     border: none;
     border-radius: 0;
@@ -338,11 +352,6 @@
     box-sizing: border-box;
 }
 
-/* 多维排名表（多 Tag 对照）撑满 */
-#pageAnalyze #azMatrixSection {
-    width: 100%;
-}
-
 /* 排名 + 成对检验：左右并排（按内容自适应宽度，不撑满整行） */
 #pageAnalyze .analyze-tables-row {
     display: flex;
@@ -361,18 +370,36 @@
     }
 }
 
-/* 共享 Tag 切换栏（独立放在表格上方） */
+/* Tab 1「多 Tag 排名对照」section 也按内容收缩（不让列被父容器宽度拉宽），
+   并让 overflow: visible 避免裁切：
+     ① 表格超出时不被 section 裁切（让 .analyze-table-wrap 自己的 overflow-x: auto 触发横向滚动）
+     ② 第一行 Tag 上方显示自定义 tooltip 时不被裁切 */
+#pageAnalyze #azMatrixSection {
+    width: fit-content;
+    max-width: 100%;
+    overflow: visible;
+}
+
+/* 问题维度诊断 section 同样按内容收缩 */
+#pageAnalyze #azProblemSection {
+    width: fit-content;
+    max-width: 100%;
+}
+
+/* Tag tab 导航栏（放在详情面板上方，作为「问题诊断/模型排名/成对检验」的 Tag 切换器） */
 #pageAnalyze .analyze-tables-shared-tabs {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 14px;
-    padding: 4px 4px 10px;
+    gap: 12px;
+    padding: 8px 0 14px;
     font-size: 12px;
     color: #6b7280;
 }
 #pageAnalyze .analyze-tables-shared-tabs .label {
-    color: #9ca3af;
+    color: #475569;
+    font-weight: 600;
+    font-size: 13px;
 }
 #pageAnalyze .analyze-tables-shared-tabs .analyze-tag-tabs {
     display: inline-flex;
@@ -414,28 +441,33 @@
     justify-content: flex-start;
 }
 
-/* ── Tag 切换标签（纯文字链接，浅色，无下划线） ── */
+/* ── Tag 切换标签（明显 tab 按钮，非文字链接） ── */
 #pageAnalyze .analyze-tag-tabs {
     display: inline-flex;
-    gap: 14px;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 #pageAnalyze .analyze-tag-tab {
-    padding: 0;
+    padding: 6px 16px;
     font-size: 13px;
-    border: none;
-    border-radius: 0;
-    background: none;
-    color: #b4b9c4;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #475569;
     cursor: pointer;
-    transition: color 0.15s;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
     white-space: nowrap;
 }
 #pageAnalyze .analyze-tag-tab:hover {
-    color: #4b5563;
+    background: #e8eef5;
+    color: #1e293b;
+    border-color: #cbd5e1;
 }
 #pageAnalyze .analyze-tag-tab.is-active {
-    color: #6b7280;
-    font-weight: 500;
+    background: #1e3a8a;
+    color: #fff;
+    font-weight: 600;
+    border-color: #1e3a8a;
 }
 
 /* ── 多 Tag 排名对照表（替代原折线图，转置版） ── */
@@ -450,7 +482,10 @@
 #pageAnalyze .analyze-matrix-table {
     border-collapse: separate;
     border-spacing: 0;
-    width: 100%;
+    /* 不强制 width: 100%，表格按内容收缩，列宽不会被父容器宽度拉宽。
+       max-width: 100% 保证超长内容（TAG 名字很多 / 模型名很长）时不撑出卡片。 */
+    width: auto;
+    max-width: 100%;
     font-size: 13px;
     table-layout: auto;
 }
@@ -479,24 +514,46 @@
     min-width: 200px;
     width: 200px;
 }
-/* 首列冻结：Tag 名（统一灰白背景，与右侧内容区视觉协调） */
+/* 首列冻结：Tag 名（统一灰白背景，与右侧内容区视觉协调；可点击切换详情 Tag）
+   宽度自适应：width: 1% + white-space: nowrap 经典组合，在 table-layout: auto 下
+   强制列宽 = 文字内容宽 + padding，不被多余空间均分。 */
 #pageAnalyze .analyze-matrix-table .matrix-td-tagcol {
     position: sticky;
     left: 0;
     z-index: 2;
-    min-width: 140px;
+    width: 1%;
+    white-space: nowrap;
+    padding: 10px 16px 10px 14px;
     font-weight: 700;
     font-size: 13px;
     letter-spacing: 0.04em;
-    text-transform: uppercase;
     text-align: left;
     background: #f5f7fa;
     color: #475569;
-    /* 轻微描边感：与右侧内容区有视觉切分 */
+    cursor: pointer;
+    user-select: none;
+    transition: background .15s ease, color .15s ease, box-shadow .15s ease;
     box-shadow: inset -1px 0 0 rgba(0,0,0,0.04);
 }
+/* hover：明显蓝色边框 + 浅蓝背景 + 阴影，提示可点击跳详情（去掉 → 图标后的替代反馈） */
+#pageAnalyze .analyze-matrix-table .matrix-td-tagcol:hover {
+    background: #dbeafe;
+    color: #1e3a8a;
+    box-shadow: inset 0 0 0 2px #3a6fd8, inset -1px 0 0 rgba(0,0,0,0.04);
+}
+/* 自定义 tooltip 改用 JS 注入（fixed 定位，z-index 10000），
+   不受父容器 overflow/stacking context 影响。详见 style-components.css .analyze-tooltip */
+/* 当前选中的 Tag 行：Tag 列深蓝高亮 + 右侧行淡蓝背景，标明"详情"绑定到哪个 Tag */
+#pageAnalyze .analyze-matrix-table .matrix-td-tagcol.is-active {
+    background: #1e3a8a !important;
+    color: #fff !important;
+    box-shadow: inset -1px 0 0 rgba(0,0,0,0.04);
+}
+#pageAnalyze .analyze-matrix-table tr.matrix-row-active td:not(.matrix-td-tagcol):not(.matrix-td-empty):not(.matrix-cell-rank-1):not(.matrix-cell-rank-2):not(.matrix-cell-rank-3) {
+    background: #eff6ff;
+}
 /* 表头首列「Tag」：角落元素，z-index 最高；继承同款深色渐变，与表头同色 */
-#pageAnalyze .analyze-matrix-table .matrix-th-tagcol {
+#pageAnalyze .analyze-matrix-table thead th.matrix-th-tagcol {
     position: sticky;
     left: 0;
     top: 0;
@@ -507,10 +564,12 @@
     font-size: 12px;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    min-width: 140px;
-    width: 140px;
     text-align: left;
     box-shadow: inset -1px 0 0 rgba(0,0,0,0.04);
+    /* 覆盖通用 thead th 的 min-width: 200px / width: 200px，让 TAG 列按内容收缩 */
+    min-width: unset;
+    width: auto;
+    white-space: nowrap;
 }
 /* 数据单元格 */
 #pageAnalyze .analyze-matrix-table .matrix-td-cell {
@@ -631,7 +690,9 @@
 /* ─── 绿→红渐变着色：.clr 标记用于跳过 hover ─── */
 
 #pageAnalyze .analyze-table-wrap {
-    width: auto;
+    /* inline-block：块级元素 inline-block 自然按内容收缩（width: fit-content 在某些
+       嵌套 sticky 场景下失效，inline-block 更稳）。max-width 100% 兜底防溢出。 */
+    display: inline-block;
     overflow-x: auto;
     max-width: 100%;
 }
@@ -1132,4 +1193,36 @@
     padding: 1px 6px;
     border-radius: 3px;
     font-size: 11px;
+}
+
+/* ── 一级 tab 页面切换（"排名对照" / "问题诊断与详细排名"） ── */
+#pageAnalyze .analyze-page-tabs {
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    background: #f1f5f9;
+    border-radius: 10px;
+    margin: 0;
+}
+#pageAnalyze .analyze-page-tab {
+    padding: 8px 18px;
+    font-size: 14px;
+    font-weight: 500;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    transition: background 0.18s ease, color 0.18s ease;
+    white-space: nowrap;
+}
+#pageAnalyze .analyze-page-tab:hover {
+    color: #1e293b;
+    background: rgba(255, 255, 255, 0.6);
+}
+#pageAnalyze .analyze-page-tab.is-active {
+    background: #fff;
+    color: #0f172a;
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
 }

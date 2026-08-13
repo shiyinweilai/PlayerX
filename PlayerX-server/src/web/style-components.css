@@ -1625,3 +1625,20 @@ table.preview-table tbody tr:hover {
     border-color: var(--primary, #0071e3);
     background: #fff;
 }
+/* ────────── 全局悬浮提示（JS 注入，fixed 定位，z-index 10000） ────────── */
+.analyze-tooltip {
+    position: fixed;
+    z-index: 10000;
+    background: #1f2937;
+    color: #fff;
+    padding: 7px 12px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+    white-space: nowrap;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+    pointer-events: none;
+    transform: translateX(-50%) translateY(-100%);
+    letter-spacing: 0.02em;
+}

@@ -10,6 +10,29 @@
     const shareBtn = $('analyzeShareBtn');
     const statusEl = $('analyzeStatus');
     const resultDiv = $('analyzeResult');
+    const analyzeTooltip = $('analyzeTooltip');
+
+    // 一级 tab 页面切换（"排名对照" / "问题诊断与详细排名"）
+    const pagePanelRank = $('azPagePanelRank');
+    const pagePanelDetail = $('azPagePanelDetail');
+    const pageTabsBar = $('azPageTabs');
+    function switchAnalyzePage(page) {
+        document.querySelectorAll('.analyze-page-tab').forEach(btn => {
+            btn.classList.toggle('is-active', btn.dataset.page === page);
+        });
+        if (pagePanelRank)   pagePanelRank.hidden   = (page !== 'rank');
+        if (pagePanelDetail) pagePanelDetail.hidden = (page !== 'detail');
+        // 切回 Tab 1：清 currentDetailTag，矩阵表无高亮（保留用户上次选择但不让界面看着"被锁"）
+        if (page === 'rank' && currentDetailTag !== null) {
+            currentDetailTag = null;
+            currentRankTagIdx = 0;
+            currentPairTagIdx = 0;
+            renderMatrixTable();
+        }
+    }
+    document.querySelectorAll('.analyze-page-tab').forEach(btn => {
+        btn.addEventListener('click', () => switchAnalyzePage(btn.dataset.page));
+    });
     const emptyDiv = $('analyzeEmpty');
     const statsGrid = $('azStatsGrid');
     const rankSection = $('azRankSection');
@@ -55,6 +78,9 @@
     let multiTagResults = [];       // 批量分析结果 [{tag, models, pairs, ...}]
     let currentRankTagIdx = 0;      // 当前表格展示的 Tag 索引
     let currentPairTagIdx = 0;
+    // 当前「详细区域」绑定的 Tag：决定问题维度诊断 + 模型排名 + 成对检验显示哪个 Tag。
+    // 单 Tag 模式：固定为唯一 Tag；多 Tag 模式：用户点矩阵表行 / Tag tabs 切换。
+    let currentDetailTag = null;
 
     // ── Tag 多选逻辑 ──────────────────────────────────────────
 
@@ -397,9 +423,17 @@
         });
     }
 
+    // 找 currentDetailTag 在 multiTagResults 里的 idx（找不到则 0）
+    function getDetailTagIdx() {
+        if (!multiTagResults.length) return -1;
+        if (!currentDetailTag) return 0;
+        const idx = multiTagResults.findIndex(r => r.tag === currentDetailTag);
+        return idx >= 0 ? idx : 0;
+    }
+
     function renderCurrentRankTable() {
         if (!multiTagResults.length) return;
-        const idx = Math.min(currentRankTagIdx, multiTagResults.length - 1);
+        const idx = getDetailTagIdx();
         currentRankTagIdx = idx;
         currentPairTagIdx = idx;  // 两个表格同步
         const data = multiTagResults[idx];
@@ -426,7 +460,7 @@
 
     function renderCurrentPairTable() {
         if (!multiTagResults.length) return;
-        const idx = Math.min(currentPairTagIdx, multiTagResults.length - 1);
+        const idx = getDetailTagIdx();
         currentPairTagIdx = idx;
         currentRankTagIdx = idx;  // 两个表格同步
         const data = multiTagResults[idx];
@@ -455,8 +489,11 @@
                 const idx = +btn.dataset.idx;
                 currentRankTagIdx = idx;
                 currentPairTagIdx = idx;  // 同步
+                currentDetailTag = multiTagResults[idx]?.tag || null;
                 renderCurrentRankTable();
                 renderCurrentPairTable();
+                renderProblemStats();
+                renderMatrixTable();  // 重新渲染以更新 Tag 名高亮
             });
         });
     }
@@ -511,11 +548,42 @@
             const color = MATRIX_TAG_PALETTE[idx % MATRIX_TAG_PALETTE.length];
             const row = document.createElement('tr');
             row.className = `matrix-row matrix-row-tag matrix-row-tag-${idx % MATRIX_TAG_PALETTE.length}`;
+            if (r.tag === currentDetailTag) row.classList.add('matrix-row-active');
 
-            // 第一列：Tag 名（冻结，统一灰白背景，由 CSS 兜底，不带 tag 专属色）
+            // 第一列：Tag 名（冻结 + 可点击切换详情区域；当前选中加 is-active 高亮）
             const tagTd = document.createElement('td');
             tagTd.className = 'matrix-td-tagcol';
             tagTd.textContent = r.tag || `tag${idx + 1}`;
+            if (r.tag === currentDetailTag) tagTd.classList.add('is-active');
+            tagTd.setAttribute('data-tooltip', '点击跳转到「问题诊断与详细排名」');
+            // JS 注入 tooltip：fixed 定位，规避父容器 overflow 裁切（首行 Tag 上方也能显示）
+            tagTd.addEventListener('mouseenter', () => {
+                if (analyzeTooltip) {
+                    analyzeTooltip.textContent = '点击跳转到「问题诊断与详细排名」';
+                    analyzeTooltip.hidden = false;
+                    const r = tagTd.getBoundingClientRect();
+                    analyzeTooltip.style.left = (r.left + r.width / 2) + 'px';
+                    analyzeTooltip.style.top  = (r.top - 8) + 'px';
+                }
+            });
+            tagTd.addEventListener('mouseleave', () => {
+                if (analyzeTooltip) analyzeTooltip.hidden = true;
+            });
+            tagTd.addEventListener('click', () => {
+                if (currentDetailTag === r.tag) {
+                    // 已是当前 Tag，单纯切到详情页
+                    switchAnalyzePage('detail');
+                    return;
+                }
+                currentDetailTag = r.tag;
+                currentRankTagIdx = idx;
+                currentPairTagIdx = idx;
+                renderMatrixTable();       // 重新渲染，更新高亮
+                renderProblemStats();      // 刷新问题诊断
+                renderCurrentRankTable();  // 刷新模型排名
+                renderCurrentPairTable();  // 刷新成对检验
+                switchAnalyzePage('detail'); // 切到「问题诊断与详细排名」tab
+            });
             row.appendChild(tagTd);
 
             // 后续列：每个排名位
@@ -597,97 +665,90 @@
             section.hidden = true;
             return;
         }
+        // 单 Tag 模式：currentDetailTag 默认就指向唯一那个 Tag
+        if (!currentDetailTag) currentDetailTag = multiTagResults[0].tag;
+        const idx = getDetailTagIdx();
+        const r = multiTagResults[idx];
+        if (!r) {
+            section.hidden = true;
+            return;
+        }
         section.hidden = false;
         body.innerHTML = '';
 
-        // 1) 收集所有 Tag 中出现过的 key 集合（保持顺序：勾选率高的放前面）
-        const allKeys = new Set();
-        multiTagResults.forEach(r => {
-            const ps = r.problemStats;
-            if (ps && Array.isArray(ps.keys)) ps.keys.forEach(k => allKeys.add(k));
-        });
-        const keys = [...allKeys];
+        const ps = r.problemStats || { keys: [], perModel: {} };
+        const keys = ps.keys || [];
 
         if (keys.length === 0) {
-            // 数据空：引导文案
-            body.innerHTML = `<div class="analyze-problem-empty">
-                <div class="icon">📋</div>
-                <div class="title">暂无问题标记数据</div>
-                <div class="sub">诊断报告需要在客户端「问题标记」弹窗中勾选具体问题类别，<br>并把勾选结果同步到 CSV（&nbsp;<code>checklist</code>&nbsp;列）。</div>
-            </div>`;
+            // 没有 checklist 数据时直接隐藏整个问题维度诊断 section
+            section.hidden = true;
             return;
         }
 
-        // 2) 为每个 Tag 渲染一张子表
-        multiTagResults.forEach((r, idx) => {
-            const ps = r.problemStats || { keys: [], perModel: {} };
-            const color = MATRIX_TAG_PALETTE[idx % MATRIX_TAG_PALETTE.length];
+        // 单 Tag 卡片：只渲染 currentDetailTag 的诊断
+        const card = document.createElement('div');
+        card.className = 'analyze-problem-card';
 
-            const card = document.createElement('div');
-            card.className = 'analyze-problem-card';
+        // 标题：Tag 名（统一灰白，由 CSS 兜底）
+        const head = document.createElement('div');
+        head.className = 'analyze-problem-card-head';
+        head.textContent = r.tag || `tag${idx + 1}`;
+        card.appendChild(head);
 
-            // 标题：Tag 名（统一灰白，由 CSS 兜底，不带 tag 专属色）
-            const head = document.createElement('div');
-            head.className = 'analyze-problem-card-head';
-            head.textContent = r.tag || `tag${idx + 1}`;
-            card.appendChild(head);
+        // 表
+        const tableWrap = document.createElement('div');
+        tableWrap.className = 'analyze-table-wrap';
+        const table = document.createElement('table');
+        table.className = 'analyze-table analyze-problem-table';
 
-            // 表
-            const tableWrap = document.createElement('div');
-            tableWrap.className = 'analyze-table-wrap';
-            const table = document.createElement('table');
-            table.className = 'analyze-table analyze-problem-table';
-
-            // thead
-            const thead = document.createElement('thead');
-            const headTr = document.createElement('tr');
-            headTr.appendChild(makeProblemTh('#', 'problem-th-rank-cell'));
-            headTr.appendChild(makeProblemTh('模型', 'problem-th-model'));
-            keys.forEach(k => {
-                headTr.appendChild(makeProblemTh(PROBLEM_LABEL_MAP[k] || k, 'problem-th-key'));
-            });
-            thead.appendChild(headTr);
-            table.appendChild(thead);
-
-            // tbody：行 = 模型（按 BT 排名升序）
-            const tbody = document.createElement('tbody');
-            const models = (r.models || []).slice();
-            // 检查是否有 problemStats.perModel 数据
-            const hasData = keys.length > 0 && ps.perModel && Object.keys(ps.perModel).length > 0;
-            if (!hasData) {
-                const tr = document.createElement('tr');
-                const td = document.createElement('td');
-                td.colSpan = keys.length + 1;
-                td.className = 'analyze-problem-td-empty';
-                td.textContent = '该 Tag 下暂无 checklist 数据';
-                tr.appendChild(td);
-                tbody.appendChild(tr);
-            } else {
-                models.forEach(m => {
-                    const tr = document.createElement('tr');
-                    // # 排名列（用 m.rank，即该 Tag 内的真实 BT 排名）
-                    const rankTd = document.createElement('td');
-                    rankTd.className = 'analyze-problem-td-rank';
-                    rankTd.textContent = (m.rank != null) ? '#' + m.rank : '—';
-                    tr.appendChild(rankTd);
-                    const nameTd = document.createElement('td');
-                    nameTd.className = 'analyze-problem-td-model';
-                    nameTd.textContent = shortModelName(m.name || m.model || '—');
-                    nameTd.title = m.name || m.model || '';
-                    tr.appendChild(nameTd);
-                    keys.forEach(k => {
-                        const rate = (ps.perModel[m.name] || {})[k] || 0;
-                        tr.appendChild(makeProblemTd(k, rate));
-                    });
-                    tbody.appendChild(tr);
-                });
-            }
-            table.appendChild(tbody);
-
-            tableWrap.appendChild(table);
-            card.appendChild(tableWrap);
-            body.appendChild(card);
+        // thead
+        const thead = document.createElement('thead');
+        const headTr = document.createElement('tr');
+        headTr.appendChild(makeProblemTh('#', 'problem-th-rank-cell'));
+        headTr.appendChild(makeProblemTh('模型', 'problem-th-model'));
+        keys.forEach(k => {
+            headTr.appendChild(makeProblemTh(PROBLEM_LABEL_MAP[k] || k, 'problem-th-key'));
         });
+        thead.appendChild(headTr);
+        table.appendChild(thead);
+
+        // tbody：行 = 模型（按 BT 排名升序）
+        const tbody = document.createElement('tbody');
+        const models = (r.models || []).slice();
+        const hasData = keys.length > 0 && ps.perModel && Object.keys(ps.perModel).length > 0;
+        if (!hasData) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = keys.length + 2;
+            td.className = 'analyze-problem-td-empty';
+            td.textContent = '该 Tag 下暂无 checklist 数据';
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+        } else {
+            models.forEach(m => {
+                const tr = document.createElement('tr');
+                // # 排名列（用 m.rank，即该 Tag 内的真实 BT 排名）
+                const rankTd = document.createElement('td');
+                rankTd.className = 'analyze-problem-td-rank';
+                rankTd.textContent = (m.rank != null) ? '#' + m.rank : '—';
+                tr.appendChild(rankTd);
+                const nameTd = document.createElement('td');
+                nameTd.className = 'analyze-problem-td-model';
+                nameTd.textContent = shortModelName(m.name || m.model || '—');
+                nameTd.title = m.name || m.model || '';
+                tr.appendChild(nameTd);
+                keys.forEach(k => {
+                    const rate = (ps.perModel[m.name] || {})[k] || 0;
+                    tr.appendChild(makeProblemTd(k, rate));
+                });
+                tbody.appendChild(tr);
+            });
+        }
+        table.appendChild(tbody);
+
+        tableWrap.appendChild(table);
+        card.appendChild(tableWrap);
+        body.appendChild(card);
     }
 
     function makeProblemTh(text, cls) {
@@ -739,6 +800,11 @@
         hideAnalyzeSections();
 
         multiTagResults = results;
+        // 默认详情 Tag = null（不预设选中，矩阵表不显示高亮；详情面板按
+        // getDetailTagIdx 回退到第一个 Tag 显示，让用户切到 Tab 2 立即看到内容）
+        currentDetailTag = null;
+        currentRankTagIdx = 0;
+        currentPairTagIdx = 0;
 
         // 统计汇总（取第一个 Tag 的 stats）
         const first = results[0] || {};
@@ -751,12 +817,27 @@
         if (rankSection) rankSection.hidden = false;
         if (pairSection) pairSection.hidden = false;
 
-        currentRankTagIdx = 0;
-        currentPairTagIdx = 0;
+        // 矩阵表在内部按 multiTagResults.length 决定是否隐藏（< 2 时隐藏）
+        // 单 Tag 模式：直接展示该 Tag 的诊断 + 详情
         renderCurrentRankTable();
         renderCurrentPairTable();
         renderMatrixTable();
         renderProblemStats();
+
+        // 单 Tag 时：隐藏 Tab 栏，自动跳转详情页
+        if (results.length < 2) {
+            if (pageTabsBar) pageTabsBar.hidden = true;
+            currentDetailTag = results[0]?.tag || null;
+            currentRankTagIdx = 0;
+            currentPairTagIdx = 0;
+            renderCurrentRankTable();
+            renderCurrentPairTable();
+            renderProblemStats();
+            switchAnalyzePage('detail');
+        } else {
+            if (pageTabsBar) pageTabsBar.hidden = false;
+            switchAnalyzePage('rank');
+        }
 
         if (shareBtn && !window.__PX_SHARE_MODE__) shareBtn.disabled = false;
     }
