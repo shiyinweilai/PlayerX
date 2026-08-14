@@ -299,9 +299,27 @@ ApplicationWindow {
     // 用法：菜单「帮助 → 教程…」点击时，会通过 Qt.openUrlExternally(tutorialUrl) 打开默认浏览器
     property url tutorialUrl: "https://iwiki.woa.com/p/4020492089"
 
-    // YUV 分析工具是否嵌入显示（"帮助 → YUV 分析工具"切换）。
-    // 由菜单开启，由 YuvWindow 的"← 返回"关闭。
-    property bool showYuvWindow: false
+    // ─── 左侧主导航当前选中的 Tab ──────────────────────────────────────
+    // 取值：home(首页) / play(播放) / yuv(YUV 分析) / stream(码流分析)
+    // 默认停留在「播放」tab，与旧版主界面行为一致；设置入口保留在顶栏菜单。
+    // 各内容区（refSidebar/videoArea/csvBottomBar/yuvView/homeView/streamView）
+    // 以及底部工具栏（footer topBar）都据此决定是否显示，逻辑互不侵入。
+    property string currentTab: "play"
+
+    // ─── 沉浸模式 ───────────────────────────────────────────────────────
+    // true 表示已进入"独立子界面"：左右导航栏 / 参考图栏 全部隐藏，
+    // 对应内容区（videoArea / yuvView / streamView）与 CSV 底栏铺满整个
+    // contentItem，真正满屏。
+    // 触发条件：
+    //   · 播放 tab 加载了视频
+    //   · YUV tab 已加载文件（render 阶段）—— setup 阶段（参数输入）不沉浸，
+    //     保留左侧导航栏方便用户在 tab 间顺畅切换
+    //   · 码流分析 tab
+    // 退出方式：播放 tab 用底部"×关闭"清空视频；YUV / 码流分析 tab 用"← 返回"。
+    readonly property bool immersive:
+        (root.currentTab === "play" && Engine.fileCount > 0)
+        || (root.currentTab === "yuv" && YuvBridge.slotCount > 0)
+        || root.currentTab === "stream"
 
     // ─── 系统菜单栏（macOS 全局菜单 / Windows 窗口菜单） ──────────────────
     // 仅作为系统级入口，与现有 ToolBar 上的"打开 ▾ / ⚙ 设置 ▾"按钮共存。
@@ -6415,6 +6433,8 @@ ApplicationWindow {
     footer: ToolBar {
         id: topBar
         height: 44
+        // 底部工具栏属于「播放」tab：切换到首页/YUV/码流分析时整条隐藏。
+        visible: root.currentTab === "play"
         background: Rectangle {
             color: "#17171a"
             // 底部分隔线
@@ -8158,14 +8178,14 @@ ApplicationWindow {
     // 折叠态完全不占位，且通过 visible 控制让其内部 binding 不参与求值，零开销。
     Rectangle {
         id: refSidebar
-        anchors.left: parent.left
+        anchors.left: leftNavBar.right
         anchors.top: parent.top
         anchors.topMargin: 2
         // 撑满到窗口底部：让左栏的图1/图2两个区域上下均分整个高度，
         // 不再为底部 CSV 提示词条让位（CSV 底栏只占视频区下方）。
         anchors.bottom: parent.bottom
         width: root.refSidebarWidth
-        visible: root.refSidebarVisible && width > 0
+        visible: root.refSidebarVisible && width > 0 && root.currentTab === "play" && !root.immersive
         color: "#15151a"
         // 右侧 1px 分隔线，与视频区切开
         Rectangle {
@@ -9451,7 +9471,8 @@ ApplicationWindow {
         //   - prompt 文本只占视频区下方的横向空间，与视频画面始终对齐。
         // 与「参考图侧边栏」作为一个整体出现/隐藏（用户工作流：要么同时看图+词，
         // 要么都不看），由 refSidebarVisible 一并控制。
-        anchors.left: refSidebar.right
+        // 沉浸模式下也铺满整个内容区底部，与 videoArea 行为一致。
+        anchors.left: root.immersive ? parent.left : refSidebar.right
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         readonly property bool hasContent: root.refTextHasCurrent
@@ -9466,7 +9487,7 @@ ApplicationWindow {
         // 高度：仅当侧边栏可见 + 有视频时才占位；展开使用用户拖拽值、折叠 24
         height: (!root.refSidebarVisible || Engine.fileCount <= 0) ? 0
               : (showFull ? root.csvBottomBarUserHeight : 24)
-        visible: height > 0
+        visible: height > 0 && root.currentTab === "play"
         color: "#15151a"
 
         // 顶部 1px 分隔线
@@ -9997,11 +10018,14 @@ ApplicationWindow {
     // 框不被 ToolBar 阴影/分隔线压住。
     Item {
         id: videoArea
-        anchors.left: refSidebar.right
+        // 沉浸模式下铺满整个 contentItem（独立子界面），普通模式下让出
+        // 左侧的参考图栏。
+        anchors.left: root.immersive ? parent.left : refSidebar.right
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.topMargin: 2
         anchors.bottom: csvBottomBar.top
+        visible: root.currentTab === "play"
 
         focus: true
 
@@ -10092,7 +10116,7 @@ ApplicationWindow {
         Item {
             id: emptyHero
             anchors.fill: parent
-            visible: Engine.fileCount <= 0 && !root.compareSliderActive && !root.showYuvWindow
+            visible: Engine.fileCount <= 0 && !root.compareSliderActive
 
             // 拖拽高亮态：DropArea 进入时整块面板加柔和高亮边框
             property bool dragHover: dropZone.containsDrag
@@ -10290,68 +10314,7 @@ ApplicationWindow {
                         }
                     }
 
-                    // ③ YUV 分析工具
-                    // 用 Y/U/V 三平面色块代替 emoji，更直观表达「裸 YUV 数据逐帧查看」
-                    Rectangle {
-                        id: heroBtnYuv
-                        Layout.preferredWidth: 240
-                        Layout.preferredHeight: 132
-                        radius: 10
-                        color: heroBtnYuvMA.containsMouse ? "#2a3a55"
-                              : heroBtnYuvMA.pressed     ? "#1e2a40"
-                                                         : "#1e1e22"
-                        border.color: heroBtnYuvMA.containsMouse ? "#3a78c8" : "#3a3a42"
-                        border.width: 1
-                        Behavior on color { ColorAnimation { duration: 120 } }
-                        Behavior on border.color { ColorAnimation { duration: 120 } }
-
-                        ColumnLayout {
-                            anchors.centerIn: parent
-                            spacing: 8
-
-                            // YUV 三平面图标（4:2:0 布局示意）
-                            Item {
-                                Layout.alignment: Qt.AlignHCenter
-                                width: 60; height: 36
-                                // Y 平面（最亮，灰白色）
-                                Rectangle {
-                                    x: 0; y: 0; width: 34; height: 36; radius: 3
-                                    color: "#e8e8ec"
-                                }
-                                // U 平面（蓝色调，半尺寸）
-                                Rectangle {
-                                    x: 38; y: 0; width: 22; height: 16; radius: 3
-                                    color: "#5a7fb8"
-                                }
-                                // V 平面（红色调，半尺寸）
-                                Rectangle {
-                                    x: 38; y: 20; width: 22; height: 16; radius: 3
-                                    color: "#b85a5a"
-                                }
-                            }
-                            Text {
-                                Layout.alignment: Qt.AlignHCenter
-                                text: "YUV 分析"
-                                color: "#e8e8ec"
-                                font.pixelSize: 16
-                                font.bold: true
-                            }
-                            Text {
-                                Layout.alignment: Qt.AlignHCenter
-                                text: "裸数据逐帧查看"
-                                color: "#9aa0a6"
-                                font.pixelSize: 12
-                            }
-                        }
-
-                        MouseArea {
-                            id: heroBtnYuvMA
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.showYuvWindow = true
-                        }
-                    }
+                    
                 }
 
                 // ── 操作说明 ──────────────────────────────────────
@@ -11990,24 +11953,1598 @@ ApplicationWindow {
         }
     }
 
-    // ── YUV 分析工具视图（内嵌主界面，由"帮助 → YUV 分析工具"菜单切换）──
+    // ── YUV 分析视图（左侧导航「YUV」tab；沉浸式独立子界面）───────────
+    // 两阶段架构：
+    //   - setup 视图（hasFile == false）：参数输入主界面，用户填好参数后点
+    //     "打开"调用 YuvBridge.openFile()，hasFile 变为 true 自动跳转到
+    //     渲染子界面；"← 返回"切回播放 tab。
+    //   - render 视图（hasFile == true）：Loader 加载 YuvWindow.qml，沉浸
+    //     渲染 + 帧导航；"← 返回"调用 YuvBridge.closeFile() 回到 setup。
     Item {
         id: yuvView
-        anchors.fill: parent
-        visible: root.showYuvWindow
-        z: 100  // 浮在主内容之上
-        // Loader 懒加载 qrc 资源，不参与 qt_add_qml_module AOT 编译
+        // render 阶段铺满 contentItem（沉浸满屏），setup 阶段让出左侧导航栏，
+        // 使用户可以在参数输入与 tab 切换之间顺畅流转。
+        anchors.left: (YuvBridge.slotCount > 0) ? parent.left : leftNavBar.right
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        visible: root.currentTab === "yuv"
+        z: 100
+
+        // ── 参数输入主界面（setup） ────────────────────────────────
+        Item {
+            id: yuvSetupView
+            // 文件列表（多选文件或文件夹扫描结果）
+            property var fileList: []
+            property int selectedIndex: -1
+            // 勾选要渲染的文件路径（最多 3 个）
+            property var checkedList: []
+            // 当前正在编辑参数的文件（用于切换时保存旧参数、加载新参数）
+            property string currentPath: ""
+            // 防止初始化时空列表覆盖持久化数据
+            property bool _loaded: false
+            anchors.fill: parent
+            visible: YuvBridge.slotCount === 0
+
+            // ── 文件列表持久化：加载/保存 ──
+            Component.onCompleted: {
+                const saved = YuvBridge.yuvFileList()
+                console.log("[yuvSetupView] Component.onCompleted loaded:", saved.length, "files")
+                if (saved && saved.length > 0) {
+                    const arr = []
+                    for (let i = 0; i < saved.length; ++i) {
+                        arr.push(saved[i])
+                    }
+                    if (arr.length > 0) fileList = arr
+                }
+                _loaded = true
+            }
+
+            onFileListChanged: {
+                if (!_loaded) return  // 初始化阶段不写入，防止清空持久化
+                console.log("[yuvSetupView] fileList changed:", fileList.length, "items")
+                YuvBridge.setYuvFileList(fileList)
+            }
+
+            // ── 参数联动：切换文件时保存旧参数、加载新参数 ──
+            onSelectedIndexChanged: {
+                // 1) 保存旧文件参数（如果正在编辑某个文件）
+                if (currentPath !== "" && yuvSetupW && yuvSetupH) {
+                    saveCurrentParams()
+                }
+                // 2) 更新当前文件
+                if (selectedIndex >= 0 && selectedIndex < fileList.length) {
+                    currentPath = fileList[selectedIndex]
+                } else {
+                    currentPath = ""
+                }
+                // 3) 加载新文件参数（无记录则回默认）
+                loadParamsForCurrent()
+            }
+
+            function currentFmt() {
+                if (yuvFmtCombo && yuvFmtCombo.model && yuvFmtCombo.currentIndex >= 0
+                        && yuvFmtCombo.currentIndex < yuvFmtCombo.model.length) {
+                    return yuvFmtCombo.model[yuvFmtCombo.currentIndex].fmt
+                }
+                return "yuv420p"
+            }
+
+            function saveCurrentParams() {
+                if (currentPath === "") return
+                const w   = parseInt(yuvSetupW.text) || 1920
+                const h   = parseInt(yuvSetupH.text) || 1080
+                const fmt = currentFmt()
+                const fps = parseFloat(yuvFpsCombo.displayText) || 30.0
+                YuvBridge.setYuvFileParams(currentPath, w + "x" + h + "|" + fmt + "|" + fps)
+            }
+
+            function loadParamsForCurrent() {
+                if (currentPath === "") return
+                const params = YuvBridge.yuvFileParams(currentPath)
+                if (params && params.length > 0) {
+                    // 解析 "1920x1080|yuv420p|30"
+                    const parts = params.split('|')
+                    const wh = parts[0].split('x')
+                    if (wh.length === 2) {
+                        yuvSetupW.text = wh[0]
+                        yuvSetupH.text = wh[1]
+                    }
+                    if (parts.length >= 2) {
+                        for (let i = 0; i < yuvFmtCombo.model.length; ++i) {
+                            if (yuvFmtCombo.model[i].fmt === parts[1]) {
+                                yuvFmtCombo.currentIndex = i
+                                break
+                            }
+                        }
+                    }
+                    if (parts.length >= 3) {
+                        const f = parseFloat(parts[2]) || 30.0
+                        for (let i = 0; i < yuvFpsCombo.model.length; ++i) {
+                            if (Math.abs(yuvFpsCombo.model[i].value - f) < 0.01) {
+                                yuvFpsCombo.currentIndex = i
+                                break
+                            }
+                        }
+                    }
+                    // 同步尺寸预设下拉选中
+                    yuvSizeCombo.rebuild()
+                } else {
+                    // 新文件：默认参数（1920×1080 / yuv420p / 30）
+                    yuvSetupW.text = "1920"
+                    yuvSetupH.text = "1080"
+                    for (let i = 0; i < yuvFmtCombo.model.length; ++i) {
+                        if (yuvFmtCombo.model[i].fmt === "yuv420p") { yuvFmtCombo.currentIndex = i; break }
+                    }
+                    for (let i = 0; i < yuvFpsCombo.model.length; ++i) {
+                        if (yuvFpsCombo.model[i].value === 30) { yuvFpsCombo.currentIndex = i; break }
+                    }
+                    yuvSizeCombo.rebuild()
+                }
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                color: "#101012"
+            }
+
+            // ════ 左侧列表 + 右侧参数栏（始终显示；空列表时显示添加提示）══════
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 22
+                spacing: 18
+
+                // ── 左侧文件列表 ──
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: 10
+                    color: "#18181e"
+                    border.color: "#2c2c34"; border.width: 1
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 16
+                        spacing: 10
+
+                        // 顶部栏
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+                            Text {
+                                text: "文件列表"
+                                color: "#e8e8ec"; font.pixelSize: 15; font.bold: true
+                            }
+                            Text {
+                                text: "· " + yuvSetupView.fileList.length + " 个"
+                                color: "#9aa0a6"; font.pixelSize: 12
+                            }
+                            Item { Layout.fillWidth: true }
+                            Rectangle {
+                                width: 76; height: 28; radius: 6
+                                color: yuvAddMoreMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                                border.color: yuvAddMoreMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                                border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "+ 添加"; color: "#e8e8ec"; font.pixelSize: 12
+                                }
+                                MouseArea {
+                                    id: yuvAddMoreMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: yuvSetupFileDialog.open()
+                                }
+                            }
+                            Rectangle {
+                                width: 84; height: 28; radius: 6
+                                color: yuvAddFolderMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                                border.color: yuvAddFolderMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                                border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "+ 文件夹"; color: "#e8e8ec"; font.pixelSize: 12
+                                }
+                                MouseArea {
+                                    id: yuvAddFolderMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: yuvSetupFolderDialog.open()
+                                }
+                            }
+                            Rectangle {
+                                width: 64; height: 28; radius: 6
+                                color: yuvClearMa.containsMouse ? "#5a3a3a" : "#3a2a2a"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "清空"; color: "#f5a3a3"; font.pixelSize: 12
+                                }
+                                MouseArea {
+                                    id: yuvClearMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        yuvSetupView.fileList = []
+                                        yuvSetupView.selectedIndex = -1
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { Layout.fillWidth: true; height: 1; color: "#2c2c34" }
+
+                        // ── 列表区：空时显示提示 + 添加按钮；有文件时显示 ListView ──
+                        Item {
+                            Layout.fillWidth: true; Layout.fillHeight: true
+
+                            // 空状态：居中提示 + 添加按钮
+                            ColumnLayout {
+                                anchors.centerIn: parent
+                                spacing: 14
+                                visible: yuvSetupView.fileList.length === 0
+                                Canvas {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    width: 40; height: 40
+                                    onPaint: {
+                                        var ctx = getContext("2d")
+                                        ctx.reset()
+                                        ctx.lineWidth = 1.8
+                                        ctx.strokeStyle = "#5a5a68"
+                                        ctx.fillStyle = "#2a2a34"
+                                        ctx.lineJoin = "round"
+                                        // 文件夹主体
+                                        ctx.beginPath()
+                                        ctx.moveTo(4, 12)
+                                        ctx.lineTo(4, 34)
+                                        ctx.lineTo(36, 34)
+                                        ctx.lineTo(36, 12)
+                                        ctx.lineTo(22, 12)
+                                        ctx.lineTo(19, 8)
+                                        ctx.lineTo(4, 8)
+                                        ctx.closePath()
+                                        ctx.fill()
+                                        ctx.stroke()
+                                        // 文件夹翻盖
+                                        ctx.beginPath()
+                                        ctx.moveTo(4, 16)
+                                        ctx.lineTo(36, 16)
+                                        ctx.stroke()
+                                    }
+                                }
+                                Text {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: "列表为空"
+                                    color: "#9aa0a6"; font.pixelSize: 13
+                                }
+                                Text {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: "点击下方按钮添加文件或文件夹"
+                                    color: "#6a6a78"; font.pixelSize: 11
+                                }
+                                RowLayout {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    Layout.topMargin: 4
+                                    spacing: 10
+                                    Rectangle {
+                                        Layout.preferredWidth: 120; Layout.preferredHeight: 32
+                                        radius: 6
+                                        color: yuvEmptyFileMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                                        border.color: yuvEmptyFileMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                                        border.width: 1
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "+ 添加文件"; color: "#e8e8ec"; font.pixelSize: 12
+                                        }
+                                        MouseArea {
+                                            id: yuvEmptyFileMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: yuvSetupFileDialog.open()
+                                        }
+                                    }
+                                    Rectangle {
+                                        Layout.preferredWidth: 120; Layout.preferredHeight: 32
+                                        radius: 6
+                                        color: yuvEmptyFolderMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                                        border.color: yuvEmptyFolderMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                                        border.width: 1
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "+ 文件夹"; color: "#e8e8ec"; font.pixelSize: 12
+                                        }
+                                        MouseArea {
+                                            id: yuvEmptyFolderMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: yuvSetupFolderDialog.open()
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 有文件时：ListView，每项支持单独删除
+                            ListView {
+                                anchors.fill: parent
+                                anchors.margins: 4
+                                visible: yuvSetupView.fileList.length > 0
+                                clip: true; spacing: 4
+                                model: yuvSetupView.fileList
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    required property int index
+                                    width: ListView.view.width; height: 48
+                                    radius: 6
+                                    color: yuvSetupView.selectedIndex === index
+                                           ? "#2a2a32"
+                                           : (fileItemMa.containsMouse ? "#22222a" : "transparent")
+                                    border.color: yuvSetupView.selectedIndex === index
+                                                  ? "#4a4a56"
+                                                  : (fileItemMa.containsMouse ? "#2c2c34" : "transparent")
+                                    border.width: 1
+
+                                    Row {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 12; anchors.rightMargin: 4
+                                        spacing: 10
+                                        // 勾选 checkbox（独立于选中，最多勾选 3 个）
+                                        Rectangle {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: 18; height: 18; radius: 4
+                                            color: (yuvSetupView.checkedList.indexOf(modelData) >= 0)
+                                                   ? "#3a6fd8" : "#1e1e24"
+                                            border.color: (yuvSetupView.checkedList.indexOf(modelData) >= 0)
+                                                          ? "#4a7cf0" : "#3a3a44"
+                                            border.width: 1
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: (yuvSetupView.checkedList.indexOf(modelData) >= 0)
+                                                      ? "✓" : ""
+                                                color: "#fff"; font.pixelSize: 12; font.bold: true
+                                            }
+                                        }
+                                        Canvas {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: 20; height: 20
+                                            onPaint: {
+                                                var ctx = getContext("2d")
+                                                ctx.reset()
+                                                ctx.lineWidth = 1.4
+                                                ctx.strokeStyle = "#6a7a90"
+                                                ctx.fillStyle = "#6a7a90"
+                                                ctx.lineJoin = "round"
+                                                // 胶片帧
+                                                ctx.strokeRect(3, 3, 14, 14)
+                                                // 齿孔
+                                                ctx.fillRect(4.5, 3, 1.5, 2)
+                                                ctx.fillRect(8, 3, 1.5, 2)
+                                                ctx.fillRect(11.5, 3, 1.5, 2)
+                                                ctx.fillRect(4.5, 15, 1.5, 2)
+                                                ctx.fillRect(8, 15, 1.5, 2)
+                                                ctx.fillRect(11.5, 15, 1.5, 2)
+                                                // 内画面
+                                                ctx.strokeRect(5.5, 6.5, 9, 7)
+                                            }
+                                        }
+                                        Column {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            spacing: 2
+                                            Text {
+                                                text: modelData.split('/').pop()
+                                                color: "#e8e8ec"; font.pixelSize: 13
+                                                font.bold: yuvSetupView.selectedIndex === index
+                                            }
+                                            Text {
+                                                text: modelData.substring(0, Math.max(0, modelData.lastIndexOf('/')))
+                                                color: "#6a6a78"; font.pixelSize: 10
+                                                elide: Text.ElideMiddle
+                                                width: ListView.view.width - 110
+                                            }
+                                        }
+                                        // 每项右侧 × 删除按钮
+                                        Rectangle {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: 22; height: 22; radius: 11
+                                            visible: fileItemMa.containsMouse || yuvSetupView.selectedIndex === index
+                                            color: fileItemDelMa.containsMouse ? "#b85a5a" : "transparent"
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "×"; color: "#f5a3a3"; font.pixelSize: 14; font.bold: true
+                                            }
+                                        }
+                                    }
+                                    MouseArea {
+                                        id: fileItemMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: yuvSetupView.selectedIndex = index
+                                    }
+                                    // checkbox 勾选的 hit zone：声明在 fileItemMa 之后（z 更高），
+                                    // 定位到 checkbox 位置，避免被 fileItemMa 拦截点击。
+                                    MouseArea {
+                                        id: fileCheckMa
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 12
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 18; height: 18
+                                        z: 1
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            const arr = yuvSetupView.checkedList.slice()
+                                            const pos = arr.indexOf(modelData)
+                                            if (pos >= 0) {
+                                                arr.splice(pos, 1)
+                                            } else {
+                                                if (arr.length >= 3) {
+                                                    yuvSetupView.selectedIndex = index
+                                                    yuvSetupStatus.text = "最多同时渲染 3 个 YUV"
+                                                    return
+                                                }
+                                                arr.push(modelData)
+                                                // 勾选时同步点选，让右侧参数栏显示
+                                                yuvSetupView.selectedIndex = index
+                                            }
+                                            yuvSetupView.checkedList = arr
+                                        }
+                                    }
+                                    // × 删除按钮的 hit zone（不冒泡到 fileItemMa）
+                                    MouseArea {
+                                        id: fileItemDelMa
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 30; height: 30
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        visible: fileItemMa.containsMouse || yuvSetupView.selectedIndex === index
+                                        propagateComposedEvents: false
+                                        onClicked: {
+                                            const arr = yuvSetupView.fileList.slice()
+                                            arr.splice(index, 1)
+                                            yuvSetupView.fileList = arr
+                                            // 选中索引修正：删掉后保持选中不变，或取消选中
+                                            if (yuvSetupView.selectedIndex >= arr.length) {
+                                                yuvSetupView.selectedIndex = arr.length - 1
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── 拖拽接收：整个列表区域支持拖入文件 / 文件夹 ──
+                    // 覆盖整个文件列表 Rectangle；散文件按 .yuv/.y4m 过滤，
+                    // 文件夹用 Fs.scanVideoFolder 递归展开（白名单含 yuv/y4m）。
+                    DropArea {
+                        anchors.fill: parent
+                        onEntered: function(drag) {
+                            if (!drag.hasUrls) { drag.accepted = false; return }
+                            drag.accept(Qt.CopyAction)
+                        }
+                        onDropped: function(drop) {
+                            if (!drop.hasUrls) return
+                            const newFiles = []
+                            for (let i = 0; i < drop.urls.length; ++i) {
+                                const u = drop.urls[i]
+                                const s = String(u).toLowerCase()
+                                // 文件夹优先：能扫出 .yuv/.y4m 即按文件夹展开
+                                let scanned = []
+                                try { scanned = Fs.scanVideoFolder(u, true) || [] } catch (e) { scanned = [] }
+                                if (scanned.length > 0) {
+                                    for (let j = 0; j < scanned.length; ++j) newFiles.push(scanned[j])
+                                } else if (s.endsWith(".yuv") || s.endsWith(".y4m")) {
+                                    newFiles.push(String(u).replace("file://", ""))
+                                }
+                            }
+                            if (newFiles.length === 0) return
+                            const merged = yuvSetupView.fileList.slice()
+                            for (let i = 0; i < newFiles.length; ++i) {
+                                if (merged.indexOf(newFiles[i]) < 0) merged.push(newFiles[i])
+                            }
+                            yuvSetupView.fileList = merged
+                            yuvSetupView.selectedIndex = merged.length - newFiles.length
+                            yuvSetupStatus.text = ""
+                        }
+                    }
+                }
+
+                // ── 右侧参数栏（始终显示，无选中文件时显示占位）──
+                Rectangle {
+                    Layout.preferredWidth: 320
+                    Layout.fillHeight: true
+                    radius: 10
+                    color: "#18181e"
+                    border.color: "#2c2c34"; border.width: 1
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 20
+                        spacing: 14
+
+                        Text {
+                            visible: yuvSetupView.selectedIndex >= 0
+                            text: "参数设置"
+                            color: "#e8e8ec"; font.pixelSize: 15; font.bold: true
+                        }
+
+                        // 无选中文件时的占位
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            visible: yuvSetupView.selectedIndex < 0
+                            ColumnLayout {
+                                anchors.centerIn: parent
+                                spacing: 12
+                                Text {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: yuvSetupView.fileList.length === 0
+                                          ? "请先添加文件"
+                                          : "在左侧选择文件后可调整参数"
+                                    color: "#6a6a78"; font.pixelSize: 13
+                                }
+                            }
+                        }
+
+                        // 选中文件名（仅选中时显示）
+                        Rectangle {
+                            visible: yuvSetupView.selectedIndex >= 0
+                            Layout.fillWidth: true; height: 32; radius: 6
+                            color: "#14141a"; border.color: "#3a3a44"; border.width: 1
+                            Text {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10; anchors.rightMargin: 10
+                                verticalAlignment: Text.AlignVCenter
+                                text: yuvSetupView.selectedIndex >= 0
+                                      ? yuvSetupView.fileList[yuvSetupView.selectedIndex].split('/').pop()
+                                      : ""
+                                color: "#e8e8ec"; font.pixelSize: 12
+                                elide: Text.ElideMiddle
+                            }
+                        }
+
+                        // ══════ 尺寸预设下拉（内置 + 用户，可保存/删除）══════
+                        ColumnLayout {
+                            visible: yuvSetupView.selectedIndex >= 0
+                            Layout.fillWidth: true; spacing: 4
+                            Text { text: "尺寸预设"; color: "#9aa0a6"; font.pixelSize: 11 }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                ComboBox {
+                                    id: yuvSizeCombo
+                                    Layout.fillWidth: true; Layout.preferredHeight: 34
+                                    textRole: "label"
+                                    function rebuild() {
+                                        // 内置项已不再含"自定义"占位。找不到匹配时 currentIndex = -1，
+                                        // contentItem 会回退显示当前手输的 "宽×高" 字符串。
+                                        const builtin = [
+                                            {label: "480p (720×480 NTSC)", w: 720,  h: 480,  builtin: true},
+                                            {label: "576p (720×576 PAL)",  w: 720,  h: 576,  builtin: true},
+                                            {label: "720p (1280×720)",     w: 1280, h: 720,  builtin: true},
+                                            {label: "1080p (1920×1080)",   w: 1920, h: 1080, builtin: true},
+                                            {label: "4K (3840×2160)",      w: 3840, h: 2160, builtin: true}
+                                        ]
+                                        const user = []
+                                        const ss = YuvBridge.yuvSizePresets()
+                                        for (let i = 0; i < ss.length; ++i) {
+                                            const p = ss[i].split('x')
+                                            user.push({
+                                                label: ss[i],
+                                                w: parseInt(p[0]) || 0,
+                                                h: parseInt(p[1]) || 0,
+                                                builtin: false,
+                                                key: ss[i]
+                                            })
+                                        }
+                                        model = builtin.concat(user)
+                                        // 同步选中：如果手输宽高匹配某项，自动指向它；否则 -1（无匹配）
+                                        const cw = parseInt(yuvSetupW.text) || 0
+                                        const ch = parseInt(yuvSetupH.text) || 0
+                                        let found = -1
+                                        for (let i = 0; i < model.length; ++i) {
+                                            if (model[i].w === cw && model[i].h === ch) { found = i; break }
+                                        }
+                                        currentIndex = found
+                                    }
+                                    Component.onCompleted: rebuild()
+                                    Connections {
+                                        target: YuvBridge
+                                        function onYuvPresetsChanged() { yuvSizeCombo.rebuild() }
+                                    }
+                                    onActivated: {
+                                        const it = model[currentIndex]
+                                        if (it && it.w > 0 && it.h > 0) {
+                                            yuvSetupW.text = it.w.toString()
+                                            yuvSetupH.text = it.h.toString()
+                                        }
+                                    }
+                                    background: Rectangle { color: "#14141a"; radius: 6; border.color: "#3a3a44"; border.width: 1 }
+                                    contentItem: Text {
+                                        // 选中时显示下拉项的 label；无匹配（currentIndex = -1）时回退显示
+                                        // 当前手输宽高（例如 "1920×1080"），让用户清楚看到当前值。
+                                        text: (yuvSizeCombo.currentIndex >= 0 && yuvSizeCombo.model[yuvSizeCombo.currentIndex]
+                                              ? yuvSizeCombo.model[yuvSizeCombo.currentIndex].label
+                                              : ((parseInt(yuvSetupW.text) || 0) + "×" + (parseInt(yuvSetupH.text) || 0)))
+                                        color: "#e8e8ec"; font.pixelSize: 13
+                                        verticalAlignment: Text.AlignVCenter
+                                        leftPadding: 10
+                                    }
+                                    popup: Popup {
+                                        id: yuvSizePopup
+                                        y: yuvSizeCombo.height; width: yuvSizeCombo.width; padding: 2
+                                        background: Rectangle { color: "#14141a"; radius: 6; border.color: "#3a3a44"; border.width: 1 }
+                                        contentItem: ListView {
+                                            clip: true
+                                            implicitHeight: Math.min(contentHeight, 280)
+                                            model: yuvSizeCombo.model
+                                            delegate: Item {
+                                                width: yuvSizeCombo.width; height: 30
+                                                required property var modelData
+                                                required property int index
+                                                Rectangle {
+                                                    anchors.fill: parent
+                                                    color: yuvSizeRowMa.containsMouse ? "#2a2a32" : "transparent"
+                                                }
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.leftMargin: 8; anchors.rightMargin: 4
+                                                    spacing: 4
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: modelData.label
+                                                        color: "#e8e8ec"; font.pixelSize: 13
+                                                        verticalAlignment: Text.AlignVCenter
+                                                    }
+                                                    Rectangle {
+                                                        Layout.preferredWidth: 22; Layout.preferredHeight: 22
+                                                        radius: 11
+                                                        color: yuvSizeDelMa.containsMouse ? "#b85a5a" : "transparent"
+                                                        visible: !modelData.builtin
+                                                        Text {
+                                                            anchors.centerIn: parent
+                                                            text: "×"; color: "#f5a3a3"; font.pixelSize: 14; font.bold: true
+                                                        }
+                                                    }
+                                                }
+                                                MouseArea {
+                                                    id: yuvSizeRowMa
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        yuvSizeCombo.currentIndex = index
+                                                        yuvSizeCombo.activated(index)
+                                                        yuvSizePopup.close()
+                                                    }
+                                                }
+                                                MouseArea {
+                                                    id: yuvSizeDelMa
+                                                    anchors.right: parent.right
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    width: 28; height: 28
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    visible: !modelData.builtin
+                                                    propagateComposedEvents: false
+                                                    onClicked: YuvBridge.removeYuvSizePreset(modelData.key)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    width: 64; height: 34; radius: 6
+                                    color: yuvSizeSaveMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                                    border.color: yuvSizeSaveMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                                    border.width: 1
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "+ 保存"; color: "#cfd2d6"; font.pixelSize: 12
+                                    }
+                                    MouseArea {
+                                        id: yuvSizeSaveMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            const w = parseInt(yuvSetupW.text) || 0
+                                            const h = parseInt(yuvSetupH.text) || 0
+                                            if (w > 0 && h > 0) {
+                                                const key = w + "x" + h
+                                                YuvBridge.addYuvSizePreset(key)
+                                                yuvSizeCombo.rebuild()
+                                                // 保存后下拉指向新建的用户项（user 在 builtin 之后），
+                                                // 而不是回到 "自定义"。
+                                                for (let i = 0; i < yuvSizeCombo.model.length; ++i) {
+                                                    if (yuvSizeCombo.model[i].key === key) {
+                                                        yuvSizeCombo.currentIndex = i
+                                                        break
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 宽 / 高（手输，与预设下拉双向）
+                        RowLayout {
+                            visible: yuvSetupView.selectedIndex >= 0
+                            Layout.fillWidth: true; spacing: 10
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 4
+                                Text { text: "宽"; color: "#9aa0a6"; font.pixelSize: 11 }
+                                Rectangle {
+                                    Layout.fillWidth: true; Layout.preferredHeight: 34; radius: 6
+                                    color: "#14141a"; border.color: "#3a3a44"; border.width: 1
+                                    TextInput {
+                                        id: yuvSetupW
+                                        anchors.fill: parent; anchors.margins: 6
+                                        color: "#e8e8ec"; font.pixelSize: 13
+                                        text: "1920"
+                                        horizontalAlignment: TextInput.AlignHCenter
+                                        validator: IntValidator { bottom: 1; top: 16384 }
+                                        onTextChanged: yuvSetupView.saveCurrentParams()
+                                    }
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 4
+                                Text { text: "高"; color: "#9aa0a6"; font.pixelSize: 11 }
+                                Rectangle {
+                                    Layout.fillWidth: true; Layout.preferredHeight: 34; radius: 6
+                                    color: "#14141a"; border.color: "#3a3a44"; border.width: 1
+                                    TextInput {
+                                        id: yuvSetupH
+                                        anchors.fill: parent; anchors.margins: 6
+                                        color: "#e8e8ec"; font.pixelSize: 13
+                                        text: "1080"
+                                        horizontalAlignment: TextInput.AlignHCenter
+                                        validator: IntValidator { bottom: 1; top: 16384 }
+                                        onTextChanged: yuvSetupView.saveCurrentParams()
+                                    }
+                                }
+                            }
+                        }
+
+                        // ══════ 像素格式下拉（内置 + 用户，可保存/删除）══════
+                        ColumnLayout {
+                            visible: yuvSetupView.selectedIndex >= 0
+                            Layout.fillWidth: true; spacing: 4
+                            Text { text: "像素格式"; color: "#9aa0a6"; font.pixelSize: 11 }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                ComboBox {
+                                    id: yuvFmtCombo
+                                    Layout.fillWidth: true; Layout.preferredHeight: 34
+                                    textRole: "label"
+                                    function rebuild() {
+                                        const builtin = [
+                                            {label: "yuv400 (灰度)",       fmt: "yuv400", builtin: true},
+                                            {label: "yuv420p (I420)",        fmt: "yuv420p", builtin: true},
+                                            {label: "yuv422p (I422)",        fmt: "yuv422p", builtin: true},
+                                            {label: "yuv440p",               fmt: "yuv440p", builtin: true},
+                                            {label: "yuv444p (I444)",        fmt: "yuv444p", builtin: true},
+                                            {label: "yuvj420p (JPEG)",       fmt: "yuvj420p", builtin: true},
+                                            {label: "yuvj422p (JPEG)",       fmt: "yuvj422p", builtin: true},
+                                            {label: "yuvj444p (JPEG)",       fmt: "yuvj444p", builtin: true},
+                                            {label: "nv12 (semi-planar 420)", fmt: "nv12", builtin: true},
+                                            {label: "nv21 (semi-planar 420)", fmt: "nv21", builtin: true},
+                                            {label: "nv16 (semi-planar 422)", fmt: "nv16", builtin: true},
+                                            {label: "nv24 (semi-planar 444)", fmt: "nv24", builtin: true},
+                                            {label: "yuyv422 (packed)",      fmt: "yuyv422", builtin: true},
+                                            {label: "uyvy422 (packed)",      fmt: "uyvy422", builtin: true}
+                                        ]
+                                        const user = []
+                                        const fs = YuvBridge.yuvFormatPresets()
+                                        for (let i = 0; i < fs.length; ++i) {
+                                            user.push({label: fs[i], fmt: fs[i], builtin: false, key: fs[i]})
+                                        }
+                                        model = builtin.concat(user)
+                                    }
+                                    Component.onCompleted: {
+                                        rebuild()
+                                        // 默认选中 yuv420p（I420，最常用）
+                                        for (let i = 0; i < model.length; ++i) {
+                                            if (model[i].fmt === "yuv420p") { currentIndex = i; break }
+                                        }
+                                    }
+                                    Connections {
+                                        target: YuvBridge
+                                        function onYuvPresetsChanged() { yuvFmtCombo.rebuild() }
+                                    }
+                                    onActivated: yuvSetupView.saveCurrentParams()
+                                    background: Rectangle { color: "#14141a"; radius: 6; border.color: "#3a3a44"; border.width: 1 }
+                                    contentItem: Text {
+                                        text: yuvFmtCombo.displayText
+                                        color: "#e8e8ec"; font.pixelSize: 13
+                                        verticalAlignment: Text.AlignVCenter
+                                        leftPadding: 10
+                                    }
+                                    popup: Popup {
+                                        id: yuvFmtPopup
+                                        y: yuvFmtCombo.height; width: yuvFmtCombo.width; padding: 2
+                                        background: Rectangle { color: "#14141a"; radius: 6; border.color: "#3a3a44"; border.width: 1 }
+                                        contentItem: ListView {
+                                            clip: true
+                                            implicitHeight: Math.min(contentHeight, 300)
+                                            model: yuvFmtCombo.model
+                                            delegate: Item {
+                                                width: yuvFmtCombo.width; height: 30
+                                                required property var modelData
+                                                required property int index
+                                                Rectangle {
+                                                    anchors.fill: parent
+                                                    color: yuvFmtRowMa.containsMouse ? "#2a2a32" : "transparent"
+                                                }
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.leftMargin: 8; anchors.rightMargin: 4
+                                                    spacing: 4
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: modelData.label
+                                                        color: "#e8e8ec"; font.pixelSize: 13
+                                                    }
+                                                    Rectangle {
+                                                        Layout.preferredWidth: 22; Layout.preferredHeight: 22
+                                                        radius: 11
+                                                        color: yuvFmtDelMa.containsMouse ? "#b85a5a" : "transparent"
+                                                        visible: !modelData.builtin
+                                                        Text {
+                                                            anchors.centerIn: parent
+                                                            text: "×"; color: "#f5a3a3"; font.pixelSize: 14; font.bold: true
+                                                        }
+                                                    }
+                                                }
+                                                MouseArea {
+                                                    id: yuvFmtRowMa
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        yuvFmtCombo.currentIndex = index
+                                                        yuvFmtCombo.activated(index)
+                                                        yuvFmtPopup.close()
+                                                    }
+                                                }
+                                                MouseArea {
+                                                    id: yuvFmtDelMa
+                                                    anchors.right: parent.right
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    width: 28; height: 28
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    visible: !modelData.builtin
+                                                    propagateComposedEvents: false
+                                                    onClicked: YuvBridge.removeYuvFormatPreset(modelData.key)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    width: 64; height: 34; radius: 6
+                                    color: yuvFmtSaveMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                                    border.color: yuvFmtSaveMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                                    border.width: 1
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "+ 保存"; color: "#cfd2d6"; font.pixelSize: 12
+                                    }
+                                    MouseArea {
+                                        id: yuvFmtSaveMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (yuvFmtCombo.displayText) {
+                                                const key = yuvFmtCombo.displayText.trim().toLowerCase()
+                                                if (!key) return
+                                                YuvBridge.addYuvFormatPreset(key)
+                                                yuvFmtCombo.rebuild()
+                                                // 保存后下拉指向新建的用户项
+                                                for (let i = 0; i < yuvFmtCombo.model.length; ++i) {
+                                                    if (yuvFmtCombo.model[i].key === key) {
+                                                        yuvFmtCombo.currentIndex = i
+                                                        break
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // ══════ 帧率下拉（内置 + 用户，可保存/删除）══════
+                        ColumnLayout {
+                            visible: yuvSetupView.selectedIndex >= 0
+                            Layout.fillWidth: true; spacing: 4
+                            Text { text: "帧率 (fps)"; color: "#9aa0a6"; font.pixelSize: 11 }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                ComboBox {
+                                    id: yuvFpsCombo
+                                    Layout.fillWidth: true; Layout.preferredHeight: 34
+                                    textRole: "label"
+                                    function rebuild() {
+                                        const builtin = [
+                                            {label: "23.976", value: 23.976, builtin: true},
+                                            {label: "24",     value: 24,    builtin: true},
+                                            {label: "25",     value: 25,    builtin: true},
+                                            {label: "29.97",  value: 29.97, builtin: true},
+                                            {label: "30",     value: 30,    builtin: true},
+                                            {label: "50",     value: 50,    builtin: true},
+                                            {label: "59.94",  value: 59.94, builtin: true},
+                                            {label: "60",     value: 60,    builtin: true},
+                                            {label: "120",    value: 120,   builtin: true}
+                                        ]
+                                        const user = []
+                                        const fs = YuvBridge.yuvFpsPresets()
+                                        for (let i = 0; i < fs.length; ++i) {
+                                            user.push({
+                                                label: fs[i].toString(),
+                                                value: fs[i],
+                                                builtin: false,
+                                                key: fs[i]
+                                            })
+                                        }
+                                        model = builtin.concat(user)
+                                    }
+                                    Component.onCompleted: {
+                                        rebuild()
+                                        // 默认选中 30 fps（最常用）
+                                        for (let i = 0; i < model.length; ++i) {
+                                            if (model[i].value === 30) { currentIndex = i; break }
+                                        }
+                                    }
+                                    Connections {
+                                        target: YuvBridge
+                                        function onYuvPresetsChanged() { yuvFpsCombo.rebuild() }
+                                    }
+                                    onActivated: yuvSetupView.saveCurrentParams()
+                                    background: Rectangle { color: "#14141a"; radius: 6; border.color: "#3a3a44"; border.width: 1 }
+                                    contentItem: Text {
+                                        text: yuvFpsCombo.displayText
+                                        color: "#e8e8ec"; font.pixelSize: 13
+                                        verticalAlignment: Text.AlignVCenter
+                                        leftPadding: 10
+                                    }
+                                    popup: Popup {
+                                        id: yuvFpsPopup
+                                        y: yuvFpsCombo.height; width: yuvFpsCombo.width; padding: 2
+                                        background: Rectangle { color: "#14141a"; radius: 6; border.color: "#3a3a44"; border.width: 1 }
+                                        contentItem: ListView {
+                                            clip: true
+                                            implicitHeight: Math.min(contentHeight, 280)
+                                            model: yuvFpsCombo.model
+                                            delegate: Item {
+                                                width: yuvFpsCombo.width; height: 30
+                                                required property var modelData
+                                                required property int index
+                                                Rectangle {
+                                                    anchors.fill: parent
+                                                    color: yuvFpsRowMa.containsMouse ? "#2a2a32" : "transparent"
+                                                }
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.leftMargin: 8; anchors.rightMargin: 4
+                                                    spacing: 4
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: modelData.label
+                                                        color: "#e8e8ec"; font.pixelSize: 13
+                                                    }
+                                                    Rectangle {
+                                                        Layout.preferredWidth: 22; Layout.preferredHeight: 22
+                                                        radius: 11
+                                                        color: yuvFpsDelMa.containsMouse ? "#b85a5a" : "transparent"
+                                                        visible: !modelData.builtin
+                                                        Text {
+                                                            anchors.centerIn: parent
+                                                            text: "×"; color: "#f5a3a3"; font.pixelSize: 14; font.bold: true
+                                                        }
+                                                    }
+                                                }
+                                                MouseArea {
+                                                    id: yuvFpsRowMa
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        yuvFpsCombo.currentIndex = index
+                                                        yuvFpsCombo.activated(index)
+                                                        yuvFpsPopup.close()
+                                                    }
+                                                }
+                                                MouseArea {
+                                                    id: yuvFpsDelMa
+                                                    anchors.right: parent.right
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    width: 28; height: 28
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    visible: !modelData.builtin
+                                                    propagateComposedEvents: false
+                                                    onClicked: YuvBridge.removeYuvFpsPreset(modelData.key)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    width: 64; height: 34; radius: 6
+                                    color: yuvFpsSaveMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                                    border.color: yuvFpsSaveMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                                    border.width: 1
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "+ 保存"; color: "#cfd2d6"; font.pixelSize: 12
+                                    }
+                                    MouseArea {
+                                        id: yuvFpsSaveMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            const f = parseFloat(yuvFpsCombo.displayText) || 0
+                                            if (f > 0) {
+                                                YuvBridge.addYuvFpsPreset(f)
+                                                yuvFpsCombo.rebuild()
+                                                // 保存后下拉指向新建的用户项（user 在 builtin 之后）
+                                                for (let i = 0; i < yuvFpsCombo.model.length; ++i) {
+                                                    if (yuvFpsCombo.model[i].value === f) {
+                                                        yuvFpsCombo.currentIndex = i
+                                                        break
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Item { Layout.fillHeight: true }
+
+                        // 状态 + 渲染按钮
+                        ColumnLayout {
+                            visible: yuvSetupView.selectedIndex >= 0
+                            Layout.fillWidth: true; spacing: 8
+                            Text {
+                                id: yuvSetupStatus
+                                color: "#f5a3a3"; font.pixelSize: 11
+                                text: ""; Layout.fillWidth: true
+                                elide: Text.ElideRight; wrapMode: Text.WordWrap
+                            }
+                            Rectangle {
+                                Layout.fillWidth: true; Layout.preferredHeight: 42; radius: 8
+                                color: yuvRenderMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                                border.color: yuvRenderMa.containsMouse ? "#5a5a66" : "#3a3a44"
+                                border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "开始渲染"
+                                    color: "#e8e8ec"; font.pixelSize: 14; font.bold: true
+                                }
+                                MouseArea {
+                                    id: yuvRenderMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (yuvSetupView.checkedList.length === 0) {
+                                            yuvSetupStatus.text = "请先勾选要渲染的文件（最多 3 个）"
+                                            return
+                                        }
+                                        // 关键：只把当前 UI 参数写入当前选中文件（currentPath），
+                                        // 绝不能覆盖其他勾选文件的持久化参数，否则切换查看时
+                                        // 当前 UI 值会把别人冲掉，导致所有文件都用同一个分辨率。
+                                        // 其他文件的参数保持各自独立的持久化值，渲染时由
+                                        // openFiles 内部按文件读取，互不干扰。
+                                        yuvSetupView.saveCurrentParams()
+
+                                        const opened = YuvBridge.openFiles(yuvSetupView.checkedList)
+                                        if (opened > 0) {
+                                            yuvSetupStatus.text = ""
+                                        } else {
+                                            yuvSetupStatus.text = "打开失败，请检查路径和参数"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 文件对话框（多选 .yuv / .y4m，按追加方式合并到现有列表）
+            FileDialog {
+                id: yuvSetupFileDialog
+                title: "选择 YUV 文件"
+                fileMode: FileDialog.OpenFiles
+                nameFilters: [
+                    "YUV / Y4M 文件 (*.yuv *.y4m)",
+                    "所有文件 (*)"
+                ]
+                onAccepted: {
+                    const newPaths = []
+                    for (let i = 0; i < selectedFiles.length; ++i) {
+                        newPaths.push(selectedFiles[i].toString().replace("file://", ""))
+                    }
+                    if (newPaths.length === 0) return
+                    // 追加到现有列表末尾并去重，保留用户原有顺序。
+                    const merged = yuvSetupView.fileList.slice()
+                    for (let i = 0; i < newPaths.length; ++i) {
+                        if (merged.indexOf(newPaths[i]) < 0) merged.push(newPaths[i])
+                    }
+                    yuvSetupView.fileList = merged
+                    // 选中新追加的第一个，让用户能看到它。
+                    yuvSetupView.selectedIndex = merged.length - newPaths.length
+                }
+            }
+
+            // 文件夹对话框（扫描 .yuv / .y4m，按追加方式合并到现有列表）
+            // 利用 Fs.scanVideoFolderPath 的白名单（含 yuv / y4m）递归扫描。
+            FolderDialog {
+                id: yuvSetupFolderDialog
+                title: "选择 YUV 文件夹"
+                onAccepted: {
+                    const folder = selectedFolder.toString().replace("file://", "")
+                    let found = []
+                    try { found = Fs.scanVideoFolderPath(folder, true) || [] } catch (e) { found = [] }
+                    if (found.length === 0) {
+                        yuvSetupStatus.text = "未在该文件夹中找到 .yuv / .y4m 文件"
+                        return
+                    }
+                    const merged = yuvSetupView.fileList.slice()
+                    for (let i = 0; i < found.length; ++i) {
+                        if (merged.indexOf(found[i]) < 0) merged.push(found[i])
+                    }
+                    yuvSetupView.fileList = merged
+                    // 选中新追加的第一个。
+                    yuvSetupView.selectedIndex = merged.length - found.length
+                    yuvSetupStatus.text = ""
+                }
+            }
+        }
+
+        // ── 渲染子界面（render） ────────────────────────────────
         Loader {
             id: yuvViewLoader
             anchors.fill: parent
-            active: root.showYuvWindow
+            active: YuvBridge.slotCount > 0
             source: "qrc:/yuv/YuvWindow.qml"
             onLoaded: {
                 if (item && item.closeRequested) {
+                    // 渲染子界面的"← 返回"：关闭全部文件，回到 setup（仍处于 YUV tab）
                     item.closeRequested.connect(function() {
-                        root.showYuvWindow = false
+                        YuvBridge.closeAll()
                     })
                 }
+            }
+        }
+    }
+
+    // ══════════════ 左侧主导航栏 ══════════════
+    // 常驻最左，纵向排列 4 个功能 Tab：首页 / 播放 / YUV 分析 / 码流分析。
+    // 设置入口保留在顶栏菜单（settingsTopMenu），不占用导航位。
+    // 内容区（videoArea/refSidebar/homeView/yuvView/streamView）均通过
+    // anchors 避开本栏；本栏 z 高于内容区，确保永不遮挡。
+    Rectangle {
+        id: leftNavBar
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: 184
+        color: "#141419"
+        z: 200
+        // 沉浸模式：播放有视频 / YUV tab 时隐藏整个侧栏，最大化工作区。
+        visible: !root.immersive
+
+        // 右侧 1px 分隔线
+        Rectangle {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 1
+            color: "#26262e"
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
+
+            // ── 顶部品牌区 ──
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 60
+                Row {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 22
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 2
+                    Text { text: "Player"; color: "#f4f6fa"; font.pixelSize: 20; font.bold: true }
+                    Text { text: "X"; color: "#3b8ef2"; font.pixelSize: 20; font.bold: true }
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#26262e" }
+
+            // ── 4 个导航 Tab ──
+            Repeater {
+                model: [
+                    { key: "home",   label: "首页" },
+                    { key: "play",   label: "播放对比" },
+                    { key: "yuv",    label: "YUV 分析" },
+                    { key: "stream", label: "码流分析" }
+                ]
+                delegate: Rectangle {
+                    id: navItem
+                    required property string key
+                    required property string label
+                    readonly property bool active: root.currentTab === navItem.key
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 46
+                    color: navItemMA.containsMouse ? "#22222c" : (navItem.active ? "#1c2536" : "transparent")
+
+                    // 选中指示条
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 3
+                        color: navItem.active ? "#3b8ef2" : "transparent"
+                    }
+
+                    Row {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 20
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 14
+
+                        // 自绘矢量图标
+                        Canvas {
+                            width: 20; height: 20
+                            anchors.verticalCenter: parent.verticalCenter
+                            property color iconColor: navItem.active ? "#6ba3f7" : "#787884"
+                            onIconColorChanged: requestPaint()
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                ctx.lineWidth = 1.6
+                                ctx.strokeStyle = iconColor
+                                ctx.fillStyle = iconColor
+                                ctx.lineCap = "round"
+                                ctx.lineJoin = "round"
+
+                                if (navItem.key === "home") {
+                                    // 房子图标：尖顶 + 方形主体
+                                    ctx.beginPath()
+                                    ctx.moveTo(10, 2.5)
+                                    ctx.lineTo(3, 9)
+                                    ctx.lineTo(5, 9)
+                                    ctx.lineTo(5, 17)
+                                    ctx.lineTo(8.5, 17)
+                                    ctx.lineTo(8.5, 12.5)
+                                    ctx.lineTo(11.5, 12.5)
+                                    ctx.lineTo(11.5, 17)
+                                    ctx.lineTo(15, 17)
+                                    ctx.lineTo(15, 9)
+                                    ctx.lineTo(17, 9)
+                                    ctx.closePath()
+                                    ctx.stroke()
+                                } else if (navItem.key === "play") {
+                                    // 双窗对比图标：两个并排矩形
+                                    ctx.strokeRect(2, 3.5, 7, 13)
+                                    ctx.strokeRect(11, 3.5, 7, 13)
+                                    // 左窗播放三角
+                                    ctx.beginPath()
+                                    ctx.moveTo(4.5, 8)
+                                    ctx.lineTo(4.5, 12.5)
+                                    ctx.lineTo(7.5, 10.25)
+                                    ctx.closePath()
+                                    ctx.fill()
+                                    // 右窗播放三角
+                                    ctx.beginPath()
+                                    ctx.moveTo(13.5, 8)
+                                    ctx.lineTo(13.5, 12.5)
+                                    ctx.lineTo(16.5, 10.25)
+                                    ctx.closePath()
+                                    ctx.fill()
+                                } else if (navItem.key === "yuv") {
+                                    // 胶片帧图标：方形+齿孔
+                                    ctx.strokeRect(3, 3, 14, 14)
+                                    // 上排齿孔
+                                    ctx.fillRect(5, 3, 2, 2.5)
+                                    ctx.fillRect(9, 3, 2, 2.5)
+                                    ctx.fillRect(13, 3, 2, 2.5)
+                                    // 下排齿孔
+                                    ctx.fillRect(5, 14.5, 2, 2.5)
+                                    ctx.fillRect(9, 14.5, 2, 2.5)
+                                    ctx.fillRect(13, 14.5, 2, 2.5)
+                                    // 内画面
+                                    ctx.strokeRect(5.5, 7, 9, 6)
+                                } else if (navItem.key === "stream") {
+                                    // 波形/信号图标：三条弧线 + 圆点
+                                    ctx.beginPath()
+                                    ctx.arc(6, 10, 2, 0, Math.PI * 2)
+                                    ctx.fill()
+                                    ctx.beginPath()
+                                    ctx.arc(6, 10, 5, -0.8, 0.8)
+                                    ctx.stroke()
+                                    ctx.beginPath()
+                                    ctx.arc(6, 10, 8, -0.7, 0.7)
+                                    ctx.stroke()
+                                    ctx.beginPath()
+                                    ctx.arc(6, 10, 11, -0.6, 0.6)
+                                    ctx.stroke()
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: navItem.label
+                            color: navItem.active ? "#ffffff" : "#a8a8b2"
+                            font.pixelSize: 14
+                            font.bold: navItem.active
+                        }
+                    }
+
+                    MouseArea {
+                        id: navItemMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.currentTab = navItem.key
+                    }
+                }
+            }
+
+            Item { Layout.fillHeight: true }
+        }
+    }
+
+    
+
+    // ══════════════ 首页视图 ══════════════
+    Item {
+        id: homeView
+        anchors.left: leftNavBar.right
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        visible: root.currentTab === "home"
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#101012"
+        }
+
+        ColumnLayout {
+            anchors.centerIn: parent
+            spacing: 26
+            width: Math.min(parent.width - 100, 680)
+
+            // ── 标题组 ──
+            ColumnLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 10
+                Row {
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: 2
+                    Text { text: "Player"; color: "#f4f6fa"; font.pixelSize: 40; font.bold: true }
+                    Text { text: "X"; color: "#3b8ef2"; font.pixelSize: 40; font.bold: true }
+                }
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: "视频播放对比 · 同步播放 · 评分采集 · 码流分析"
+                    color: "#9aa0a6"
+                    font.pixelSize: 14
+                }
+            }
+
+            // ── 功能入口卡片（点击跳转到对应 Tab）──
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 16
+
+                // 播放对比
+                Rectangle {
+                    Layout.preferredWidth: 190
+                    Layout.preferredHeight: 120
+                    radius: 10
+                    color: homeCardPlayMA.containsMouse ? "#2a3a55" : "#1e1e24"
+                    border.color: homeCardPlayMA.containsMouse ? "#3a78c8" : "#3a3a44"
+                    border.width: 1
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: 8
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "🎬"; font.pixelSize: 34 }
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "播放对比"; color: "#e8e8ec"; font.pixelSize: 15; font.bold: true }
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "多路视频同步播放"; color: "#9aa0a6"; font.pixelSize: 12 }
+                    }
+                    MouseArea {
+                        id: homeCardPlayMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.currentTab = "play"
+                    }
+                }
+
+                // YUV 分析
+                Rectangle {
+                    Layout.preferredWidth: 190
+                    Layout.preferredHeight: 120
+                    radius: 10
+                    color: homeCardYuvMA.containsMouse ? "#2a3a55" : "#1e1e24"
+                    border.color: homeCardYuvMA.containsMouse ? "#3a78c8" : "#3a3a44"
+                    border.width: 1
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: 8
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "🎞"; font.pixelSize: 34 }
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "YUV 分析"; color: "#e8e8ec"; font.pixelSize: 15; font.bold: true }
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "裸数据逐帧查看"; color: "#9aa0a6"; font.pixelSize: 12 }
+                    }
+                    MouseArea {
+                        id: homeCardYuvMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.currentTab = "yuv"
+                    }
+                }
+
+                // 码流分析
+                Rectangle {
+                    Layout.preferredWidth: 190
+                    Layout.preferredHeight: 120
+                    radius: 10
+                    color: homeCardStreamMA.containsMouse ? "#2a3a55" : "#1e1e24"
+                    border.color: homeCardStreamMA.containsMouse ? "#3a78c8" : "#3a3a44"
+                    border.width: 1
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: 8
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "📡"; font.pixelSize: 34 }
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "码流分析"; color: "#e8e8ec"; font.pixelSize: 15; font.bold: true }
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "裸码流解析（开发中）"; color: "#9aa0a6"; font.pixelSize: 12 }
+                    }
+                    MouseArea {
+                        id: homeCardStreamMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.currentTab = "stream"
+                    }
+                }
+            }
+
+            // ── 快速打开 ──
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 16
+
+                Rectangle {
+                    Layout.preferredWidth: 160
+                    Layout.preferredHeight: 40
+                    radius: 8
+                    color: homeOpenFileMA.containsMouse ? "#3a6fd8" : "#2a5fc0"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "打开文件"
+                        color: "#fff"
+                        font.pixelSize: 14
+                        font.bold: true
+                    }
+                    MouseArea {
+                        id: homeOpenFileMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: addDialog.open()
+                    }
+                }
+
+                Rectangle {
+                    Layout.preferredWidth: 160
+                    Layout.preferredHeight: 40
+                    radius: 8
+                    color: homeOpenFolderMA.containsMouse ? "#3a3a46" : "#2a2a32"
+                    border.color: "#4a4a56"
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "打开文件夹"
+                        color: "#e8e8ec"
+                        font.pixelSize: 14
+                    }
+                    MouseArea {
+                        id: homeOpenFolderMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: multiGroupDialog.showAndRefresh()
+                    }
+                }
+            }
+        }
+    }
+
+    // ══════════════ 码流分析视图（占位） ══════════════
+    Item {
+        id: streamView
+        // 沉浸时铺满整个 contentItem，作为独立的码流分析子界面。
+        anchors.fill: parent
+        visible: root.currentTab === "stream"
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#101012"
+        }
+
+        // ── 左上角返回按钮 ──
+        Rectangle {
+            id: streamBackBtn
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.leftMargin: 20
+            anchors.topMargin: 20
+            width: 84
+            height: 36
+            radius: 6
+            color: streamBackMA.containsMouse ? "#2a2a32" : "#1e1e24"
+            border.color: "#3a3a44"
+            border.width: 1
+            Row {
+                anchors.centerIn: parent
+                spacing: 6
+                Text { text: "←"; color: "#e8e8ec"; font.pixelSize: 14; font.bold: true }
+                Text { text: "返回"; color: "#e8e8ec"; font.pixelSize: 13 }
+            }
+            MouseArea {
+                id: streamBackMA
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.currentTab = "play"
+            }
+        }
+
+        ColumnLayout {
+            anchors.centerIn: parent
+            spacing: 14
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: "📡"
+                font.pixelSize: 48
+            }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: "码流分析"
+                color: "#e8e8ec"
+                font.pixelSize: 22
+                font.bold: true
+            }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: "功能开发中，敬请期待"
+                color: "#9aa0a6"
+                font.pixelSize: 14
+            }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: "将支持 H.264 / H.265 Annex-B 裸码流解析与逐帧分析"
+                color: "#6a6a78"
+                font.pixelSize: 12
             }
         }
     }

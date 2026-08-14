@@ -16,11 +16,26 @@ namespace rb {
 
 static AVPixelFormat parsePixelFormat(const QString& name) {
     const QString n = name.trimmed().toLower();
-    if (n == "yuv420p") return AV_PIX_FMT_YUV420P;
-    if (n == "yuv422p") return AV_PIX_FMT_YUV422P;
-    if (n == "yuv444p") return AV_PIX_FMT_YUV444P;
-    if (n == "nv12")    return AV_PIX_FMT_NV12;
-    if (n == "nv21")    return AV_PIX_FMT_NV21;
+    // ── 灰度（单平面，只有 Y） ──
+    if (n == "yuv400" || n == "gray" || n == "grey" || n == "y8")
+        return AV_PIX_FMT_GRAY8;
+    // ── Planar YUV ──
+    if (n == "yuv420p")  return AV_PIX_FMT_YUV420P;
+    if (n == "yuv422p")  return AV_PIX_FMT_YUV422P;
+    if (n == "yuv440p")  return AV_PIX_FMT_YUV440P;
+    if (n == "yuv444p")  return AV_PIX_FMT_YUV444P;
+    // ── 全范围 JPEG-style（BT.601）──
+    if (n == "yuvj420p") return AV_PIX_FMT_YUVJ420P;
+    if (n == "yuvj422p") return AV_PIX_FMT_YUVJ422P;
+    if (n == "yuvj444p") return AV_PIX_FMT_YUVJ444P;
+    // ── Semi-planar（UV 交错）──
+    if (n == "nv12")     return AV_PIX_FMT_NV12;
+    if (n == "nv21")     return AV_PIX_FMT_NV21;
+    if (n == "nv16")     return AV_PIX_FMT_NV16;
+    if (n == "nv24")     return AV_PIX_FMT_NV24;
+    // ── Packed（YUV 交错在单一平面）──
+    if (n == "yuyv422" || n == "yuy2")  return AV_PIX_FMT_YUYV422;
+    if (n == "uyvy422")                 return AV_PIX_FMT_UYVY422;
     // default
     return AV_PIX_FMT_YUV420P;
 }
