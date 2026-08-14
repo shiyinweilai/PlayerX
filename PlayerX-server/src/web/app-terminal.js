@@ -83,12 +83,12 @@
             return `
                 <div class="term-tab ${isActive ? 'active' : ''}" data-idx="${i}">
                     <span class="term-tab-title">${escapeHtml(label)}</span>
-                    <span class="term-tab-close" data-action="close" title="关闭">×</span>
+                    <span class="term-tab-close" data-action="close" data-tip="关闭">×</span>
                 </div>
             `;
         }).join('');
         container.innerHTML = html + `
-            <div class="term-tab term-tab-add" title="新建标签" data-action="add">+</div>
+            <div class="term-tab term-tab-add" data-tip="新建标签" data-action="add">+</div>
         `;
         // 绑定
         container.querySelectorAll('.term-tab').forEach(el => {
@@ -119,7 +119,7 @@
         return defaultTitle;
     }
 
-    
+
 
     // 缓存徽章：根据 meta.loginCached 显示状态
     function updateCacheBadge() {
@@ -141,7 +141,7 @@
         else if (ageMin < 60) ageText = `${ageMin}m`;
         else ageText = `${Math.floor(ageMin / 60)}h`;
         badge.textContent = `cached ${ageText}`;
-        badge.title = `登录 shell 环境已缓存\nTTL: ${Math.round(lc.ttlSeconds/60)}min\n点击 ↻ 刷新重新捕获`;
+        badge.title = `登录 shell 环境已缓存\nTTL: ${Math.round(lc.ttlSeconds / 60)}min\n点击 ↻ 刷新重新捕获`;
         badge.className = `term-cache-badge ${meta.loginCapturing ? 'capturing' : 'ready'}`;
     }
 
@@ -155,7 +155,7 @@
                 meta.loginCapturing = j.loginCapturing;
                 updateCacheBadge();
             }
-        } catch (_) {}
+        } catch (_) { }
     }
 
     // ── 主入口 ──
@@ -187,28 +187,70 @@
                         <span class="term-meta-item"><span class="term-meta-key">host</span>=<span class="term-meta-val">${escapeHtml(meta.host)}</span></span>
                         <span class="term-meta-item"><span class="term-meta-key">user</span>=<span class="term-meta-val">${escapeHtml(meta.user)}</span></span>
                         <span class="term-meta-item"><span class="term-meta-key">cwd</span>=<span class="term-meta-val term-cwd" id="termRootDir" title="${escapeHtml(meta.cwd)}">${escapeHtml(meta.cwd)}</span></span>
-                        <span class="term-meta-item"><span class="term-meta-key">timeout</span>=<span class="term-meta-val">${(meta.defaultTimeoutMs/1000)|0}s</span></span>
+                        <span class="term-meta-item"><span class="term-meta-key">timeout</span>=<span class="term-meta-val">${(meta.defaultTimeoutMs / 1000) | 0}s</span></span>
                     </div>
                     <div class="term-header-right">
                         <span class="term-upload-msg" id="termUploadMsg" hidden></span>
-                        <div class="term-header-btn-group">
-                            <label class="term-header-btn" title="上传一个或多个文件到 assets/">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                                    <polyline points="14 2 14 8 20 8"/>
-                                    <line x1="12" y1="18" x2="12" y2="12"/>
-                                    <line x1="9" y1="15" x2="15" y2="15"/>
+                        <div class="term-upload-result" id="termUploadResult" hidden>
+                            <span class="term-upload-result-label">已上传到</span>
+                            <code class="term-upload-result-path" id="termUploadResultPath" title=""></code>
+                            <button class="term-upload-result-icon" id="termUploadResultCopy" data-tip="复制路径">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
                                 </svg>
-                                文件
-                                <input type="file" id="termUploadInput" multiple hidden />
-                            </label>
-                            <div class="term-header-btn" id="termUploadFolderBtn" title="选择一个文件夹上传到 assets/">
+                            </button>
+                            <button class="term-upload-result-close" id="termUploadResultClose" data-tip="关闭">×</button>
+                        </div>
+                        <div class="term-upload-split" id="termUploadSplit">
+                            <button class="term-upload-main" id="termUploadMainBtn" data-tip="上传文件到 assets/">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                                    <line x1="12" y1="11" x2="12" y2="17"/>
-                                    <line x1="9" y1="14" x2="15" y2="14"/>
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
                                 </svg>
-                                文件夹
+                                上传
+                            </button>
+                            <button class="term-upload-caret" id="termUploadCaretBtn" data-tip="选择文件或文件夹">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"/>
+                                </svg>
+                            </button>
+                            <div class="term-upload-menu" id="termUploadMenu" hidden>
+                                <button class="term-upload-menu-item" data-kind="file">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                        <polyline points="14 2 14 8 20 8"/>
+                                    </svg>
+                                    上传文件
+                                </button>
+                                <button class="term-upload-menu-item" data-kind="folder">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                                    </svg>
+                                    上传文件夹
+                                </button>
+                            </div>
+                            <input type="file" id="termUploadInput" multiple hidden />
+                        </div>
+                        <div class="term-upload-settings" id="termUploadSettings">
+                            <button class="term-upload-settings-btn" id="termUploadSettingsBtn" data-tip="上传设置（自动解压 / 目标目录）">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="3"/>
+                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                                </svg>
+                            </button>
+                            <div class="term-upload-settings-panel" id="termUploadSettingsPanel" hidden>
+                                <div class="term-settings-title">上传设置</div>
+                                <label class="term-settings-row">
+                                    <span class="term-settings-label">压缩包自动解压</span>
+                                    <input type="checkbox" id="termUploadAutoExtract" checked />
+                                </label>
+                                <label class="term-settings-row">
+                                    <span class="term-settings-label">目标目录</span>
+                                    <input type="text" id="termUploadTargetDir" placeholder="assets/" spellcheck="false" autocomplete="off" />
+                                </label>
+                                <div class="term-settings-hint">默认 <code>assets/</code>（相对 data/）；填 <code>assets/foo</code> 可传到子目录。上传后若需改名/移动，可直接在终端用 <code>mv</code> 调整。</div>
                             </div>
                         </div>
                     </div>
@@ -217,13 +259,13 @@
                 <div class="term-toolbar">
                     <div class="term-tabs" id="termTabs"></div>
                     <div class="term-toolbar-right">
-                        <label class="term-toggle" title="开启后会启动登录 shell（bash -lc），加载 .bash_profile/.bashrc 的 PATH，比如alias命令就需要开启。开启后第一次慢（~900ms），之后会用缓存（~5ms）。仅在 PATH 不对时启用">
+                        <label class="term-toggle" data-tip="登录 shell 模式（加载 .bashrc 等）">
                             <input type="checkbox" id="termLoginToggle" />
                             <span>登录模式</span>
                             <span class="term-cache-badge" id="termCacheBadge" hidden></span>
                         </label>
-                        <button class="term-btn term-btn-ghost" id="termRefreshCacheBtn" title="刷新登录 shell 环境缓存（如改了 .bashrc 后调用）" hidden>↻ 刷新</button>
-                        <button class="term-btn term-btn-ghost" id="termClearBtn" title="清空当前终端的输出">清屏</button>
+                        <button class="term-btn term-btn-ghost" id="termRefreshCacheBtn" data-tip="刷新登录 shell 环境缓存" hidden>↻ 刷新</button>
+                        <button class="term-btn term-btn-ghost" id="termClearBtn" data-tip="清空当前终端输出">清屏</button>
                     </div>
                 </div>
 
@@ -234,7 +276,7 @@
                         <input type="text" class="term-input" id="termInput"
                             placeholder="输入命令后回车（↑↓ 翻历史，Tab 补全，Ctrl+L 清屏）"
                             spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" />
-                        <button class="term-btn term-btn-danger" id="termKillBtn" hidden title="中止当前正在执行的命令（Ctrl+C）">
+                        <button class="term-btn term-btn-danger" id="termKillBtn" hidden data-tip="中止当前命令（Ctrl+C）">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
                                 <rect x="6" y="6" width="12" height="12" rx="1"/>
                             </svg>
@@ -272,11 +314,11 @@
             </div>
         `;
 
-        const outEl   = container.querySelector('#termOutput');
+        const outEl = container.querySelector('#termOutput');
         const inputEl = container.querySelector('#termInput');
-        const runBtn  = container.querySelector('#termRunBtn');
+        const runBtn = container.querySelector('#termRunBtn');
         const killBtn = container.querySelector('#termKillBtn');
-        const tabsEl  = container.querySelector('#termTabs');
+        const tabsEl = container.querySelector('#termTabs');
         const promptEl = container.querySelector('#termPrompt');
 
         function rerenderTabs() {
@@ -320,10 +362,10 @@
 
         function writeLine(kind, text, isError) {
             let cls;
-            if (kind === 'err')      cls = 'term-err' + (isError ? ' is-error' : '');
+            if (kind === 'err') cls = 'term-err' + (isError ? ' is-error' : '');
             else if (kind === 'meta') cls = 'term-meta' + (isError ? ' has-error' : '');
-            else if (kind === 'cmd')  cls = 'term-cmd';
-            else                      cls = 'term-out';
+            else if (kind === 'cmd') cls = 'term-cmd';
+            else cls = 'term-out';
             appendAndSave(`<div class="term-block ${cls}">${escapeHtml(text)}</div>`);
         }
 
@@ -351,7 +393,7 @@
                 const j = await r.json();
                 if (!j.ok) throw new Error(j.error);
                 refreshMeta();
-            } catch (_) {}
+            } catch (_) { }
         });
 
         // ── 清屏 ──
@@ -372,9 +414,118 @@
         }
 
         // ── 上传文件 / 文件夹 ── 用 adminFetch（cookie 维持登录态）──
-        const uploadMsg   = container.querySelector('#termUploadMsg');
-        const fileInput   = container.querySelector('#termUploadInput');
-        const folderInput = container.querySelector('#termUploadFolderInput');
+        const uploadMsg = container.querySelector('#termUploadMsg');
+        const fileInput = container.querySelector('#termUploadInput');
+        const uploadResult = container.querySelector('#termUploadResult');
+        const resultPathEl = container.querySelector('#termUploadResultPath');
+        const resultCopyBtn = container.querySelector('#termUploadResultCopy');
+        const resultCloseBtn = container.querySelector('#termUploadResultClose');
+
+        // 当前要复制的路径（单条或多条换行拼接）
+        let currentCopyPaths = [];
+
+        // 复制到剪贴板（带降级）
+        async function copyToClipboard(text) {
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                }
+            } catch (_) { }
+            // 降级：临时 textarea + execCommand
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                const ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                return ok;
+            } catch (_) {
+                return false;
+            }
+        }
+
+        // 显示成功结果：路径 + 复制按钮
+        // 展示用相对路径（简短直观），复制时补成绝对路径（savedTo）
+        function showUploadResult(json) {
+            const displayPaths = [];
+            const absPaths = [];
+            const collect = (rel, savedTo) => {
+                if (!rel) return;
+                displayPaths.push(rel);
+                absPaths.push(savedTo || rel);
+            };
+            collect(json.relativePath, json.savedTo);
+            if (Array.isArray(json.files)) {
+                json.files.forEach(f => collect(f.relativePath, f.savedTo));
+            }
+            if (displayPaths.length === 0) return;
+
+            // 隐藏旧的简单消息，避免叠加
+            if (uploadMsg) uploadMsg.hidden = true;
+
+            currentCopyPaths = absPaths;
+            let displayText;
+            if (displayPaths.length === 1) {
+                displayText = displayPaths[0];
+            } else if (displayPaths.length <= 3) {
+                displayText = displayPaths.join(', ');
+            } else {
+                displayText = `${displayPaths.slice(0, 2).join(', ')} …等 ${displayPaths.length} 个文件`;
+            }
+            if (resultPathEl) {
+                resultPathEl.textContent = displayText;
+                resultPathEl.title = absPaths.join('\n');
+            }
+            if (uploadResult) uploadResult.hidden = false;
+        }
+
+        // 复制按钮：复制完整路径列表
+        if (resultCopyBtn) {
+            resultCopyBtn.addEventListener('click', async () => {
+                if (currentCopyPaths.length === 0) return;
+                const text = currentCopyPaths.join('\n');
+                const ok = await copyToClipboard(text);
+                const original = resultCopyBtn.innerHTML;
+                resultCopyBtn.innerHTML = ok ? '✓' : '✗';
+                resultCopyBtn.disabled = true;
+                setTimeout(() => {
+                    resultCopyBtn.innerHTML = original;
+                    resultCopyBtn.disabled = false;
+                }, 1200);
+            });
+        }
+
+        // 关闭按钮
+        if (resultCloseBtn) {
+            resultCloseBtn.addEventListener('click', () => {
+                if (uploadResult) uploadResult.hidden = true;
+                currentCopyPaths = [];
+            });
+        }
+
+        // 上传设置（localStorage 持久化）：自动解压 + 目标目录
+        const UPLOAD_SETTINGS_KEY = 'PlayerX.terminal.uploadSettings.v2';
+        function readUploadSettings() {
+            try {
+                const raw = localStorage.getItem(UPLOAD_SETTINGS_KEY);
+                if (raw) {
+                    const o = JSON.parse(raw);
+                    return {
+                        // 默认勾选：字段缺失（老数据）时也视为 true，仅当用户明确取消过才为 false
+                        autoExtract: o.autoExtract !== false,
+                        targetDir: String(o.targetDir || '').trim(),
+                    };
+                }
+            } catch (_) { }
+            return { autoExtract: true, targetDir: '' };
+        }
+        function saveUploadSettings(s) {
+            try { localStorage.setItem(UPLOAD_SETTINGS_KEY, JSON.stringify(s)); } catch (_) { }
+        }
 
         function setUploadMsg(text, cls) {
             uploadMsg.hidden = false;
@@ -401,34 +552,32 @@
                 fd.append('file', f, name);
             }
 
+            // 附加上传设置：目标目录 + 自动解压
+            const settings = readUploadSettings();
+            if (settings.targetDir) fd.append('targetDir', settings.targetDir);
+            if (settings.autoExtract) fd.append('autoExtract', '1');
+
             const hammer = throbber(files, word);
             try {
                 const r = await adminFetch('/api/models/upload-folder', { method: 'POST', body: fd });
                 const j = await r.json();
                 if (!j.ok) throw new Error(j.error);
 
-                if (files.length === 1) {
-                    const sz = (j.size / 1024).toFixed(0);
-                    setUploadMsg(`✓ ${j.relativePath} (${sz} KB)`, 'ok');
-                } else {
-                    const sz = (j.totalSize / 1024).toFixed(0);
-                    setUploadMsg(`✓ 已上传 ${j.fileCount} ${word} (${sz} KB)`, 'ok');
-                }
+                // 成功：在上传按钮左侧显示路径 + 复制按钮
+                showUploadResult(j);
             } catch (err) {
                 setUploadMsg(`✗ ${err.message}`, 'err');
+                setTimeout(() => { uploadMsg.hidden = true; }, 6000);
             } finally {
                 clearInterval(hammer);
                 if (fileInput) fileInput.value = '';
-                if (folderInput) folderInput.value = '';
-                setTimeout(() => { uploadMsg.hidden = true; }, 6000);
             }
         }
 
-// 文件按钮：保持原有逻辑
+        // 文件按钮：保持原有逻辑
         if (fileInput) fileInput.addEventListener('change', e => performUpload(Array.from(e.target.files || []), false));
 
-        // 文件夹按钮：FAPI 或降级
-        const folderBtn = container.querySelector('#termUploadFolderBtn');
+        // 文件夹：FAPI 或降级（提取为独立函数，被下拉菜单项复用）
         const modal = container.querySelector('#termUploadModal');
         let pendingFolderFiles = [];
 
@@ -449,9 +598,6 @@
         function closeModal() {
             modal.hidden = true;
             pendingFolderFiles = [];
-            if (folderInput) folderInput.value = '';
-            // fallback input 可能也有残留
-            if (folderInput) folderInput.value = '';
         }
 
         container.querySelector('#termModalBackdrop').addEventListener('click', closeModal);
@@ -481,56 +627,128 @@
             }
         });
 
-        if (folderBtn) {
-            folderBtn.addEventListener('click', async () => {
-                if (window.showDirectoryPicker) {
-                    // FAPI：现代浏览器，无浏览器弹窗
-                    try {
-                        const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
-                        pendingFolderFiles = [];
-                        // 递归遍历整个目录树，保留子目录结构
-                        async function walkDir(handle, prefix) {
-                            for await (const [name, child] of handle.entries()) {
-                                const rel = prefix ? prefix + '/' + name : name;
-                                if (child.kind === 'file') {
-                                    const f = await child.getFile();
-                                    Object.defineProperty(f, 'webkitRelativePath', { value: rel });
-                                    pendingFolderFiles.push(f);
-                                } else {
-                                    // child.kind === 'directory'：递归
-                                    await walkDir(child, rel);
-                                }
+        // 选择文件夹的函数（FAPI 优先，无浏览器原生弹窗）
+        async function pickFolder() {
+            if (window.showDirectoryPicker) {
+                try {
+                    const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+                    pendingFolderFiles = [];
+                    async function walkDir(handle, prefix) {
+                        for await (const [name, child] of handle.entries()) {
+                            const rel = prefix ? prefix + '/' + name : name;
+                            if (child.kind === 'file') {
+                                const f = await child.getFile();
+                                Object.defineProperty(f, 'webkitRelativePath', { value: rel });
+                                pendingFolderFiles.push(f);
+                            } else {
+                                await walkDir(child, rel);
                             }
                         }
-                        await walkDir(dirHandle, dirHandle.name);
-                        if (pendingFolderFiles.length === 0) {
-                            setUploadMsg('⚠ 文件夹为空', 'err');
-                            setTimeout(() => { uploadMsg.hidden = true; }, 3000);
-                            return;
-                        }
-                        const totalMB = (pendingFolderFiles.reduce((s, f) => s + f.size, 0) / 1024).toFixed(1);
-                        openModal(`上传文件夹：${dirHandle.name}`,
-                            `<span class="term-meta-key">${dirHandle.name}</span> — ${pendingFolderFiles.length} 个文件、${totalMB} KB`);
-                    } catch (err) {
-                        if (err.name !== 'AbortError') setUploadMsg(`✗ ${err.message}`, 'err');
                     }
-                } else {
-                    // 降级：隐藏 input + 程序化点击
-                    if (folderInput) folderInput.click();
+                    await walkDir(dirHandle, dirHandle.name);
+                    if (pendingFolderFiles.length === 0) {
+                        setUploadMsg('⚠ 文件夹为空', 'err');
+                        setTimeout(() => { uploadMsg.hidden = true; }, 3000);
+                        return;
+                    }
+                    const totalMB = (pendingFolderFiles.reduce((s, f) => s + f.size, 0) / 1024).toFixed(1);
+                    openModal(`上传文件夹：${dirHandle.name}`,
+                        `<span class="term-meta-key">${dirHandle.name}</span> — ${pendingFolderFiles.length} 个文件、${totalMB} KB`);
+                } catch (err) {
+                    if (err.name !== 'AbortError') setUploadMsg(`✗ ${err.message}`, 'err');
                 }
-            });
+            } else {
+                // 降级：浏览器不支持 FAPI，提示用户
+                setUploadMsg('⚠ 当前浏览器不支持选择文件夹，请改用"上传文件"逐个选择', 'err');
+                setTimeout(() => { uploadMsg.hidden = true; }, 4000);
+            }
+        }
 
-            // fallback 回退：webkitdirectory 选中后直接上传（无自定义弹窗）
-            if (folderInput) {
-                folderInput.addEventListener('change', e => {
-                    const files = Array.from(e.target.files || []);
-                    if (files.length > 0) {
-                        pendingFolderFiles = files;
-                        const totalMB = (files.reduce((s, f) => s + f.size, 0) / 1024).toFixed(1);
-                        openModal(`上传文件夹`, `${files.length} 个文件、${totalMB} KB`);
+        // 主按钮：上传文件（直接触发 file input）
+        const uploadMainBtn = container.querySelector('#termUploadMainBtn');
+        if (uploadMainBtn) {
+            uploadMainBtn.addEventListener('click', () => {
+                if (fileInput) fileInput.click();
+            });
+        }
+
+        // 下拉三角 + 菜单
+        const caretBtn = container.querySelector('#termUploadCaretBtn');
+        const menu = container.querySelector('#termUploadMenu');
+        function closeMenu() { if (menu) menu.hidden = true; }
+        if (caretBtn && menu) {
+            caretBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                menu.hidden = !menu.hidden;
+            });
+            // 菜单项点击
+            menu.querySelectorAll('.term-upload-menu-item').forEach(item => {
+                item.addEventListener('click', async () => {
+                    closeMenu();
+                    const kind = item.dataset.kind;
+                    if (kind === 'file') {
+                        if (fileInput) fileInput.click();
+                    } else if (kind === 'folder') {
+                        await pickFolder();
                     }
                 });
+            });
+            // 点击其他区域关闭菜单
+            document.addEventListener('click', e => {
+                if (menu && !menu.hidden && !container.querySelector('#termUploadSplit').contains(e.target)) {
+                    closeMenu();
+                }
+            });
+        }
+
+        // ── 上传设置面板：自动解压 + 目标目录 ──
+        const settingsWrap = container.querySelector('#termUploadSettings');
+        const settingsBtn = container.querySelector('#termUploadSettingsBtn');
+        const settingsPanel = container.querySelector('#termUploadSettingsPanel');
+        const autoExtractChk = container.querySelector('#termUploadAutoExtract');
+        const targetDirInput = container.querySelector('#termUploadTargetDir');
+
+        function closeSettingsPanel() { if (settingsPanel) settingsPanel.hidden = true; }
+        function applySettingsToUI(s) {
+            if (autoExtractChk) autoExtractChk.checked = s.autoExtract;
+            if (targetDirInput) targetDirInput.value = s.targetDir;
+        }
+        applySettingsToUI(readUploadSettings());
+
+        if (settingsBtn && settingsPanel) {
+            settingsBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                settingsPanel.hidden = !settingsPanel.hidden;
+                if (!settingsPanel.hidden) closeMenu();
+            });
+            // 面板内部点击不关闭
+            settingsPanel.addEventListener('click', e => e.stopPropagation());
+            // 自动解压开关
+            if (autoExtractChk) {
+                autoExtractChk.addEventListener('change', () => {
+                    const s = readUploadSettings();
+                    s.autoExtract = autoExtractChk.checked;
+                    saveUploadSettings(s);
+                });
             }
+            // 目标目录输入：失焦/回车时保存
+            if (targetDirInput) {
+                const persistTarget = () => {
+                    const s = readUploadSettings();
+                    s.targetDir = targetDirInput.value.trim();
+                    saveUploadSettings(s);
+                };
+                targetDirInput.addEventListener('change', persistTarget);
+                targetDirInput.addEventListener('keydown', e => {
+                    if (e.key === 'Enter') { persistTarget(); closeSettingsPanel(); }
+                });
+            }
+            // 点击其他区域关闭面板
+            document.addEventListener('click', e => {
+                if (settingsPanel && !settingsPanel.hidden && settingsWrap && !settingsWrap.contains(e.target)) {
+                    closeSettingsPanel();
+                }
+            });
         }
 
         // ── Ctrl+L 在输入框聚焦时清屏 ──
@@ -541,7 +759,7 @@
             if (e.key === 'Tab') { e.preventDefault(); tabComplete(); return; }
         });
 
-                // ── 执行命令 ──
+        // ── 执行命令 ──
         async function runCommand() {
             const s = sessions[activeIdx];
             if (s.running) return;
@@ -555,10 +773,10 @@
             // 用 innerHTML 注入：时间戳 span + 转义后的命令文本
             appendAndSave(
                 `<div class="term-block term-cmd">` +
-                    `<span class="term-cmd-ts">${ts}</span> ` +
-                    `<span class="term-cmd-prompt">${escapeHtml(promptEl.textContent)}</span> ` +
-                    `<span class="term-cmd-cwd">[${escapeHtml(cwdShort)}]</span> ` +
-                    `<span class="term-cmd-text">${escapeHtml(cmd)}</span>` +
+                `<span class="term-cmd-ts">${ts}</span> ` +
+                `<span class="term-cmd-prompt">${escapeHtml(promptEl.textContent)}</span> ` +
+                `<span class="term-cmd-cwd">[${escapeHtml(cwdShort)}]</span> ` +
+                `<span class="term-cmd-text">${escapeHtml(cmd)}</span>` +
                 `</div>`
             );
 
@@ -576,10 +794,10 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                    command: cmd,
-                    cwd: cwdForRun,
-                    login: container.querySelector('#termLoginToggle')?.checked || false,
-                }),
+                        command: cmd,
+                        cwd: cwdForRun,
+                        login: container.querySelector('#termLoginToggle')?.checked || false,
+                    }),
                 });
                 const data = await r.json();
                 if (!data.ok) {
@@ -637,7 +855,7 @@
             }
         }
 
-runBtn.addEventListener('click', runCommand);
+        runBtn.addEventListener('click', runCommand);
         inputEl.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') { e.preventDefault(); runCommand(); }
             // Ctrl+C 终止（仅在命令运行时生效）
@@ -704,11 +922,11 @@ runBtn.addEventListener('click', runCommand);
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                    command: listCmd,
-                    cwd: sessions[activeIdx].cwd || meta.cwd,
-                    timeout: 5000,
-                    login: container.querySelector('#termLoginToggle')?.checked || false,
-                }),
+                        command: listCmd,
+                        cwd: sessions[activeIdx].cwd || meta.cwd,
+                        timeout: 5000,
+                        login: container.querySelector('#termLoginToggle')?.checked || false,
+                    }),
                 });
                 const data = await r.json();
                 if (!data.ok || !data.stdout) return;
@@ -720,7 +938,7 @@ runBtn.addEventListener('click', runCommand);
                 const newVal = val.slice(0, cursor - token.length) + replacement + val.slice(cursor);
                 inputEl.value = newVal;
                 inputEl.setSelectionRange(cursor - token.length + replacement.length, cursor - token.length + replacement.length);
-            } catch (_) {}
+            } catch (_) { }
         }
     }
 
@@ -756,16 +974,16 @@ runBtn.addEventListener('click', runCommand);
         return '/' + stack.join('/');
     }
 
-// ── ls 输出着色：给文件名按类型着色 ──
+    // ── ls 输出着色：给文件名按类型着色 ──
     const LS_COLOR_RULES = [
-        { re: /\/$/m,              cls: 'term-ls-dir',     desc: '目录' },
-        { re: /\*$/m,              cls: 'term-ls-exe',     desc: '可执行' },
-        { re: /@$/m,               cls: 'term-ls-sym',     desc: '符号链接' },
-        { re: /[|=]$/m,            cls: 'term-ls-fifo',    desc: '管道/套接字' },
+        { re: /\/$/m, cls: 'term-ls-dir', desc: '目录' },
+        { re: /\*$/m, cls: 'term-ls-exe', desc: '可执行' },
+        { re: /@$/m, cls: 'term-ls-sym', desc: '符号链接' },
+        { re: /[|=]$/m, cls: 'term-ls-fifo', desc: '管道/套接字' },
         { re: /\.(tar|gz|bz2|xz|zip|7z|rar|tgz|tbz|txz)$/i, cls: 'term-ls-archive', desc: '归档' },
         { re: /\.(png|jpg|jpeg|gif|svg|webp|bmp|ico|mp4|mkv|avi|mov|webm|wmv|flv|mp3|wav|flac|ogg|aac|wma)$/i, cls: 'term-ls-media', desc: '媒体' },
         { re: /\.(pdf|docx?|xlsx?|pptx?|csv|tsv|md|rst|txt|json|yaml|yml|toml|xml|html?|css|jsx?|tsx?|py|rb|go|rs|java|c|cpp|h|hpp|sh|bash|zsh|fish)$/i, cls: 'term-ls-doc', desc: '代码/文档' },
-        { re: /(?:^|\s)\.\S+/m,    cls: 'term-ls-dot',     desc: '隐藏文件' },
+        { re: /(?:^|\s)\.\S+/m, cls: 'term-ls-dot', desc: '隐藏文件' },
     ];
 
     function colorizeLine(line) {

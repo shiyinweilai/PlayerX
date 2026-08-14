@@ -63,6 +63,191 @@
 .term-header-btn svg {
     flex-shrink: 0;
 }
+
+/* ── 上传（文件 / 文件夹）合并按钮：主按钮 + 下拉三角 ── */
+.term-upload-split {
+    position: relative;
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 6px;
+    background: rgba(99, 102, 241, 0.08);
+    overflow: visible;
+}
+.term-upload-split .term-upload-main,
+.term-upload-split .term-upload-caret {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #6366f1;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+}
+.term-upload-split .term-upload-main {
+    padding-right: 6px;
+}
+.term-upload-split .term-upload-caret {
+    padding: 0 6px 0 4px;
+    border-left: 1px solid rgba(99, 102, 241, 0.25);
+    color: #6366f1;
+}
+.term-upload-split:hover {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(99, 102, 241, 0.4);
+}
+.term-upload-split:hover .term-upload-main,
+.term-upload-split:hover .term-upload-caret {
+    color: #4f46e5;
+}
+.term-upload-split .term-upload-caret svg {
+    transition: transform 0.18s ease;
+}
+.term-upload-split.is-open .term-upload-caret svg {
+    transform: rotate(180deg);
+}
+.term-upload-split .term-upload-main svg,
+.term-upload-split .term-upload-caret svg {
+    flex-shrink: 0;
+}
+.term-upload-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 5000;
+    min-width: 140px;
+    padding: 4px;
+    background: #fff;
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.10), 0 2px 4px rgba(15, 23, 42, 0.04);
+}
+.term-upload-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #1e293b;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.term-upload-menu-item:hover {
+    background: rgba(99, 102, 241, 0.10);
+    color: #4f46e5;
+}
+.term-upload-menu-item svg {
+    flex-shrink: 0;
+    color: #6366f1;
+}
+
+/* ── 上传设置（齿轮按钮 + 浮层面板） ── */
+.term-upload-settings {
+    position: relative;
+    display: inline-flex;
+}
+.term-upload-settings-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    color: #6366f1;
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.term-upload-settings-btn:hover {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(99, 102, 241, 0.4);
+    color: #4f46e5;
+}
+.term-upload-settings-btn svg {
+    flex-shrink: 0;
+}
+.term-upload-settings-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 5000;
+    width: 260px;
+    padding: 12px;
+    background: #fff;
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 2px 4px rgba(15, 23, 42, 0.04);
+}
+.term-settings-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e293b;
+    margin-bottom: 10px;
+}
+.term-settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 0;
+}
+.term-settings-label {
+    font-size: 12px;
+    color: #475569;
+    white-space: nowrap;
+}
+.term-settings-row input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    font-size: 12px;
+    color: #1e293b;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.term-settings-row input[type="text"]:focus {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+    background: #fff;
+}
+.term-settings-row input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #6366f1;
+    cursor: pointer;
+}
+.term-settings-hint {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #94a3b8;
+}
+.term-settings-hint code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: #6366f1;
+    background: #f1f5f9;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
 .term-title-text {
     font-size: 15px;
     font-weight: 700;
@@ -117,7 +302,7 @@
     border-bottom: none;
     padding: 6px 8px;
     gap: 10px;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .term-tabs {
@@ -423,6 +608,110 @@
 .term-up-bar { flex: 1; min-width: 120px; max-width: 240px; height: 6px; background: rgba(99, 102, 241, 0.12); border-radius: 3px; overflow: hidden; }
 .term-up-bar-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #3b82f6); transition: width 0.15s linear; }
 .term-up-bytes { font-size: 10.5px; color: #64748b; font-family: 'SF Mono', 'Cascadia Code', monospace; white-space: nowrap; }
+
+/* ── 上传成功结果卡（路径 + 复制按钮，紧邻按钮左侧） ── */
+.term-upload-result {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 4px 10px;
+    margin-right: 4px;
+    background: rgba(34, 197, 94, 0.08);
+    border: 1px solid rgba(34, 197, 94, 0.30);
+    border-radius: 6px;
+    max-width: 380px;
+    min-width: 0;
+}
+.term-upload-result-label {
+    flex-shrink: 0;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #15803d;
+    white-space: nowrap;
+}
+.term-upload-result-path {
+    flex: 1;
+    min-width: 0;
+    padding: 2px 6px;
+    font-family: 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: #166534;
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.term-upload-result-icon,
+.term-upload-result-close {
+    flex-shrink: 0;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: #15803d;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 1;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.term-upload-result-icon:hover,
+.term-upload-result-close:hover {
+    background: rgba(34, 197, 94, 0.18);
+    color: #14532d;
+}
+.term-upload-result-icon:disabled {
+    cursor: default;
+    opacity: 0.85;
+}
+/* 自定义 tooltip：CSS 伪元素立即响应（避开浏览器原生 title 的 ~500ms 延迟）
+   统一在按钮下方弹出 + 尖角向上，适用于所有带 data-tip 属性的按钮 */
+.term-page [data-tip] {
+    position: relative;
+}
+.term-page [data-tip]::before {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    transform: translateY(-2px);
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #fff;
+    background: #1e293b;
+    border-radius: 4px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    z-index: 9999;
+}
+.term-page [data-tip]::after {
+    content: '';
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 10px;
+    border: 4px solid transparent;
+    border-bottom-color: #1e293b;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+    z-index: 9999;
+}
+.term-page [data-tip]:hover::before {
+    opacity: 1;
+    transform: translateY(0);
+}
+.term-page [data-tip]:hover::after {
+    opacity: 1;
+}
 
 
 /* ── 上传弹窗 ── */

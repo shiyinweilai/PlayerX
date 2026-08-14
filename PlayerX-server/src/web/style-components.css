@@ -731,21 +731,25 @@ td.actions .row-act:disabled {
     pointer-events: none;
     transition: opacity .25s ease, transform .25s ease;
 }
+
 .top-alert.show {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
     pointer-events: auto;
 }
+
 .top-alert-icon {
     font-size: 22px;
     line-height: 1;
     flex-shrink: 0;
     margin-top: 1px;
 }
+
 .top-alert-body {
     flex: 1;
     min-width: 0;
 }
+
 .top-alert-title {
     font-size: 14px;
     font-weight: 700;
@@ -753,12 +757,14 @@ td.actions .row-act:disabled {
     line-height: 1.4;
     margin-bottom: 2px;
 }
+
 .top-alert-detail {
     font-size: 12px;
     color: #78350f;
     line-height: 1.5;
     word-break: break-all;
 }
+
 .top-alert-close {
     background: none;
     border: none;
@@ -771,9 +777,11 @@ td.actions .row-act:disabled {
     flex-shrink: 0;
     transition: opacity .15s ease;
 }
+
 .top-alert-close:hover {
     opacity: 1;
 }
+
 /* 严重错误：红色 */
 .top-alert.top-alert-err {
     border-color: #fca5a5;
@@ -782,15 +790,19 @@ td.actions .row-act:disabled {
         0 12px 28px -8px rgba(239, 68, 68, 0.35),
         0 4px 12px -4px rgba(0, 0, 0, 0.10);
 }
+
 .top-alert.top-alert-err .top-alert-title {
     color: #991b1b;
 }
+
 .top-alert.top-alert-err .top-alert-detail {
     color: #7f1d1d;
 }
+
 .top-alert.top-alert-err .top-alert-close {
     color: #991b1b;
 }
+
 /* 成功：绿色 */
 .top-alert.top-alert-ok {
     border-color: #86efac;
@@ -799,12 +811,15 @@ td.actions .row-act:disabled {
         0 12px 28px -8px rgba(16, 185, 129, 0.30),
         0 4px 12px -4px rgba(0, 0, 0, 0.10);
 }
+
 .top-alert.top-alert-ok .top-alert-title {
     color: #065f46;
 }
+
 .top-alert.top-alert-ok .top-alert-detail {
     color: #047857;
 }
+
 .top-alert.top-alert-ok .top-alert-close {
     color: #065f46;
 }
@@ -1625,6 +1640,7 @@ table.preview-table tbody tr:hover {
     border-color: var(--primary, #0071e3);
     background: #fff;
 }
+
 /* ────────── 全局悬浮提示（JS 注入，fixed 定位，z-index 10000） ────────── */
 .analyze-tooltip {
     position: fixed;
