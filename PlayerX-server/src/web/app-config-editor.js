@@ -981,7 +981,7 @@ async function runBuildAction() {
 
     const action = 'build';
     const statusEl = dimView.querySelector('#dimBuildStatus');
-    const ensureBuildStatusUi = () => {
+    const ensureProgressUi = () => {
         if (!statusEl) return null;
         if (!statusEl.querySelector('.dim-build-progress')) {
             statusEl.innerHTML = `
@@ -1001,14 +1001,25 @@ async function runBuildAction() {
         }
         return statusEl.querySelector('.dim-build-progress-text');
     };
-    const setBuildStatus = (state, text) => {
+    const setBuildStatus = (state, text, detail) => {
         if (!statusEl) return;
         statusEl.classList.remove('is-pending', 'is-success', 'is-warn', 'is-error');
         if (!text) {
             statusEl.innerHTML = '';
             return;
         }
-        const textEl = ensureBuildStatusUi();
+        if (state === 'is-error') {
+            // 失败时不显示进度条，直接显示失败标签+错误详情
+            statusEl.innerHTML = `
+                    <span class="dim-build-fail">
+                        <span class="dim-build-fail-icon">✕</span>
+                        <span class="dim-build-fail-label">失败</span>
+                    </span>
+                    ${detail ? `<span class="dim-build-fail-detail">${typeof escHtml === 'function' ? escHtml(detail) : detail}</span>` : ''}`;
+            statusEl.classList.add('is-error');
+            return;
+        }
+        const textEl = ensureProgressUi();
         if (state) statusEl.classList.add(state);
         if (textEl) textEl.textContent = text;
     };
@@ -1026,8 +1037,7 @@ async function runBuildAction() {
         if (r.status === 401) { setBuildStatus('', ''); return; }
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j.ok) {
-            showToast('❌ ' + (j.error || '执行失败'), 'err');
-            setBuildStatus('is-error', '❌ 失败');
+            setBuildStatus('is-error', '❌ 失败', j.error || '执行失败');
             return;
         }
         // 构建成功后默认 zip 到 testsrc

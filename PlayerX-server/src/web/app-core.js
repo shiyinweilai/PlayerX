@@ -433,6 +433,20 @@ const MODE_ORDER = ['multi_dim', 'subjective', 'quality', 'quality_slide', 'test
 
 function modeLabel(mode) { return MODE_LABELS[mode] || mode; }
 
+// ── 移动端侧边栏（drawer）控制 ──
+function openMobileSidebar() {
+    const sb = document.querySelector('.admin-sidebar');
+    const bd = document.getElementById('adminSidebarBackdrop');
+    if (sb) sb.classList.add('open');
+    if (bd) bd.classList.add('open');
+}
+function closeMobileSidebar() {
+    const sb = document.querySelector('.admin-sidebar');
+    const bd = document.getElementById('adminSidebarBackdrop');
+    if (sb) sb.classList.remove('open');
+    if (bd) bd.classList.remove('open');
+}
+
 // ── 模块路由（sidebar 导航） ──
 const MODULES = {
     dashboard: { section: () => $('pageDashboard'), hash: '#dashboard' },
@@ -460,6 +474,8 @@ function switchModule(name, skipHashUpdate) {
     // hash
     if (!skipHashUpdate) history.replaceState(null, '', MODULES[name].hash);
     currentModule = name;
+    // 移动端：切换模块后自动收起侧边栏
+    if (window.innerWidth <= 1024) closeMobileSidebar();
     // 各模块进入时的初始化
     if (name === 'tasks') { dimPageOpen = true; loadConfigList(); }
     else { dimPageOpen = false; }
@@ -476,3 +492,9 @@ function switchModule(name, skipHashUpdate) {
         window.PXTasks.onShow();
     }
 }
+
+// ── 移动端菜单按钮 + 背景点击关闭 ──
+const _menuToggle = document.getElementById('adminMenuToggle');
+const _menuBackdrop = document.getElementById('adminSidebarBackdrop');
+if (_menuToggle) _menuToggle.addEventListener('click', openMobileSidebar);
+if (_menuBackdrop) _menuBackdrop.addEventListener('click', closeMobileSidebar);

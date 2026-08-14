@@ -73,11 +73,15 @@
 }
 
 .dashboard-table-wrap {
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;       /* 移动端弹性滚动 */
+    max-width: 100%;
 }
 
 .dashboard-table {
     width: 100%;
+    min-width: 540px;        /* 桌面端不变；移动端窄于 540 时启用水平滚动 */
     border-collapse: separate;
     border-spacing: 0;
     font-size: 13px;

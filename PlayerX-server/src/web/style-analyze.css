@@ -880,16 +880,70 @@
 }
 
 @media (max-width: 640px) {
-    #pageAnalyze .analyze-controls {
-        align-items: stretch;
+    #pageAnalyze .analyze-panel {
+        padding: 12px;
     }
 
+    #pageAnalyze .analyze-header {
+        margin-bottom: 8px;
+    }
+
+    #pageAnalyze .analyze-header>div {
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    #pageAnalyze .analyze-title {
+        font-size: 18px;
+    }
+
+    #pageAnalyze .analyze-subtitle {
+        font-size: 12px;
+    }
+
+    #pageAnalyze .analyze-controls {
+        gap: 8px;
+        padding: 8px;
+        margin-bottom: 10px;
+        align-items: center;
+        flex-wrap: nowrap;
+    }
+
+    /* 移动端按钮只显示图标，隐藏文字 */
+    #pageAnalyze .analyze-controls .primary-btn .label,
+    #pageAnalyze .analyze-controls .analyze-share-btn .label {
+        display: none;
+    }
+    #pageAnalyze .analyze-controls .primary-btn,
+    #pageAnalyze .analyze-controls .analyze-share-btn {
+        flex-shrink: 0;
+        padding: 8px 10px;
+        min-width: 0;
+    }
+
+    /* Tag 输入框占满剩余空间 */
     #pageAnalyze .analyze-control-item {
-        min-width: 100%;
+        min-width: 0;
+        flex: 1 1 0;
+        overflow: visible;
+    }
+
+    /* 下拉菜单适应移动端视口 */
+    #pageAnalyze .analyze-tag-menu {
+        width: calc(100vw - 32px);
+        left: 50%;
+        transform: translateX(-50%);
     }
 
     #pageAnalyze .analyze-stats-grid {
         grid-template-columns: 1fr;
+        gap: 4px;
+        padding: 4px 8px;
+    }
+
+    #pageAnalyze .analyze-overview-row {
+        gap: 8px;
+        margin: 0 0 8px;
     }
 }
 

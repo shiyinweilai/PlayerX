@@ -362,13 +362,29 @@ tr.sel>td {
     background: var(--bg-elev-1);
     border: 1px solid var(--border-soft);
     border-radius: var(--radius-md);
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: auto;                      /* 同时支持上下滚动（行多时） */
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+    max-height: 70vh;                      /* 行多时启用纵向滚动而非全展开 */
 }
 
 table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
+    min-width: 720px;
+}
+
+/* 移动端：让"文件名"列至少 160px，避免被压成竖排 */
+@media (max-width: 860px) {
+    .table-wrap table col[data-col="name"] {
+        min-width: 160px;
+    }
+    .table-wrap thead th,
+    .table-wrap tbody td {
+        word-break: break-word;
+    }
 }
 
 thead th {
