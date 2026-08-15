@@ -8185,7 +8185,7 @@ ApplicationWindow {
         // 不再为底部 CSV 提示词条让位（CSV 底栏只占视频区下方）。
         anchors.bottom: parent.bottom
         width: root.refSidebarWidth
-        visible: root.refSidebarVisible && width > 0 && root.currentTab === "play" && !root.immersive
+        visible: root.refSidebarVisible && width > 0 && root.currentTab === "play"
         color: "#15151a"
         // 右侧 1px 分隔线，与视频区切开
         Rectangle {
@@ -9471,8 +9471,8 @@ ApplicationWindow {
         //   - prompt 文本只占视频区下方的横向空间，与视频画面始终对齐。
         // 与「参考图侧边栏」作为一个整体出现/隐藏（用户工作流：要么同时看图+词，
         // 要么都不看），由 refSidebarVisible 一并控制。
-        // 沉浸模式下也铺满整个内容区底部，与 videoArea 行为一致。
-        anchors.left: root.immersive ? parent.left : refSidebar.right
+        // 与 videoArea 保持一致，始终跟随 refSidebar 右侧。
+        anchors.left: refSidebar.right
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         readonly property bool hasContent: root.refTextHasCurrent
@@ -10018,9 +10018,9 @@ ApplicationWindow {
     // 框不被 ToolBar 阴影/分隔线压住。
     Item {
         id: videoArea
-        // 沉浸模式下铺满整个 contentItem（独立子界面），普通模式下让出
-        // 左侧的参考图栏。
-        anchors.left: root.immersive ? parent.left : refSidebar.right
+        // videoArea 始终跟随 refSidebar 右侧（refSidebar 折叠时宽度=0，等价于贴 leftNavBar.right）。
+        // immersive 模式下 leftNavBar 宽度变为 0，refSidebar 自然贴左边。
+        anchors.left: refSidebar.right
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.topMargin: 2
@@ -13142,10 +13142,10 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: 184
+        width: root.immersive ? 0 : 184
         color: "#141419"
         z: 200
-        // 沉浸模式：播放有视频 / YUV tab 时隐藏整个侧栏，最大化工作区。
+        // 沉浸模式：播放有视频 / YUV render 阶段时隐藏整个侧栏，最大化工作区。
         visible: !root.immersive
 
         // 右侧 1px 分隔线
