@@ -189,6 +189,30 @@ void    YuvBridge::setDisplayMode(int slot, int mode) {
     emit displayModeChanged(slot);
 }
 
+QVariantList YuvBridge::pixelBlock8x8(int slot, int px, int py) const {
+    QVariantList result;
+    if (slot < 0 || slot >= MaxSlots) return result;
+    if (!m_analyzers[slot]->isOpen()) return result;
+
+    // 对齐到 8 的倍数
+    const int bx = (px / 8) * 8;
+    const int by = (py / 8) * 8;
+
+    for (int row = 0; row < 8; ++row) {
+        for (int col = 0; col < 8; ++col) {
+            const int x = bx + col;
+            const int y = by + row;
+            auto pix = m_analyzers[slot]->getPixelYUV(x, y);
+            QVariantMap m;
+            m["y"] = pix.y;
+            m["u"] = pix.u;
+            m["v"] = pix.v;
+            result.append(m);
+        }
+    }
+    return result;
+}
+
 // ── 预设持久化 ──────────────────────────────────────────────────────
 // 用 QSettings 把用户的"尺寸 / 格式 / 帧率"历史存到磁盘，
 // 跨会话保留，下次直接下拉复用。可单独删除任一项。

@@ -12,6 +12,9 @@
 #include <QImage>
 #include <QString>
 #include <QStringList>
+#include <QVariant>
+#include <QVariantList>
+#include <QVariantMap>
 #include <memory>
 
 namespace rb {
@@ -64,6 +67,12 @@ public:
     Q_INVOKABLE bool    hasFile(int slot) const;
     Q_INVOKABLE int     displayMode(int slot) const;
     Q_INVOKABLE void    setDisplayMode(int slot, int mode);
+
+    // ── 像素级查询（8×8 块）──────────────────────────────────────────────
+    // 返回以 (px, py) 为起点（图像坐标）的 8×8 YUV 像素块数据。
+    // 返回 QVariantList，每个元素为一个 QVariantMap {"y":int,"u":int,"v":int}。
+    // 共 64 个元素，按行优先排列。若坐标越界则返回空列表。
+    Q_INVOKABLE QVariantList pixelBlock8x8(int slot, int px, int py) const;
 
     // ── 预设持久化（用 QSettings 保存到磁盘）───────────────────────────
     // 尺寸预设（"1920x1080"），按添加顺序去重；QML 用于"宽高预设"下拉。

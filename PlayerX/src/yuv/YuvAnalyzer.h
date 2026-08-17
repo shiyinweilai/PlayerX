@@ -61,6 +61,11 @@ public:
     // 单平面灰度图（plane: 0=Y, 1=U, 2=V）
     QImage getPlaneImage(int plane);
 
+    // ── 像素级查询 ──────────────────────────────────────────────────────
+    // 获取图像坐标 (x, y) 处的 YUV 值，返回 {y, u, v}；越界返回 {-1,-1,-1}
+    struct YuvPixel { int y, u, v; };
+    YuvPixel getPixelYUV(int x, int y) const;
+
 private:
     void initSwsContext();
     void freeSwsContext();

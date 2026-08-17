@@ -307,4 +307,66 @@ void YuvAnalyzer::planeSize(int plane, int& pw, int& ph) const {
     }
 }
 
+YuvAnalyzer::YuvPixel YuvAnalyzer::getPixelYUV(int x, int y) const {
+    if (m_frameBuf.empty() || !m_srcFrame) return {-1, -1, -1};
+    if (x < 0 || x >= m_width || y < 0 || y >= m_height) return {-1, -1, -1};
+
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
+    if (!desc) return {-1, -1, -1};
+
+    // Y 值：直接从 plane 0 读取
+    int yVal = 0;
+    if (m_srcFrame->data[0]) {
+        yVal = m_srcFrame->data[0][y * m_srcFrame->linesize[0] + x];
+    }
+
+    // U/V 值：考虑色度下采样
+    int uVal = 128, vVal = 128;
+    const int chromaW = desc->log2_chroma_w;
+    const int chromaH = desc->log2_chroma_h;
+    const int cx = x >> chromaW;
+    const int cy = y >> chromaH;
+
+    if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
+        // Semi-planar: UV 交错在 plane 1
+        if (m_srcFrame->data[1]) {
+            const int uvOffset = cy * m_srcFrame->linesize[1] + cx * 2;
+            if (m_pixFmt == AV_PIX_FMT_NV12) {
+                uVal = m_srcFrame->data[1][uvOffset];
+                vVal = m_srcFrame->data[1][uvOffset + 1];
+            } else { // NV21
+                vVal = m_srcFrame->data[1][uvOffset];
+                uVal = m_srcFrame->data[1][uvOffset + 1];
+            }
+        }
+    } else if (m_pixFmt == AV_PIX_FMT_YUYV422 || m_pixFmt == AV_PIX_FMT_UYVY422) {
+        // Packed: YUYV 或 UYVY
+        if (m_srcFrame->data[0]) {
+            const int pairX = (x / 2) * 4;
+            const uint8_t* row = m_srcFrame->data[0] + y * m_srcFrame->linesize[0];
+            if (m_pixFmt == AV_PIX_FMT_YUYV422) {
+                uVal = row[pairX + 1];
+                vVal = row[pairX + 3];
+            } else {
+                uVal = row[pairX];
+                vVal = row[pairX + 2];
+            }
+        }
+    } else if (m_pixFmt == AV_PIX_FMT_GRAY8) {
+        // 灰度：无 U/V
+        uVal = 128;
+        vVal = 128;
+    } else {
+        // Planar: U 在 plane 1, V 在 plane 2
+        if (m_srcFrame->data[1]) {
+            uVal = m_srcFrame->data[1][cy * m_srcFrame->linesize[1] + cx];
+        }
+        if (m_srcFrame->data[2]) {
+            vVal = m_srcFrame->data[2][cy * m_srcFrame->linesize[2] + cx];
+        }
+    }
+
+    return {yVal, uVal, vVal};
+}
+
 } // namespace rb
