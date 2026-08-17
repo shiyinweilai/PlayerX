@@ -198,6 +198,34 @@ Item {
                                 onExited: showPixelGrid = false
                             }
 
+                            // ── 8×8 像素块 hover 高亮边框 ──
+                            Rectangle {
+                                id: blockHighlight
+                                visible: pixelHoverArea.showPixelGrid
+                                width: 8
+                                height: 8
+                                color: "transparent"
+                                border.color: "#00FF88"
+                                border.width: 2
+                                radius: 1
+
+                                // 定位到当前像素所在的8×8块（对齐到块边界）
+                                x: {
+                                    const imgW = YuvBridge.width(slotWin.index)
+                                    const dispW = pixelHoverArea.width
+                                    const offX = (dispW - imgW) / 2.0
+                                    const blockX = Math.floor(pixelHoverArea.pixelX / 8) * 8
+                                    return offX + blockX
+                                }
+                                y: {
+                                    const imgH = YuvBridge.height(slotWin.index)
+                                    const dispH = pixelHoverArea.height
+                                    const offY = (dispH - imgH) / 2.0
+                                    const blockY = Math.floor(pixelHoverArea.pixelY / 8) * 8
+                                    return offY + blockY
+                                }
+                            }
+
                             // ── 8×8 像素矩阵浮窗 ──
                             Rectangle {
                                 id: pixelGridPopup
@@ -210,11 +238,39 @@ Item {
                                 border.width: 1
                                 opacity: 0.95
 
-                                // 定位：跟随鼠标但不超出画面
-                                x: Math.min(pixelHoverArea.mouseX + 16,
-                                            parent.width - width - 8)
-                                y: Math.max(8, Math.min(pixelHoverArea.mouseY - height - 8,
-                                            parent.height - height - 8))
+                                // 定位：智能避让，确保不遮挡鼠标附近的视频内容
+                                // X轴：优先放右侧，放不下则放左侧
+                                x: {
+                                    const mx = pixelHoverArea.mouseX
+                                    const pw = parent.width
+                                    const rightX = mx + 20
+                                    const leftX = mx - width - 20
+                                    // 右侧能完整显示则放右侧，否则放左侧
+                                    if (rightX + width + 8 <= pw) {
+                                        return rightX
+                                    } else if (leftX >= 8) {
+                                        return leftX
+                                    } else {
+                                        // 两侧都放不下时，贴右边界
+                                        return pw - width - 8
+                                    }
+                                }
+                                // Y轴：优先放上方，放不下则放下方
+                                y: {
+                                    const my = pixelHoverArea.mouseY
+                                    const ph = parent.height
+                                    const topY = my - height - 20
+                                    const bottomY = my + 20
+                                    // 上方能完整显示则放上方，否则放下方
+                                    if (topY >= 8) {
+                                        return topY
+                                    } else if (bottomY + height + 8 <= ph) {
+                                        return bottomY
+                                    } else {
+                                        // 都放不下时，贴顶部
+                                        return 8
+                                    }
+                                }
 
                                 ColumnLayout {
                                     anchors.fill: parent
