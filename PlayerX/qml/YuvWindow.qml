@@ -84,6 +84,9 @@ Item {
                         function onFrameChanged(slot) {
                             if (slot === slotWin.index) ver++
                         }
+                        function onPlayStateChanged(slot) {
+                            if (slot === slotWin.index) ver++
+                        }
                         function onDisplayModeChanged(slot) {
                             if (slot === slotWin.index) ver++
                         }
@@ -146,6 +149,7 @@ Item {
                         Item {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            clip: true
 
                             YuvDisplayItem {
                                 id: yuvDisp
@@ -153,6 +157,37 @@ Item {
                                 image: {
                                     const _ = slotWin.ver
                                     return YuvBridge.frameImage(slotWin.index)
+                                }
+                            }
+
+                            // ── 右键按住拖拽平移 ──
+                            MouseArea {
+                                id: panArea
+                                anchors.fill: parent
+                                acceptedButtons: Qt.RightButton
+                                property real lastX: 0
+                                property real lastY: 0
+
+                                onPressed: function(mouse) {
+                                    lastX = mouse.x
+                                    lastY = mouse.y
+                                    cursorShape = Qt.ClosedHandCursor
+                                }
+                                onReleased: {
+                                    cursorShape = Qt.ArrowCursor
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (pressed) {
+                                        yuvDisp.panX += mouse.x - lastX
+                                        yuvDisp.panY += mouse.y - lastY
+                                        lastX = mouse.x
+                                        lastY = mouse.y
+                                    }
+                                }
+                                // 右键双击：重置平移归位
+                                onDoubleClicked: {
+                                    yuvDisp.panX = 0
+                                    yuvDisp.panY = 0
                                 }
                             }
 
@@ -171,7 +206,7 @@ Item {
 
                                 onPositionChanged: function(mouse) {
                                     // 将鼠标坐标映射到图像坐标
-                                    // YuvDisplayItem 使用 1:1 原尺寸居中（不缩放）
+                                    // YuvDisplayItem 使用 1:1 原尺寸居中 + panX/panY 偏移
                                     const imgW = YuvBridge.width(slotWin.index)
                                     const imgH = YuvBridge.height(slotWin.index)
                                     if (imgW <= 0 || imgH <= 0) return
@@ -179,9 +214,9 @@ Item {
                                     const dispW = pixelHoverArea.width
                                     const dispH = pixelHoverArea.height
 
-                                    // 1:1 居中偏移（与 YuvDisplayItem::paint 一致）
-                                    const offX = (dispW - imgW) / 2.0
-                                    const offY = (dispH - imgH) / 2.0
+                                    // 1:1 居中偏移 + 平移偏移（与 YuvDisplayItem::paint 一致）
+                                    const offX = (dispW - imgW) / 2.0 + yuvDisp.panX
+                                    const offY = (dispH - imgH) / 2.0 + yuvDisp.panY
 
                                     const ix = Math.floor(mouse.x - offX)
                                     const iy = Math.floor(mouse.y - offY)
@@ -213,14 +248,14 @@ Item {
                                 x: {
                                     const imgW = YuvBridge.width(slotWin.index)
                                     const dispW = pixelHoverArea.width
-                                    const offX = (dispW - imgW) / 2.0
+                                    const offX = (dispW - imgW) / 2.0 + yuvDisp.panX
                                     const blockX = Math.floor(pixelHoverArea.pixelX / 8) * 8
                                     return offX + blockX
                                 }
                                 y: {
                                     const imgH = YuvBridge.height(slotWin.index)
                                     const dispH = pixelHoverArea.height
-                                    const offY = (dispH - imgH) / 2.0
+                                    const offY = (dispH - imgH) / 2.0 + yuvDisp.panY
                                     const blockY = Math.floor(pixelHoverArea.pixelY / 8) * 8
                                     return offY + blockY
                                 }
@@ -473,22 +508,22 @@ Item {
 
                                 Item { Layout.fillWidth: true }
 
-                                // 帧导航按钮
+                                // 帧导航 + 播放控制按钮
                                 Row {
                                     spacing: 2
 
-                                    // 首帧
+                                    // 快退 15 帧
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navFirstMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        color: navSkipBackMa.containsMouse ? "#3a3a3d" : "#252528"
                                         Text { anchors.centerIn: parent; text: "⏮"; color: "#ccc"; font.pixelSize: 11 }
                                         MouseArea {
-                                            id: navFirstMa; anchors.fill: parent
+                                            id: navSkipBackMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.firstFrame(slotWin.index)
+                                            onClicked: YuvBridge.skipBackward(slotWin.index, 15)
                                         }
                                     }
-                                    // 上一帧
+                                    // 帧后退（上一帧）
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
                                         color: navPrevMa.containsMouse ? "#3a3a3d" : "#252528"
@@ -499,33 +534,25 @@ Item {
                                             onClicked: YuvBridge.prevFrame(slotWin.index)
                                         }
                                     }
-                                    // 跳转输入
+                                    // 播放/暂停
                                     Rectangle {
-                                        width: 44; height: 22; radius: 3
-                                        color: "#1e1e24"; border.color: "#3a3a44"; border.width: 1
-                                        TextInput {
-                                            id: jumpInput
-                                            anchors.fill: parent; anchors.margins: 3
-                                            color: "#e0e0e0"; font.pixelSize: 10
-                                            horizontalAlignment: TextInput.AlignHCenter
-                                            validator: IntValidator { bottom: 1 }
-                                        }
-                                    }
-                                    Rectangle {
-                                        width: 30; height: 22; radius: 3
-                                        color: jumpGoMa.containsMouse ? "#3a6fd8" : "#2a5fc0"
-                                        Text { anchors.centerIn: parent; text: "GO"; color: "#fff"; font.pixelSize: 10; font.bold: true }
-                                        MouseArea {
-                                            id: jumpGoMa; anchors.fill: parent
-                                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                const n = parseInt(jumpInput.text)
-                                                if (n >= 1 && n <= YuvBridge.totalFrames(slotWin.index))
-                                                    YuvBridge.gotoFrame(slotWin.index, n - 1)
+                                        width: 28; height: 22; radius: 3
+                                        color: navPlayMa.containsMouse ? "#3a6fd8" : "#2a5fc0"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: {
+                                                const _ = slotWin.ver
+                                                return YuvBridge.isPlaying(slotWin.index) ? "⏸" : "▶"
                                             }
+                                            color: "#fff"; font.pixelSize: 11
+                                        }
+                                        MouseArea {
+                                            id: navPlayMa; anchors.fill: parent
+                                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                            onClicked: YuvBridge.togglePlayPause(slotWin.index)
                                         }
                                     }
-                                    // 下一帧
+                                    // 帧前进（下一帧）
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
                                         color: navNextMa.containsMouse ? "#3a3a3d" : "#252528"
@@ -536,15 +563,66 @@ Item {
                                             onClicked: YuvBridge.nextFrame(slotWin.index)
                                         }
                                     }
-                                    // 末帧
+                                    // 快进 15 帧
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navLastMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        color: navSkipFwdMa.containsMouse ? "#3a3a3d" : "#252528"
                                         Text { anchors.centerIn: parent; text: "⏭"; color: "#ccc"; font.pixelSize: 11 }
                                         MouseArea {
-                                            id: navLastMa; anchors.fill: parent
+                                            id: navSkipFwdMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.lastFrame(slotWin.index)
+                                            onClicked: YuvBridge.skipForward(slotWin.index, 15)
+                                        }
+                                    }
+
+                                    Item { width: 8 }
+
+                                    // 重置（回首帧）
+                                    Rectangle {
+                                        width: 28; height: 22; radius: 3
+                                        color: navResetMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        Text { anchors.centerIn: parent; text: "↺"; color: "#ccc"; font.pixelSize: 14 }
+                                        MouseArea {
+                                            id: navResetMa; anchors.fill: parent
+                                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                            onClicked: YuvBridge.resetFrame(slotWin.index)
+                                        }
+                                    }
+                                    // 倒放
+                                    Rectangle {
+                                        width: 28; height: 22; radius: 3
+                                        color: {
+                                            const _ = slotWin.ver
+                                            if (YuvBridge.isReversing(slotWin.index)) return "#b85a5a"
+                                            return navRevMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        }
+                                        Text { anchors.centerIn: parent; text: "◀◀"; color: "#ccc"; font.pixelSize: 9 }
+                                        MouseArea {
+                                            id: navRevMa; anchors.fill: parent
+                                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                if (YuvBridge.isReversing(slotWin.index))
+                                                    YuvBridge.pause(slotWin.index)
+                                                else
+                                                    YuvBridge.playReverse(slotWin.index)
+                                            }
+                                        }
+                                    }
+
+                                    Item { width: 8 }
+
+                                    // 一键居中（重置平移）
+                                    Rectangle {
+                                        width: 28; height: 22; radius: 3
+                                        color: navCenterMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        Text { anchors.centerIn: parent; text: "⊙"; color: "#ccc"; font.pixelSize: 13 }
+                                        MouseArea {
+                                            id: navCenterMa; anchors.fill: parent
+                                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                yuvDisp.panX = 0
+                                                yuvDisp.panY = 0
+                                            }
                                         }
                                     }
                                 }

@@ -3,6 +3,7 @@
 
 #include <QDir>
 #include <QSettings>
+#include <QTimer>
 #include <QUrl>
 #include <algorithm>
 #include <cstdio>
@@ -87,6 +88,7 @@ int YuvBridge::openFiles(const QVariantList& files) {
 
 void YuvBridge::closeAll() {
     for (int i = 0; i < MaxSlots; ++i) {
+        stopTimer(i);
         m_analyzers[i]->close();
         m_frameImages[i] = QImage();
         m_displayModes[i] = 0;
@@ -107,6 +109,7 @@ int YuvBridge::slotCount() const {
 void YuvBridge::closeFile(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
+    stopTimer(slot);
     m_analyzers[slot]->close();
     m_frameImages[slot] = QImage();
 
@@ -421,4 +424,134 @@ void YuvBridge::refreshFrameImage(int slot) {
     }
 
     emit frameChanged(slot);
+}
+
+void YuvBridge::stopTimer(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (m_playTimers[slot]) {
+        m_playTimers[slot]->stop();
+        delete m_playTimers[slot];
+        m_playTimers[slot] = nullptr;
+    }
+    m_playing[slot] = false;
+    m_reversing[slot] = false;
+}
+
+void YuvBridge::play(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
+
+    stopTimer(slot);
+    m_playing[slot] = true;
+    m_reversing[slot] = false;
+
+    const double fpsVal = m_analyzers[slot]->fps();
+    const int intervalMs = (fpsVal > 0) ? qMax(1, (int)(1000.0 / fpsVal)) : 33;
+
+    m_playTimers[slot] = new QTimer(this);
+    m_playTimers[slot]->setInterval(intervalMs);
+    connect(m_playTimers[slot], &QTimer::timeout, this, [this, slot]() {
+        if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) {
+            stopTimer(slot);
+            emit playStateChanged(slot);
+            return;
+        }
+        const int cur = m_analyzers[slot]->currentFrame();
+        const int total = m_analyzers[slot]->totalFrames();
+        if (cur >= total - 1) {
+            // 到达末尾，停止播放
+            stopTimer(slot);
+            emit playStateChanged(slot);
+            return;
+        }
+        m_analyzers[slot]->nextFrame();
+        refreshFrameImage(slot);
+    });
+    m_playTimers[slot]->start();
+    emit playStateChanged(slot);
+}
+
+void YuvBridge::playReverse(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
+
+    stopTimer(slot);
+    m_playing[slot] = true;
+    m_reversing[slot] = true;
+
+    const double fpsVal = m_analyzers[slot]->fps();
+    const int intervalMs = (fpsVal > 0) ? qMax(1, (int)(1000.0 / fpsVal)) : 33;
+
+    m_playTimers[slot] = new QTimer(this);
+    m_playTimers[slot]->setInterval(intervalMs);
+    connect(m_playTimers[slot], &QTimer::timeout, this, [this, slot]() {
+        if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) {
+            stopTimer(slot);
+            emit playStateChanged(slot);
+            return;
+        }
+        const int cur = m_analyzers[slot]->currentFrame();
+        if (cur <= 0) {
+            stopTimer(slot);
+            emit playStateChanged(slot);
+            return;
+        }
+        m_analyzers[slot]->prevFrame();
+        refreshFrameImage(slot);
+    });
+    m_playTimers[slot]->start();
+    emit playStateChanged(slot);
+}
+
+void YuvBridge::pause(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    stopTimer(slot);
+    emit playStateChanged(slot);
+}
+
+void YuvBridge::togglePlayPause(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (m_playing[slot]) {
+        pause(slot);
+    } else {
+        play(slot);
+    }
+}
+
+bool YuvBridge::isPlaying(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return false;
+    return m_playing[slot];
+}
+
+bool YuvBridge::isReversing(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return false;
+    return m_reversing[slot];
+}
+
+void YuvBridge::skipForward(int slot, int frames) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
+    const int cur = m_analyzers[slot]->currentFrame();
+    const int total = m_analyzers[slot]->totalFrames();
+    const int target = qMin(cur + frames, total - 1);
+    m_analyzers[slot]->seekToFrame(target);
+    refreshFrameImage(slot);
+}
+
+void YuvBridge::skipBackward(int slot, int frames) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
+    const int cur = m_analyzers[slot]->currentFrame();
+    const int target = qMax(cur - frames, 0);
+    m_analyzers[slot]->seekToFrame(target);
+    refreshFrameImage(slot);
+}
+
+void YuvBridge::resetFrame(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
+    stopTimer(slot);
+    m_analyzers[slot]->seekToFrame(0);
+    refreshFrameImage(slot);
+    emit playStateChanged(slot);
 }

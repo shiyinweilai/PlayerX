@@ -19,11 +19,15 @@ static AVPixelFormat parsePixelFormat(const QString& name) {
     // ── 灰度（单平面，只有 Y） ──
     if (n == "yuv400" || n == "gray" || n == "grey" || n == "y8")
         return AV_PIX_FMT_GRAY8;
-    // ── Planar YUV ──
+    // ── Planar YUV 8-bit ──
     if (n == "yuv420p")  return AV_PIX_FMT_YUV420P;
     if (n == "yuv422p")  return AV_PIX_FMT_YUV422P;
     if (n == "yuv440p")  return AV_PIX_FMT_YUV440P;
     if (n == "yuv444p")  return AV_PIX_FMT_YUV444P;
+    // ── Planar YUV 10-bit (little-endian) ──
+    if (n == "yuv420p10le" || n == "yuv420p10") return AV_PIX_FMT_YUV420P10LE;
+    if (n == "yuv422p10le" || n == "yuv422p10") return AV_PIX_FMT_YUV422P10LE;
+    if (n == "yuv444p10le" || n == "yuv444p10") return AV_PIX_FMT_YUV444P10LE;
     // ── 全范围 JPEG-style（BT.601）──
     if (n == "yuvj420p") return AV_PIX_FMT_YUVJ420P;
     if (n == "yuvj422p") return AV_PIX_FMT_YUVJ422P;
@@ -314,14 +318,24 @@ YuvAnalyzer::YuvPixel YuvAnalyzer::getPixelYUV(int x, int y) const {
     const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
     if (!desc) return {-1, -1, -1};
 
+    // 判断是否为 10bit 格式（每分量 > 8 bit，使用 2 字节存储）
+    const bool is10bit = (desc->comp[0].depth > 8);
+
     // Y 值：直接从 plane 0 读取
     int yVal = 0;
     if (m_srcFrame->data[0]) {
-        yVal = m_srcFrame->data[0][y * m_srcFrame->linesize[0] + x];
+        if (is10bit) {
+            const uint16_t* row = reinterpret_cast<const uint16_t*>(
+                m_srcFrame->data[0] + y * m_srcFrame->linesize[0]);
+            yVal = row[x];
+        } else {
+            yVal = m_srcFrame->data[0][y * m_srcFrame->linesize[0] + x];
+        }
     }
 
     // U/V 值：考虑色度下采样
-    int uVal = 128, vVal = 128;
+    int uVal = is10bit ? 512 : 128;
+    int vVal = is10bit ? 512 : 128;
     const int chromaW = desc->log2_chroma_w;
     const int chromaH = desc->log2_chroma_h;
     const int cx = x >> chromaW;
@@ -358,11 +372,24 @@ YuvAnalyzer::YuvPixel YuvAnalyzer::getPixelYUV(int x, int y) const {
         vVal = 128;
     } else {
         // Planar: U 在 plane 1, V 在 plane 2
-        if (m_srcFrame->data[1]) {
-            uVal = m_srcFrame->data[1][cy * m_srcFrame->linesize[1] + cx];
-        }
-        if (m_srcFrame->data[2]) {
-            vVal = m_srcFrame->data[2][cy * m_srcFrame->linesize[2] + cx];
+        if (is10bit) {
+            if (m_srcFrame->data[1]) {
+                const uint16_t* uRow = reinterpret_cast<const uint16_t*>(
+                    m_srcFrame->data[1] + cy * m_srcFrame->linesize[1]);
+                uVal = uRow[cx];
+            }
+            if (m_srcFrame->data[2]) {
+                const uint16_t* vRow = reinterpret_cast<const uint16_t*>(
+                    m_srcFrame->data[2] + cy * m_srcFrame->linesize[2]);
+                vVal = vRow[cx];
+            }
+        } else {
+            if (m_srcFrame->data[1]) {
+                uVal = m_srcFrame->data[1][cy * m_srcFrame->linesize[1] + cx];
+            }
+            if (m_srcFrame->data[2]) {
+                vVal = m_srcFrame->data[2][cy * m_srcFrame->linesize[2] + cx];
+            }
         }
     }
 

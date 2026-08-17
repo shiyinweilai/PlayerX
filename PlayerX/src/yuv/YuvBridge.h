@@ -15,6 +15,7 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QTimer>
 #include <memory>
 
 namespace rb {
@@ -35,15 +36,8 @@ public:
     ~YuvBridge() override;
 
     // ── 批量打开 ──────────────────────────────────────────────────────
-    // 一次打开多个 YUV 文件（最多 MaxSlots 个），返回成功打开的数量。
-    // 成功打开的 slot 从 0 开始连续编号。
-    // 每个文件的渲染参数（宽高/格式/帧率）从 yuvFileParams(path) 持久化记录读取，
-    // 做到每个文件用自己独立的参数渲染，渲染窗口之间不共享任何状态。
-    // 用 QVariantList 接收（QML 传 JS 数组最稳妥），内部转 QStringList。
     Q_INVOKABLE int openFiles(const QVariantList& files);
-    // 关闭所有 slot。
     Q_INVOKABLE void closeAll();
-    // 当前打开的 slot 数量（0..MaxSlots）。
     Q_INVOKABLE int slotCount() const;
 
     // ── 单 slot 文件操作 ──────────────────────────────────────────────
@@ -53,6 +47,17 @@ public:
     Q_INVOKABLE void prevFrame(int slot);
     Q_INVOKABLE void firstFrame(int slot);
     Q_INVOKABLE void lastFrame(int slot);
+
+    // ── 播放控制（缓存播放）──────────────────────────────────────────
+    Q_INVOKABLE void play(int slot);            // 正向播放
+    Q_INVOKABLE void playReverse(int slot);     // 倒放
+    Q_INVOKABLE void pause(int slot);           // 暂停
+    Q_INVOKABLE void togglePlayPause(int slot); // 切换播放/暂停
+    Q_INVOKABLE bool isPlaying(int slot) const; // 是否正在播放
+    Q_INVOKABLE bool isReversing(int slot) const; // 是否倒放中
+    Q_INVOKABLE void skipForward(int slot, int frames = 15);  // 快进 N 帧
+    Q_INVOKABLE void skipBackward(int slot, int frames = 15); // 快退 N 帧
+    Q_INVOKABLE void resetFrame(int slot);      // 重置到首帧
 
     // ── 单 slot 查询 ──────────────────────────────────────────────────
     Q_INVOKABLE QImage  frameImage(int slot) const;
@@ -69,51 +74,46 @@ public:
     Q_INVOKABLE void    setDisplayMode(int slot, int mode);
 
     // ── 像素级查询（8×8 块）──────────────────────────────────────────────
-    // 返回以 (px, py) 为起点（图像坐标）的 8×8 YUV 像素块数据。
-    // 返回 QVariantList，每个元素为一个 QVariantMap {"y":int,"u":int,"v":int}。
-    // 共 64 个元素，按行优先排列。若坐标越界则返回空列表。
     Q_INVOKABLE QVariantList pixelBlock8x8(int slot, int px, int py) const;
 
     // ── 预设持久化（用 QSettings 保存到磁盘）───────────────────────────
-    // 尺寸预设（"1920x1080"），按添加顺序去重；QML 用于"宽高预设"下拉。
     Q_INVOKABLE QStringList yuvSizePresets() const;
     Q_INVOKABLE void addYuvSizePreset(const QString& size);
     Q_INVOKABLE void removeYuvSizePreset(const QString& size);
 
-    // 像素格式预设（"yuv420p" 等），同上。
     Q_INVOKABLE QStringList yuvFormatPresets() const;
     Q_INVOKABLE void addYuvFormatPreset(const QString& fmt);
     Q_INVOKABLE void removeYuvFormatPreset(const QString& fmt);
 
-    // 帧率预设（23.976 / 30 / 60 …），同上。
     Q_INVOKABLE QList<double> yuvFpsPresets() const;
     Q_INVOKABLE void addYuvFpsPreset(double fps);
     Q_INVOKABLE void removeYuvFpsPreset(double fps);
 
     // ── 文件列表 + 每文件参数持久化 ────────────────────────────────────
-    // 文件列表（本地路径），跨会话保留。
     Q_INVOKABLE QStringList yuvFileList() const;
     Q_INVOKABLE void setYuvFileList(const QVariantList& files);
 
-    // 某个文件的渲染参数，格式 "1920x1080|yuv420p|30"；无记录返回空串。
-    // 以文件 basename 作为 key（避免完整路径中的 '/' 被 QSettings 解析为 group）。
     Q_INVOKABLE QString yuvFileParams(const QString& path) const;
     Q_INVOKABLE void setYuvFileParams(const QString& path, const QString& params);
 
 signals:
-    // 某 slot 帧变化（frameNum），QML 据此刷新对应窗口画面
     void frameChanged(int slot);
-    // 某 slot 打开/关闭（用于 QML 重建窗口）
     void fileOpened(int slot);
     void displayModeChanged(int slot);
     void slotCountChanged();
-    // 任一预设集合（尺寸/格式/帧率）变化时触发，QML 重新拉取列表
     void yuvPresetsChanged();
+    void playStateChanged(int slot);
 
 private:
     void refreshFrameImage(int slot);
+    void stopTimer(int slot);
 
     std::unique_ptr<rb::YuvAnalyzer> m_analyzers[MaxSlots];
     QImage m_frameImages[MaxSlots];
     int    m_displayModes[MaxSlots]{0, 0, 0};
+
+    // 播放定时器（每个 slot 独立）
+    QTimer* m_playTimers[MaxSlots]{nullptr, nullptr, nullptr};
+    bool    m_playing[MaxSlots]{false, false, false};
+    bool    m_reversing[MaxSlots]{false, false, false};
 };

@@ -84,11 +84,29 @@ Item {
         }
 
         function currentFmt() {
+            let baseFmt = "yuv420p"
             if (yuvFmtCombo && yuvFmtCombo.model && yuvFmtCombo.currentIndex >= 0
                     && yuvFmtCombo.currentIndex < yuvFmtCombo.model.length) {
-                return yuvFmtCombo.model[yuvFmtCombo.currentIndex].fmt
+                baseFmt = yuvFmtCombo.model[yuvFmtCombo.currentIndex].fmt
             }
-            return "yuv420p"
+            // 根据 bit depth 组合最终格式名
+            // 例如 yuv420p + 10bit → yuv420p10le
+            const bd = currentBitDepth()
+            if (bd === 10) {
+                // 如果 baseFmt 已经含 "10"，不重复加
+                if (baseFmt.indexOf("10") < 0) {
+                    return baseFmt + "10le"
+                }
+            }
+            return baseFmt
+        }
+
+        function currentBitDepth() {
+            if (yuvBitDepthCombo && yuvBitDepthCombo.model && yuvBitDepthCombo.currentIndex >= 0
+                    && yuvBitDepthCombo.currentIndex < yuvBitDepthCombo.model.length) {
+                return yuvBitDepthCombo.model[yuvBitDepthCombo.currentIndex].value
+            }
+            return 8
         }
 
         function saveCurrentParams() {
@@ -97,14 +115,62 @@ Item {
             const h   = parseInt(yuvSetupH.text) || 1080
             const fmt = currentFmt()
             const fps = parseFloat(yuvFpsCombo.displayText) || 30.0
-            YuvBridge.setYuvFileParams(currentPath, w + "x" + h + "|" + fmt + "|" + fps)
+            const bd  = currentBitDepth()
+            YuvBridge.setYuvFileParams(currentPath, w + "x" + h + "|" + fmt + "|" + fps + "|" + bd)
+        }
+
+        // ── 从文件名自动解析参数（宽高、帧率、bit 深度）──
+        // 算法：按下划线 split，逐段查找 "数字x数字" 确定宽高，
+        //       宽高段紧后的段作为帧率，含 "10bit" 段则标记 10bit。
+        // 典型文件名模式：
+        //   BQSquare_416x240_60.yuv        → 416×240, 60fps, 8bit
+        //   10bit_3_4096x2160_24_f300.yuv  → 4096×2160, 24fps, 10bit
+        //   10bit_animation_3400x1912_25.yuv → 3400×1912, 25fps, 10bit
+        function parseFilenameParams(filePath) {
+            const name = fileBasename(filePath)
+            let result = { width: 0, height: 0, fps: 0, is10bit: false }
+
+            // 去掉扩展名后按下划线 split
+            const baseName = name.replace(/\.[^.]+$/, "")
+            const parts = baseName.split('_')
+
+            let whIdx = -1
+            for (let i = 0; i < parts.length; ++i) {
+                // 检测 10bit
+                if (/^10bit$/i.test(parts[i])) {
+                    result.is10bit = true
+                    continue
+                }
+                // 检测宽高：数字x数字（不区分大小写，支持 4096x2160 / 4096X2160）
+                const m = parts[i].match(/^(\d+)[xX](\d+)$/)
+                if (m && whIdx < 0) {
+                    const w = parseInt(m[1])
+                    const h = parseInt(m[2])
+                    if (w >= 16 && w <= 16384 && h >= 16 && h <= 16384) {
+                        result.width = w
+                        result.height = h
+                        whIdx = i
+                    }
+                }
+            }
+
+            // 帧率：宽高段之后紧跟的段（纯数字或浮点数）
+            if (whIdx >= 0 && whIdx + 1 < parts.length) {
+                const fpsStr = parts[whIdx + 1]
+                const f = parseFloat(fpsStr)
+                if (!isNaN(f) && f >= 1 && f <= 240) {
+                    result.fps = f
+                }
+            }
+
+            return result
         }
 
         function loadParamsForCurrent() {
             if (currentPath === "") return
             const params = YuvBridge.yuvFileParams(currentPath)
             if (params && params.length > 0) {
-                // 解析 "1920x1080|yuv420p|30"
+                // 解析 "1920x1080|yuv420p|30|8" 或旧格式 "1920x1080|yuv420p|30"
                 const parts = params.split('|')
                 const wh = parts[0].split('x')
                 if (wh.length === 2) {
@@ -112,12 +178,23 @@ Item {
                     yuvSetupH.text = wh[1]
                 }
                 if (parts.length >= 2) {
+                    // 格式可能存储的是 yuv420p10le 这种合成格式，
+                    // 需拆回 baseFmt + bitDepth
+                    let fmtStr = parts[1]
+                    let loadedBd = 8
+                    if (fmtStr.indexOf("10le") >= 0) {
+                        loadedBd = 10
+                        fmtStr = fmtStr.replace("10le", "")
+                    }
+                    // 在格式列表中匹配 baseFmt
                     for (let i = 0; i < yuvFmtCombo.model.length; ++i) {
-                        if (yuvFmtCombo.model[i].fmt === parts[1]) {
+                        if (yuvFmtCombo.model[i].fmt === fmtStr) {
                             yuvFmtCombo.currentIndex = i
                             break
                         }
                     }
+                    // 设置 bitDepth 下拉
+                    yuvBitDepthCombo.currentIndex = (loadedBd === 10) ? 1 : 0
                 }
                 if (parts.length >= 3) {
                     const f = parseFloat(parts[2]) || 30.0
@@ -128,18 +205,53 @@ Item {
                         }
                     }
                 }
+                if (parts.length >= 4) {
+                    const bd = parseInt(parts[3]) || 8
+                    yuvBitDepthCombo.currentIndex = (bd === 10) ? 1 : 0
+                }
                 // 同步尺寸预设下拉选中
                 yuvSizeCombo.rebuild()
             } else {
-                // 新文件：默认参数（1920×1080 / yuv420p / 30）
-                yuvSetupW.text = "1920"
-                yuvSetupH.text = "1080"
+                // 新文件：尝试从文件名解析参数
+                const parsed = parseFilenameParams(currentPath)
+
+                // 宽高：解析到则填入，否则保留空（不乱填）
+                if (parsed.width > 0 && parsed.height > 0) {
+                    yuvSetupW.text = String(parsed.width)
+                    yuvSetupH.text = String(parsed.height)
+                } else {
+                    yuvSetupW.text = ""
+                    yuvSetupH.text = ""
+                }
+
+                // 像素格式：默认 yuv420p（bitDepth 单独控制 8/10bit）
                 for (let i = 0; i < yuvFmtCombo.model.length; ++i) {
                     if (yuvFmtCombo.model[i].fmt === "yuv420p") { yuvFmtCombo.currentIndex = i; break }
                 }
-                for (let i = 0; i < yuvFpsCombo.model.length; ++i) {
-                    if (yuvFpsCombo.model[i].value === 30) { yuvFpsCombo.currentIndex = i; break }
+
+                // bit 位宽
+                yuvBitDepthCombo.currentIndex = parsed.is10bit ? 1 : 0
+
+                // 帧率：解析到则选中最接近的，否则选默认 30fps
+                if (parsed.fps > 0) {
+                    let bestIdx = -1, bestDiff = 9999
+                    for (let i = 0; i < yuvFpsCombo.model.length; ++i) {
+                        const diff = Math.abs(yuvFpsCombo.model[i].value - parsed.fps)
+                        if (diff < bestDiff) { bestDiff = diff; bestIdx = i }
+                    }
+                    if (bestIdx >= 0 && bestDiff < 1) {
+                        yuvFpsCombo.currentIndex = bestIdx
+                    } else {
+                        for (let i = 0; i < yuvFpsCombo.model.length; ++i) {
+                            if (yuvFpsCombo.model[i].value === 30) { yuvFpsCombo.currentIndex = i; break }
+                        }
+                    }
+                } else {
+                    for (let i = 0; i < yuvFpsCombo.model.length; ++i) {
+                        if (yuvFpsCombo.model[i].value === 30) { yuvFpsCombo.currentIndex = i; break }
+                    }
                 }
+
                 yuvSizeCombo.rebuild()
             }
         }
@@ -1067,6 +1179,34 @@ Item {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    // ══════ bit 位宽选择 ══════
+                    ColumnLayout {
+                        visible: yuvSetupView.selectedIndex >= 0
+                        Layout.fillWidth: true; spacing: 4
+                        Text { text: "位宽 (bit depth)"; color: "#9aa0a6"; font.pixelSize: 11 }
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 6
+                            ComboBox {
+                                id: yuvBitDepthCombo
+                                Layout.fillWidth: true; Layout.preferredHeight: 34
+                                textRole: "label"
+                                model: [
+                                    {label: "8 bit", value: 8},
+                                    {label: "10 bit", value: 10}
+                                ]
+                                Component.onCompleted: currentIndex = 0
+                                onActivated: yuvSetupView.saveCurrentParams()
+                                background: Rectangle { color: "#14141a"; radius: 6; border.color: "#3a3a44"; border.width: 1 }
+                                contentItem: Text {
+                                    text: yuvBitDepthCombo.displayText
+                                    color: "#e8e8ec"; font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                    leftPadding: 10
                                 }
                             }
                         }
