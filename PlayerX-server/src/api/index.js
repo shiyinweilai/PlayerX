@@ -126,6 +126,32 @@ function mountApi(app) {
     app.post('/api/terminal/refresh', auth.requireAdmin, express.json({ limit: '4kb' }),  terminal.refreshLoginShell);
     app.post('/api/terminal/kill',    auth.requireAdmin, terminal.handleKill);
 
+    // 浏览 assets 目录（供任务管理路径选择）
+    app.post('/api/browse-assets', auth.requireAdmin, express.json({ limit: '1mb' }), (req, res) => {
+        const fs = require('fs');
+        const path = require('path');
+        const { ASSETS_DIR } = require('../lib/paths');
+        const { subdir = '' } = req.body || {};
+        const target = subdir ? path.join(ASSETS_DIR, subdir) : ASSETS_DIR;
+        // 安全检查：不允许 .. 越界
+        if (!path.resolve(target).startsWith(path.resolve(ASSETS_DIR))) {
+            return res.json({ ok: false, error: '路径越界' });
+        }
+        try {
+            const entries = fs.readdirSync(target, { withFileTypes: true });
+            const items = entries
+                .filter(e => !e.name.startsWith('.'))
+                .map(e => ({ name: e.name, isDir: e.isDirectory() }))
+                .sort((a, b) => {
+                    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+                    return a.name.localeCompare(b.name);
+                });
+            res.json({ ok: true, base: ASSETS_DIR, items });
+        } catch (err) {
+            res.json({ ok: true, base: ASSETS_DIR, items: [] });
+        }
+    });
+
     // 盲评分析配置管理（GET 公开，写操作需管理员）
     app.get('/api/analyze-configs',              analyzeCfgs.handleList);
     app.get('/api/analyze-configs/:name',        analyzeCfgs.handleGetOne);

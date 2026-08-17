@@ -527,7 +527,7 @@ function handle(req, res) {
     }
 
     // 解析相对路径：以 tasks 目录为基准（产物存放在 <ROOT>/tasks/<tag>/ 下）
-    const { TASKS_DIR } = require('../lib/paths');
+    const { TASKS_DIR, ASSETS_DIR } = require('../lib/paths');
     const cfg = Object.assign({}, config);
     if (cfg.map_csv && !path.isAbsolute(cfg.map_csv)) {
         cfg.map_csv = path.join(TASKS_DIR, cfg.map_csv);
@@ -536,16 +536,30 @@ function handle(req, res) {
         const c = path.join(TASKS_DIR, cfg.reuse_map_csv);
         if (fs.existsSync(c)) cfg.reuse_map_csv = c;
     }
-    if (cfg.companions) {
-        cfg.companions = Object.assign({}, cfg.companions);
-      if (cfg.companions.prompt_csv && !path.isAbsolute(cfg.companions.prompt_csv)) {
-      const c = path.join(TASKS_DIR, cfg.companions.prompt_csv);
- if (fs.existsSync(c)) cfg.companions.prompt_csv = c;
+    if (!cfg.companions) cfg.companions = {};
+    // 默认路径：未填写时使用 ASSETS_DIR 绝对路径
+    if (!cfg.companions.first_frames_dir) {
+        cfg.companions.first_frames_dir = ASSETS_DIR;
+    }
+    if (!cfg.companions.prompt_csv) {
+        cfg.companions.prompt_csv = path.join(ASSETS_DIR, 'prompt.csv');
+    }
+    cfg.companions = Object.assign({}, cfg.companions);
+    if (cfg.companions.prompt_csv && !path.isAbsolute(cfg.companions.prompt_csv)) {
+        const c = path.join(ASSETS_DIR, cfg.companions.prompt_csv);
+        if (fs.existsSync(c)) cfg.companions.prompt_csv = c;
+        else {
+            const c2 = path.join(TASKS_DIR, cfg.companions.prompt_csv);
+            if (fs.existsSync(c2)) cfg.companions.prompt_csv = c2;
         }
-        if (cfg.companions.first_frames_dir && !path.isAbsolute(cfg.companions.first_frames_dir)) {
- const c = path.join(TASKS_DIR, cfg.companions.first_frames_dir);
-   if (fs.existsSync(c)) cfg.companions.first_frames_dir = c;
-   }
+    }
+    if (cfg.companions.first_frames_dir && !path.isAbsolute(cfg.companions.first_frames_dir)) {
+        const c = path.join(ASSETS_DIR, cfg.companions.first_frames_dir);
+        if (fs.existsSync(c)) cfg.companions.first_frames_dir = c;
+        else {
+            const c2 = path.join(TASKS_DIR, cfg.companions.first_frames_dir);
+            if (fs.existsSync(c2)) cfg.companions.first_frames_dir = c2;
+        }
     }
     // dst_dir 若为相对路径，基于 tasks 目录解析（产物 → <ROOT>/tasks/<tag>/，如 subj）
     if (cfg.dst_dir && !path.isAbsolute(cfg.dst_dir)) {

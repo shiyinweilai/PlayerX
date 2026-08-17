@@ -682,6 +682,102 @@ function bindBuildTabEvents() {
             el.addEventListener('blur', autosaveBuild);
         }
     });
+
+    // ── 路径浏览下拉：参考帧目录 & Prompt CSV ──
+    dimView.querySelectorAll('.dim-path-browse-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const targetId = btn.dataset.target;
+            const dropdown = dimView.querySelector(`.dim-path-dropdown[data-for="${targetId}"]`);
+            if (!dropdown) return;
+            // toggle
+            if (!dropdown.hidden) { dropdown.hidden = true; return; }
+            // 关闭其他下拉
+            dimView.querySelectorAll('.dim-path-dropdown').forEach(d => d.hidden = true);
+            dropdown.hidden = false;
+            // 加载根目录
+            await loadPathDropdown(dropdown, '', targetId);
+        });
+    });
+
+    // 关键字过滤
+    dimView.querySelectorAll('.dim-path-filter').forEach(filterInput => {
+        filterInput.addEventListener('input', () => {
+            const dropdown = filterInput.closest('.dim-path-dropdown');
+            const keyword = filterInput.value.trim().toLowerCase();
+            dropdown.querySelectorAll('.dim-path-item').forEach(item => {
+                const name = (item.textContent || '').toLowerCase();
+                item.style.display = name.includes(keyword) ? '' : 'none';
+            });
+        });
+    });
+
+    // 点击外部关闭下拉
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.dim-path-field')) {
+            dimView.querySelectorAll('.dim-path-dropdown').forEach(d => d.hidden = true);
+        }
+    });
+
+    async function loadPathDropdown(dropdown, subdir, targetId) {
+        const listEl = dropdown.querySelector('.dim-path-list');
+        listEl.innerHTML = '<div style="padding:8px;color:#888">加载中...</div>';
+        try {
+            const resp = await adminFetch('/api/browse-assets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ subdir })
+            });
+            const data = await resp.json();
+            if (!data.ok) { listEl.innerHTML = '<div style="padding:8px;color:#f44">加载失败</div>'; return; }
+            const basePath = data.base;
+            const currentPath = subdir ? basePath + '/' + subdir : basePath;
+            let html = '';
+            // 返回上级按钮（非根目录时显示）
+            if (subdir) {
+                const parentDir = subdir.includes('/') ? subdir.substring(0, subdir.lastIndexOf('/')) : '';
+                html += `<div class="dim-path-item dim-path-item--back" data-subdir="${escHtml(parentDir)}" data-isdir="true">⬆ 返回上级</div>`;
+            }
+            // 当前目录选择按钮
+            html += `<div class="dim-path-item dim-path-item--select" data-fullpath="${escHtml(currentPath)}">✓ 选择当前目录: ${escHtml(currentPath)}</div>`;
+            for (const item of data.items) {
+                const fullPath = currentPath + '/' + item.name;
+                if (item.isDir) {
+                    const itemSubdir = subdir ? subdir + '/' + item.name : item.name;
+                    html += `<div class="dim-path-item dim-path-item--dir" data-subdir="${escHtml(itemSubdir)}" data-isdir="true">📁 ${escHtml(item.name)}</div>`;
+                } else {
+                    html += `<div class="dim-path-item dim-path-item--file" data-fullpath="${escHtml(fullPath)}">📄 ${escHtml(item.name)}</div>`;
+                }
+            }
+            if (data.items.length === 0 && !subdir) {
+                html += '<div style="padding:8px;color:#888">目录为空</div>';
+            }
+            listEl.innerHTML = html;
+
+            // 绑定点击事件
+            listEl.querySelectorAll('.dim-path-item--dir, .dim-path-item--back').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const nextSubdir = el.dataset.subdir;
+                    // 清除过滤
+                    const filterInput = dropdown.querySelector('.dim-path-filter');
+                    if (filterInput) filterInput.value = '';
+                    loadPathDropdown(dropdown, nextSubdir, targetId);
+                });
+            });
+            listEl.querySelectorAll('.dim-path-item--file, .dim-path-item--select').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const pathVal = el.dataset.fullpath;
+                    const input = dimView.querySelector(`[data-bf="${targetId}"]`);
+                    if (input) { input.value = pathVal; input.dispatchEvent(new Event('change')); }
+                    dropdown.hidden = true;
+                });
+            });
+        } catch (err) {
+            listEl.innerHTML = `<div style="padding:8px;color:#f44">错误: ${err.message}</div>`;
+        }
+    }
 }
 
 /** 渲染单张维度卡片 HTML（纯字符串，不绑定事件） */
@@ -844,6 +940,23 @@ function renderBuildSection(obj, admin) {
             + `</div>`;
     };
 
+    // 带目录浏览下拉的字段
+    const pathFld = (label, id, val, ph, size) => {
+        const szCls = 'dim-build-sz-' + (size || 'md');
+        if (!admin) {
+            return `<div class="dim-build-field ${szCls}"><label class="dim-build-label">${escHtml(label)}</label>`
+                + `<span class="dim-build-val">${escHtml(val || ph || '—')}</span></div>`;
+        }
+        return `<div class="dim-build-field ${szCls} dim-path-field"><label class="dim-build-label">${escHtml(label)}</label>`
+            + `<div class="dim-path-wrap">`
+            + `<input class="dim-build-input dim-path-input" data-bf="${id}" value="${escHtml(val || '')}" placeholder="${escHtml(ph || '')}">`
+            + `<button type="button" class="dim-path-browse-btn" data-target="${id}" title="浏览 assets 目录">▼</button>`
+            + `<div class="dim-path-dropdown" data-for="${id}" hidden>`
+            + `<input class="dim-path-filter" placeholder="输入关键字过滤..." />`
+            + `<div class="dim-path-list"></div></div>`
+            + `</div></div>`;
+    };
+
     const selFld = (label, id, val, opts, size) => {
         const szCls = 'dim-build-sz-' + (size || 'sm');
         return `<div class="dim-build-field ${szCls}"><label class="dim-build-label">${escHtml(label)}</label>`
@@ -861,8 +974,8 @@ function renderBuildSection(obj, admin) {
         <div class="dim-build-grp">
         <div class="dim-build-grp-title">参数配置</div>
    <div class="dim-build-grid">
-       ${fld('参考帧目录', 'first_frames_dir', b.companions ? b.companions.first_frames_dir : '', 'first_frames', 'half')}
-       ${fld('Prompt CSV', 'prompt_csv', b.companions ? b.companions.prompt_csv : '', 'prompt.csv', 'half')}
+       ${pathFld('参考帧目录', 'first_frames_dir', b.companions ? b.companions.first_frames_dir : '', 'first_frames', 'half')}
+       ${pathFld('Prompt CSV', 'prompt_csv', b.companions ? b.companions.prompt_csv : '', 'prompt.csv', 'half')}
              ${fld('组数', 'n_groups', String(b.n_groups || 5), '5', 'xs')}
     ${fld('种子', 'seed', String(b.seed != null ? b.seed : 42), '42', 'xs')}
 ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false', '否']], 'xs')}

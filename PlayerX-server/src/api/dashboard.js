@@ -92,6 +92,8 @@ function handle(_req, res) {
 
         const files = allItems.filter(it => (it.mode || '') === mode && (it.tag || '') === tag);
         const submittedUsers = uniq(files.map(it => it.user));
+        // 完成率只统计配置成员中已提交的人数
+        const submittedMembers = members.filter(u => submittedUsers.includes(u));
         const missingUsers = members.filter(u => !submittedUsers.includes(u));
 
         tasks.push({
@@ -103,7 +105,7 @@ function handle(_req, res) {
           members,
           expectedCount,
           submittedUsers,
-          submittedCount: submittedUsers.length,
+          submittedCount: submittedMembers.length,
           missingUsers,
           fileCount: files.length,
           latestMtime: files.length ? files[0].mtime : null,

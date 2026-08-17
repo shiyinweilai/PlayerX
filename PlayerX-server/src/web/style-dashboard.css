@@ -80,8 +80,8 @@
 }
 
 .dashboard-table {
-    width: 100%;
-    min-width: 540px;        /* 桌面端不变；移动端窄于 540 时启用水平滚动 */
+    width: auto;
+    min-width: 540px;
     border-collapse: separate;
     border-spacing: 0;
     font-size: 13px;
@@ -111,7 +111,24 @@
 }
 
 .dash-chip-cell {
-    min-width: 220px;
+    min-width: 120px;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap !important;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 6px !important;
+}
+
+.dash-chip-cell::-webkit-scrollbar {
+    height: 4px;
+}
+.dash-chip-cell::-webkit-scrollbar-thumb {
+    background: rgba(100,116,139,0.25);
+    border-radius: 4px;
+}
+.dash-chip-cell::-webkit-scrollbar-track {
+    background: transparent;
 }
 
 .dash-chip {

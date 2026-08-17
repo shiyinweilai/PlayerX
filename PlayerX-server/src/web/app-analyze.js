@@ -619,7 +619,7 @@
         const short = shortModelName(fullName);
         const mean = m.mean != null ? m.mean.toFixed(3) : '—';
         const elo = m.elo != null ? Math.round(m.elo) : '—';
-        const bt = m.strength != null ? (m.strength * 100).toFixed(1) + '%' : '—';
+        const bt = m.strength != null ? m.strength.toFixed(3) : '—';
 
         td.title = `${fullName}\nBT 排名: ${actualRank} · 样本数: ${m.n != null ? m.n : '—'}`;
         td.innerHTML =
@@ -981,10 +981,15 @@
 
         try {
             // 统一走批量 API（单 Tag 也兼容）
+            const payload = { tags: tagsToUse, action: 'rank' };
+            // 从"分析选中"入口来的，将选中的文件名传给后端以限定分析范围
+            if (fromSelected && names && names.length > 0) {
+                payload.names = names;
+            }
             const r = await adminFetch('/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tags: tagsToUse, action: 'rank' }),
+                body: JSON.stringify(payload),
             });
             const j = await r.json();
             if (!r.ok || !j.ok) throw new Error(j.error || '执行失败');
@@ -1012,6 +1017,12 @@
             if (multiTagResults.length === 0) {
                 const errMsg = (j.errors && j.errors[0] && j.errors[0].error) || '所有 Tag 分析均失败';
                 throw new Error(errMsg);
+            }
+
+            // 同步顶部 tag pills 为本次实际分析使用的 tags
+            if (tagsToUse.length && JSON.stringify(selectedTags) !== JSON.stringify(tagsToUse)) {
+                selectedTags = [...tagsToUse];
+                renderTagChips();
             }
 
             renderAnalyzeResult(multiTagResults);

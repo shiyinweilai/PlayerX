@@ -627,7 +627,28 @@
             }
         });
 
-        // 选择文件夹的函数（FAPI 优先，无浏览器原生弹窗）
+        // 选择文件夹的函数（FAPI 优先，降级用 webkitdirectory input）
+        // 创建一个隐藏的 folder input 作为降级方案
+        const folderInput = document.createElement('input');
+        folderInput.type = 'file';
+        folderInput.setAttribute('webkitdirectory', '');
+        folderInput.setAttribute('directory', '');
+        folderInput.multiple = true;
+        folderInput.style.display = 'none';
+        container.appendChild(folderInput);
+
+        folderInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files || []);
+            if (files.length === 0) return;
+            pendingFolderFiles = files;
+            // 获取文件夹名（webkitRelativePath 第一段）
+            const folderName = (files[0].webkitRelativePath || '').split('/')[0] || '文件夹';
+            const totalKB = (files.reduce((s, f) => s + f.size, 0) / 1024).toFixed(1);
+            openModal(`上传文件夹：${folderName}`,
+                `<span class="term-meta-key">${folderName}</span> — ${files.length} 个文件、${totalKB} KB`);
+            folderInput.value = '';
+        });
+
         async function pickFolder() {
             if (window.showDirectoryPicker) {
                 try {
@@ -658,9 +679,8 @@
                     if (err.name !== 'AbortError') setUploadMsg(`✗ ${err.message}`, 'err');
                 }
             } else {
-                // 降级：浏览器不支持 FAPI，提示用户
-                setUploadMsg('⚠ 当前浏览器不支持选择文件夹，请改用"上传文件"逐个选择', 'err');
-                setTimeout(() => { uploadMsg.hidden = true; }, 4000);
+                // 降级：使用 webkitdirectory input
+                folderInput.click();
             }
         }
 
