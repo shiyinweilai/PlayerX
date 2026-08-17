@@ -62,7 +62,7 @@ function renderModelsContent(container) {
  <div class="mdl-source-card" data-idx="${realIdx}">
 <div class="mdl-source-header">
       <input class="mdl-source-name-input" data-idx="${realIdx}" value="${escHtml(src.name)}" title="点击编辑名称" />
-     <span class="mdl-source-path">${escHtml(src.path)}</span>
+     <input class="mdl-source-path-input" data-idx="${realIdx}" value="${escHtml(src.path)}" title="点击编辑路径" placeholder="源目录路径" />
      <span class="mdl-source-scope ${scope}">${scopeLabel}</span>
     <div class="mdl-source-actions">
  <button class="mdl-btn mdl-btn-del" data-idx="${realIdx}" title="删除此源目录"><span class="mdl-btn-shadow"></span><span class="mdl-btn-edge mdl-btn-edge-red"></span><span class="mdl-btn-front mdl-btn-front-red">删除</span></button>
@@ -90,7 +90,7 @@ function renderModelsContent(container) {
             </div>
             <div class="mdl-add-row">
                 <input class="mdl-add-name" placeholder="测试集名称" />
-                <input class="mdl-add-path" placeholder="源目录路径（如：/data/models/daxin 或 assets/xxx）" />
+                <input class="mdl-add-path" placeholder="源目录路径（留空默认：data/assets）" />
                 <input class="mdl-add-owner" placeholder="归属人（如：张三）" />
                 <select class="mdl-add-scope">
         <option value="personal">个人</option>
@@ -193,6 +193,36 @@ function bindModelsEvents(container) {
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
             if (e.key === 'Escape') { input.value = modelsData[+input.dataset.idx].name; input.blur(); }
+        });
+    });
+
+    // 原地编辑测试集路径
+    container.querySelectorAll('.mdl-source-path-input').forEach(input => {
+        let saving = false;
+        const save = async () => {
+            if (saving) return;
+            const idx = +input.dataset.idx;
+            const src = modelsData[idx];
+            const newPath = input.value.trim();
+            if (newPath === src.path) return;
+            saving = true;
+            try {
+                const r = await adminFetch(`/api/models/${src.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: newPath })
+                });
+                const j = await r.json();
+                if (!j.ok) throw new Error(j.error);
+                modelsData[idx].path = j.source.path || newPath;
+                input.value = modelsData[idx].path;
+            } catch (e) { alert('修改路径失败: ' + e.message); input.value = src.path; }
+            saving = false;
+        };
+        input.addEventListener('blur', save);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') { input.value = modelsData[+input.dataset.idx].path; input.blur(); }
         });
     });
 

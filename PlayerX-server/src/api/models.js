@@ -46,25 +46,33 @@ function sanitizeFolderName(raw) {
 // GET /api/models
 function handleList(req, res) {
     const data = loadData();
-    res.json({ ok: true, sources: data.sources });
+    // 返回时将相对路径解析为绝对路径，方便前端显示和编辑
+    const sources = data.sources.map(s => ({
+        ...s,
+        path: s.path ? resolveSourcePath(s.path) : ASSETS_DIR,
+    }));
+    res.json({ ok: true, sources });
 }
 
 // POST /api/models
 function handleCreate(req, res) {
     const { name: rawName, path: dirPath, scope, owner } = req.body || {};
     const data = loadData();
-    const absPath = normalizeIncomingPath(dirPath);
+    // 如果路径为空，默认使用 ASSETS_DIR
+    const effectivePath = dirPath || ASSETS_DIR;
+    const absPath = normalizeIncomingPath(effectivePath);
     let storedPath = '';
     if (absPath) {
         try { if (fs.existsSync(absPath) && fs.statSync(absPath).isDirectory()) storedPath = relativizeSourcePath(absPath); }
             catch (_) {}
-        if (!storedPath) storedPath = path.isAbsolute(dirPath || '') ? absPath : relativizeSourcePath(absPath);
+        if (!storedPath) storedPath = path.isAbsolute(effectivePath) ? absPath : relativizeSourcePath(absPath);
     }
     const name = rawName || `测试集${data.sources.length + 1}`;
     const entry = { id: genId(), name, path: storedPath, models: [], scope: scope || 'personal', owner: owner || '' };
     data.sources.unshift(entry);
     saveData(data);
-    res.json({ ok: true, source: entry });
+    // 返回时也解析为绝对路径
+    res.json({ ok: true, source: { ...entry, path: resolveSourcePath(entry.path) } });
 }
 
 // PUT /api/models/:id
@@ -83,7 +91,9 @@ function handleUpdate(req, res) {
     if (u.scope !== undefined) data.sources[idx].scope = u.scope;
     if (u.owner !== undefined) data.sources[idx].owner = u.owner;
     saveData(data);
-    res.json({ ok: true, source: data.sources[idx] });
+    // 返回时解析为绝对路径
+    const source = { ...data.sources[idx], path: resolveSourcePath(data.sources[idx].path) };
+    res.json({ ok: true, source });
 }
 
 // DELETE /api/models/:id

@@ -133,7 +133,7 @@ function resolveSourcePath(storedPath) {
     if (path.isAbsolute(storedPath)) {
         try { return fs.realpathSync(storedPath); } catch (_) { return storedPath; }
     }
-    const isAssets = storedPath.startsWith('assets/') || storedPath.startsWith('assets\\');
+    const isAssets = storedPath === 'assets' || storedPath.startsWith('assets/') || storedPath.startsWith('assets\\');
     const base = isAssets ? DATA_DIR : ROOT_DIR;
     const abs = path.resolve(base, storedPath);
     try { return fs.realpathSync(abs); } catch (_) { return abs; }

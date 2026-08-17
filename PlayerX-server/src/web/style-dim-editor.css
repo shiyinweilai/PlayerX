@@ -1126,7 +1126,7 @@
     letter-spacing: 0.3px;
     padding: 4px 10px;
     background: rgba(23, 162, 184, .12);
-    border: 1px solid rgba(23, 162, 184, .28);
+    border: none;
     border-radius: 999px;
 }
 
@@ -1459,6 +1459,46 @@
 }
 
 /* ─── 测试源自动化配置区（testSource）─── */
+
+.dim-ts-section {
+    margin: 0;
+}
+
+.dim-ts-header-simple {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(0, 0, 0, .06);
+    margin-bottom: 4px;
+}
+
+.dim-ts-header-simple .dim-cl-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #5270e8;
+    background: none;
+    border: none;
+    padding: 0;
+    border-radius: 0;
+}
+
+.dim-ts-header-simple .dim-cl-subtitle {
+    font-size: 11px;
+    color: #94a3b8;
+    flex-basis: 100%;
+}
+
+.dim-ts-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-top: 1px solid rgba(0, 0, 0, .06);
+    margin-top: 8px;
+}
+
 .dim-ts-header {
     background: linear-gradient(90deg, rgba(255, 159, 10, .10), rgba(10, 132, 255, .08));
 }
@@ -1663,23 +1703,58 @@
 .dim-build-toggle-ts {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 5px 12px;
-    border: 1px solid var(--border, #e2e4ea);
-    border-radius: 6px;
-    background: var(--bg-elev-1, #f4f5f7);
-    color: var(--primary, #0ea5e9);
+    gap: 6px;
+    padding: 6px 14px 6px 12px;
+    border: 1px solid rgba(91, 127, 246, .35);
+    border-radius: 8px;
+    background: linear-gradient(135deg, #f5f7ff 0%, #eef1fe 100%);
+    color: #5270e8;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
     margin-left: 0;
-    transition: background 0.15s, box-shadow 0.15s;
+    transition: background 0.2s, box-shadow 0.2s, border-color 0.2s, transform 0.15s;
+    box-shadow: 0 1px 3px rgba(91, 127, 246, .10);
+    letter-spacing: 0.2px;
+}
+
+.dim-build-toggle-ts::after {
+    content: '›';
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1;
+    transition: transform 0.2s ease;
 }
 
 .dim-build-toggle-ts:hover {
-    background: var(--bg-elev-2, #e8f4fd);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    background: linear-gradient(135deg, #eef1fe 0%, #dfe4fd 100%);
+    border-color: rgba(91, 127, 246, .6);
+    box-shadow: 0 3px 8px rgba(91, 127, 246, .18);
+    transform: translateX(2px);
+}
+
+.dim-build-toggle-ts:hover::after {
+    transform: translateX(2px);
+}
+
+.dim-build-toggle-ts:active {
+    transform: translateX(1px) scale(.97);
+    box-shadow: 0 1px 2px rgba(91, 127, 246, .12);
+}
+
+.dim-build-toggle-ts.is-expanded {
+    background: linear-gradient(135deg, #eef1fe 0%, #f5f7ff 100%);
+    border-color: rgba(91, 127, 246, .5);
+}
+
+.dim-build-toggle-ts.is-expanded::after {
+    content: '‹';
+    transform: translateX(-1px);
+}
+
+.dim-build-toggle-ts.is-expanded:hover {
+    transform: translateX(-2px);
 }
 
 /* 从目录选择模型 */
@@ -2328,6 +2403,38 @@
     line-height: 1.3;
 }
 
+.mdl-source-path-input {
+    font-size: 11px;
+    color: #64748b;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: none;
+    padding: 2px 4px;
+    border: none;
+    border-bottom: 1px solid transparent;
+    border-radius: 0;
+    line-height: 1.3;
+    outline: none;
+    transition: border-color 0.25s ease, background 0.2s;
+    min-width: 120px;
+    box-shadow: none;
+    box-sizing: border-box;
+}
+
+.mdl-source-path-input:hover {
+    border-bottom-color: #cbd5e1;
+}
+
+.mdl-source-path-input:focus {
+    border-bottom-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.04);
+    color: #1e293b;
+    box-shadow: none;
+}
+
 .mdl-source-actions {
     display: flex;
     align-items: center;
@@ -2627,6 +2734,10 @@
     }
 }
 
+.dim-build-section.dim-checklist-section {
+    margin: 0;
+}
+
 .dim-build-section .dim-cl-body {
     padding: 0;
 }
@@ -2643,7 +2754,7 @@
 .dim-build-grp-title {
     font-size: 14px;
     font-weight: 600;
-    color: var(--primary, #0071e3);
+    color: #5270e8;
     margin-bottom: 14px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -2743,28 +2854,65 @@ textarea.dim-build-input {
     gap: 12px;
 }
 
+.dim-build-footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 18px;
+    border-top: 1px solid rgba(0, 0, 0, .06);
+    background: rgba(248, 250, 252, .6);
+    border-radius: 0 0 14px 14px;
+}
+
 .dim-build-trigger {
     cursor: pointer;
     user-select: none;
     position: relative;
-    transition: transform .12s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease, filter .18s ease;
+    /* 外层：渐变边框容器 */
+    background: linear-gradient(180deg, rgba(91, 127, 246, .30) 0%, transparent 100%);
+    padding: 4px;
+    border-radius: 14px;
+    border: none;
+    transition: transform .2s ease, box-shadow .2s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, .08);
+}
+
+.dim-build-trigger-inner {
+    /* 内层：实际按钮面 */
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: linear-gradient(180deg, #6b8af9 0%, #5270e8 100%);
+    border-radius: 10px;
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+    letter-spacing: 0.3px;
+    box-shadow: 0 1px 2px rgba(82, 112, 232, .20) inset;
 }
 
 .dim-build-trigger:hover {
-    background: linear-gradient(180deg, rgba(23, 162, 184, .28), rgba(10, 132, 255, .20));
-    border-color: rgba(14, 165, 233, .62);
-    box-shadow: 0 4px 14px rgba(14, 165, 233, .28);
-    filter: saturate(1.08);
+    box-shadow: 0 4px 14px rgba(91, 127, 246, .35);
+    transform: translateY(-1px);
+}
+
+.dim-build-trigger:hover .dim-build-trigger-inner {
+    background: linear-gradient(180deg, #7b96fa 0%, #5f7ef0 100%);
 }
 
 .dim-build-trigger:active {
-    transform: translateY(2px) scale(.972);
-    background: linear-gradient(180deg, rgba(23, 162, 184, .34), rgba(10, 132, 255, .26));
-    box-shadow: 0 1px 0 rgba(255, 255, 255, .22) inset, 0 2px 5px rgba(14, 165, 233, .22) inset;
+    transform: translateY(1px) scale(.98);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+}
+
+.dim-build-trigger:active .dim-build-trigger-inner {
+    background: linear-gradient(180deg, #4f6de0 0%, #4360d4 100%);
+    box-shadow: 0 2px 4px rgba(67, 96, 212, .35) inset;
 }
 
 .dim-build-trigger:focus-visible {
-    outline: 2px solid rgba(14, 165, 233, .65);
+    outline: 2px solid rgba(91, 127, 246, .65);
     outline-offset: 2px;
 }
 
@@ -2782,26 +2930,27 @@ textarea.dim-build-input {
 .dim-build-status {
     display: inline-flex;
     align-items: center;
-    align-self: stretch;
-    min-height: 40px;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
 }
 
 .dim-build-progress {
     position: relative;
     width: 240px;
     max-width: 28vw;
-    height: 26px;
+    height: 24px;
     border-radius: 999px;
     overflow: hidden;
-    border: 1px solid rgba(73, 177, 227, .28);
-    background: radial-gradient(circle at 30% 0%, rgba(20, 35, 58, .95), rgba(10, 16, 30, .96));
-    box-shadow: 0 6px 16px rgba(2, 8, 23, .35);
+    border: none;
+    background: rgba(91, 127, 246, .10);
+    box-shadow: none;
 }
 
 .dim-build-progress-track {
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, rgba(34, 211, 238, .08), rgba(59, 130, 246, .1));
+    background: rgba(91, 127, 246, .06);
 }
 
 .dim-build-progress-bar {
@@ -2811,8 +2960,8 @@ textarea.dim-build-input {
     bottom: 0;
     width: 40%;
     border-radius: 999px;
-    background: linear-gradient(90deg, #22d3ee, #3b82f6);
-    box-shadow: 0 0 12px rgba(34, 211, 238, .35), 0 0 22px rgba(59, 130, 246, .25);
+    background: linear-gradient(90deg, #6b8af9, #5270e8);
+    box-shadow: none;
     animation: dim-build-bar-grow 2.2s ease-in-out infinite;
 }
 
@@ -2824,7 +2973,7 @@ textarea.dim-build-input {
     height: 40px;
     border-radius: 50%;
     transform: translate(-50%, -50%);
-    background: radial-gradient(circle, rgba(255, 255, 255, .25), transparent 65%);
+    background: radial-gradient(circle, rgba(91, 127, 246, .20), transparent 65%);
     animation: dim-build-ripple 1.8s ease-out infinite;
 }
 
@@ -2839,7 +2988,7 @@ textarea.dim-build-input {
     width: 3px;
     height: 3px;
     border-radius: 50%;
-    background: rgba(255, 255, 255, .9);
+    background: rgba(91, 127, 246, .7);
     opacity: .6;
     animation: dim-build-float 3.2s ease-in-out infinite;
 }
@@ -2881,46 +3030,70 @@ textarea.dim-build-input {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: .4px;
-    color: #eaf6ff;
-    text-shadow: 0 1px 4px rgba(2, 8, 23, .65);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .3px;
+    color: #1e40af;
+    text-shadow: none;
 }
 
 .dim-build-status.is-success .dim-build-progress-bar {
     width: 100%;
     animation: none;
     background: linear-gradient(90deg, #34d399, #10b981);
-    box-shadow: 0 0 14px rgba(16, 185, 129, .35);
+    box-shadow: none;
 }
 
 .dim-build-status.is-success .dim-build-progress-ripple {
     animation-duration: 2.4s;
-    background: radial-gradient(circle, rgba(52, 211, 153, .28), transparent 68%);
+    background: radial-gradient(circle, rgba(52, 211, 153, .20), transparent 68%);
+}
+
+.dim-build-status.is-success .dim-build-progress {
+    background: rgba(16, 185, 129, .10);
+}
+
+.dim-build-status.is-success .dim-build-progress-text {
+    color: #065f46;
 }
 
 .dim-build-status.is-warn .dim-build-progress-bar {
     width: 78%;
     animation: dim-build-bar-grow-warn 1.5s ease-in-out infinite;
     background: linear-gradient(90deg, #fbbf24, #f59e0b);
-    box-shadow: 0 0 14px rgba(245, 158, 11, .32);
+    box-shadow: none;
 }
 
 .dim-build-status.is-warn .dim-build-progress-ripple {
-    background: radial-gradient(circle, rgba(251, 191, 36, .24), transparent 68%);
+    background: radial-gradient(circle, rgba(251, 191, 36, .18), transparent 68%);
+}
+
+.dim-build-status.is-warn .dim-build-progress {
+    background: rgba(245, 158, 11, .10);
+}
+
+.dim-build-status.is-warn .dim-build-progress-text {
+    color: #92400e;
 }
 
 .dim-build-status.is-error .dim-build-progress-bar {
     width: 100%;
     animation: none;
     background: linear-gradient(90deg, #fb7185, #ef4444);
-    box-shadow: 0 0 14px rgba(239, 68, 68, .34);
+    box-shadow: none;
 }
 
 .dim-build-status.is-error .dim-build-progress-ripple {
     animation-duration: 1.2s;
-    background: radial-gradient(circle, rgba(251, 113, 133, .26), transparent 68%);
+    background: radial-gradient(circle, rgba(251, 113, 133, .18), transparent 68%);
+}
+
+.dim-build-status.is-error .dim-build-progress {
+    background: rgba(239, 68, 68, .10);
+}
+
+.dim-build-status.is-error .dim-build-progress-text {
+    color: #991b1b;
 }
 
 /* ── 失败标签（无进度条方案） ── */

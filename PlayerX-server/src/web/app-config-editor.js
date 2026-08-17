@@ -585,7 +585,9 @@ function bindBuildTabEvents() {
             const right = dimView.querySelector('.dim-build-right');
             if (right) {
                 right.classList.toggle('dim-build-right--collapsed');
-                toggleBtn.textContent = right.classList.contains('dim-build-right--collapsed') ? '⚙ 测试源' : '✕ 收起';
+                const collapsed = right.classList.contains('dim-build-right--collapsed');
+                toggleBtn.textContent = collapsed ? '测试源' : '收起';
+                toggleBtn.classList.toggle('is-expanded', !collapsed);
             }
         });
     }
@@ -883,16 +885,12 @@ ${selFld('盲评', 'blind', String(b.blind !== false), [['true', '是'], ['false
     return `<div class="dim-build-combined">
           <div class="dim-build-left">
  <div class="dim-build-section dim-checklist-section">
-     <div class="dim-cl-header">
-  <div class="dim-build-head-left">
-    <span class="dim-cl-title ${admin ? 'dim-build-trigger' : ''}" ${admin ? 'title="点击执行构建"' : ''}>🔨 构建配置</span>
-    ${admin ? `<span class="dim-build-status" id="dimBuildStatus"></span>` : ''}
-  </div>
-   ${admin ? `<div class="dim-build-head-actions">
-     <button class="dim-build-toggle-ts" title="展开测试源配置">⚙ 测试源</button>
-   </div>` : ''}
-   </div>
  <div class="dim-cl-body dim-build-body">${bodyHtml}</div>
+ ${admin ? `<div class="dim-build-footer-actions">
+    <span class="dim-build-trigger" title="点击执行构建"><span class="dim-build-trigger-inner">🔨 构建配置</span></span>
+    <span class="dim-build-status" id="dimBuildStatus"></span>
+    <button class="dim-build-toggle-ts" style="margin-left:auto" title="展开测试源配置">测试源</button>
+ </div>` : ''}
 </div>
       </div>
        <div class="dim-build-right dim-build-right--collapsed">
@@ -1097,7 +1095,7 @@ async function runBuildAction() {
                             const right = dimView.querySelector('.dim-build-right');
                             if (right) right.classList.remove('dim-build-right--collapsed');
                             const toggleBtn = dimView.querySelector('.dim-build-toggle-ts');
-                            if (toggleBtn) toggleBtn.textContent = '✕ 收起';
+                            if (toggleBtn) { toggleBtn.textContent = '收起'; toggleBtn.classList.add('is-expanded'); }
                         }
                     }
                 } else {
@@ -1180,15 +1178,17 @@ function renderTestSourceSection(obj, admin) {
     }
 
     return `<div class="dim-ts-section dim-checklist-section">
-            <div class="dim-cl-header dim-ts-header">
+            <div class="dim-ts-header-simple">
                   <span class="dim-cl-title">测试源</span>
                 <span class="dim-cl-subtitle">客户端点「接受」后自动：下载 → 解压 → 导入对比 → 绑定参考图/提示词 → 进入打分</span>
-                ${admin ? '<button class="dim-ts-upload-btn ghost-btn" title="选择 zip 上传到本服务器，成功后自动填入 url 字段">⇪ 上传 zip 到服务器</button><input type="file" class="dim-ts-upload-input" accept=".zip,application/zip" style="display:none">' : ''}
-                ${delCfgBtn}
             </div>
             <div class="dim-cl-body dim-ts-body">
                 ${bodyHtml}
             </div>
+            ${admin ? `<div class="dim-ts-footer-actions">
+                <button class="dim-ts-upload-btn ghost-btn" title="选择 zip 上传到本服务器，成功后自动填入 url 字段">⇪ 上传 zip 到服务器</button><input type="file" class="dim-ts-upload-input" accept=".zip,application/zip" style="display:none">
+                ${delCfgBtn}
+            </div>` : ''}
         </div>`;
 }
 

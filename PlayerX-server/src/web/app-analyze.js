@@ -619,6 +619,7 @@
         const short = shortModelName(fullName);
         const mean = m.mean != null ? m.mean.toFixed(3) : '—';
         const elo = m.elo != null ? Math.round(m.elo) : '—';
+        const bt = m.strength != null ? (m.strength * 100).toFixed(1) + '%' : '—';
 
         td.title = `${fullName}\nBT 排名: ${actualRank} · 样本数: ${m.n != null ? m.n : '—'}`;
         td.innerHTML =
@@ -627,7 +628,7 @@
                 `<span class="matrix-name-text">${escapeHtmlMatrix(short)}</span>` +
                 `<span class="matrix-cell-rank-badge">#${actualRank}</span>` +
             `</div>` +
-            `<div class="matrix-cell-meta">Mean <b>${mean}</b> · Elo ${elo}</div>`;
+            `<div class="matrix-cell-meta">Mean <b>${mean}</b> · BT ${bt} · Elo ${elo}</div>`;
         return td;
     }
 
