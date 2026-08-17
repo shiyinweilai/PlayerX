@@ -1,9 +1,24 @@
 #include "YuvBridge.h"
 #include "YuvAnalyzer.h"
 
+#include <QDir>
 #include <QSettings>
+#include <QUrl>
 #include <algorithm>
 #include <cstdio>
+
+// 将路径标准化：统一分隔符为 '/'，处理 file:// URL 前缀
+static QString normalizePath(const QString& input) {
+    QString p = input.trimmed();
+    // 如果是 file:// URL，转为本地路径
+    if (p.startsWith(QLatin1String("file://"))) {
+        QUrl url(p);
+        p = url.toLocalFile();
+    }
+    // 统一路径分隔符为 /
+    p = QDir::fromNativeSeparators(p);
+    return p;
+}
 
 YuvBridge::YuvBridge(QObject* parent)
     : QObject(parent) {
@@ -21,7 +36,7 @@ int YuvBridge::openFiles(const QVariantList& files) {
     QStringList paths;
     paths.reserve(files.size());
     for (const QVariant& v : files) {
-        const QString p = v.toString().trimmed();
+        const QString p = normalizePath(v.toString());
         if (!p.isEmpty()) paths << p;
     }
 
@@ -165,7 +180,7 @@ QString YuvBridge::filePath(int slot) const {
 }
 QString YuvBridge::fileName(int slot) const {
     const QString p = filePath(slot);
-    const int idx = p.lastIndexOf('/');
+    const int idx = std::max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
     return (idx >= 0) ? p.mid(idx + 1) : p;
 }
 QString YuvBridge::fmtName(int slot) const {
@@ -242,7 +257,7 @@ constexpr const char* kFileParamsPrefix = "yuv_presets/fileparams/";
 
 // 取文件 basename 作为持久化 key，避免完整路径中的 '/' 被 QSettings 解析为 group。
 QString basenameOf(const QString& p) {
-    const int idx = p.lastIndexOf('/');
+    const int idx = std::max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
     return (idx >= 0) ? p.mid(idx + 1) : p;
 }
 
@@ -367,7 +382,7 @@ void YuvBridge::setYuvFileList(const QVariantList& files) {
     QStringList list;
     list.reserve(files.size());
     for (const QVariant& v : files) {
-        const QString p = v.toString().trimmed();
+        const QString p = normalizePath(v.toString());
         if (!p.isEmpty()) list << p;
     }
     yuvSettings().setValue(kFileListKey, list);

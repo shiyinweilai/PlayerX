@@ -12,6 +12,26 @@ Item {
     id: yuvView
     z: 100
 
+    // ── 路径工具函数（兼容 Windows / macOS / Linux）──
+    // 使用 Fs.urlToLocalFile() 转换 file:// URL 为本地路径（与播放对比一致）
+    // 跨平台正确：macOS → "/Users/..."，Windows → "C:/Users/..."
+    function normalizeFilePath(urlOrStr) {
+        // 如果是 file:// URL，走 C++ 的 QUrl::toLocalFile()
+        const s = String(urlOrStr)
+        if (s.indexOf("file://") === 0) {
+            return Fs.urlToLocalFile(urlOrStr)
+        }
+        // 非 URL 的普通路径字符串，统一分隔符
+        return s.replace(/\\/g, "/")
+    }
+
+    // 从绝对路径中提取文件名
+    function fileBasename(path) {
+        const p = String(path).replace(/\\/g, "/")
+        const idx = p.lastIndexOf('/')
+        return idx >= 0 ? p.substring(idx + 1) : p
+    }
+
     // ── 参数输入主界面（setup） ────────────────────────────────
     Item {
         id: yuvSetupView
@@ -375,12 +395,12 @@ Item {
                                         anchors.verticalCenter: parent.verticalCenter
                                         spacing: 2
                                         Text {
-                                            text: modelData.split('/').pop()
+                                            text: yuvView.fileBasename(modelData)
                                             color: "#e8e8ec"; font.pixelSize: 13
                                             font.bold: yuvSetupView.selectedIndex === index
                                         }
                                         Text {
-                                            text: modelData.substring(0, Math.max(0, modelData.lastIndexOf('/')))
+                                            text: modelData
                                             color: "#6a6a78"; font.pixelSize: 10
                                             elide: Text.ElideMiddle
                                             width: ListView.view.width - 110
@@ -479,7 +499,7 @@ Item {
                             if (scanned.length > 0) {
                                 for (let j = 0; j < scanned.length; ++j) newFiles.push(scanned[j])
                             } else if (s.endsWith(".yuv") || s.endsWith(".y4m")) {
-                                newFiles.push(String(u).replace("file://", ""))
+                                newFiles.push(yuvView.normalizeFilePath(u))
                             }
                         }
                         if (newFiles.length === 0) return
@@ -541,7 +561,7 @@ Item {
                             anchors.leftMargin: 10; anchors.rightMargin: 10
                             verticalAlignment: Text.AlignVCenter
                             text: yuvSetupView.selectedIndex >= 0
-                                  ? yuvSetupView.fileList[yuvSetupView.selectedIndex].split('/').pop()
+                                  ? yuvSetupView.fileList[yuvSetupView.selectedIndex]
                                   : ""
                             color: "#e8e8ec"; font.pixelSize: 12
                             elide: Text.ElideMiddle
@@ -1117,7 +1137,7 @@ Item {
             onAccepted: {
                 const newPaths = []
                 for (let i = 0; i < selectedFiles.length; ++i) {
-                    newPaths.push(selectedFiles[i].toString().replace("file://", ""))
+                    newPaths.push(yuvView.normalizeFilePath(selectedFiles[i]))
                 }
                 if (newPaths.length === 0) return
                 // 追加到现有列表末尾并去重，保留用户原有顺序。
@@ -1137,7 +1157,7 @@ Item {
             id: yuvSetupFolderDialog
             title: "选择 YUV 文件夹"
             onAccepted: {
-                const folder = selectedFolder.toString().replace("file://", "")
+                const folder = yuvView.normalizeFilePath(selectedFolder)
                 let found = []
                 try { found = Fs.scanVideoFolderPath(folder, true) || [] } catch (e) { found = [] }
                 if (found.length === 0) {
