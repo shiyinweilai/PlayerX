@@ -191,13 +191,30 @@ QImage YuvAnalyzer::getPlaneImage(int plane) {
 
     const int ls = m_srcFrame->linesize[plane];
 
+    // 判断位深：>8 bit（如 10/12/16）每分量 2 字节，必须按 uint16_t 读再归一到 8bit
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
+    const bool isHighDepth = desc && desc->comp[0].depth > 8;
+    const int shift = desc ? (desc->comp[0].depth - 8) : 0;   // 10bit→2, 12bit→4, 16bit→8
+
     // Y 平面：纯灰度（亮度直观，无需染色）
     if (plane == 0) {
         QImage img(pw, ph, QImage::Format_Grayscale8);
-        for (int y = 0; y < ph; ++y) {
-            std::memcpy(img.scanLine(y),
-                        m_srcFrame->data[0] + y * ls,
-                        static_cast<size_t>(pw));
+        if (isHighDepth) {
+            for (int y = 0; y < ph; ++y) {
+                const uint16_t* src = reinterpret_cast<const uint16_t*>(
+                    m_srcFrame->data[0] + y * ls);
+                uint8_t* dst = img.scanLine(y);
+                for (int x = 0; x < pw; ++x) {
+                    // 10bit(0..1023)>>2 → 0..255；12bit>>4；16bit>>8
+                    dst[x] = static_cast<uint8_t>(src[x] >> shift);
+                }
+            }
+        } else {
+            for (int y = 0; y < ph; ++y) {
+                std::memcpy(img.scanLine(y),
+                            m_srcFrame->data[0] + y * ls,
+                            static_cast<size_t>(pw));
+            }
         }
         return img;
     }
@@ -205,14 +222,21 @@ QImage YuvAnalyzer::getPlaneImage(int plane) {
     // U / V 平面：染色（仿 YUView / Elecard 风格）
     //   U 平面（Cb）：128=灰, >128→蓝, <128→黄（蓝-黄轴）
     //   V 平面（Cr）：128=灰, >128→红, <128→绿（红-绿轴）
-    //   对比度 2× 增强，使细微色差更易观察。
+    //   对比度 4× 增强 —— 8bit 自然图像 U/V 普遍集中在 128±10 范围内，
+    //   2× 会让色差几乎不可见；10bit 降采样后同理。std::clamp 兜底防过饱和。
     QImage img(pw, ph, QImage::Format_RGBA8888);
     for (int y = 0; y < ph; ++y) {
         const uint8_t* src = m_srcFrame->data[plane] + y * ls;
         uint8_t*       dst = img.scanLine(y);
         for (int x = 0; x < pw; ++x) {
-            const int val  = static_cast<int>(src[x]);
-            const int delta = std::clamp((val - 128) * 2, -255, 255);
+            int val;
+            if (isHighDepth) {
+                const uint16_t* row = reinterpret_cast<const uint16_t*>(src);
+                val = row[x] >> shift;   // 10bit 归一到 0..255
+            } else {
+                val = src[x];
+            }
+            const int delta = std::clamp((val - 128) * 4, -255, 255);
             int r, g, b;
             if (plane == 1) {
                 // U (Cb): blue–yellow axis
