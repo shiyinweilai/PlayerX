@@ -55,6 +55,10 @@ extern "C" {
 // 实现在 src/qt/MacAppearance.mm（Objective-C++）：
 // 强制 NSApp 深色外观，让系统标题栏 / 原生菜单 / 原生对话框渲染为深色。
 void applyMacDarkAppearance();
+// 标题栏「右侧栏」切换按钮（macOS 原生标题栏 AppKit，挂在标题栏右侧）
+void installTitleBarSidebarButton(QQuickWindow* win, void* ctx, void(*fn)(void*));
+// 标题栏「个人中心」按钮（macOS 原生标题栏 AppKit，点击打开登录/个人信息）
+void installTitleBarProfileButton(QQuickWindow* win, void* ctx, void(*fn)(void*));
 // 登录菜单展开拦截：菜单栏「登录/评分人名」点击时在 menuWillOpen 阶段
 // 取消展开（永不出下拉）并回调此处，转而打开 QML 登录对话框。
 void installLoginMenuSuppressor(void* ctx, void(*fn)(void*));
@@ -62,6 +66,11 @@ static void openLoginDialogFromNative(void* ctx) {
     // ctx = QML 根对象；QueuedConnection 保证回到 Qt 主事件循环再开对话框
     QMetaObject::invokeMethod(static_cast<QObject*>(ctx),
                               "_openLoginDialogFromNative", Qt::QueuedConnection);
+}
+// 标题栏右侧栏按钮点击回调：转发到 QML 根对象的 _onTitleBarSidebarToggle()
+static void onTitleBarSidebarToggleFromNative(void* ctx) {
+    QMetaObject::invokeMethod(static_cast<QObject*>(ctx),
+                              "_onTitleBarSidebarToggle", Qt::QueuedConnection);
 }
 #endif
 
@@ -254,8 +263,12 @@ int main(int argc, char* argv[]) {
     const QObjectList rootObjs = engine.rootObjects();
 
 #if defined(Q_OS_MACOS)
-    // 安装登录菜单展开拦截：macOS 菜单栏点击「登录/名字」直接弹对话框、永不出下拉。
+    // 标题栏「个人中心」按钮（最左）+「右侧栏」切换按钮（最右）+ 登录菜单展开拦截。
     if (!rootObjs.isEmpty()) {
+        installTitleBarProfileButton(qobject_cast<QQuickWindow*>(rootObjs.first()),
+                                     rootObjs.first(), &openLoginDialogFromNative);
+        installTitleBarSidebarButton(qobject_cast<QQuickWindow*>(rootObjs.first()),
+                                     rootObjs.first(), &onTitleBarSidebarToggleFromNative);
         installLoginMenuSuppressor(rootObjs.first(), &openLoginDialogFromNative);
     }
 #endif

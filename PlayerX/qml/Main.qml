@@ -173,6 +173,12 @@ ApplicationWindow {
         root._toggleLoginDialog()
     }
 
+    // macOS 标题栏「右侧栏」按钮点击回调（原生 AppKit 触发）
+    function _onTitleBarSidebarToggle() {
+        root.rightSidebarOpen = !root.rightSidebarOpen
+    }
+    property bool rightSidebarOpen: false
+
     // ─── 登录 / 个人信息对话框 ──────────────────────────────────────
     // 未登录：登录框（输入评分人姓名）；
     // 已登录：个人信息页（头像 / 姓名 / 系统用户 / 上传服务器），
@@ -1761,6 +1767,24 @@ ApplicationWindow {
         multiGroupDialog: multiGroupDialog
         ratingsDialog: ratingsDialog
         leftNavBar: leftNavBar
+    }
+
+    // ─── 右侧栏（标题栏按钮控制，暂为占位） ─────────────────────────
+    Rectangle {
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: 320
+        color: "#141419"
+        visible: root.rightSidebarOpen
+        z: 200
+        Rectangle {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 1
+            color: "#26262e"
+        }
     }
 
     // ─── 多组对比模式配置面板（独立窗口，默认隐藏）──────────

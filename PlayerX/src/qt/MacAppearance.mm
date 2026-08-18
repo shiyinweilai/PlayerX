@@ -11,11 +11,174 @@
 #import <AppKit/AppKit.h>
 #include <QSettings>
 #include <QString>
+#include <QQuickWindow>
 
 void applyMacDarkAppearance() {
     if (@available(macOS 10.14, *)) {
         NSApp.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
     }
+}
+
+// ─── 标题栏「右侧栏」切换按钮（原生 AppKit，VSCode 风格）──────────────────
+// 图标 = 圆角正方形 + 中间一条竖线；未展开时空心，展开后右侧填色。
+// 按钮自维护展开状态（g_sidebarOpen）用于重绘，点击时同步 toggle 并回调 QML。
+static void* g_sbCtx = nullptr;
+static void (*g_sbFn)(void*) = nullptr;
+static BOOL g_sidebarOpen = NO;
+
+// 标题栏小按钮基类：继承 NSControl，同时【吞掉 mouseUp】。
+// macOS 的标题栏双击 zoom 是在 mouseUp 阶段检测 clickCount==2 触发的；
+// 只要把 mouseUp 重写为空、不向上冒泡，NSWindow 就收不到双击事件，不会 zoom。
+// mouseDown 不判断 clickCount：双击当两次单击处理（快速两次 onClick=两次 toggle）。
+@interface PXTitleBarButton : NSControl
+@property (nonatomic, copy) void (^onClick)(void);
+@end
+@implementation PXTitleBarButton
+- (void)mouseDown:(NSEvent*)e {
+    if (self.onClick) self.onClick();
+}
+- (void)mouseUp:(NSEvent*)e {
+    // 关键：吞掉 mouseUp，阻止事件冒泡到 NSWindow 触发双击 zoom。
+    // （不要调用 [super mouseUp:]，否则会沿 responder 链传到 NSWindow。）
+}
+- (BOOL)acceptsFirstMouse:(NSEvent*)e { return YES; }
+- (void)resetCursorRects {
+    [self addCursorRect:self.bounds cursor:[NSCursor pointingHandCursor]];
+}
+@end
+
+@interface PXSidebarBtnView : PXTitleBarButton @end
+@implementation PXSidebarBtnView
+- (void)drawRect:(NSRect)dirtyRect {
+    NSColor* fg = [NSColor labelColor];   // 深色模式下系统自动取白
+
+    // 圆角正方形（居中，16×16）
+    CGFloat side = 16.0;
+    NSRect frame = NSMakeRect((self.bounds.size.width  - side) / 2.0,
+                              (self.bounds.size.height - side) / 2.0,
+                              side, side);
+    NSBezierPath* box = [NSBezierPath bezierPathWithRoundedRect:frame xRadius:3.0 yRadius:3.0];
+    box.lineWidth = 1.2;
+    [fg setStroke];
+    [box stroke];
+
+    // 中间一条竖线
+    CGFloat midX = NSMidX(frame);
+    NSBezierPath* div = [NSBezierPath bezierPath];
+    [div moveToPoint:NSMakePoint(midX, frame.origin.y + 2.0)];
+    [div lineToPoint:NSMakePoint(midX, frame.origin.y + frame.size.height - 2.0)];
+    div.lineWidth = 1.2;
+    [div stroke];
+
+    // 展开态：右侧填色（用圆角框裁剪，保证填色不超出圆角）
+    if (g_sidebarOpen) {
+        [box addClip];
+        NSRect rightHalf = NSMakeRect(midX, frame.origin.y,
+                                      frame.size.width / 2.0, frame.size.height);
+        [fg setFill];
+        NSRectFill(rightHalf);
+    }
+}
+@end
+
+void installTitleBarSidebarButton(QQuickWindow* win, void* ctx, void(*fn)(void*)) {
+    g_sbCtx = ctx;
+    g_sbFn = fn;
+    if (!win) return;
+    NSView* view = reinterpret_cast<NSView*>(win->winId());
+    NSWindow* nswin = [view window];
+    if (!nswin) return;
+
+    // 紧凑尺寸；NSLayoutAttributeRight 让 accessory 自然位于标题栏最右，
+    // 系统自带的小间距即"离右边界有一点距离"的效果。
+    PXSidebarBtnView* btn = [[PXSidebarBtnView alloc] initWithFrame:NSMakeRect(0, 0, 26, 22)];
+    btn.onClick = ^{
+        g_sidebarOpen = !g_sidebarOpen;
+        [btn setNeedsDisplay:YES];
+        if (g_sbFn) g_sbFn(g_sbCtx);
+    };
+
+    NSTitlebarAccessoryViewController* acc = [[NSTitlebarAccessoryViewController alloc] init];
+    acc.layoutAttribute = NSLayoutAttributeRight;
+    acc.view = btn;
+    [nswin addTitlebarAccessoryViewController:acc];
+}
+
+// ─── 标题栏「个人中心」按钮（原生 AppKit）────────────────────────────────
+// 图标 = 圆头（空心圆环）+ 微笑弧 + 底部身体弧（参考用户提供的 user SVG）。
+// 点击回调到 QML，复用登录/个人信息对话框入口。
+static void* g_pfCtx = nullptr;
+static void (*g_pfFn)(void*) = nullptr;
+static BOOL g_profileOpen = NO;
+
+@interface PXProfileBtnView : PXTitleBarButton @end
+@implementation PXProfileBtnView
+// 不翻折：使用 macOS 默认坐标系（y 从底部向上），与侧栏按钮一致，
+// 保证两个按钮图标视觉垂直对齐。
+- (void)drawRect:(NSRect)dirtyRect {
+    NSColor* fg = [NSColor labelColor];   // 深色模式下系统自动取白
+    CGFloat cx = self.bounds.size.width / 2.0;
+    CGFloat cy = self.bounds.size.height / 2.0;   // 垂直中心（按钮 22 高 → cy=11）
+
+    // 头部圆环（中心偏上）：圆心在 cy+3.5，圆 r=4.5
+    CGFloat headR = 4.5;
+    NSRect headRect = NSMakeRect(cx - headR, (cy + 3.5) - headR, headR * 2, headR * 2);
+    NSBezierPath* head = [NSBezierPath bezierPathWithOvalInRect:headRect];
+
+    // 微笑弧（头部圆内下方）
+    NSBezierPath* smile = [NSBezierPath bezierPath];
+    CGFloat sy = cy + 4.5;
+    [smile moveToPoint:NSMakePoint(cx - 2.0, sy)];
+    [smile curveToPoint:NSMakePoint(cx + 2.0, sy)
+          controlPoint1:NSMakePoint(cx - 2.0, sy + 1.7)
+          controlPoint2:NSMakePoint(cx + 2.0, sy + 1.7)];
+
+    // 底部身体弧（U 形，比头宽 50%，模拟肩膀）
+    NSBezierPath* body = [NSBezierPath bezierPath];
+    [body moveToPoint:NSMakePoint(cx - 9.0, cy - 2.5)];
+    [body curveToPoint:NSMakePoint(cx + 9.0, cy - 2.5)
+         controlPoint1:NSMakePoint(cx - 9.0, cy - 8.5)
+         controlPoint2:NSMakePoint(cx + 9.0, cy - 8.5)];
+
+    if (g_profileOpen) {
+        // 激活态：头部圆 + 身体弧整体填色（与侧栏按钮「右侧填色」视觉一致）
+        [fg setFill];
+        [head fill];
+        [body fill];
+        // 微笑处用窗口背景色反白，保留「嘴」轮廓
+        [[NSColor windowBackgroundColor] setFill];
+        NSRectFill(NSMakeRect(cx - 0.8, sy - 0.4, 1.6, 1.8));
+    } else {
+        [fg setStroke];
+        head.lineWidth = 1.3;
+        [head stroke];
+        smile.lineWidth = 1.1;
+        [smile stroke];
+        body.lineWidth = 1.3;
+        [body stroke];
+    }
+}
+@end
+
+void installTitleBarProfileButton(QQuickWindow* win, void* ctx, void(*fn)(void*)) {
+    g_pfCtx = ctx;
+    g_pfFn = fn;
+    if (!win) return;
+    NSView* view = reinterpret_cast<NSView*>(win->winId());
+    NSWindow* nswin = [view window];
+    if (!nswin) return;
+
+    PXProfileBtnView* btn = [[PXProfileBtnView alloc] initWithFrame:NSMakeRect(0, 0, 26, 22)];
+    btn.onClick = ^{
+        g_profileOpen = !g_profileOpen;
+        [btn setNeedsDisplay:YES];
+        if (g_pfFn) g_pfFn(g_pfCtx);
+    };
+
+    NSTitlebarAccessoryViewController* acc = [[NSTitlebarAccessoryViewController alloc] init];
+    acc.layoutAttribute = NSLayoutAttributeRight;
+    acc.view = btn;
+    [nswin addTitlebarAccessoryViewController:acc];
 }
 
 // ─── 菜单栏"点击守卫"（含登录菜单展开拦截）─────────────────────────────
