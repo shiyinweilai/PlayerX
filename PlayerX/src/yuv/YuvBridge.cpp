@@ -6,6 +6,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 
 // 将路径标准化：统一分隔符为 '/'，处理 file:// URL 前缀
@@ -228,6 +229,43 @@ QVariantList YuvBridge::pixelBlock8x8(int slot, int px, int py) const {
             result.append(m);
         }
     }
+    return result;
+}
+
+QVariantMap YuvBridge::pixelBlockStats8x8(int slot, int px, int py) const {
+    QVariantMap result;
+    if (slot < 0 || slot >= MaxSlots) return result;
+    if (!m_analyzers[slot]->isOpen()) return result;
+
+    // 对齐到 8 的倍数（与 pixelBlock8x8 保持一致）
+    const int bx = (px / 8) * 8;
+    const int by = (py / 8) * 8;
+
+    long long ySum = 0, uSum = 0, vSum = 0;
+    int yMin = INT_MAX, yMax = INT_MIN;
+    int uMin = INT_MAX, uMax = INT_MIN;
+    int vMin = INT_MAX, vMax = INT_MIN;
+    int valid = 0;
+
+    for (int row = 0; row < 8; ++row) {
+        for (int col = 0; col < 8; ++col) {
+            const int x = bx + col;
+            const int y = by + row;
+            auto pix = m_analyzers[slot]->getPixelYUV(x, y);
+            if (pix.y < 0) continue;   // 越界/无效像素
+            ++valid;
+            ySum += pix.y; uSum += pix.u; vSum += pix.v;
+            yMin = std::min(yMin, pix.y); yMax = std::max(yMax, pix.y);
+            uMin = std::min(uMin, pix.u); uMax = std::max(uMax, pix.u);
+            vMin = std::min(vMin, pix.v); vMax = std::max(vMax, pix.v);
+        }
+    }
+
+    if (valid == 0) return result;
+    const long long n = valid;
+    result["yAvg"] = int(ySum / n); result["yMin"] = yMin; result["yMax"] = yMax;
+    result["uAvg"] = int(uSum / n); result["uMin"] = uMin; result["uMax"] = uMax;
+    result["vAvg"] = int(vSum / n); result["vMin"] = vMin; result["vMax"] = vMax;
     return result;
 }
 

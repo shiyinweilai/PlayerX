@@ -203,6 +203,8 @@ Item {
                                 property int pixelX: 0
                                 property int pixelY: 0
                                 property var pixelData: []
+                                // 8×8 块的统计值：{ yAvg,yMin,yMax, uAvg,uMin,uMax, vAvg,vMin,vMax }
+                                property var pixelStats: ({})
 
                                 onPositionChanged: function(mouse) {
                                     // 将鼠标坐标映射到图像坐标
@@ -226,6 +228,7 @@ Item {
                                         pixelY = iy
                                         showPixelGrid = true
                                         pixelData = YuvBridge.pixelBlock8x8(slotWin.index, ix, iy)
+                                        pixelStats = YuvBridge.pixelBlockStats8x8(slotWin.index, ix, iy)
                                     } else {
                                         showPixelGrid = false
                                     }
@@ -266,7 +269,7 @@ Item {
                                 id: pixelGridPopup
                                 visible: pixelHoverArea.showPixelGrid && pixelHoverArea.pixelData.length === 64
                                 width: 320
-                                height: 290
+                                height: 295
                                 radius: 6
                                 color: "#1a1a22"
                                 border.color: "#3a3a4a"
@@ -472,26 +475,21 @@ Item {
                                         }
                                     }
 
-                                    // 当前像素坐标值
-                                    Text {
-                                        text: {
-                                            if (!pixelHoverArea.pixelData || pixelHoverArea.pixelData.length === 0)
-                                                return ""
-                                            const px = pixelHoverArea.pixelX
-                                            const py = pixelHoverArea.pixelY
-                                            // 找到鼠标所在的那个像素在 block 中的位置
-                                            const bx = Math.floor(px / 8) * 8
-                                            const by = Math.floor(py / 8) * 8
-                                            const lx = px - bx
-                                            const ly = py - by
-                                            const idx = ly * 8 + lx
-                                            if (idx >= 0 && idx < pixelHoverArea.pixelData.length) {
-                                                const p = pixelHoverArea.pixelData[idx]
-                                                return "(" + px + "," + py + ")  Y=" + p.y + " U=" + p.u + " V=" + p.v
-                                            }
-                                            return ""
+                                    // 8×8 块 YUV 统计：avg / min / max 三行合一，用 | 分隔
+                                    Column {
+                                        spacing: 1
+                                        property var s: pixelHoverArea.pixelStats || {}
+                                        property bool ready: (typeof s.yAvg === "number")
+
+                                        Text {
+                                            visible: parent.ready
+                                            text: "<span style=\"color:#6cf\">avg</span> (" + parent.s.yAvg + ", " + parent.s.uAvg + ", " + parent.s.vAvg + ")"
+                                                + "  <span style=\"color:#6c8\">min</span> (" + parent.s.yMin + ", " + parent.s.uMin + ", " + parent.s.vMin + ")"
+                                                + "  <span style=\"color:#e86\">max</span> (" + parent.s.yMax + ", " + parent.s.uMax + ", " + parent.s.vMax + ")"
+                                            color: "#dde"; font.pixelSize: 10; font.bold: true
+                                            font.family: "Menlo, Monaco, Consolas, monospace"
+                                            textFormat: Text.RichText
                                         }
-                                        color: "#8af"; font.pixelSize: 10
                                     }
                                 }
                             }

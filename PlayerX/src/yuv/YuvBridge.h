@@ -76,6 +76,13 @@ public:
     // ── 像素级查询（8×8 块）──────────────────────────────────────────────
     Q_INVOKABLE QVariantList pixelBlock8x8(int slot, int px, int py) const;
 
+    // ── 8×8 块统计（Y/U/V 各自的 avg / min / max）───────────────────────
+    // 返回 QVariantMap：
+    //   { "yAvg", "yMin", "yMax",
+    //     "uAvg", "uMin", "uMax",
+    //     "vAvg", "vMin", "vMax" }
+    Q_INVOKABLE QVariantMap pixelBlockStats8x8(int slot, int px, int py) const;
+
     // ── 预设持久化（用 QSettings 保存到磁盘）───────────────────────────
     Q_INVOKABLE QStringList yuvSizePresets() const;
     Q_INVOKABLE void addYuvSizePreset(const QString& size);
