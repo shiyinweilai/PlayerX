@@ -322,10 +322,20 @@ Item {
                                         color: "#aaa"; font.pixelSize: 10
                                     }
 
-                                    // 通道选择 tabs
+                                    // 通道选择 tabs — 与底部 YUV/Y/U/V 按钮同步
+                                    //  YUV 模式（displayMode=0）默认显示 Y 平面
+                                    //  Y / U / V 模式 → 矩阵自动切到对应通道
+                                    //  矩阵里点击则反向同步回 YuvBridge（用户在悬浮窗里手动切换）
                                     Row {
+                                        id: channelTabs
                                         spacing: 2
-                                        property int channel: 0  // 0=Y, 1=U, 2=V
+                                        property int channel: {
+                                            const dm = YuvBridge.displayMode(slotWin.index)
+                                            const _ = slotWin.ver   // 触发 displayMode 变化时刷新
+                                            if (dm === 2) return 1  // U
+                                            if (dm === 3) return 2  // V
+                                            return 0               // YUV / Y → Y
+                                        }
 
                                         Repeater {
                                             model: ["Y", "U", "V"]
@@ -337,13 +347,22 @@ Item {
                                                 Text {
                                                     anchors.centerIn: parent
                                                     text: modelData
-                                                    color: parent.parent.channel === index ? "#fff" : "#888"
+                                                    color: parent.parent.parent.channel === index ? "#fff" : "#888"
                                                     font.pixelSize: 10; font.bold: true
                                                 }
                                                 MouseArea {
                                                     anchors.fill: parent
                                                     cursorShape: Qt.PointingHandCursor
-                                                    onClicked: parent.parent.channel = index
+                                                    onClicked: {
+                                                        // 1) 立即更新本地 channel（让 UI 立刻响应）
+                                                        parent.parent.channel = index
+                                                        // 2) 同步到 YuvBridge 的显示模式
+                                                        //    matrix Y → displayMode 1 (Y)
+                                                        //    matrix U → displayMode 2 (U)
+                                                        //    matrix V → displayMode 3 (V)
+                                                        const dm = (index === 0) ? 1 : (index === 1 ? 2 : 3)
+                                                        YuvBridge.setDisplayMode(slotWin.index, dm)
+                                                    }
                                                 }
                                             }
                                         }
@@ -361,8 +380,37 @@ Item {
                                         Layout.fillWidth: true
                                         Layout.fillHeight: true
 
-                                        property int channel: parent.children[1].channel !== undefined
-                                                              ? parent.children[1].channel : 0
+                                        property int channel: channelTabs ? channelTabs.channel : 0
+
+                                        // 当前通道下、当前 8×8 块的原始值域（不用位深，按真实数据自适应）
+                                        //   - 8bit 块：0-255
+                                        //   - 10bit 块：0-1023
+                                        //   - 极端全黑/全亮：min==max，span=1，"t" 退化为 0（保证不出错）
+                                        property int blockMin: 0
+                                        property int blockMax: 1
+                                        function recomputeRange() {
+                                            if (!pixelHoverArea.pixelData || pixelHoverArea.pixelData.length !== 64) {
+                                                blockMin = 0; blockMax = 1; return
+                                            }
+                                            const ch = channel
+                                            let mn = 65535, mx = -1
+                                            for (let i = 0; i < 64; ++i) {
+                                                const v = ch === 0 ? pixelHoverArea.pixelData[i].y
+                                                                  : (ch === 1 ? pixelHoverArea.pixelData[i].u
+                                                                              : pixelHoverArea.pixelData[i].v)
+                                                if (v < mn) mn = v
+                                                if (v > mx) mx = v
+                                            }
+                                            if (mn === mx) { blockMin = mn; blockMax = mn + 1 }
+                                            else           { blockMin = mn; blockMax = mx }
+                                        }
+                                        // 通道/数据任一变化都要重算
+                                        onChannelChanged: recomputeRange()
+                                        Component.onCompleted: recomputeRange()
+                                        Connections {
+                                            target: pixelHoverArea
+                                            function onPixelDataChanged() { pixelGrid.recomputeRange() }
+                                        }
 
                                         Repeater {
                                             model: 64
@@ -376,12 +424,18 @@ Item {
                                                         return "#222"
                                                     const pix = pixelHoverArea.pixelData[index]
                                                     const ch = pixelGrid.channel
-                                                    const val = ch === 0 ? pix.y : (ch === 1 ? pix.u : pix.v)
-                                                    // 根据值映射背景色
-                                                    const t = val / 255.0
-                                                    const r = Math.round(30 + t * 60)
-                                                    const g = Math.round(30 + t * 80)
-                                                    const b = Math.round(40 + t * 100)
+                                                    const raw = ch === 0 ? pix.y : (ch === 1 ? pix.u : pix.v)
+                                                    // ── 自适应背景色 ──
+                                                    // 像素值按"位深未知"处理：直接拿当前 8×8 块的动态范围 (min..max) 归一化。
+                                                    // 这样 8bit (0-255) 和 10bit (0-1023) 都能用，亮块/暗块都能看清。
+                                                    const refMin = pixelGrid.blockMin || 0
+                                                    const refMax = pixelGrid.blockMax || 1
+                                                    const span = Math.max(1, refMax - refMin)
+                                                    const t = Math.max(0, Math.min(1, (raw - refMin) / span))
+                                                    // 背景：暗端 #0f1218 → 亮端 #4a5268（中等灰蓝），永远不和文字撞色
+                                                    const r = Math.round(15 + t * 55)
+                                                    const g = Math.round(18 + t * 60)
+                                                    const b = Math.round(24 + t * 72)
                                                     return Qt.rgba(r/255, g/255, b/255, 1.0)
                                                 }
 
@@ -394,9 +448,25 @@ Item {
                                                         const ch = pixelGrid.channel
                                                         return ch === 0 ? pix.y : (ch === 1 ? pix.u : pix.v)
                                                     }
-                                                    color: "#e0e0e0"
+                                                    // 文字：按"靠近 0 还是靠近 255"自动反色，做绝对对比
+                                                    // 改用感知亮度公式 (luma) 判定：阈值 0.5
+                                                    color: {
+                                                        if (!pixelHoverArea.pixelData || pixelHoverArea.pixelData.length <= index)
+                                                            return "#e0e0e0"
+                                                        const pix = pixelHoverArea.pixelData[index]
+                                                        const ch = pixelGrid.channel
+                                                        const raw = ch === 0 ? pix.y : (ch === 1 ? pix.u : pix.v)
+                                                        const refMin = pixelGrid.blockMin || 0
+                                                        const refMax = pixelGrid.blockMax || 1
+                                                        const span = Math.max(1, refMax - refMin)
+                                                        const t = Math.max(0, Math.min(1, (raw - refMin) / span))
+                                                        // 背景的近似亮度曲线（与上面同步）
+                                                        const lum = (0.299 * (15 + t*55) + 0.587 * (18 + t*60) + 0.114 * (24 + t*72)) / 255
+                                                        return lum > 0.55 ? "#0a0a0a" : "#f0f0f0"
+                                                    }
                                                     font.pixelSize: 9
                                                     font.family: "Menlo, Monaco, Consolas, monospace"
+                                                    font.bold: true
                                                 }
                                             }
                                         }
