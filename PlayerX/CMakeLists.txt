@@ -164,6 +164,36 @@ qt_add_qml_module(PlayerX
         qml/DarkMenu.qml
         qml/DarkMenuItem.qml
         qml/DarkMenuSeparator.qml
+        # ── 从 Main.qml 拆分的窗口级组件 / 对话框 ──
+        qml/AppMenuBar.qml
+        qml/LoginDialog.qml
+        qml/UpdateDialog.qml
+        qml/UpdateToast.qml
+        qml/TaskUpdateDismissArea.qml
+        qml/TaskUpdateCard.qml
+        qml/TestSourceDownloadDialog.qml
+        qml/TestSourceGroupDialog.qml
+        qml/TestSourceRedownloadDialog.qml
+        qml/ConfirmCloseAllDialog.qml
+        qml/RestoreDefaultConfirmDialog.qml
+        qml/ClearHistoryConfirmDialog.qml
+        qml/QuickUploadConfirmDialog.qml
+        qml/QuickUploadResultDialog.qml
+        qml/QuickUploadOverwriteDialog.qml
+        qml/FileDialogs.qml
+        qml/GlobalShortcuts.qml
+        qml/ResizeEdge.qml
+        # ── 主界面布局区块 ──
+        qml/TopBar.qml
+        qml/RefSidebar.qml
+        qml/CsvBottomBar.qml
+        qml/RefSidebarHSplitter.qml
+        qml/CsvBottomVSplitter.qml
+        qml/VideoArea.qml
+        qml/LeftNavBar.qml
+        # ── Main.qml 拆出的纯逻辑 JS ──
+        qml/MainLogic.js
+        qml/RatingLogic.js
 )
 
 # ─── 头文件搜索路径 ───────────────────────────────────────────────────────────

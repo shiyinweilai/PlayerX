@@ -433,6 +433,78 @@ ApplicationWindow {
         _saveFolderHistory(json)
     }
 
+    // ─── 【设置 → 测试配置 → 清除多路历史记录】一键清空全部本地历史 ─────
+    // 动机：lanes 历史按「评分模式」分槶位持久化，槶位内 lane 数上限 kMaxLanes(9)，
+    // 反复测试会不断堆积旧路径（尤其是仅未勾选的死路），堆到上限后新导入的路会被
+    // 静默丢弃（见 addFoldersToHistory 的 kMaxLanes break 逻辑）——表现就是"应该
+    // 两路结果只加进一路"。此函数用于手动清空，避免重新构建/反复测试时被历史脏数据
+    // 干扰，恢复到"首次启动"般的干净状态。
+    // 覆盖范围：4 个评分模式槶位（subjective/quality/test/off）的 lanes + 旧版遗留
+    // key/文件 + 独立的「文件夹历史」+「全局上次导入目录」——三轨存储（cache 文件 /
+    // LocalStorage / Rating QSettings）全部清空。
+    // 不影响：评分数据 ratings_*.csv、参考图配置 references.ini——那些是评分产出，
+    // 不属于"多路历史"范畴，不会被本函数触碰。
+    function clearAllHistory() {
+        console.log("[MGD] clearAllHistory: 用户在设置菜单手动清除全部多路历史记录")
+        var dir = ""
+        try {
+            if (typeof Fs !== "undefined" && Fs && typeof Fs.appCacheDir === "function") {
+                dir = Fs.appCacheDir() || ""
+            }
+        } catch (e) { /* ignore */ }
+
+        // 1) 四个评分模式槶位的 lanes
+        var modes = ["subjective", "quality", "test", "off"]
+        for (var i = 0; i < modes.length; ++i) {
+            var key = "multiGroup/lanesJson/" + modes[i]
+            var fn  = "multi_group_lanes_" + modes[i] + ".json"
+            try {
+                if (dir.length > 0 && typeof Fs.writeTextFile === "function") {
+                    Fs.writeTextFile(dir + "/" + fn, "")
+                }
+            } catch (e) { /* ignore */ }
+            _lsSave(key, "")
+            try {
+                if (typeof Rating !== "undefined" && Rating && typeof Rating.saveString === "function") {
+                    Rating.saveString(key, "")
+                }
+            } catch (e) { /* ignore */ }
+        }
+        // 旧版遗留 key/文件（一次性迁移用，顺手清掉）
+        try {
+            if (dir.length > 0 && typeof Fs.writeTextFile === "function") {
+                Fs.writeTextFile(dir + "/" + _legacyPersistFileName, "")
+            }
+        } catch (e) { /* ignore */ }
+        _lsSave(_legacyPersistKey, "")
+        try {
+            if (typeof Rating !== "undefined" && Rating && typeof Rating.saveString === "function") {
+                Rating.saveString(_legacyPersistKey, "")
+            }
+        } catch (e) { /* ignore */ }
+
+        // 2) 独立的「文件夹历史」——本次"该有 2 路却只加进 1 路" bug 的直接成因
+        _saveFolderHistory("")
+
+        // 3)「全局上次导入目录」
+        lastImportFolderUrl = ""
+        try {
+            if (typeof Rating !== "undefined" && Rating && typeof Rating.saveString === "function") {
+                Rating.saveString(_lastImportFolderKey, "")
+            }
+        } catch (e) { /* ignore */ }
+
+        // 4) 重置当前内存态 → 与"首次启动、无历史快照"体感一致：默认 2 路空槶
+        while (_rowsModel.count > 0) _rowsModel.remove(_rowsModel.count - 1)
+        _laneRuntime = []
+        _folderHistMerged = false
+        addLane()
+        addLane()
+
+        console.log("[MGD] clearAllHistory: 已清空三轨存储并重置为默认 2 路")
+        return true
+    }
+
     function _persistLanes() {
         if (_restoring) return
         var arr = []
@@ -1724,8 +1796,9 @@ ApplicationWindow {
         _persistLanes()
     }
     // 启动按钮入口：先检查进度，再决定是否弹"接着 / 重置"
-    // 返回 true → 已直接启动；false → 已弹窗（启动延后到用户选择）
-    // 调用方：启动按钮 onClicked。dlg.close() 由弹窗回调里负责。
+    // 返回 true → 已直接启动；false → 已弹窗（启动延后到用户选择）/ 或 canStart 为假、start() 本身失败
+    // 调用方：① 启动按钮 onClicked；② loadFolders()（测试源自动化"接受"流程复用同一套进度检查，
+    //         不再无条件直接 start()，见 loadFolders 里的说明）。dlg.close() 由弹窗回调里负责。
     property bool _startedFromResumeDialog: false
     function _startWithResumeCheck() {
         if (!canStart) return false
@@ -1733,10 +1806,21 @@ ApplicationWindow {
         try { console.log("[MGD] _startWithResumeCheck hasProgress=", info.hasProgress) } catch (e) {}
         if (!info.hasProgress) {
             // 无进度，直接启动
-            if (start()) dlg.close()
-            return true
+            var ok = start()
+            if (ok) dlg.close()
+            return ok
         }
         // 有进度 → 弹窗
+        // 【关键】resumeChoiceDialog 是声明在 dlg（ApplicationWindow）里的 Popup，
+        // 依赖 dlg 自己的 Overlay 渲染——如果 dlg 还没 show() 过 / 当前 visible=false
+        // （测试源自动化"点🔔接受"这条路径正是如此：全程不会主动显示"打开文件夹/
+        // 多组对比"配置窗，直接在后台 loadFolders→start），resumeChoiceDialog.open()
+        // 只是把内部状态置为打开，但因为宿主窗口不可见，用户什么都看不到，之前就是
+        // 卡在这里表现为"点🔔接受没反应"的另一种形式。这里补一次 show()，让弹窗真正
+        // 能显示出来；用户在弹窗里选完「接着评分/重置进度」后，各自的 onClicked 会
+        // start() 成功后 dlg.close()，窗口随之自动隐藏，不影响自动化流程的"无感启动"
+        // 体验；若用户点「取消」，则 dlg 保持可见，停在配置面板上（与手动流程一致）。
+        dlg.show()
         resumeChoiceDialog._info = info
         resumeChoiceDialog.open()
         return false
@@ -1937,7 +2021,16 @@ ApplicationWindow {
         var addedPaths = addFoldersToHistory(urls)
         // 路数撞上限（kMaxLanes）时：按优先级腾位置（空槽 → 死路 → 最旧未勾选），
         // 再重试一次。勾选中的路绝不动——若 9 路全在勾选，返回 false 让用户手动删。
-        if ((!addedPaths || addedPaths.length === 0) && _rowsModel.count >= kMaxLanes) {
+        //
+        // 【坑】addFoldersToHistory 内部是逐个 url 处理的 for 循环，一旦中途撞到
+        // kMaxLanes 就直接 break——这会导致「本批」里前面几个 url 已经成功加入，
+        // 后面几个被静默丢弃（例如批量传入 [A, B]，历史恰好还差 1 个名额，加完 A
+        // 正好满 9 路，B 被 break 掉）。此时 addedPaths.length 是 >0 的（不是 0！），
+        // 之前只在 === 0 时才判定「撞上限」去腾位置重试，这种「部分成功」的情况
+        // 被漏判，导致像本例一样"应该是 2 路，实际只加进 1 路"。
+        // 改成只要「本批没能全部加进去」（addedPaths.length < urls.length）且已到
+        // 上限，就腾位置重试一次，保证同一批 lanes 尽量整批成功或一起失败。
+        if (addedPaths.length < urls.length && _rowsModel.count >= kMaxLanes) {
             console.log("[MGD] loadFolders: 路数已满，按优先级腾位置后重试")
             _evictForCapacity(urls.length)
             addedPaths = addFoldersToHistory(urls)
@@ -1955,7 +2048,19 @@ ApplicationWindow {
         }
         _bumpState()
         _persistLanes()
-        return start()
+        // 【本次修复】这里之前是 `return start()`：无条件跳过"接着评分 / 重置进度"
+        // 询问框，直接启动。手动点"启动对比"按钮走的是 `_startWithResumeCheck()`，
+        // 会在检测到当前模式已有播放进度时先弹"继续评分？"询问框；而 loadFolders 是
+        // 测试源自动化（点左下角🔔接受任务）唯一的导入+启动入口，两条路径行为不一致——
+        // 导致"手动启动会问，自动化接受不会问"，用户体验割裂（同一份历史进度，走
+        // 自动化路径会被静默覆盖/跳过）。
+        // 改为同样调用 `_startWithResumeCheck()`：无进度→照常直接启动；有进度→弹同一个
+        // "继续评分？"框，由用户选择「接着评分/重置进度/取消」，之后再各自 start()。
+        // 注意：这里的返回值语义是"导入是否成功"（上面 addedPaths 非空即成立），
+        // 不等于"是否已启动"——弹窗场景下启动被推迟到用户点击后，但导入本身已完成，
+        // 不应向调用方（_tsImportAndStart）报错。
+        _startWithResumeCheck()
+        return true
     }
 
     // ─── 刷新「未导入」空态的已有路 ─────────────────────────────────

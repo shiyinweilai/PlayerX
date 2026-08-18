@@ -24,13 +24,37 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import PlayerX 1.0
+import "MainLogic.js" as Logic
+import "RatingLogic.js" as RatingLogic
 
 Rectangle {
     // 顶层属性（抽离唯一新增）：playerIdx / viewRoot；其余沿用原 cell 内属性。
     property int  playerIdx: -1
     property var  viewRoot:  null
+    property var  multiGroupDialog: null
+    property var  ratingsDialog: null
+    property var  ratingToast: null
 
     id: cell
+
+    // 【星星打分失效 / checklist 不弹出的根因】RatingLogic.js 没有 `.pragma library`，
+    // 每个 import 它的 QML **组件实例**都会拿到一份独立的模块状态副本（Grid 里最多
+    // 9 个 VideoCellDelegate 实例，就是 9 份互不相干的 _root/_multiGroupDialog/
+    // _ratingsDialog）。本文件此前从未调用过 `RatingLogic._initRating(...)`，
+    // 于是每个 cell 自己那份 `_root` 一直是模块顶部兜底的空对象 `{}`：
+    //   · 点星星 -> _writeRating 里 `_root.cellRatings.slice()` 直接抛
+    //     TypeError: Cannot call method 'slice' of undefined -> 打分失效；
+    //   · 抛异常导致后面 `_multiGroupDialog._bumpState()` / checklist 联动
+    //     统统没机会执行 -> checklist 弹窗也不会跳出来。
+    // 这里补上初始化，让每个 cell 实例的模块副本都指向真正的共享对象。
+    Component.onCompleted: {
+        RatingLogic._initRating({
+            root: viewRoot,
+            multiGroupDialog: multiGroupDialog,
+            ratingsDialog: ratingsDialog,
+            ratingToast: ratingToast
+        })
+    }
     width:  (parent.width  - parent.spacing * (parent.columns - 1)) / Math.max(1, parent.columns)
     height: (parent.height - parent.spacing * (parent.rows    - 1)) / Math.max(1, parent.rows)
     color: "#000"
@@ -417,9 +441,9 @@ Rectangle {
                                 onExited:  inlineStarRow.hoverRating = 0
                                 onClicked: function(mouse) {
                                     if (mouse.button === Qt.RightButton) {
-                                        viewRoot._writeRating(cell.playerIdx, 0)
+                                        RatingLogic._writeRating(cell.playerIdx, 0)
                                     } else {
-                                        viewRoot._writeRating(cell.playerIdx, parent.starIndex)
+                                        RatingLogic._writeRating(cell.playerIdx, parent.starIndex)
                                     }
                                     inlineStarRow.hoverRating = 0
                                 }
@@ -481,7 +505,7 @@ Rectangle {
             // 【cell hover 工具按钮】放大/还原本路：等价于按数字键 1..9。
             //   · 当前不是单路视图，或单路视图但聚焦的不是本路 → 进入单路并聚焦本路（=放大）
             //   · 当前是单路视图且聚焦的就是本路           → 回到上次的多路布局（=还原）
-            // 复用 viewRoot._toggleOne(idx)，与数字键完全同一套行为，不重复实现。
+            // 复用 RatingLogic._toggleOne(idx)，与数字键完全同一套行为，不重复实现。
             // 用方框图标 ⤢ / ⤡ 区分两态：放大态显示 ⤡（视觉上"缩回"），多路态显示 ⤢。
             Rectangle {
                 id: zoomBtn
@@ -512,7 +536,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: viewRoot._toggleOne(cell.playerIdx)
+                    onClicked: RatingLogic._toggleOne(cell.playerIdx)
                 }
                 ToolTip.visible: zoomArea.containsMouse
                 ToolTip.delay: 400
@@ -678,9 +702,9 @@ Rectangle {
                                     onExited:  dimRow.dimHover = 0
                                     onClicked: function(mouse) {
                                         if (mouse.button === Qt.RightButton) {
-                                            viewRoot._writeRating(cell.playerIdx, 0, dimRow.dimKey)
+                                            RatingLogic._writeRating(cell.playerIdx, 0, dimRow.dimKey)
                                         } else {
-                                            viewRoot._writeRating(cell.playerIdx, dimStarItem.starIdx, dimRow.dimKey)
+                                            RatingLogic._writeRating(cell.playerIdx, dimStarItem.starIdx, dimRow.dimKey)
                                             // 打完任意维度后弹出 checklist（有 checklist 配置即弹，不限评分模式）
                                             console.log("[Checklist] 星星点击 dimKey=" + dimRow.dimKey
                                                 + " starIdx=" + dimStarItem.starIdx
@@ -784,8 +808,8 @@ Rectangle {
             _saveChecked()
             // 通知 Main.qml：checklist 勾选变化 → 触发 allGroupsRated 响应式重算，
             // 让"下一组"按钮亮/灰状态与"下一组切换未评分校验"同步生效。
-            if (viewRoot && typeof viewRoot._onChecklistChanged === "function") {
-                try { viewRoot._onChecklistChanged() } catch (e) {}
+            if (viewRoot && typeof RatingLogic._onChecklistChanged === "function") {
+                try { RatingLogic._onChecklistChanged() } catch (e) {}
             }
         }
 
@@ -1236,7 +1260,7 @@ Rectangle {
                 Label {
                     color: "#cfcfd2"
                     font.pixelSize: 11
-                    text: viewRoot.fmtTime(cell._pos()) + " / " + viewRoot.fmtTime(cell._dur())
+                    text: Logic.fmtTime(cell._pos()) + " / " + Logic.fmtTime(cell._dur())
                 }
             }
 
