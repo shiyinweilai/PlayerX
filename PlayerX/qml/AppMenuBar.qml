@@ -77,6 +77,112 @@ MenuBar {
             anchors.bottom: parent.bottom
             z: 10
 
+            // ─── 自绘按钮：右侧栏切换（在个人中心左侧）──
+            // 圆角方框 + 中间竖线；激活时方框右侧填色。
+            // 状态：open 直接绑定到 root.rightSidebarOpen → 主程序 toggle 时按钮自动填色。
+            Rectangle {
+                id: capSidebarBtn
+                width: 32; height: parent.height
+                color: sbMa.containsMouse ? "#2a2a32" : "transparent"
+                property bool open: root.rightSidebarOpen
+
+                Item {
+                    anchors.centerIn: parent
+                    width: 16; height: 16
+
+                    // 外框（始终显示）
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        color: "transparent"
+                        border.color: "#cfcfd2"
+                        border.width: 1.5
+                    }
+                    // 中间竖线（始终显示）：撑满高度，将方框一分为二
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 1.5
+                        color: "#cfcfd2"
+                    }
+                    // 激活态：右半填色（覆盖到竖线右侧 + 右侧圆角）
+                    Rectangle {
+                        visible: capSidebarBtn.open
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: parent.width / 2
+                        radius: 3
+                        color: "#cfcfd2"
+                    }
+                }
+
+                MouseArea {
+                    id: sbMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    // accepted=true 阻止双击冒泡到外层 TapHandler
+                    onClicked: root._onTitleBarSidebarToggle()
+                }
+            }
+
+            // ─── 自绘按钮：个人中心（在右侧栏按钮右侧 → 更靠近系统三键）──
+            // 圆头 + 半月肩 + 嘴；激活时头+身填色（嘴留白）。
+            // 状态：open 直接绑定到 root.loginDialogOpen → 打开对话框时按钮自动填色。
+            Rectangle {
+                id: capProfileBtn
+                width: 32; height: parent.height
+                color: pfMa.containsMouse ? "#2a2a32" : "transparent"
+                property bool open: root.loginDialogOpen
+
+                Item {
+                    anchors.centerIn: parent
+                    width: 18; height: 18
+
+                    // ── 头部：圆头 r=4 ──
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: parent.top
+                        anchors.topMargin: 1
+                        width: 8; height: 8; radius: 4
+                        color: capProfileBtn.open ? "#cfcfd2" : "transparent"
+                        border.color: "#cfcfd2"
+                        border.width: 1.3
+                    }
+
+                    // ── 身体：半月肩（半圆：宽 16 / 高 8，半径 8）──
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom
+                        width: 16; height: 8; radius: 8
+                        color: capProfileBtn.open ? "#cfcfd2" : "transparent"
+                        border.color: "#cfcfd2"
+                        border.width: 1.3
+                    }
+
+                    // ── 反白嘴（仅激活态：与按钮背景同色，画在身体弧线之上）──
+                    Rectangle {
+                        visible: capProfileBtn.open
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.verticalCenterOffset: 2
+                        width: 3; height: 1.6
+                        color: "#101012"
+                    }
+                }
+
+                MouseArea {
+                    id: pfMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    // accepted=true 阻止双击冒泡到外层 TapHandler
+                    onClicked: root._openLoginDialogFromNative()
+                }
+            }
+
             // 最小化
             Rectangle {
                 id: capMinBtn

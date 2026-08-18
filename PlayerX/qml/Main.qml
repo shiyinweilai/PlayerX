@@ -178,6 +178,8 @@ ApplicationWindow {
         root.rightSidebarOpen = !root.rightSidebarOpen
     }
     property bool rightSidebarOpen: false
+    // 登录/个人信息对话框开关状态：供 Windows 自绘按钮绑定填色状态。
+    property bool loginDialogOpen: loginDialog.visible
 
     // ─── 登录 / 个人信息对话框 ──────────────────────────────────────
     // 未登录：登录框（输入评分人姓名）；
