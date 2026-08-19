@@ -12,6 +12,12 @@ Item {
     id: yuvView
     z: 100
 
+    // ── 供顶部菜单「YUV 分析 ▸ 打开 YUV 文件/文件夹」调用的入口 ──
+    // 仅触发本模块自带的 FileDialog / FolderDialog（见下方 yuvSetupView 内），
+    // 与「播放对比」的视频打开入口（addDialog / multiGroupDialog）完全隔离。
+    function openFileDialog() { yuvSetupFileDialog.open() }
+    function openFolderDialog() { yuvSetupFolderDialog.open() }
+
     // ── 路径工具函数（兼容 Windows / macOS / Linux）──
     // 使用 Fs.urlToLocalFile() 转换 file:// URL 为本地路径（与播放对比一致）
     // 跨平台正确：macOS → "/Users/..."，Windows → "C:/Users/..."

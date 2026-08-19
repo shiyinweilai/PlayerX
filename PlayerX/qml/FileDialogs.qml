@@ -9,6 +9,21 @@ Item {
     property var root: null
     property var multiGroupDialog: null
 
+    // 【对外 property alias】
+    // 子组件的 id 只能在本组件 scope 内访问（`fileDialogs.addDialog` 拿不到
+    // 内部 id），必须用 property alias 显式导出。Main.qml / AppMenuBar 等外部
+    // 通过 fileDialogs.addDialog / fileDialogs.replaceDialog / fileDialogs.refSidebar*
+    // 等访问的就是下面这些别名。
+    property alias addDialog: addDialog
+    property alias replaceDialog: replaceDialog
+    property alias refSidebarCsvDlg: refSidebarCsvDlg
+    property alias refSidebarFileDlg: refSidebarFileDlg
+    property alias refSidebarDirDlg: refSidebarDirDlg
+    property alias refSidebarGroupedDlg: refSidebarGroupedDlg
+    property alias refSidebarFileDlg2: refSidebarFileDlg2
+    property alias refSidebarDirDlg2: refSidebarDirDlg2
+    property alias refSidebarGroupedDlg2: refSidebarGroupedDlg2
+
     FileDialog {
         id: addDialog
         title: "添加视频文件（可多选）"

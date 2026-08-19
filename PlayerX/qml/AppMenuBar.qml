@@ -269,8 +269,11 @@ MenuBar {
         // 其余菜单【不要】手动 toggle：C++ MenuBar 已连接
         // triggered → onItemTriggered 负责展开/收起；QML 再手动 open/close
         // 会双重触发，表现为"点击后菜单立即缩回去"（Windows 实测）。
+        // 【macOS 保护】本 delegate 只在 Windows 自绘菜单栏下生效（inTitleBar=true）。
+        // macOS 顶部菜单栏走系统 NSMenu，MenuBarItem.onClicked 永远不会被触发；
+        // 但加 !inTitleBar 守卫避免 macOS 误触任何菜单的回调。
         onClicked: {
-            if (mbItem.menu === loginMenu)
+            if (mbItem.menu === loginMenu && inTitleBar)
                 root._toggleLoginDialog()
         }
 
@@ -299,6 +302,24 @@ MenuBar {
     DarkMenu {
         title: qsTr("文件")
         DarkMenuItem {
+            id: miQuit
+            text: qsTr("退出 PlayerX")
+            onTriggered: Qt.quit()
+        }
+    }
+
+    // 顶部菜单按模块平铺（每个模块一个顶级 DarkMenu，最深两级）：
+    //   文件 / 播放对比 / YUV 分析 / 码流分析 / 通用（开发者模式 + 自动更新） / 帮助 / 登录
+    // 系统菜单为原生 NSMenu / Win32 菜单渲染，不接受自定义深色 delegate —— 这是
+    // macOS 标准外观，与系统其他应用一致。
+
+    // ═══ 播放对比（模块设置 + 打开入口 + 评分数据）═══════════════════════════════
+    DarkMenu {
+        id: playCompareMenu
+        title: qsTr("播放对比")
+
+        // 打开视频文件（多路视频，进入播放对比）
+        DarkMenuItem {
             id: miOpenFile
             text: qsTr("打开文件…")
             enabled: Engine.fileCount < 9
@@ -311,42 +332,6 @@ MenuBar {
             onTriggered: multiGroupDialog.showAndRefresh()
         }
         DarkMenuSeparator {}
-        // 一次性关闭所有视频（与单路 ✕ 一致；带二次确认）
-        DarkMenuItem {
-            id: miCloseAll
-            text: qsTr("关闭所有视频")
-            enabled: Engine.fileCount > 0
-            onTriggered: confirmCloseAllDialog.open()
-        }
-        DarkMenuSeparator {}
-        // 评分数据：查看/导出/清空本地 CSV（与播放完全解耦）
-        DarkMenuItem {
-            id: miRatings
-            text: qsTr("评分数据…")
-            onTriggered: ratingsDialog.open()
-        }
-        DarkMenuSeparator {}
-        // 打开日志目录（排查问题用：每次启动在 <CacheLocation>/logs/ 下生成日志）
-        DarkMenuItem {
-            text: qsTr("打开日志目录")
-            onTriggered: Fs.revealInFileManager(Fs.appLogDir())
-        }
-        DarkMenuSeparator {}
-        DarkMenuItem {
-            id: miQuit
-            text: qsTr("退出 PlayerX")
-            onTriggered: Qt.quit()
-        }
-    }
-
-    // 【设置】顶层菜单（macOS / Windows 系统菜单）
-    //  · 布局 ▶ / 播放速度 ▶ / 测试配置 ▶ / 滑动对比 / 通道信息 / 视频信息 /
-    //    单路悬停控制条 / 自动重播。
-    //  · 系统菜单为原生 NSMenu / Win32 菜单渲染，不接受自定义深色 delegate —— 这是
-    //    macOS 标准外观，与系统其他应用一致。
-    DarkMenu {
-        id: settingsTopMenu
-        title: qsTr("设置")
 
         // ── 布局 ▶ ──（4 种多路布局，互斥单选）
         // 不用 Repeater：macOS 全局菜单对动态实例化的 MenuItem 支持不稳定，
@@ -519,6 +504,59 @@ MenuBar {
             onTriggered: Engine.loopEnabled = !Engine.loopEnabled
         }
 
+        DarkMenuSeparator {}
+
+        // 评分数据：查看/导出/清空本地 CSV（播放对比模块的评测数据）
+        DarkMenuItem {
+            id: miRatings
+            text: qsTr("评分数据…")
+            onTriggered: ratingsDialog.open()
+        }
+    }
+
+    // ═══ YUV 分析（模块打开入口 + 设置）══════════════
+    DarkMenu {
+        id: yuvMenu
+        title: qsTr("YUV 分析")
+        // 打开 .yuv / .y4m 裸数据文件（带分辨率/格式参数，进入 YUV 分析）
+        DarkMenuItem {
+            text: qsTr("打开 YUV 文件…")
+            onTriggered: root.openYuvFileDialog()
+        }
+        // 打开文件夹并递归扫描 .yuv / .y4m
+        DarkMenuItem {
+            text: qsTr("打开 YUV 文件夹…")
+            onTriggered: root.openYuvFolderDialog()
+        }
+    }
+
+    // ═══ 码流分析（暂未实现，仅留占位提示）══════════════
+    DarkMenu {
+        id: streamMenu
+        title: qsTr("码流分析")
+        DarkMenuItem {
+            text: qsTr("暂未实现")
+            enabled: false
+        }
+    }
+
+    // ═══ 通用（跨模块：关闭视频 + 日志 + 开发者模式 + 自动更新）══════════════
+    DarkMenu {
+        id: generalMenu
+        title: qsTr("通用")
+
+        // 一次性关闭所有视频（与单路 ✕ 一致；带二次确认）
+        DarkMenuItem {
+            id: miCloseAll
+            text: qsTr("关闭所有视频")
+            enabled: Engine.fileCount > 0
+            onTriggered: confirmCloseAllDialog.open()
+        }
+        // 打开日志目录（排查问题用：每次启动在 <CacheLocation>/logs/ 下生成日志）
+        DarkMenuItem {
+            text: qsTr("打开日志目录")
+            onTriggered: Fs.revealInFileManager(Fs.appLogDir())
+        }
         DarkMenuSeparator {}
 
         // ── 开发者模式 ──（每次启动一律不勾选，不记忆）

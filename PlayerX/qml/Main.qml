@@ -181,6 +181,17 @@ ApplicationWindow {
     // 登录/个人信息对话框开关状态：供 Windows 自绘按钮绑定填色状态。
     property bool loginDialogOpen: loginDialog.visible
 
+    // ── 顶部菜单「YUV 分析 ▸ 打开 YUV 文件/文件夹」的桥接入口 ──
+    // 先切到 YUV tab（让用户看到对话框与其结果），再触发 YuvSetupView 的对话框。
+    function openYuvFileDialog() {
+        root.currentTab = "yuv"
+        yuvView.openFileDialog()
+    }
+    function openYuvFolderDialog() {
+        root.currentTab = "yuv"
+        yuvView.openFolderDialog()
+    }
+
     // ─── 登录 / 个人信息对话框 ──────────────────────────────────────
     // 未登录：登录框（输入评分人姓名）；
     // 已登录：个人信息页（头像 / 姓名 / 系统用户 / 上传服务器），

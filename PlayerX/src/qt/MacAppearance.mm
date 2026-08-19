@@ -235,16 +235,18 @@ static void px_fireLoginDialog() {
     if (g_loginMenuFn) g_loginMenuFn(g_loginMenuCtx);
 }
 
-// 判定某一级菜单是否为登录菜单：标题 =「登录」或当前评分人名（QSettings），
-// 位置兜底 index 4（布局：Apple/文件/设置/帮助/登录/QtWindowMenu）。
-// 注意不能用"最后一项"：Qt 会在末尾自动追加 QtWindowMenu（实测日志证实）。
+// 判定某一级菜单是否为登录菜单：标题 =「登录」或当前评分人名（QSettings）。
+// 【不要用位置/索引兜底】——菜单布局会变（旧布局是 Apple/文件/设置/帮助/登录，
+// 现布局是 Apple/文件/播放对比/YUV分析/通用/帮助/登录），用 index 兜底会把
+// 「通用」误判成登录菜单，导致点击"通用"弹出个人信息面板。
 static BOOL px_isLoginMenu(NSMenu *menu, NSInteger index) {
+    (void)index;   // 保留参数仅为兼容调用点，刻意不使用
     NSString *t = menu.title ?: @"";
     if ([t isEqualToString:@"登录"]) return YES;
     QSettings s(QStringLiteral("PlayerX"), QStringLiteral("PlayerX"));
     NSString *rater = s.value(QStringLiteral("rating/user")).toString().toNSString();
     if (rater.length > 0 && [t isEqualToString:rater]) return YES;
-    return index == 4;
+    return NO;
 }
 
 @interface PXTopMenuGuard : NSObject <NSMenuDelegate>

@@ -48,3 +48,80 @@
 给 `MainLogic.js`、`RatingLogic.js` 顶部加 `.pragma library`，让全局只有一份真正共享的模块状态，
 一次 `_init` 即可全局生效，不用每个新增的 QML 文件都记得手动初始化一遍
 （但要注意 library script 里不能再用裸的 QML id，如 `root`，需要全部通过传入的 ctx 访问）。
+
+---
+
+## 【坑】macOS 菜单栏登录菜单判定用了 index 兜底，点「通用/码流分析」误弹个人信息面板
+
+### 现象（2026-08-19）
+- 点击顶部菜单栏「通用」「码流分析」会弹出"个人信息"对话框（本该展开各自下拉菜单）。
+- 登录后菜单栏标题是用户名（如 `rbyang`），与「通用」相邻，容易误以为是位置重叠导致。
+
+### 根因
+`MacAppearance.mm` 的 `px_isLoginMenu()` 里有一句 **`return index == 4;` 的位置兜底**判定。
+旧菜单布局是 `Apple/文件/设置/帮助/登录`，index 4 恰是登录菜单。
+后来把「设置」重构为按模块平铺（`文件/播放对比/YUV分析/通用/帮助/登录`），
+index 4 变成了「通用」，于是每次轮询挂菜单守卫（guard）时，「通用」被错误标记为 `isLogin=YES`，
+点击即触发 `px_fireLoginDialog()` 弹出个人信息面板；「码流分析」等位置也会命中同类误判。
+
+### 修复
+删除 index 兜底，只保留**标题匹配**（`"登录"` 或当前评分人名 `rating/user`）：
+
+```objc
+static BOOL px_isLoginMenu(NSMenu *menu, NSInteger index) {
+    (void)index;   // 保留参数仅为兼容，刻意不用
+    NSString *t = menu.title ?: @"";
+    if ([t isEqualToString:@"登录"]) return YES;
+    QSettings s(QStringLiteral("PlayerX"), QStringLiteral("PlayerX"));
+    NSString *rater = s.value(QStringLiteral("rating/user")).toString().toNSString();
+    if (rater.length > 0 && [t isEqualToString:rater]) return YES;
+    return NO;
+}
+```
+
+### 教训
+菜单布局会随迭代变化，**不要用位置/索引兜底**去定位某个特定菜单；用标题/标识等稳定特征判定。
+改菜单结构后，顺手 `grep` 一遍 C++ 侧是否还有 `index == N` 这类硬编码位置假设。
+
+---
+
+## 【坑】FileDialogs 内部 id 外部访问 → undefined，所有"打开文件"按钮失效
+
+### 现象（2026-08-19）
+重构顶部菜单（按模块平铺）后，顶部菜单「播放对比 ▸ 打开文件…」和主界面「打开文件」大按钮都**无任何反应**——点了菜单项高亮关闭，FileDialog 不弹。
+
+### 日志
+```
+[12:44:56] TypeError: Cannot call method 'open' of undefined
+   qrc:/qt/qml/PlayerX/qml/AppMenuBar.qml:326
+[12:45:09] TypeError: Cannot call method 'open' of undefined
+   qrc:/qt/qml/PlayerX/qml/VideoArea.qml:268
+```
+
+### 根因
+`FileDialogs.qml` 内部 `FileDialog { id: addDialog }` 的 `addDialog` 是**内部 id**，
+QML 中 id 只在当前 component scope 内解析——外部通过 `fileDialogs.addDialog` 访问
+内部 id 返回 **undefined**（QML 早期/AOT 关闭时宽松返回内部对象，AOT 严格后直接 undefined）。
+
+Main.qml 里大量 `addDialog: fileDialogs.addDialog` / `fileDialogs.refSidebar*` 都被这一 bug 影响。
+
+### 修复
+在 `FileDialogs.qml` 用 `property alias` 显式导出所有内部 id：
+
+```qml
+property alias addDialog: addDialog
+property alias replaceDialog: replaceDialog
+property alias refSidebarCsvDlg: refSidebarCsvDlg
+property alias refSidebarFileDlg: refSidebarFileDlg
+property alias refSidebarDirDlg: refSidebarDirDlg
+property alias refSidebarGroupedDlg: refSidebarGroupedDlg
+property alias refSidebarFileDlg2: refSidebarFileDlg2
+property alias refSidebarDirDlg2: refSidebarDirDlg2
+property alias refSidebarGroupedDlg2: refSidebarGroupedDlg2
+```
+
+### 教训
+**子组件的 id 不要假设外部能直接访问**——必须用 `property alias` 显式导出。
+新增需要被外部访问的子组件时，第一件事就是写 `property alias`。
+重构完 QML，**第一件事**是打开 app 日志搜 `TypeError` / `Cannot read property 'X' of undefined`，
+这类静默失败不会有 UI 反馈，只会在日志里留警告。
