@@ -213,12 +213,13 @@ QVariantList YuvBridge::pixelBlock8x8(int slot, int px, int py) const {
     if (slot < 0 || slot >= MaxSlots) return result;
     if (!m_analyzers[slot]->isOpen()) return result;
 
-    // 对齐到 8 的倍数
-    const int bx = (px / 8) * 8;
-    const int by = (py / 8) * 8;
+    // 对齐到 m_blockSize 的倍数
+    const int bs = m_blockSize;
+    const int bx = (px / bs) * bs;
+    const int by = (py / bs) * bs;
 
-    for (int row = 0; row < 8; ++row) {
-        for (int col = 0; col < 8; ++col) {
+    for (int row = 0; row < bs; ++row) {
+        for (int col = 0; col < bs; ++col) {
             const int x = bx + col;
             const int y = by + row;
             auto pix = m_analyzers[slot]->getPixelYUV(x, y);
@@ -237,9 +238,10 @@ QVariantMap YuvBridge::pixelBlockStats8x8(int slot, int px, int py) const {
     if (slot < 0 || slot >= MaxSlots) return result;
     if (!m_analyzers[slot]->isOpen()) return result;
 
-    // 对齐到 8 的倍数（与 pixelBlock8x8 保持一致）
-    const int bx = (px / 8) * 8;
-    const int by = (py / 8) * 8;
+    // 对齐到 m_blockSize 的倍数（与 pixelBlock8x8 保持一致）
+    const int bs = m_blockSize;
+    const int bx = (px / bs) * bs;
+    const int by = (py / bs) * bs;
 
     long long ySum = 0, uSum = 0, vSum = 0;
     int yMin = INT_MAX, yMax = INT_MIN;
@@ -247,8 +249,8 @@ QVariantMap YuvBridge::pixelBlockStats8x8(int slot, int px, int py) const {
     int vMin = INT_MAX, vMax = INT_MIN;
     int valid = 0;
 
-    for (int row = 0; row < 8; ++row) {
-        for (int col = 0; col < 8; ++col) {
+    for (int row = 0; row < bs; ++row) {
+        for (int col = 0; col < bs; ++col) {
             const int x = bx + col;
             const int y = by + row;
             auto pix = m_analyzers[slot]->getPixelYUV(x, y);
@@ -297,7 +299,7 @@ QVariantMap YuvBridge::blockHistogram(int slot, int plane, int px, int py) const
     if (!m_analyzers[slot]->isOpen()) return result;
 
     const rb::YuvAnalyzer::PlaneHistogram h =
-        m_analyzers[slot]->computeBlockHistogram(plane, px, py, 8);
+        m_analyzers[slot]->computeBlockHistogram(plane, px, py, m_blockSize);
     if (h.bins.empty()) return result;
 
     QVariantList bins;
@@ -318,6 +320,21 @@ void YuvBridge::setHoverPixel(int slot, int px, int py, bool valid) {
     m_hoverPixelX = px;
     m_hoverPixelY = py;
     m_hoverValid = valid;
+    emit hoverChanged();
+}
+
+void YuvBridge::setBlockSize(int size) {
+    // 仅接受 8/16/32/64 四档，其余取最近的合法值。
+    int v = 8;
+    if (size >= 64) v = 64;
+    else if (size >= 32) v = 32;
+    else if (size >= 16) v = 16;
+    else v = 8;
+
+    if (v == m_blockSize) return;
+    m_blockSize = v;
+    emit blockSizeChanged();
+    // 块大小变化会影响当前悬浮位置对应的块内容/高亮范围，一并通知刷新。
     emit hoverChanged();
 }
 

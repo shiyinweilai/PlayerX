@@ -29,6 +29,11 @@ class YuvBridge : public QObject {
     // 更新，从而驱动 setup/render 切换与渲染窗口重建。
     Q_PROPERTY(int slotCount READ slotCount NOTIFY slotCountChanged)
 
+    // 像素块统计/悬浮矩阵的块大小（8/16/32/64），全局唯一，顶部菜单"YUV 分析→
+    // 块大小"设置。不依赖右侧栏是否打开；影响 pixelBlock8x8 / pixelBlockStats8x8
+    // / blockHistogram 以及悬浮矩阵浮窗的对齐块大小。
+    Q_PROPERTY(int blockSize READ blockSize WRITE setBlockSize NOTIFY blockSizeChanged)
+
 public:
     static constexpr int MaxSlots = 3;
 
@@ -100,6 +105,10 @@ public:
     Q_INVOKABLE int  hoverPixelY() const { return m_hoverPixelY; }
     Q_INVOKABLE bool hoverValid() const { return m_hoverValid; }
 
+    // ── 块大小设置（8/16/32/64，全局唯一）───────────────────────────────
+    int  blockSize() const { return m_blockSize; }
+    void setBlockSize(int size);
+
     // ── 预设持久化（用 QSettings 保存到磁盘）───────────────────────────
     Q_INVOKABLE QStringList yuvSizePresets() const;
     Q_INVOKABLE void addYuvSizePreset(const QString& size);
@@ -128,6 +137,7 @@ signals:
     void yuvPresetsChanged();
     void playStateChanged(int slot);
     void hoverChanged();
+    void blockSizeChanged();
 
 private:
     void refreshFrameImage(int slot);
@@ -147,4 +157,7 @@ private:
     int  m_hoverPixelX{0};
     int  m_hoverPixelY{0};
     bool m_hoverValid{false};
+
+    // 像素块统计/悬浮矩阵的块大小，默认 8×8，可选 8/16/32/64
+    int  m_blockSize{8};
 };

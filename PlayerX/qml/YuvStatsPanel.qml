@@ -7,7 +7,8 @@ import PlayerX 1.0
 // 桶数按位深自适应（8bit=256, 10bit=1024）。
 // 支持 帧级别 / 块级别 两种统计模式：
 //   - 帧级别（默认）：统计整帧数据，随 frameChanged 更新（ver）。
-//   - 块级别：统计鼠标悬浮处的 8×8 像素块，随鼠标移动实时刷新（hoverVer）。
+//   - 块级别：统计鼠标悬浮处的像素块（块大小 = YuvBridge.blockSize，顶部菜单
+//     "YUV 分析→块大小"设置），随鼠标移动实时刷新（hoverVer）。
 //     悬浮坐标由 YuvWindow.qml 的像素悬浮 MouseArea 通过
 //     YuvBridge.setHoverPixel() 上报，跨窗口全局共享。
 Rectangle {
@@ -119,10 +120,12 @@ Rectangle {
                 visible: panel.statsMode === 1
                 text: {
                     const _ = panel.hoverVer
+                    const __ = YuvBridge.blockSize
                     if (!YuvBridge.hoverValid()) return "将鼠标移动到画面上查看块级统计"
-                    const bx = Math.floor(YuvBridge.hoverPixelX() / 8) * 8
-                    const by = Math.floor(YuvBridge.hoverPixelY() / 8) * 8
-                    return "块 [" + bx + "," + by + "] ~ [" + (bx + 7) + "," + (by + 7) + "]"
+                    const bs = YuvBridge.blockSize
+                    const bx = Math.floor(YuvBridge.hoverPixelX() / bs) * bs
+                    const by = Math.floor(YuvBridge.hoverPixelY() / bs) * bs
+                    return "块 [" + bx + "," + by + "] ~ [" + (bx + bs - 1) + "," + (by + bs - 1) + "]（" + bs + "×" + bs + "）"
                 }
                 color: "#9aa0a6"; font.pixelSize: 11
                 wrapMode: Text.WordWrap
@@ -314,10 +317,15 @@ Rectangle {
                             ctx.stroke()
                             ctx.setLineDash([])
 
+                            // min/max 数字标签往两条竖线外侧绘制（min 标签靠左线左侧右对齐，
+                            // max 标签靠右线右侧左对齐），避免两条线靠得很近时文字互相重叠
                             ctx.fillStyle = "#ff7070"
                             ctx.font = "9px sans-serif"
-                            ctx.fillText(lo.toString(), xMin + 2, 9)
-                            ctx.fillText(hi.toString(), xMax - 14, 9)
+                            ctx.textAlign = "right"
+                            ctx.fillText(lo.toString(), xMin - 3, 9)
+                            ctx.textAlign = "left"
+                            ctx.fillText(hi.toString(), xMax + 3, 9)
+                            ctx.textAlign = "left"
                         }
 
                         // 6. X 轴刻度
