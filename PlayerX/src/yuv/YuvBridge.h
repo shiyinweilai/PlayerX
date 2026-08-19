@@ -89,6 +89,17 @@ public:
     //     "mean", "stddev", "min", "max", "binCount" }
     Q_INVOKABLE QVariantMap histogram(int slot, int plane) const;
 
+    // ── 块级直方图统计（右侧栏"块级别"模式，8×8 块，对齐规则与 pixelBlock8x8 一致）──
+    Q_INVOKABLE QVariantMap blockHistogram(int slot, int plane, int px, int py) const;
+
+    // ── 全局鼠标悬浮像素坐标（供右侧栏"块级别"统计随鼠标实时刷新）───────
+    // 由 YuvWindow.qml 的像素悬浮 MouseArea 在 positionChanged / exited 时上报。
+    Q_INVOKABLE void setHoverPixel(int slot, int px, int py, bool valid);
+    Q_INVOKABLE int  hoverSlot() const { return m_hoverSlot; }
+    Q_INVOKABLE int  hoverPixelX() const { return m_hoverPixelX; }
+    Q_INVOKABLE int  hoverPixelY() const { return m_hoverPixelY; }
+    Q_INVOKABLE bool hoverValid() const { return m_hoverValid; }
+
     // ── 预设持久化（用 QSettings 保存到磁盘）───────────────────────────
     Q_INVOKABLE QStringList yuvSizePresets() const;
     Q_INVOKABLE void addYuvSizePreset(const QString& size);
@@ -116,6 +127,7 @@ signals:
     void slotCountChanged();
     void yuvPresetsChanged();
     void playStateChanged(int slot);
+    void hoverChanged();
 
 private:
     void refreshFrameImage(int slot);
@@ -129,4 +141,10 @@ private:
     QTimer* m_playTimers[MaxSlots]{nullptr, nullptr, nullptr};
     bool    m_playing[MaxSlots]{false, false, false};
     bool    m_reversing[MaxSlots]{false, false, false};
+
+    // 全局鼠标悬浮像素坐标（跨 slot 共享，供右侧栏"块级别"统计使用）
+    int  m_hoverSlot{0};
+    int  m_hoverPixelX{0};
+    int  m_hoverPixelY{0};
+    bool m_hoverValid{false};
 };

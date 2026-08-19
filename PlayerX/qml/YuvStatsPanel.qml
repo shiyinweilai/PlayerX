@@ -5,6 +5,11 @@ import PlayerX 1.0
 // ─── YUV 分析右侧栏：直方图统计面板 ───────────────────────────────────
 // 风格：专业示波器风格。Y=白、U=蓝、V=红，红色 TV Range 虚线，水平网格。
 // 桶数按位深自适应（8bit=256, 10bit=1024）。
+// 支持 帧级别 / 块级别 两种统计模式：
+//   - 帧级别（默认）：统计整帧数据，随 frameChanged 更新（ver）。
+//   - 块级别：统计鼠标悬浮处的 8×8 像素块，随鼠标移动实时刷新（hoverVer）。
+//     悬浮坐标由 YuvWindow.qml 的像素悬浮 MouseArea 通过
+//     YuvBridge.setHoverPixel() 上报，跨窗口全局共享。
 Rectangle {
     id: panel
     color: "#121417"
@@ -12,12 +17,25 @@ Rectangle {
 
     property int activeSlot: 0
     property int ver: 0
+    property int hoverVer: 0
+    property int statsMode: 0   // 0=帧级别, 1=块级别
+
+    // 根据当前 statsMode 取对应的统计数据（bins/mean/stddev/min/max）
+    function statsFor(plane) {
+        if (panel.statsMode === 1) {
+            if (!YuvBridge.hoverValid()) return null
+            return YuvBridge.blockHistogram(YuvBridge.hoverSlot(), plane,
+                                             YuvBridge.hoverPixelX(), YuvBridge.hoverPixelY())
+        }
+        return YuvBridge.histogram(panel.activeSlot, plane)
+    }
 
     Connections {
         target: YuvBridge
         function onFrameChanged(slot) { if (slot === panel.activeSlot) panel.ver++ }
         function onFileOpened(slot) { panel.ver++ }
         function onSlotCountChanged() { panel.ver++ }
+        function onHoverChanged() { panel.hoverVer++ }
     }
 
     // 左侧分隔线
@@ -65,10 +83,55 @@ Rectangle {
                 }
             }
 
-            // ── slot 选择 tabs（多路时）──
+            // ── 帧级别 / 块级别 切换 tab ──
             Row {
                 width: parent.width
-                visible: YuvBridge.slotCount > 1
+                spacing: 4
+                Repeater {
+                    model: ["帧级别", "块级别"]
+                    delegate: Rectangle {
+                        required property int index
+                        required property string modelData
+                        width: (col.width - 4) / 2
+                        height: 24
+                        radius: 4
+                        color: panel.statsMode === index ? "#2a3a55" : "#1e1e26"
+                        border.color: panel.statsMode === index ? "#3a6fd8" : "#2a2a32"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData
+                            color: panel.statsMode === index ? "#ffffff" : "#a0a4ac"
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: panel.statsMode = index
+                        }
+                    }
+                }
+            }
+
+            // 块级别模式下：提示当前悬浮的块坐标 / 无悬浮时的引导文案
+            Text {
+                width: parent.width
+                visible: panel.statsMode === 1
+                text: {
+                    const _ = panel.hoverVer
+                    if (!YuvBridge.hoverValid()) return "将鼠标移动到画面上查看块级统计"
+                    const bx = Math.floor(YuvBridge.hoverPixelX() / 8) * 8
+                    const by = Math.floor(YuvBridge.hoverPixelY() / 8) * 8
+                    return "块 [" + bx + "," + by + "] ~ [" + (bx + 7) + "," + (by + 7) + "]"
+                }
+                color: "#9aa0a6"; font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+
+            // ── slot 选择 tabs（多路时，仅帧级别模式下有意义）──
+            Row {
+                width: parent.width
+                visible: YuvBridge.slotCount > 1 && panel.statsMode === 0
                 spacing: 4
                 Repeater {
                     model: YuvBridge.slotCount
@@ -103,20 +166,25 @@ Rectangle {
                 property string title: ""
                 property color drawColor: "#ffffff"
                 property int plane: 0
-                property real mean: 0
-                property real stdDev: 0
-                property real minVal: 0
-                property real maxVal: 0
 
                 readonly property color bgColor: "#121417"
                 readonly property color gridColor: "#2c3036"
                 readonly property color thresholdColor: "#ff3a3a"
                 readonly property color textColor: "#bbbbbb"
 
-                // 直方图 bins 数据（来自 YuvBridge.histogram().bins）
-                property var histData: {
+                // 当前使用的统计数据（帧级别 or 块级别，取决于 panel.statsMode）
+                readonly property var statsData: {
                     const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, histRoot.plane)
+                    if (panel.statsMode === 1) {
+                        const __ = panel.hoverVer
+                        return panel.statsFor(histRoot.plane)
+                    }
+                    return YuvBridge.histogram(panel.activeSlot, histRoot.plane)
+                }
+
+                // 直方图 bins 数据（来自 statsData.bins）
+                property var histData: {
+                    const d = histRoot.statsData
                     if (!d || !d.bins) return []
                     // 显式转为 JS 纯数字数组（QVariantList 在 JS 里访问可能成
                     // QVariant 对象，直接 Number() 转一下避免绘制时 NaN）
@@ -126,6 +194,23 @@ Rectangle {
                     return r
                 }
                 onHistDataChanged: cv.requestPaint()
+
+                readonly property string mean: {
+                    const d = histRoot.statsData
+                    return (d && d.mean !== undefined) ? Number(d.mean).toFixed(1) : "—"
+                }
+                readonly property string stdDev: {
+                    const d = histRoot.statsData
+                    return (d && d.stddev !== undefined) ? Number(d.stddev).toFixed(1) : "—"
+                }
+                readonly property var minVal: {
+                    const d = histRoot.statsData
+                    return (d && d.min !== undefined) ? d.min : "—"
+                }
+                readonly property var maxVal: {
+                    const d = histRoot.statsData
+                    return (d && d.max !== undefined) ? d.max : "—"
+                }
 
                 // 标题行：色块 + 标题
                 Row {
@@ -176,14 +261,14 @@ Rectangle {
                         }
                         ctx.globalAlpha = 1
 
-                        // 3. 取直方图数据
-                        const histObj = YuvBridge.histogram(panel.activeSlot, histRoot.plane)
+                        // 3. 取直方图数据（帧级别 / 块级别，取决于 panel.statsMode）
+                        const histObj = panel.statsFor(histRoot.plane)
                         const rawBins = histObj && histObj.bins ? histObj.bins : []
                         const N = rawBins.length
                         if (N === 0) {
                             ctx.fillStyle = "#5a5f66"
                             ctx.font = "10px sans-serif"
-                            ctx.fillText("无数据", 8, h / 2)
+                            ctx.fillText(panel.statsMode === 1 ? "将鼠标移到画面上" : "无数据", 8, h / 2)
                             return
                         }
                         // 转纯 number 数组 + 求 max
@@ -273,78 +358,18 @@ Rectangle {
                 drawColor: "#ffffff"
                 plane: 0
                 height: 200
-                mean: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 0)
-                    return d && d.mean !== undefined ? d.mean.toFixed(1) : "—"
-                }
-                stdDev: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 0)
-                    return d && d.stddev !== undefined ? d.stddev.toFixed(1) : "—"
-                }
-                minVal: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 0)
-                    return d && d.min !== undefined ? d.min : "—"
-                }
-                maxVal: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 0)
-                    return d && d.max !== undefined ? d.max : "—"
-                }
             }
             HistItem {
                 title: "U 直方图"
                 drawColor: "#42A5FF"
                 plane: 1
                 height: 200
-                mean: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 1)
-                    return d && d.mean !== undefined ? d.mean.toFixed(1) : "—"
-                }
-                stdDev: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 1)
-                    return d && d.stddev !== undefined ? d.stddev.toFixed(1) : "—"
-                }
-                minVal: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 1)
-                    return d && d.min !== undefined ? d.min : "—"
-                }
-                maxVal: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 1)
-                    return d && d.max !== undefined ? d.max : "—"
-                }
             }
             HistItem {
                 title: "V 直方图"
                 drawColor: "#FF4888"
                 plane: 2
                 height: 200
-                mean: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 2)
-                    return d && d.mean !== undefined ? d.mean.toFixed(1) : "—"
-                }
-                stdDev: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 2)
-                    return d && d.stddev !== undefined ? d.stddev.toFixed(1) : "—"
-                }
-                minVal: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 2)
-                    return d && d.min !== undefined ? d.min : "—"
-                }
-                maxVal: {
-                    const _ = panel.ver
-                    const d = YuvBridge.histogram(panel.activeSlot, 2)
-                    return d && d.max !== undefined ? d.max : "—"
-                }
             }
 
             Item { width: parent.width; height: 8 }

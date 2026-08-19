@@ -291,6 +291,36 @@ QVariantMap YuvBridge::histogram(int slot, int plane) const {
     return result;
 }
 
+QVariantMap YuvBridge::blockHistogram(int slot, int plane, int px, int py) const {
+    QVariantMap result;
+    if (slot < 0 || slot >= MaxSlots) return result;
+    if (!m_analyzers[slot]->isOpen()) return result;
+
+    const rb::YuvAnalyzer::PlaneHistogram h =
+        m_analyzers[slot]->computeBlockHistogram(plane, px, py, 8);
+    if (h.bins.empty()) return result;
+
+    QVariantList bins;
+    bins.reserve(static_cast<int>(h.bins.size()));
+    for (int v : h.bins) bins.append(v);
+
+    result["bins"]     = bins;
+    result["mean"]     = h.mean;
+    result["stddev"]   = h.stddev;
+    result["min"]      = h.minVal;
+    result["max"]      = h.maxVal;
+    result["binCount"] = h.binCount;
+    return result;
+}
+
+void YuvBridge::setHoverPixel(int slot, int px, int py, bool valid) {
+    m_hoverSlot = slot;
+    m_hoverPixelX = px;
+    m_hoverPixelY = py;
+    m_hoverValid = valid;
+    emit hoverChanged();
+}
+
 // ── 预设持久化 ──────────────────────────────────────────────────────
 // 用 QSettings 把用户的"尺寸 / 格式 / 帧率"历史存到磁盘，
 // 跨会话保留，下次直接下拉复用。可单独删除任一项。

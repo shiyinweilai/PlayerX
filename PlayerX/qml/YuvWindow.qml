@@ -229,11 +229,17 @@ Item {
                                         showPixelGrid = true
                                         pixelData = YuvBridge.pixelBlock8x8(slotWin.index, ix, iy)
                                         pixelStats = YuvBridge.pixelBlockStats8x8(slotWin.index, ix, iy)
+                                        // 上报全局悬浮像素坐标，供右侧栏"块级别"统计实时跟随
+                                        YuvBridge.setHoverPixel(slotWin.index, ix, iy, true)
                                     } else {
                                         showPixelGrid = false
+                                        YuvBridge.setHoverPixel(slotWin.index, 0, 0, false)
                                     }
                                 }
-                                onExited: showPixelGrid = false
+                                onExited: {
+                                    showPixelGrid = false
+                                    YuvBridge.setHoverPixel(slotWin.index, 0, 0, false)
+                                }
                             }
 
                             // ── 8×8 像素块 hover 高亮边框 ──

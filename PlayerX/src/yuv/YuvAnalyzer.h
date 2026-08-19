@@ -79,6 +79,11 @@ public:
     };
     PlaneHistogram computeHistogram(int plane) const;
 
+    // ── 块级直方图统计（右侧栏"块级别"模式，随鼠标悬浮实时统计）──────────
+    // 以 (px, py) 为基准，对齐到 blockSize 的倍数（默认 8×8，与
+    // pixelBlock8x8 / pixelBlockStats8x8 的对齐规则保持一致）。
+    PlaneHistogram computeBlockHistogram(int plane, int px, int py, int blockSize = 8) const;
+
 private:
     void initSwsContext();
     void freeSwsContext();

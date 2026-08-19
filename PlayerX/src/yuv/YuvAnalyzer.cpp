@@ -379,6 +379,53 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogram(int plane) const {
     return result;
 }
 
+YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeBlockHistogram(int plane, int px, int py, int blockSize) const {
+    PlaneHistogram result;
+    if (m_frameBuf.empty() || !m_srcFrame) return result;
+    if (plane < 0 || plane >= planeCount()) return result;
+    if (blockSize <= 0) return result;
+
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
+    const bool isHighDepth = desc && desc->comp[0].depth > 8;
+    const int binCount = isHighDepth ? 1024 : 256;
+    result.bins.assign(binCount, 0);
+    result.binCount = binCount;
+
+    // 对齐到 blockSize 的倍数（与 pixelBlock8x8 / pixelBlockStats8x8 一致）
+    const int bx = (px / blockSize) * blockSize;
+    const int by = (py / blockSize) * blockSize;
+
+    long long sum = 0, sumSq = 0;
+    int minVal = INT_MAX, maxVal = INT_MIN;
+    long long count = 0;
+
+    for (int row = 0; row < blockSize; ++row) {
+        for (int col = 0; col < blockSize; ++col) {
+            const int x = bx + col;
+            const int y = by + row;
+            const YuvPixel p = getPixelYUV(x, y);
+            if (p.y < 0) continue;   // 越界/无效像素
+            const int val = (plane == 0) ? p.y : (plane == 1) ? p.u : p.v;
+            if (val < 0 || val >= binCount) continue;
+            result.bins[val]++;
+            sum += val;
+            sumSq += static_cast<long long>(val) * val;
+            if (val < minVal) minVal = val;
+            if (val > maxVal) maxVal = val;
+            ++count;
+        }
+    }
+
+    if (count == 0) { result.bins.clear(); result.binCount = 0; return result; }
+    result.mean = static_cast<double>(sum) / count;
+    const double meanSq = result.mean * result.mean;
+    const double sqMean = static_cast<double>(sumSq) / count;
+    result.stddev = (sqMean > meanSq) ? std::sqrt(sqMean - meanSq) : 0.0;
+    result.minVal = minVal;
+    result.maxVal = maxVal;
+    return result;
+}
+
 YuvAnalyzer::YuvPixel YuvAnalyzer::getPixelYUV(int x, int y) const {
     if (m_frameBuf.empty() || !m_srcFrame) return {-1, -1, -1};
     if (x < 0 || x >= m_width || y < 0 || y >= m_height) return {-1, -1, -1};
