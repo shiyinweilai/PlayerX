@@ -22,6 +22,8 @@ void applyMacDarkAppearance() {
 // ─── 标题栏「右侧栏」切换按钮（原生 AppKit，VSCode 风格）──────────────────
 // 图标 = 圆角正方形 + 中间一条竖线；未展开时空心，展开后右侧填色。
 // 按钮自维护展开状态（g_sidebarOpen）用于重绘，点击时同步 toggle 并回调 QML。
+// LEFT_INSET：让两个按钮整体左移，避开 macOS 窗口右上角的圆弧区域。
+#define LEFT_INSET 16.0
 static void* g_sbCtx = nullptr;
 static void (*g_sbFn)(void*) = nullptr;
 static BOOL g_sidebarOpen = NO;
@@ -89,8 +91,6 @@ void installTitleBarSidebarButton(QQuickWindow* win, void* ctx, void(*fn)(void*)
     NSWindow* nswin = [view window];
     if (!nswin) return;
 
-    // 紧凑尺寸；NSLayoutAttributeRight 让 accessory 自然位于标题栏最右，
-    // 系统自带的小间距即"离右边界有一点距离"的效果。
     PXSidebarBtnView* btn = [[PXSidebarBtnView alloc] initWithFrame:NSMakeRect(0, 0, 26, 22)];
     btn.onClick = ^{
         g_sidebarOpen = !g_sidebarOpen;
@@ -98,9 +98,17 @@ void installTitleBarSidebarButton(QQuickWindow* win, void* ctx, void(*fn)(void*)
         if (g_sbFn) g_sbFn(g_sbCtx);
     };
 
+    // 容器宽度 = 按钮宽 + LEFT_INSET，按钮靠容器左边（x=0），
+    // 右边多出的 LEFT_INSET 空隙让按钮整体左移，避开窗口右上角圆弧。
+    // 容器高度 = 28（macOS 标准标题栏高度），按钮 22 高居中于容器，
+    // 这样 accessory 居中对齐标题栏中心时按钮也正好和 traffic lights 同基线。
+    NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 26 + LEFT_INSET, 28)];
+    [container addSubview:btn];
+    btn.frame = NSMakeRect(0, 3, 26, 22);   // 22 高的按钮在 28 高的容器里居中
+
     NSTitlebarAccessoryViewController* acc = [[NSTitlebarAccessoryViewController alloc] init];
     acc.layoutAttribute = NSLayoutAttributeRight;
-    acc.view = btn;
+    acc.view = container;
     [nswin addTitlebarAccessoryViewController:acc];
 }
 
@@ -175,9 +183,14 @@ void installTitleBarProfileButton(QQuickWindow* win, void* ctx, void(*fn)(void*)
         if (g_pfFn) g_pfFn(g_pfCtx);
     };
 
+    // 与侧栏按钮一致：容器高 28、宽 = 26+LEFT_INSET，按钮 22 高在容器内居中。
+    NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 26 + LEFT_INSET, 28)];
+    [container addSubview:btn];
+    btn.frame = NSMakeRect(0, 3, 26, 22);   // 22 高按钮在 28 高容器里居中
+
     NSTitlebarAccessoryViewController* acc = [[NSTitlebarAccessoryViewController alloc] init];
     acc.layoutAttribute = NSLayoutAttributeRight;
-    acc.view = btn;
+    acc.view = container;
     [nswin addTitlebarAccessoryViewController:acc];
 }
 
