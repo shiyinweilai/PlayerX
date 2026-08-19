@@ -348,7 +348,7 @@ Item {
                                 id: pixelGridPopup
                                 readonly property int bs: YuvBridge.blockSize
                                 visible: pixelHoverArea.showPixelGrid && pixelHoverArea.pixelData.length === bs * bs
-                                width: 280
+                                width: 300
                                 height: contentCol.implicitHeight + 16
                                 radius: 6
                                 color: "#1a1a22"
@@ -476,27 +476,111 @@ Item {
                                         function getChannel() { return channel }
                                     }
 
-                                    // 固定尺寸视口：单元格大小恒定（不随块大小自适应缩小），
-                                    // 块越大只展示可视区域，需固定后拖动查看其余部分。
-                                    Flickable {
-                                        id: gridFlick
+                                    // 固定尺寸视口 + 行/列偏移刻度：
+                                    //   顶部刻度＝列偏移（块内 x，0 起），左侧刻度＝行偏移（块内 y，0 起）；
+                                    //   随 gridFlick 的 contentX/contentY 同步滚动，方便对照当前滑到了块内哪个位置。
+                                    // 注：用 Item + 显式 x/y/width/height 硬定位（而非 Layout 自动协商尺寸），
+                                    //   避免刻度与主网格互相引用尺寸形成绑定环、也避免括号计数出错。
+                                    Item {
+                                        id: gridWithRulers
+                                        readonly property int rulerSize: 16
                                         readonly property int cellSize: 30
                                         readonly property int cellSpacing: 1
                                         readonly property int viewCells: 8
-                                        Layout.preferredWidth: viewCells * cellSize + (viewCells - 1) * cellSpacing
-                                        Layout.preferredHeight: viewCells * cellSize + (viewCells - 1) * cellSpacing
+                                        readonly property int gridSpan: viewCells * cellSize + (viewCells - 1) * cellSpacing
+
                                         Layout.alignment: Qt.AlignHCenter
-                                        clip: true
-                                        interactive: pixelHoverArea.pinned
-                                        boundsBehavior: Flickable.StopAtBounds
-                                        contentWidth: pixelGrid.width
-                                        contentHeight: pixelGrid.height
-                                        ScrollBar.vertical: ScrollBar {
-                                            policy: pixelHoverArea.pinned ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                                        Layout.preferredWidth: rulerSize + gridSpan
+                                        Layout.preferredHeight: rulerSize + gridSpan
+
+                                        // 顶部刻度：列偏移（跟随 gridFlick 水平滚动）
+                                        Flickable {
+                                            id: hRuler
+                                            x: gridWithRulers.rulerSize
+                                            y: 0
+                                            width: gridWithRulers.gridSpan
+                                            height: gridWithRulers.rulerSize
+                                            clip: true
+                                            interactive: false
+                                            boundsBehavior: Flickable.StopAtBounds
+                                            contentX: gridFlick.contentX
+                                            contentWidth: pixelGrid.width
+                                            contentHeight: height
+
+                                            Row {
+                                                spacing: gridWithRulers.cellSpacing
+                                                Repeater {
+                                                    model: pixelGrid.bs
+                                                    delegate: Text {
+                                                        required property int index
+                                                        width: gridWithRulers.cellSize
+                                                        height: hRuler.height
+                                                        horizontalAlignment: Text.AlignHCenter
+                                                        verticalAlignment: Text.AlignVCenter
+                                                        text: index
+                                                        color: "#6a6f76"
+                                                        font.pixelSize: 9
+                                                        font.family: "Menlo, Monaco, Consolas, monospace"
+                                                    }
+                                                }
+                                            }
                                         }
-                                        ScrollBar.horizontal: ScrollBar {
-                                            policy: pixelHoverArea.pinned ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+
+                                        // 左侧刻度：行偏移（跟随 gridFlick 垂直滚动）
+                                        Flickable {
+                                            id: vRuler
+                                            x: 0
+                                            y: gridWithRulers.rulerSize
+                                            width: gridWithRulers.rulerSize
+                                            height: gridWithRulers.gridSpan
+                                            clip: true
+                                            interactive: false
+                                            boundsBehavior: Flickable.StopAtBounds
+                                            contentY: gridFlick.contentY
+                                            contentWidth: width
+                                            contentHeight: pixelGrid.height
+
+                                            Column {
+                                                spacing: gridWithRulers.cellSpacing
+                                                Repeater {
+                                                    model: pixelGrid.bs
+                                                    delegate: Text {
+                                                        required property int index
+                                                        width: vRuler.width
+                                                        height: gridWithRulers.cellSize
+                                                        horizontalAlignment: Text.AlignHCenter
+                                                        verticalAlignment: Text.AlignVCenter
+                                                        text: index
+                                                        color: "#6a6f76"
+                                                        font.pixelSize: 9
+                                                        font.family: "Menlo, Monaco, Consolas, monospace"
+                                                    }
+                                                }
+                                            }
                                         }
+
+                                        // 固定尺寸视口：单元格大小恒定（不随块大小自适应缩小），
+                                        // 块越大只展示可视区域，需固定后拖动查看其余部分。
+                                        Flickable {
+                                            id: gridFlick
+                                            x: gridWithRulers.rulerSize
+                                            y: gridWithRulers.rulerSize
+                                            width: gridWithRulers.gridSpan
+                                            height: gridWithRulers.gridSpan
+                                            readonly property int cellSize: gridWithRulers.cellSize
+                                            readonly property int cellSpacing: gridWithRulers.cellSpacing
+                                            readonly property int viewCells: gridWithRulers.viewCells
+                                            clip: true
+                                            interactive: pixelHoverArea.pinned
+                                            boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: pixelGrid.width
+                                            contentHeight: pixelGrid.height
+                                            ScrollBar.vertical: ScrollBar {
+                                                policy: pixelHoverArea.pinned ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                                            }
+                                            ScrollBar.horizontal: ScrollBar {
+                                                policy: pixelHoverArea.pinned ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                                            }
 
                                         Grid {
                                             id: pixelGrid
@@ -597,8 +681,9 @@ Item {
                                                     }
                                                 }
                                             }
-                                        }
-                                    }
+                                        } // end Grid pixelGrid
+                                        } // end Flickable gridFlick
+                                    } // end Item gridWithRulers
 
                                     // 块 YUV 统计：avg / min / max 三行合一，用 | 分隔
                                     Column {
