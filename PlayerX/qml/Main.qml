@@ -1782,21 +1782,89 @@ ApplicationWindow {
         leftNavBar: leftNavBar
     }
 
-    // ─── 右侧栏（标题栏按钮控制，暂为占位） ─────────────────────────
-    Rectangle {
+    // ─── 右侧栏（标题栏按钮控制，按 currentTab 路由内容） ─────────
+    // 每个模块的右侧栏内容不同：yuv → 直方图统计；play → 播放对比设置（占位）；
+    // stream → 码流分析（占位）；home → 空（隐藏）。
+    Loader {
+        id: rightSidebarLoader
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
+        // 避开 YUV 渲染区底部 36px 控制栏（通道切换 + 帧导航按钮），
+        // 避免右侧栏盖住这些播放控制按钮。
+        anchors.bottomMargin: 36
         width: 320
-        color: "#141419"
         visible: root.rightSidebarOpen
         z: 200
+        sourceComponent: {
+            if (root.currentTab === "yuv") return yuvStatsPanelComp
+            if (root.currentTab === "play") return playComparePanelComp
+            if (root.currentTab === "stream") return streamPanelComp
+            return null
+        }
+    }
+
+    // ── YUV 统计面板（直方图 + 统计摘要）────────────────────────
+    Component {
+        id: yuvStatsPanelComp
+        YuvStatsPanel { }
+    }
+
+    // ── 播放对比面板（占位）────────────────────────
+    Component {
+        id: playComparePanelComp
         Rectangle {
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            width: 1
-            color: "#26262e"
+            color: "#141419"
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 1
+                color: "#26262e"
+            }
+            Column {
+                anchors.centerIn: parent
+                spacing: 6
+                Text {
+                    text: "播放对比"
+                    color: "#e8e8ee"; font.pixelSize: 14; font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                Text {
+                    text: "设置面板待实现"
+                    color: "#7a7f86"; font.pixelSize: 11
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+            }
+        }
+    }
+
+    // ── 码流分析面板（占位）────────────────────────
+    Component {
+        id: streamPanelComp
+        Rectangle {
+            color: "#141419"
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 1
+                color: "#26262e"
+            }
+            Column {
+                anchors.centerIn: parent
+                spacing: 6
+                Text {
+                    text: "码流分析"
+                    color: "#e8e8ee"; font.pixelSize: 14; font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                Text {
+                    text: "统计面板待实现"
+                    color: "#7a7f86"; font.pixelSize: 11
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+            }
         }
     }
 

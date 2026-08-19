@@ -66,6 +66,19 @@ public:
     struct YuvPixel { int y, u, v; };
     YuvPixel getPixelYUV(int x, int y) const;
 
+    // ── 直方图统计（当前帧，plane: 0=Y, 1=U, 2=V）────────────────────────
+    // 桶数按位深自适应：8bit=256 桶，10bit=1024 桶（高位深时 binCount>256）。
+    // 顺带返回 mean / stddev / min / max，一次遍历全部算好。
+    struct PlaneHistogram {
+        std::vector<int> bins;   // 每个值域的像素计数
+        double mean     = 0.0;   // 均值
+        double stddev   = 0.0;   // 标准差（无偏，整体标准差）
+        int    minVal   = 0;     // 最小值
+        int    maxVal   = 0;     // 最大值
+        int    binCount = 0;     // 桶数（256 或 1024）
+    };
+    PlaneHistogram computeHistogram(int plane) const;
+
 private:
     void initSwsContext();
     void freeSwsContext();

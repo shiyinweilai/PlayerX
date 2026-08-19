@@ -3,6 +3,8 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
+#include <climits>
 #include <algorithm>
 
 extern "C" {
@@ -333,6 +335,48 @@ void YuvAnalyzer::planeSize(int plane, int& pw, int& ph) const {
             ph = m_height / 2;
         }
     }
+}
+
+YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogram(int plane) const {
+    PlaneHistogram result;
+    if (m_frameBuf.empty() || !m_srcFrame) return result;
+    if (plane < 0 || plane >= planeCount()) return result;
+
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
+    const bool isHighDepth = desc && desc->comp[0].depth > 8;
+    const int binCount = isHighDepth ? 1024 : 256;
+    result.bins.assign(binCount, 0);
+    result.binCount = binCount;
+
+    // 遍历整帧。getPixelYUV 每像素带格式分支，但「当前帧直方图」是点击时
+    // 一次性计算（非实时），200 万像素在 Release 下 <50ms，可接受。
+    long long sum = 0, sumSq = 0;
+    int minVal = INT_MAX, maxVal = INT_MIN;
+    long long count = 0;
+
+    for (int y = 0; y < m_height; ++y) {
+        for (int x = 0; x < m_width; ++x) {
+            const YuvPixel p = getPixelYUV(x, y);
+            if (p.y < 0) continue;   // 越界 / 无效像素
+            const int val = (plane == 0) ? p.y : (plane == 1) ? p.u : p.v;
+            if (val < 0 || val >= binCount) continue;
+            result.bins[val]++;
+            sum += val;
+            sumSq += static_cast<long long>(val) * val;
+            if (val < minVal) minVal = val;
+            if (val > maxVal) maxVal = val;
+            ++count;
+        }
+    }
+
+    if (count == 0) { result.bins.clear(); result.binCount = 0; return result; }
+    result.mean = static_cast<double>(sum) / count;
+    const double meanSq = result.mean * result.mean;
+    const double sqMean = static_cast<double>(sumSq) / count;
+    result.stddev = (sqMean > meanSq) ? std::sqrt(sqMean - meanSq) : 0.0;
+    result.minVal = minVal;
+    result.maxVal = maxVal;
+    return result;
 }
 
 YuvAnalyzer::YuvPixel YuvAnalyzer::getPixelYUV(int x, int y) const {

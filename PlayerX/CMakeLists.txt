@@ -191,6 +191,7 @@ qt_add_qml_module(PlayerX
         qml/CsvBottomVSplitter.qml
         qml/VideoArea.qml
         qml/LeftNavBar.qml
+        qml/YuvStatsPanel.qml
         # ── Main.qml 拆出的纯逻辑 JS ──
         qml/MainLogic.js
         qml/RatingLogic.js

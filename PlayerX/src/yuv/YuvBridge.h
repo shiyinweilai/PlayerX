@@ -83,6 +83,12 @@ public:
     //     "vAvg", "vMin", "vMax" }
     Q_INVOKABLE QVariantMap pixelBlockStats8x8(int slot, int px, int py) const;
 
+    // ── 直方图统计（当前帧，plane: 0=Y, 1=U, 2=V）──────────────────────
+    // 返回 QVariantMap：
+    //   { "bins": [int,...],       // 桶计数（8bit=256, 10bit=1024）
+    //     "mean", "stddev", "min", "max", "binCount" }
+    Q_INVOKABLE QVariantMap histogram(int slot, int plane) const;
+
     // ── 预设持久化（用 QSettings 保存到磁盘）───────────────────────────
     Q_INVOKABLE QStringList yuvSizePresets() const;
     Q_INVOKABLE void addYuvSizePreset(const QString& size);
