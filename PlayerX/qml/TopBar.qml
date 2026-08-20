@@ -1453,12 +1453,12 @@ ToolBar {
         // ── 关闭全部视频（一次性清空所有路）──
         // 设计：
         //   · 只在 fileCount > 0 时显示，与单路 ✕ 一致；
-        //   · 文案 "✕ 关闭" 用红色调色，悬停加深，与单路关闭按钮的语义/视觉对齐；
+        //   · 文案 "✕ 返回" 用红色调色，悬停加深，与单路关闭按钮的语义/视觉对齐；
         //   · 点击先弹深色二次确认弹窗，避免误触一次性丢失全部正在比较的视频；
         //   · 也可通过【文件】▸ 关闭所有视频 / ⌘W 触发。
         FlatButton {
             id: closeAllBtn
-            text: "✕ 关闭"
+            text: "✕ 返回"
             visible: Engine.fileCount > 0
             Layout.preferredWidth: visible ? implicitWidth : 0
             font.pixelSize: 12

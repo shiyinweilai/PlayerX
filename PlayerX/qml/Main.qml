@@ -1638,6 +1638,12 @@ ApplicationWindow {
             if (root.cellRatings.length > Engine.fileCount) {
                 root.cellRatings = root.cellRatings.slice(0, Engine.fileCount)
             }
+            // 播放 tab 关闭全部视频 → 自动收起右侧栏。
+            // 触发源：底部「✕ 关闭」/ 菜单「关闭所有」/ 快捷键 ⌘W / 单路 ✕。
+            // 目的：回到主界面时右侧栏（视频信息面板）不再"挂"在那，避免
+            // 用户在空播放界面上看到一个无意义的"视频信息"面板。
+            if (Engine.fileCount <= 0 && root.currentTab === "play" && root.rightSidebarOpen)
+                root.rightSidebarOpen = false
         }
         // 翻组 / 切宫格 / 重新打开文件后，按新文件路径重建 cellRatings —
         // 避免上一组的评分残留到下一组（同一 idx 但 path 已变）。
