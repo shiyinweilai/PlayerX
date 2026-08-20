@@ -1486,46 +1486,38 @@ Item {
             }
         }
 
-        // ── 最下方：返回 + 全局总控（同时作用于所有已打开 slot）──────────
+        // ── 最下方：全局总控（同时作用于所有已打开 slot）───────────────
+        // 视觉规范与内嵌控制条（slotFloatBar）保持完全一致：50% 透明深色背景
+        // `#8018181c`、按钮配色 `#80252528`/`#803a3a3d`/`#802a2a34`/
+        // `#80e05050`/`#802a5fc0`/`#80b85a5a`，按钮高度 22、圆角 3。
+        //
+        // 设计上"返回 tab"和"关闭全部"职责互补而非重复：
+        //   · 退出 YUV tab → 用户切左侧导航栏"首页 / 播放对比 / 码流分析"
+        //     （= 切走 tab；切回 YUV 时槽位仍在）
+        //   · 清空全部 → 破坏性操作，红色突出；与原版"← 返回"职责正交。
+        // 因此底部不再单独提供"← 返回"按钮，避免与最右"清空"按钮在视觉
+        // 上并列造成"两个相似按钮"的混淆（用户反馈）。
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 40
-            color: "#18181c"
+            Layout.preferredHeight: 36
+            color: "#8018181c"   // 50% 透明深色背景（与 slotFloatBar 一致）
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 10
-                anchors.rightMargin: 10
-                spacing: 6
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                spacing: 4
 
-                // 返回
-                Rectangle {
-                    width: 68; height: 26; radius: 4
-                    color: backBtnMa.containsMouse ? "#3a3a3d" : "#252528"
-                    Text {
-                        anchors.centerIn: parent
-                        text: "← 返回"
-                        color: "#ccc"; font.pixelSize: 12
-                    }
-                    MouseArea {
-                        id: backBtnMa
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: yuvView.closeRequested()
-                    }
-                }
+                // 弹性空白：把所有按钮推到最右侧（与"清空"对齐靠右）。
+                // 注意："总控 · N 路"等纯文字标签已删除（用户反馈：右侧贴边更简洁）。
+                Item { Layout.fillWidth: true }
 
-                Rectangle { width: 1; height: 20; color: "#333" }
-
-                Text {
-                    text: "总控 · " + yuvView.openSlotCount + " 路"
-                    color: "#9aa0a6"; font.pixelSize: 11
-                }
-
-                // 通道切换（作用于所有 slot）
+                // 通道切换（作用于所有 slot）—— 与内嵌控制条完全一致：YUV 标签 38x22，
+                // 其它通道按钮 28x22，激活态 `#80e05050`，未激活 `#802a2a34`，
+                // 左侧/右侧加 corner-fill 让连接处无缝融合。
                 Row {
                     spacing: 0
+                    Layout.alignment: Qt.AlignVCenter
                     Repeater {
                         model: ["YUV", "Y", "U", "V"]
                         delegate: Rectangle {
@@ -1537,8 +1529,9 @@ Item {
                             }
                             width: index === 0 ? 38 : 28
                             height: 22
-                            radius: index === 0 ? 4 : (index === 3 ? 4 : 0)
+                            radius: index === 0 ? 3 : (index === 3 ? 3 : 0)
 
+                            // 连接处 corner-fill：与 slotFloatBar 中同段一致
                             Rectangle {
                                 visible: index === 0
                                 anchors.right: parent.right
@@ -1554,8 +1547,8 @@ Item {
                                 color: parent.color
                             }
 
-                            color: isActive ? "#e05050" : "#2a2a34"
-                            border.color: isActive ? "#e05050" : "#3a3a44"
+                            color: isActive ? "#80e05050" : "#802a2a34"
+                            border.color: isActive ? "#80e05050" : "#803a3a44"
                             border.width: isActive ? 0 : 1
 
                             Text {
@@ -1567,6 +1560,7 @@ Item {
                             }
                             MouseArea {
                                 anchors.fill: parent
+                                hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: yuvView.globalSetDisplayMode(index)
                             }
@@ -1574,15 +1568,18 @@ Item {
                     }
                 }
 
-                Item { width: 8 }
-
-                // 播放控制（作用于所有 slot）
+                // 播放控制（作用于所有 slot）—— 配色与内嵌控制条一致：
+                //   普通按钮  `#80252528` / hover `#803a3a3d`
+                //   播放按钮  `#802a5fc0` / hover `#803d7adf`
+                //   复位按钮  `#80b85a5a` / hover `#80c87070` （带停止色彩提醒）
                 Row {
                     spacing: 2
+                    Layout.alignment: Qt.AlignVCenter
 
+                    // ⏮（快退 15 帧）
                     Rectangle {
                         width: 28; height: 22; radius: 3
-                        color: gSkipBackMa.containsMouse ? "#3a3a3d" : "#252528"
+                        color: gSkipBackMa.containsMouse ? "#803a3a3d" : "#80252528"
                         Text { anchors.centerIn: parent; text: "⏮"; color: "#ccc"; font.pixelSize: 11 }
                         MouseArea {
                             id: gSkipBackMa; anchors.fill: parent
@@ -1590,9 +1587,10 @@ Item {
                             onClicked: yuvView.globalSkipBackward()
                         }
                     }
+                    // ◀（上一帧）
                     Rectangle {
                         width: 28; height: 22; radius: 3
-                        color: gPrevMa.containsMouse ? "#3a3a3d" : "#252528"
+                        color: gPrevMa.containsMouse ? "#803a3a3d" : "#80252528"
                         Text { anchors.centerIn: parent; text: "◀"; color: "#ccc"; font.pixelSize: 11 }
                         MouseArea {
                             id: gPrevMa; anchors.fill: parent
@@ -1600,9 +1598,10 @@ Item {
                             onClicked: yuvView.globalPrevFrame()
                         }
                     }
+                    // ▶/⏸（主播放按钮，蓝色突出）
                     Rectangle {
                         width: 28; height: 22; radius: 3
-                        color: gPlayMa.containsMouse ? "#3a6fd8" : "#2a5fc0"
+                        color: gPlayMa.containsMouse ? "#803d7adf" : "#802a5fc0"
                         Text {
                             anchors.centerIn: parent
                             text: {
@@ -1617,9 +1616,10 @@ Item {
                             onClicked: yuvView.globalTogglePlayPause()
                         }
                     }
+                    // ▶（下一帧）
                     Rectangle {
                         width: 28; height: 22; radius: 3
-                        color: gNextMa.containsMouse ? "#3a3a3d" : "#252528"
+                        color: gNextMa.containsMouse ? "#803a3a3d" : "#80252528"
                         Text { anchors.centerIn: parent; text: "▶"; color: "#ccc"; font.pixelSize: 11 }
                         MouseArea {
                             id: gNextMa; anchors.fill: parent
@@ -1627,9 +1627,10 @@ Item {
                             onClicked: yuvView.globalNextFrame()
                         }
                     }
+                    // ⏭（快进 15 帧）
                     Rectangle {
                         width: 28; height: 22; radius: 3
-                        color: gSkipFwdMa.containsMouse ? "#3a3a3d" : "#252528"
+                        color: gSkipFwdMa.containsMouse ? "#803a3a3d" : "#80252528"
                         Text { anchors.centerIn: parent; text: "⏭"; color: "#ccc"; font.pixelSize: 11 }
                         MouseArea {
                             id: gSkipFwdMa; anchors.fill: parent
@@ -1637,24 +1638,23 @@ Item {
                             onClicked: yuvView.globalSkipForward()
                         }
                     }
-
-                    Item { width: 8 }
-
+                    // ↺（复位到 0 帧，红色提醒）
                     Rectangle {
                         width: 28; height: 22; radius: 3
-                        color: gResetMa.containsMouse ? "#3a3a3d" : "#252528"
-                        Text { anchors.centerIn: parent; text: "↺"; color: "#ccc"; font.pixelSize: 14 }
+                        color: gResetMa.containsMouse ? "#80c87070" : "#80b85a5a"
+                        Text { anchors.centerIn: parent; text: "↺"; color: "#fff"; font.pixelSize: 14 }
                         MouseArea {
                             id: gResetMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: yuvView.globalResetFrame()
                         }
                     }
+                    // ◀◀（反向播放）
                     Rectangle {
                         width: 28; height: 22; radius: 3
                         color: {
                             const _ = yuvView.globalVer
-                            return gRevMa.containsMouse ? "#3a3a3d" : "#252528"
+                            return gRevMa.containsMouse ? "#803a3a3d" : "#80252528"
                         }
                         Text { anchors.centerIn: parent; text: "◀◀"; color: "#ccc"; font.pixelSize: 9 }
                         MouseArea {
@@ -1663,12 +1663,10 @@ Item {
                             onClicked: yuvView.globalToggleReverse()
                         }
                     }
-
-                    Item { width: 8 }
-
+                    // ⊙（全部画面居中复位）
                     Rectangle {
                         width: 28; height: 22; radius: 3
-                        color: gCenterMa.containsMouse ? "#3a3a3d" : "#252528"
+                        color: gCenterMa.containsMouse ? "#803a3a3d" : "#80252528"
                         Text { anchors.centerIn: parent; text: "⊙"; color: "#ccc"; font.pixelSize: 13 }
                         MouseArea {
                             id: gCenterMa; anchors.fill: parent
@@ -1678,7 +1676,21 @@ Item {
                     }
                 }
 
-                Item { Layout.fillWidth: true }
+                // 清空全部 YUV（破坏性按钮，红色突出）—— 放在最右侧
+                // （左侧已有的 Item { Layout.fillWidth: true } 已把所有按钮右对齐）
+                // 命名采用"清空"而非"关闭"，避免与 tab 导航混淆（用户反馈）。
+                // 注意：本按钮只清空 YUV slot 数据，**不**自动切回 home tab——
+                // 留在 YUV tab 内可立即"重新打开文件"继续分析，流转更顺。
+                Rectangle {
+                    width: 64; height: 22; radius: 3
+                    color: gCloseAllMa.containsMouse ? "#80c87070" : "#80b85a5a"
+                    Text { anchors.centerIn: parent; text: "清空"; color: "#fff"; font.pixelSize: 11 }
+                    MouseArea {
+                        id: gCloseAllMa; anchors.fill: parent
+                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: YuvBridge.closeAll()
+                    }
+                }
             }
         }
     }
