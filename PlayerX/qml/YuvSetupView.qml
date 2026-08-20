@@ -353,7 +353,8 @@ Item {
                         // ── 排序下拉按钮：默认 / 升序 / 降序 三选一 ──
                         // 按钮宽高固定（implicitWidth:76），不跟随 label 内容浮动，
                         // 切换排序模式时按钮位置/尺寸绝对稳定。
-                        // 浮层 sortMenu 借助 QML 绘制深度优势（深度 > ListView），自然叠在列表之上。
+                        // 浮层 sortMenu 放在卡片顶层（见下方 sortMenuLayer），与 ListView 同父，
+                        // z 直接可比，避免被列表的 hover 高亮遮挡。
                         Item {
                             id: sortBtn
                             implicitWidth: 76
@@ -388,72 +389,18 @@ Item {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: sortMenu.visible = !sortMenu.visible
-                                }
-                            }
-
-                            // 下拉浮层：相对 sortTrigger 定位；深度大于 ListView，
-                            // 在 QML 默认绘制顺序下自然叠在列表之上。
-                            Rectangle {
-                                id: sortMenu
-                                visible: false
-                                width: 110
-                                anchors.top: sortTrigger.bottom
-                                anchors.topMargin: 4
-                                anchors.horizontalCenter: sortTrigger.horizontalCenter
-                                radius: 6
-                                color: "#1a1a22"
-                                border.color: "#3a3a44"; border.width: 1
-                                z: 30
-                                Column {
-                                    anchors.fill: parent
-                                    anchors.margins: 4
-                                    spacing: 2
-                                    Repeater {
-                                        model: yuvSetupView.sortOptions
-                                        delegate: Rectangle {
-                                            required property var modelData
-                                            required property int index
-                                            width: parent.width; height: 26; radius: 4
-                                            color: (sortItemMa.containsMouse || yuvSetupView.sortMode === index)
-                                                   ? "#2a3a55" : "transparent"
-                                            Text {
-                                                anchors.centerIn: parent
-                                                text: modelData.label
-                                                color: (yuvSetupView.sortMode === index)
-                                                       ? "#ffffff" : "#c8c8d0"
-                                                font.pixelSize: 12
-                                                font.bold: yuvSetupView.sortMode === index
-                                            }
-                                            MouseArea {
-                                                id: sortItemMa
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: {
-                                                    yuvSetupView.sortMode = index
-                                                    sortMenu.visible = false
-                                                }
-                                            }
+                                    onClicked: {
+                                        // mapToItem() 内部读取的祖先 x/y 不会被 QML 绑定依赖
+                                        // 追踪到，声明式绑定在布局未稳定前算出的坐标不会再更新。
+                                        // 因此改为每次“打开”时命令式重新计算一次（此时布局已稳定）。
+                                        if (!sortMenu.visible) {
+                                            const pt = sortTrigger.mapToItem(sortMenuLayer,
+                                                sortTrigger.width / 2, sortTrigger.height)
+                                            sortMenu.x = pt.x - sortMenu.width / 2
+                                            sortMenu.y = pt.y + 4
                                         }
+                                        sortMenu.visible = !sortMenu.visible
                                     }
-                                }
-                            }
-
-                            // 点击浮层外关闭：在 sortBtn 自身铺一层透明 MouseArea，
-                            // 仅当 sortMenu.visible 时启用，propagateComposedEvents 让
-                            // 事件穿透到下方兄弟按钮（添加/清空等仍可点击）。
-                            MouseArea {
-                                anchors.fill: parent
-                                enabled: sortMenu.visible
-                                propagateComposedEvents: true
-                                preventStealing: false
-                                onPressed: function(mouse) {
-                                    // 点击位置映射到 sortTrigger 坐标系判断是否在按钮范围内
-                                    const local = sortTrigger.mapFromItem(sortBtn, mouse.x, mouse.y)
-                                    const inBtn = local.x >= 0 && local.x <= sortTrigger.width
-                                                  && local.y >= 0 && local.y <= sortTrigger.height
-                                    if (!inBtn) sortMenu.visible = false
                                 }
                             }
                         }
@@ -759,6 +706,101 @@ Item {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // ── 排序下拉浮层 + 点击外部关闭：放在 ColumnLayout 之后、DropArea 之前，
+                //    作为卡片顶层节点（与 ListView 同祖父），绘制顺序由 z:30 保证在最上层，
+                //    不会被列表 hover 高亮（任何 z:0 的兄弟）遮挡。─────────────
+                // 位置：sortTrigger 在 RowLayout 内 sortBtn 内，用 sortTrigger.mapToItem
+                //      算其在卡片坐标系的位置；sortMenuLayer 始终 enabled 让绑定稳定。
+                Item {
+                    id: sortMenuLayer
+                    // 显式 width/height 而非 anchors.fill：保证子项 mapToItem 坐标系建立，
+                    // 即使父是 Layout-managed Item 也能正确返回坐标。
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    width: parent.width
+                    height: parent.height
+
+                    // 下拉浮层：相对 sortTrigger 底边居中定位（卡片坐标系）。
+                    // x/y 不用声明式绑定（mapToItem 内部读取的祖先几何不会被
+                    // QML 绑定依赖追踪到，会导致布局变化后位置卡死不更新），
+                    // 而是在 sortMa.onClicked 打开时命令式赋值一次。
+                    Rectangle {
+                        id: sortMenu
+                        visible: false
+                        width: 110
+                        // 显式高度 = Column 内容高度 + 上下 margin；不用 anchors.fill 让
+                        // Column 撑满 parent（那样会与下面这行反向循环绑定，退化成 0 高度，
+                        // 只是没裁剪所以文字仍能画出来，背板却消失/错位）。
+                        height: sortMenuCol.height + 8
+                        x: 0
+                        y: 0
+                        radius: 6
+                        color: "#1a1a22"
+                        border.color: "#3a3a44"; border.width: 1
+                        z: 30
+
+                        Column {
+                            id: sortMenuCol
+                            anchors.top: parent.top
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.margins: 4
+                            spacing: 2
+                            Repeater {
+                                model: yuvSetupView.sortOptions
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    required property int index
+                                    width: parent.width; height: 26; radius: 4
+                                    color: (sortItemMa.containsMouse || yuvSetupView.sortMode === index)
+                                           ? "#2a3a55" : "transparent"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData.label
+                                        color: (yuvSetupView.sortMode === index)
+                                               ? "#ffffff" : "#c8c8d0"
+                                        font.pixelSize: 12
+                                        font.bold: yuvSetupView.sortMode === index
+                                    }
+                                    MouseArea {
+                                        id: sortItemMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            yuvSetupView.sortMode = index
+                                            sortMenu.visible = false
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 点击浮层外关闭：覆盖整张卡片的透明 MouseArea。
+                    // sortMenu 自身（z:30）之上的点击由它自己处理；其他区域的点击
+                    // 冒泡到这里 → 关闭浮层。propagateComposedEvents 让下方按钮
+                    //（添加/清空/列表行等）在浮层打开时仍可点击。
+                    // hoverEnabled 在菜单打开时同步开启：拦住下方列表行的 hover
+                    // 悬浮事件（不接管就会穿透到 ListView delegate，导致鼠标划过
+                    // 下拉菜单时，被遮住的列表行 hover 高亮/删除按钮一闪一闪）。
+                    MouseArea {
+                        anchors.fill: parent
+                        z: 29
+                        enabled: sortMenu.visible
+                        hoverEnabled: sortMenu.visible
+                        propagateComposedEvents: true
+                        preventStealing: false
+                        onPressed: function(mouse) {
+                            // 点在 sortTrigger 范围内 → 不关闭，让 sortBtn 自己切换
+                            const local = sortTrigger.mapFromItem(sortMenuLayer, mouse.x, mouse.y)
+                            const inBtn = local.x >= 0 && local.x <= sortTrigger.width
+                                          && local.y >= 0 && local.y <= sortTrigger.height
+                            if (!inBtn) sortMenu.visible = false
                         }
                     }
                 }
