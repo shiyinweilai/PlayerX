@@ -18,6 +18,367 @@ Item {
 
     property int openSlotCount: YuvBridge.slotCount
 
+    // ── 双路对比模式（正好打开 2 路时启用）────────────────────────────────
+    // 悬浮/固定任意一路视频的像素块，联动显示 [YUV-A / YUV-B / 差异Δ] 三个
+    // 挨在一起的悬浮矩阵浮窗；拖动任意一个浮窗的网格，三者共享同一滚动位置
+    // 同步滚动；两路视频的同坐标块同时描边高亮。
+    property bool cmpActive: openSlotCount === 2
+    property bool cmpShow: false
+    property bool cmpPinned: false
+    property int cmpSlotA: 0
+    property int cmpSlotB: 1
+    property int cmpPixelX: 0
+    property int cmpPixelY: 0
+    property var cmpDataA: []
+    property var cmpDataB: []
+    property var cmpStatsA: ({})
+    property var cmpStatsB: ({})
+    property int cmpChannel: 0     // 0=Y / 1=U / 2=V，三个浮窗共享
+    property real cmpScrollX: 0    // 三个浮窗共享的网格滚动位置（拖任一个都同步）
+    property real cmpScrollY: 0
+    property real cmpGroupX: 0     // 固定态下，浮窗组冻结的屏幕坐标
+    property real cmpGroupY: 0
+    property real cmpMouseX: 0     // 未固定时，跟随鼠标计算浮窗组位置用
+    property real cmpMouseY: 0
+
+    // 按当前 (ix,iy) 拉取两路块数据（对比模式悬浮/块大小变化时共用）
+    function cmpFetchAt(ix, iy) {
+        cmpPixelX = ix
+        cmpPixelY = iy
+        cmpShow = true
+        cmpDataA = YuvBridge.pixelBlock8x8(cmpSlotA, ix, iy)
+        cmpDataB = YuvBridge.pixelBlock8x8(cmpSlotB, ix, iy)
+        cmpStatsA = YuvBridge.pixelBlockStats8x8(cmpSlotA, ix, iy)
+        cmpStatsB = YuvBridge.pixelBlockStats8x8(cmpSlotB, ix, iy)
+    }
+
+    // 浮窗组智能避让定位（与单路悬浮矩阵的 computePopupX/Y 逻辑一致，作用于整组宽高）
+    function cmpComputeGroupX(mx) {
+        const gw = cmpGroup.width
+        const areaW = yuvView.width
+        const rightX = mx + 20
+        const leftX = mx - gw - 20
+        if (rightX + gw + 8 <= areaW) return rightX
+        else if (leftX >= 8) return leftX
+        else return Math.max(8, areaW - gw - 8)
+    }
+    function cmpComputeGroupY(my) {
+        const gh = cmpGroup.height
+        const areaH = yuvView.height
+        const topY = my - gh - 20
+        const bottomY = my + 20
+        if (topY >= 8) return topY
+        else if (bottomY + gh + 8 <= areaH) return bottomY
+        else return Math.max(8, areaH - gh - 8)
+    }
+
+    onCmpActiveChanged: {
+        // 打开/关闭对比模式（第三路打开或关闭时）复位状态，避免残留数据/滚动位置
+        cmpShow = false
+        cmpPinned = false
+        cmpScrollX = 0
+        cmpScrollY = 0
+    }
+    onCmpPinnedChanged: {
+        if (!cmpPinned) {
+            cmpScrollX = 0
+            cmpScrollY = 0
+        }
+    }
+
+    // 块大小变化（顶部菜单"YUV 分析→块大小"）时，对比模式下若正展示中，按新块大小重新拉取
+    Connections {
+        target: YuvBridge
+        function onBlockSizeChanged() {
+            if (yuvView.cmpActive && yuvView.cmpShow) {
+                yuvView.cmpFetchAt(yuvView.cmpPixelX, yuvView.cmpPixelY)
+                yuvView.cmpScrollX = 0
+                yuvView.cmpScrollY = 0
+            }
+        }
+        // 右侧栏"差异总览"热力图点击某块 → 左侧联动固定弹出该像素坐标的对比浮窗组
+        // （居中定位展示，不依赖具体某路视频的屏幕几何，避免因缩放/平移导致定位偏差）
+        function onPixelInspectRequested(px, py) {
+            if (!yuvView.cmpActive) return
+            yuvView.cmpFetchAt(px, py)
+            yuvView.cmpScrollX = 0
+            yuvView.cmpScrollY = 0
+            yuvView.cmpGroupX = Math.max(8, (yuvView.width - cmpGroup.width) / 2)
+            yuvView.cmpGroupY = Math.max(8, (yuvView.height - cmpGroup.height) / 2)
+            yuvView.cmpPinned = true
+        }
+    }
+
+    // ── 对比模式悬浮矩阵浮窗（单个面板：YUV-A / YUV-B / 差异Δ 复用同一组件）──
+    component CompareMatrixPanel: Rectangle {
+        id: cmpPanel
+        property string title: ""
+        property string mode: "a"   // "a" | "b" | "diff"
+
+        readonly property int bs: YuvBridge.blockSize
+        readonly property var dataA: yuvView.cmpDataA
+        readonly property var dataB: yuvView.cmpDataB
+        readonly property int channel: yuvView.cmpChannel
+        readonly property bool ready: dataA.length === bs * bs && dataB.length === bs * bs
+
+        readonly property int rulerSize: 8
+        readonly property int cellSize: 30
+        readonly property int cellSpacing: 1
+        readonly property int viewCells: 8
+        readonly property int gridSpan: viewCells * cellSize + (viewCells - 1) * cellSpacing
+
+        width: rulerSize + gridSpan + 16
+        height: contentCol.implicitHeight + 16
+        radius: 6
+        color: "#1a1a22"
+        border.color: mode === "diff" ? "#5a3a3a" : "#3a3a4a"
+        border.width: 1
+        opacity: 0.97
+
+        // 吞掉面板内除拖拽区域外的点击/悬浮事件，避免穿透到下层视频的
+        // pixelHoverArea（否则会被误判为"点击视频"，导致固定态被意外取消）。
+        MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+            onClicked: {}
+        }
+
+        function valueAt(idx, src) {
+            const pix = src[idx]
+            if (!pix) return 0
+            return channel === 0 ? pix.y : (channel === 1 ? pix.u : pix.v)
+        }
+        // 当前 cell 显示值：a/b 为原始通道值，diff 为有符号差值（A − B）
+        function cellValue(idx) {
+            if (!ready) return 0
+            if (mode === "a") return valueAt(idx, dataA)
+            if (mode === "b") return valueAt(idx, dataB)
+            return valueAt(idx, dataA) - valueAt(idx, dataB)
+        }
+
+        property real rangeMin: 0
+        property real rangeMax: 1
+        function recomputeRange() {
+            if (!ready) { rangeMin = 0; rangeMax = 1; return }
+            const n = bs * bs
+            let mn = 1e9, mx = -1e9
+            for (let i = 0; i < n; ++i) {
+                const v = cellValue(i)
+                if (v < mn) mn = v
+                if (v > mx) mx = v
+            }
+            if (mn === mx) { rangeMin = mn; rangeMax = mn + 1 } else { rangeMin = mn; rangeMax = mx }
+        }
+        onChannelChanged: recomputeRange()
+        onModeChanged: recomputeRange()
+        Component.onCompleted: recomputeRange()
+        Connections {
+            target: yuvView
+            function onCmpDataAChanged() { cmpPanel.recomputeRange() }
+            function onCmpDataBChanged() { cmpPanel.recomputeRange() }
+        }
+
+        // 底部 avg/min/max（diff 模式下统计的是 |差值|）
+        readonly property var statsSrc: mode === "a" ? yuvView.cmpStatsA : (mode === "b" ? yuvView.cmpStatsB : null)
+        function fieldFor(kind) {
+            if (mode !== "diff") {
+                const s = statsSrc || {}
+                const key = (channel === 0 ? "y" : (channel === 1 ? "u" : "v")) + kind
+                const v = s[key]
+                return (v === undefined) ? "—" : v
+            }
+            if (!ready) return "—"
+            const n = bs * bs
+            let sum = 0, mn = 1e9, mx = -1e9
+            for (let i = 0; i < n; ++i) {
+                const v = Math.abs(cellValue(i))
+                sum += v
+                if (v < mn) mn = v
+                if (v > mx) mx = v
+            }
+            if (kind === "Avg") return (sum / n).toFixed(1)
+            if (kind === "Min") return mn
+            return mx
+        }
+
+        ColumnLayout {
+            id: contentCol
+            anchors.fill: parent
+            anchors.margins: 8
+            spacing: 4
+
+            Text {
+                Layout.fillWidth: true
+                text: cmpPanel.title
+                color: cmpPanel.mode === "diff" ? "#ff8a80" : "#9fc1ff"
+                font.pixelSize: 11; font.bold: true
+                elide: Text.ElideRight
+            }
+
+            Item {
+                id: viewport
+                Layout.preferredWidth: cmpPanel.rulerSize + cmpPanel.gridSpan
+                Layout.preferredHeight: cmpPanel.rulerSize + cmpPanel.gridSpan
+
+                // 顶部列刻度
+                Item {
+                    x: cmpPanel.rulerSize; y: 0
+                    width: cmpPanel.gridSpan; height: cmpPanel.rulerSize
+                    clip: true
+                    Row {
+                        x: -yuvView.cmpScrollX
+                        spacing: cmpPanel.cellSpacing
+                        Repeater {
+                            model: cmpPanel.bs
+                            delegate: Text {
+                                required property int index
+                                width: cmpPanel.cellSize; height: cmpPanel.rulerSize
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                text: index; color: "#6a6f76"; font.pixelSize: 9
+                                font.family: "Menlo, Monaco, Consolas, monospace"
+                            }
+                        }
+                    }
+                }
+
+                // 左侧行刻度
+                Item {
+                    x: 0; y: cmpPanel.rulerSize
+                    width: cmpPanel.rulerSize; height: cmpPanel.gridSpan
+                    clip: true
+                    Column {
+                        y: -yuvView.cmpScrollY
+                        spacing: cmpPanel.cellSpacing
+                        Repeater {
+                            model: cmpPanel.bs
+                            delegate: Text {
+                                required property int index
+                                width: cmpPanel.rulerSize; height: cmpPanel.cellSize
+                                horizontalAlignment: Text.AlignLeft
+                                leftPadding: 0
+                                verticalAlignment: Text.AlignVCenter
+                                text: index; color: "#6a6f76"; font.pixelSize: 9
+                                font.family: "Menlo, Monaco, Consolas, monospace"
+                            }
+                        }
+                    }
+                }
+
+                // 主网格视口：拖拽此区域会更新共享 cmpScrollX/cmpScrollY（三个浮窗任一拖动都同步）
+                Item {
+                    id: gridViewport
+                    x: cmpPanel.rulerSize; y: cmpPanel.rulerSize
+                    width: cmpPanel.gridSpan; height: cmpPanel.gridSpan
+                    clip: true
+
+                    Grid {
+                        id: cmpGrid
+                        x: -yuvView.cmpScrollX
+                        y: -yuvView.cmpScrollY
+                        columns: cmpPanel.bs
+                        rows: cmpPanel.bs
+                        spacing: cmpPanel.cellSpacing
+
+                        Repeater {
+                            model: cmpPanel.bs * cmpPanel.bs
+                            delegate: Rectangle {
+                                required property int index
+                                width: cmpPanel.cellSize; height: cmpPanel.cellSize
+                                radius: 2
+                                color: {
+                                    if (!cmpPanel.ready) return "#222"
+                                    const v = cmpPanel.cellValue(index)
+                                    if (cmpPanel.mode === "diff") {
+                                        const scale = Math.max(1, Math.max(Math.abs(cmpPanel.rangeMin), Math.abs(cmpPanel.rangeMax)))
+                                        const absT = Math.max(0, Math.min(1, Math.abs(v) / scale))
+                                        const r = Math.round(26 + absT * 205)
+                                        const g = Math.round(26 + absT * 20)
+                                        const b = Math.round(30 + absT * 20)
+                                        return Qt.rgba(r/255, g/255, b/255, 1.0)
+                                    }
+                                    const refMin = cmpPanel.rangeMin, refMax = cmpPanel.rangeMax
+                                    const span = Math.max(1, refMax - refMin)
+                                    const t = Math.max(0, Math.min(1, (v - refMin) / span))
+                                    const r = Math.round(15 + t * 55)
+                                    const g = Math.round(18 + t * 60)
+                                    const b = Math.round(24 + t * 72)
+                                    return Qt.rgba(r/255, g/255, b/255, 1.0)
+                                }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: {
+                                        if (!cmpPanel.ready) return ""
+                                        const v = cmpPanel.cellValue(index)
+                                        return (cmpPanel.mode === "diff" && v > 0) ? ("+" + v) : v
+                                    }
+                                    color: {
+                                        if (!cmpPanel.ready) return "#e0e0e0"
+                                        const v = cmpPanel.cellValue(index)
+                                        if (cmpPanel.mode === "diff") {
+                                            const scale = Math.max(1, Math.max(Math.abs(cmpPanel.rangeMin), Math.abs(cmpPanel.rangeMax)))
+                                            return Math.abs(v) > scale * 0.5 ? "#fff" : "#ddd"
+                                        }
+                                        const refMin = cmpPanel.rangeMin, refMax = cmpPanel.rangeMax
+                                        const span = Math.max(1, refMax - refMin)
+                                        const t = Math.max(0, Math.min(1, (v - refMin) / span))
+                                        const lum = (0.299*(15+t*55) + 0.587*(18+t*60) + 0.114*(24+t*72)) / 255
+                                        return lum > 0.55 ? "#0a0a0a" : "#f0f0f0"
+                                    }
+                                    font.pixelSize: 10; font.bold: true
+                                    font.family: "Menlo, Monaco, Consolas, monospace"
+                                }
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: yuvView.cmpPinned
+                        property real lastX: 0
+                        property real lastY: 0
+                        onPressed: function(mouse) { lastX = mouse.x; lastY = mouse.y }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed) return
+                            const bs = cmpPanel.bs
+                            const contentSpan = bs * cmpPanel.cellSize + (bs - 1) * cmpPanel.cellSpacing
+                            const maxScroll = Math.max(0, contentSpan - cmpPanel.gridSpan)
+                            const nx = yuvView.cmpScrollX - (mouse.x - lastX)
+                            const ny = yuvView.cmpScrollY - (mouse.y - lastY)
+                            yuvView.cmpScrollX = Math.max(0, Math.min(maxScroll, nx))
+                            yuvView.cmpScrollY = Math.max(0, Math.min(maxScroll, ny))
+                            lastX = mouse.x; lastY = mouse.y
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                Text {
+                    Layout.fillWidth: true; Layout.alignment: Qt.AlignHCenter
+                    text: (cmpPanel.mode === "diff" ? "<span style=\"color:#ff8a80\">avgΔ</span> " : "<span style=\"color:#6cf\">avg</span> ") + cmpPanel.fieldFor("Avg")
+                    color: "#dde"; font.pixelSize: 10; font.bold: true
+                    font.family: "Menlo, Monaco, Consolas, monospace"; textFormat: Text.RichText
+                }
+                Text {
+                    Layout.fillWidth: true; Layout.alignment: Qt.AlignHCenter
+                    text: (cmpPanel.mode === "diff" ? "<span style=\"color:#6c8\">minΔ</span> " : "<span style=\"color:#6c8\">min</span> ") + cmpPanel.fieldFor("Min")
+                    color: "#dde"; font.pixelSize: 10; font.bold: true
+                    font.family: "Menlo, Monaco, Consolas, monospace"; textFormat: Text.RichText
+                }
+                Text {
+                    Layout.fillWidth: true; Layout.alignment: Qt.AlignHCenter
+                    text: (cmpPanel.mode === "diff" ? "<span style=\"color:#e86\">maxΔ</span> " : "<span style=\"color:#e86\">max</span> ") + cmpPanel.fieldFor("Max")
+                    color: "#dde"; font.pixelSize: 10; font.bold: true
+                    font.family: "Menlo, Monaco, Consolas, monospace"; textFormat: Text.RichText
+                }
+            }
+        }
+    }
+
     Rectangle {
         anchors.fill: parent
         color: "#101012"
@@ -251,6 +612,28 @@ Item {
                                 }
 
                                 onPositionChanged: function(mouse) {
+                                    // ── 双路对比模式：悬浮任一路视频，联动三窗口浮窗组 ──
+                                    if (yuvView.cmpActive) {
+                                        if (yuvView.cmpPinned) return
+                                        const imgWc = YuvBridge.width(slotWin.index)
+                                        const imgHc = YuvBridge.height(slotWin.index)
+                                        if (imgWc <= 0 || imgHc <= 0) return
+                                        const dispWc = pixelHoverArea.width
+                                        const dispHc = pixelHoverArea.height
+                                        const offXc = (dispWc - imgWc) / 2.0 + yuvDisp.panX
+                                        const offYc = (dispHc - imgHc) / 2.0 + yuvDisp.panY
+                                        const ixc = Math.floor(mouse.x - offXc)
+                                        const iyc = Math.floor(mouse.y - offYc)
+                                        if (ixc >= 0 && ixc < imgWc && iyc >= 0 && iyc < imgHc) {
+                                            yuvView.cmpFetchAt(ixc, iyc)
+                                            const gp = pixelHoverArea.mapToItem(yuvView, mouse.x, mouse.y)
+                                            yuvView.cmpMouseX = gp.x
+                                            yuvView.cmpMouseY = gp.y
+                                        } else {
+                                            yuvView.cmpShow = false
+                                        }
+                                        return
+                                    }
                                     if (pinned) return   // 已固定：不再跟随鼠标刷新
                                     // 将鼠标坐标映射到图像坐标
                                     // YuvDisplayItem 使用 1:1 原尺寸居中 + panX/panY 偏移
@@ -276,11 +659,27 @@ Item {
                                     }
                                 }
                                 onExited: {
+                                    if (yuvView.cmpActive) {
+                                        if (!yuvView.cmpPinned) yuvView.cmpShow = false
+                                        return
+                                    }
                                     if (pinned) return   // 已固定：鼠标移出视频区域也不收起弹窗
                                     showPixelGrid = false
                                     YuvBridge.setHoverPixel(slotWin.index, 0, 0, false)
                                 }
                                 onClicked: function(mouse) {
+                                    if (yuvView.cmpActive) {
+                                        if (yuvView.cmpPinned) {
+                                            // 点击视频区域（浮窗组之外）→ 取消固定，恢复跟随鼠标
+                                            yuvView.cmpPinned = false
+                                        } else if (yuvView.cmpShow) {
+                                            const gp = pixelHoverArea.mapToItem(yuvView, mouse.x, mouse.y)
+                                            yuvView.cmpGroupX = yuvView.cmpComputeGroupX(gp.x)
+                                            yuvView.cmpGroupY = yuvView.cmpComputeGroupY(gp.y)
+                                            yuvView.cmpPinned = true
+                                        }
+                                        return
+                                    }
                                     if (pinned) {
                                         // 点击视频区域（弹窗之外）→ 取消固定，恢复跟随鼠标
                                         pinned = false
@@ -314,13 +713,14 @@ Item {
                             }
 
                             // ── 像素块 hover 高亮边框（尺寸跟随 YuvBridge.blockSize）──
+                            // 对比模式下：A/B 两路同坐标块同时高亮，联动效果由 cmpPixelX/Y 驱动。
                             Rectangle {
                                 id: blockHighlight
-                                visible: pixelHoverArea.showPixelGrid
+                                visible: yuvView.cmpActive ? yuvView.cmpShow : pixelHoverArea.showPixelGrid
                                 width: YuvBridge.blockSize
                                 height: YuvBridge.blockSize
                                 color: "transparent"
-                                border.color: pixelHoverArea.pinned ? "#3a6fd8" : "#00FF88"
+                                border.color: (yuvView.cmpActive ? yuvView.cmpPinned : pixelHoverArea.pinned) ? "#3a6fd8" : "#00FF88"
                                 border.width: 2
                                 radius: 1
 
@@ -330,7 +730,8 @@ Item {
                                     const dispW = pixelHoverArea.width
                                     const offX = (dispW - imgW) / 2.0 + yuvDisp.panX
                                     const bs = YuvBridge.blockSize
-                                    const blockX = Math.floor(pixelHoverArea.pixelX / bs) * bs
+                                    const px = yuvView.cmpActive ? yuvView.cmpPixelX : pixelHoverArea.pixelX
+                                    const blockX = Math.floor(px / bs) * bs
                                     return offX + blockX
                                 }
                                 y: {
@@ -338,17 +739,20 @@ Item {
                                     const dispH = pixelHoverArea.height
                                     const offY = (dispH - imgH) / 2.0 + yuvDisp.panY
                                     const bs = YuvBridge.blockSize
-                                    const blockY = Math.floor(pixelHoverArea.pixelY / bs) * bs
+                                    const py = yuvView.cmpActive ? yuvView.cmpPixelY : pixelHoverArea.pixelY
+                                    const blockY = Math.floor(py / bs) * bs
                                     return offY + blockY
                                 }
                             }
 
                             // ── 像素矩阵浮窗（固定视口尺寸 + 固定单元格大小，块越大越靠滚动查看）──
+                            // 对比模式下改由顶层共享的 cmpGroup（YUV-A/YUV-B/差异Δ 三联窗）展示，此处隐藏。
                             Rectangle {
                                 id: pixelGridPopup
                                 readonly property int bs: YuvBridge.blockSize
-                                visible: pixelHoverArea.showPixelGrid && pixelHoverArea.pixelData.length === bs * bs
-                                width: 300
+                                visible: !yuvView.cmpActive && pixelHoverArea.showPixelGrid && pixelHoverArea.pixelData.length === bs * bs
+                                // 左对齐（不再水平居中），避免弹窗宽度 > 网格实际宽度时产生大片左侧空白
+                                width: 271
                                 height: contentCol.implicitHeight + 16
                                 radius: 6
                                 color: "#1a1a22"
@@ -370,6 +774,49 @@ Item {
                                     hoverEnabled: true
                                     acceptedButtons: Qt.LeftButton
                                     onClicked: {}
+                                }
+
+                                // 一键拷贝：把当前通道（Y/U/V）的 bs×bs 矩阵 + avg/min/max 汇总
+                                // 以 Tab 分隔（TSV）写入系统剪贴板 —— 可直接粘贴进 Excel / Numbers /
+                                // Google Sheets 自动分列成表格，比逗号/空格分隔更适合"矩阵"场景。
+                                property bool copyFlash: false
+                                TextEdit {
+                                    id: copyHelper
+                                    visible: false
+                                    // 隐藏但仍需存在于场景中才能执行 selectAll()/copy()
+                                }
+                                Timer {
+                                    id: copyFlashTimer
+                                    interval: 1200
+                                    onTriggered: pixelGridPopup.copyFlash = false
+                                }
+                                function copyMatrixToClipboard() {
+                                    const bs = pixelGridPopup.bs
+                                    const data = pixelHoverArea.pixelData
+                                    if (!data || data.length !== bs * bs) return
+                                    const ch = channelTabs ? channelTabs.channel : 0
+                                    const pick = (pix) => ch === 0 ? pix.y : (ch === 1 ? pix.u : pix.v)
+                                    let lines = []
+                                    for (let r = 0; r < bs; ++r) {
+                                        let cols = []
+                                        for (let c = 0; c < bs; ++c) cols.push(pick(data[r * bs + c]))
+                                        lines.push(cols.join("\t"))
+                                    }
+                                    const s = pixelHoverArea.pixelStats || {}
+                                    const avg = ch === 0 ? s.yAvg : (ch === 1 ? s.uAvg : s.vAvg)
+                                    const min = ch === 0 ? s.yMin : (ch === 1 ? s.uMin : s.vMin)
+                                    const max = ch === 0 ? s.yMax : (ch === 1 ? s.uMax : s.vMax)
+                                    lines.push("")
+                                    lines.push("avg\tmin\tmax")
+                                    lines.push(avg + "\t" + min + "\t" + max)
+
+                                    copyHelper.text = lines.join("\n")
+                                    copyHelper.selectAll()
+                                    copyHelper.copy()
+                                    copyHelper.deselect()
+
+                                    copyFlash = true
+                                    copyFlashTimer.restart()
                                 }
 
                                 ColumnLayout {
@@ -398,6 +845,23 @@ Item {
                                             text: "📌"
                                             font.pixelSize: 11
                                         }
+                                        // 一键拷贝当前通道矩阵（Tab 分隔，可直接粘贴进 Excel/Numbers/Sheets 自动分列）
+                                        Rectangle {
+                                            id: copyBtn
+                                            width: 16; height: 16; radius: 8
+                                            color: copyMa.containsMouse ? "#3a6fd8" : "#2a2a34"
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "⧉"; color: copyMa.containsMouse ? "#fff" : "#9aa"; font.pixelSize: 10
+                                            }
+                                            MouseArea {
+                                                id: copyMa
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: pixelGridPopup.copyMatrixToClipboard()
+                                            }
+                                        }
                                         Rectangle {
                                             visible: pixelHoverArea.pinned
                                             width: 16; height: 16; radius: 8
@@ -416,13 +880,16 @@ Item {
                                         }
                                     }
 
-                                    // 固定态操作提示（未固定时提示可点击固定，固定后提示可滚动/取消）
+                                    // 固定态操作提示（未固定时提示可点击固定，固定后提示可滚动/取消）；
+                                    // 拷贝成功后短暂替换成"已复制"提示，1.2s 后自动恢复。
                                     Text {
                                         Layout.fillWidth: true
-                                        text: pixelHoverArea.pinned
-                                              ? "已固定 · 拖动查看完整块 · 点击 × 或视频空白处取消"
-                                              : "点击可固定窗口，支持滚动查看完整块"
-                                        color: pixelHoverArea.pinned ? "#7fd3ff" : "#6a6f76"
+                                        text: pixelGridPopup.copyFlash
+                                              ? "✓ 已复制到剪贴板（Tab 分隔，可直接粘贴到 Excel/表格）"
+                                              : (pixelHoverArea.pinned
+                                                  ? "已固定 · 拖动查看完整块 · 点击 × 或视频空白处取消"
+                                                  : "点击可固定窗口，支持滚动查看完整块")
+                                        color: pixelGridPopup.copyFlash ? "#7ee787" : (pixelHoverArea.pinned ? "#7fd3ff" : "#6a6f76")
                                         font.pixelSize: 9
                                         wrapMode: Text.WordWrap
                                     }
@@ -483,13 +950,14 @@ Item {
                                     //   避免刻度与主网格互相引用尺寸形成绑定环、也避免括号计数出错。
                                     Item {
                                         id: gridWithRulers
-                                        readonly property int rulerSize: 16
+                                        readonly property int rulerSize: 8
                                         readonly property int cellSize: 30
                                         readonly property int cellSpacing: 1
                                         readonly property int viewCells: 8
                                         readonly property int gridSpan: viewCells * cellSize + (viewCells - 1) * cellSpacing
 
-                                        Layout.alignment: Qt.AlignHCenter
+                                        // 左对齐（不再水平居中），避免弹窗宽度 > 网格实际宽度时产生大片左侧空白
+                                        Layout.alignment: Qt.AlignLeft
                                         Layout.preferredWidth: rulerSize + gridSpan
                                         Layout.preferredHeight: rulerSize + gridSpan
 
@@ -548,7 +1016,9 @@ Item {
                                                         required property int index
                                                         width: vRuler.width
                                                         height: gridWithRulers.cellSize
-                                                        horizontalAlignment: Text.AlignHCenter
+                                                        // 贴左对齐：让数字紧贴右侧（紧挨主网格），而不是刻度容器中央
+                                                        horizontalAlignment: Text.AlignLeft
+                                                        leftPadding: 0
                                                         verticalAlignment: Text.AlignVCenter
                                                         text: index
                                                         color: "#6a6f76"
@@ -685,23 +1155,83 @@ Item {
                                         } // end Flickable gridFlick
                                     } // end Item gridWithRulers
 
-                                    // 块 YUV 统计：avg / min / max 三行合一，用 | 分隔
+                                    // 块 YUV 统计：avg / min / max 三行合一
+                                    //   - YUV 模式：三个通道值都显示，便于一眼对比差异
+                                    //   - 单通道模式（Y / U / V）：只显示当前通道的数值，更聚焦
                                     Column {
                                         Layout.fillWidth: true
                                         spacing: 1
                                         property var s: pixelHoverArea.pixelStats || {}
                                         property bool ready: (typeof s.yAvg === "number")
+                                        // 跟随 matrix 的通道 tab：0=Y / 1=U / 2=V（与 channelTabs.channel 对齐）
+                                        property int ch: channelTabs ? channelTabs.channel : 0
 
-                                        Text {
+                                        // 三组指标三等分布局：avg | min | max 各占 1/3 宽度，水平居中
+                                        //   - Y / U / V 单通道模式：显示当前通道的 avg / min / max
+                                        //   - YUV 模式（兜底）：显示三通道的 (y,u,v)
+                                        //   - avg 标签按通道上色（Y 蓝 / U V 紫），min 绿 / max 橙
+                                        RowLayout {
                                             visible: parent.ready
+                                            // 注意：父级是普通 Column（非 ColumnLayout），Column 不支持
+                                            // 子项的 Layout.fillWidth 附加属性，必须显式 width 才能撑满，
+                                            // 否则子 Text 的 Layout.fillWidth 会因为本身没有宽度可分配而失效。
                                             width: parent.width
-                                            wrapMode: Text.WordWrap
-                                            text: "<span style=\"color:#6cf\">avg</span> (" + parent.s.yAvg + ", " + parent.s.uAvg + ", " + parent.s.vAvg + ")"
-                                                + "  <span style=\"color:#6c8\">min</span> (" + parent.s.yMin + ", " + parent.s.uMin + ", " + parent.s.vMin + ")"
-                                                + "  <span style=\"color:#e86\">max</span> (" + parent.s.yMax + ", " + parent.s.uMax + ", " + parent.s.vMax + ")"
-                                            color: "#dde"; font.pixelSize: 10; font.bold: true
-                                            font.family: "Menlo, Monaco, Consolas, monospace"
-                                            textFormat: Text.RichText
+                                            spacing: 0
+
+                                            // avg
+                                            Text {
+                                                Layout.fillWidth: true
+                                                Layout.alignment: Qt.AlignHCenter
+                                                text: {
+                                                    const s = parent.parent.s
+                                                    const ch = parent.parent.ch
+                                                    const label = (ch === 0) ? "<span style=\"color:#6cf\">avg</span>"
+                                                              : (ch === 1 || ch === 2) ? "<span style=\"color:#c8a\">avg</span>"
+                                                              : "<span style=\"color:#6cf\">avg</span>"
+                                                    const val = (ch === 0) ? s.yAvg
+                                                              : (ch === 1) ? s.uAvg
+                                                              : (ch === 2) ? s.vAvg
+                                                              : "(" + s.yAvg + ", " + s.uAvg + ", " + s.vAvg + ")"
+                                                    return label + " " + val
+                                                }
+                                                color: "#dde"; font.pixelSize: 10; font.bold: true
+                                                font.family: "Menlo, Monaco, Consolas, monospace"
+                                                textFormat: Text.RichText
+                                            }
+                                            // min
+                                            Text {
+                                                Layout.fillWidth: true
+                                                Layout.alignment: Qt.AlignHCenter
+                                                text: {
+                                                    const s = parent.parent.s
+                                                    const ch = parent.parent.ch
+                                                    const val = (ch === 0) ? s.yMin
+                                                              : (ch === 1) ? s.uMin
+                                                              : (ch === 2) ? s.vMin
+                                                              : "(" + s.yMin + ", " + s.uMin + ", " + s.vMin + ")"
+                                                    return "<span style=\"color:#6c8\">min</span> " + val
+                                                }
+                                                color: "#dde"; font.pixelSize: 10; font.bold: true
+                                                font.family: "Menlo, Monaco, Consolas, monospace"
+                                                textFormat: Text.RichText
+                                            }
+                                            // max
+                                            Text {
+                                                Layout.fillWidth: true
+                                                Layout.alignment: Qt.AlignHCenter
+                                                text: {
+                                                    const s = parent.parent.s
+                                                    const ch = parent.parent.ch
+                                                    const val = (ch === 0) ? s.yMax
+                                                              : (ch === 1) ? s.uMax
+                                                              : (ch === 2) ? s.vMax
+                                                              : "(" + s.yMax + ", " + s.uMax + ", " + s.vMax + ")"
+                                                    return "<span style=\"color:#e86\">max</span> " + val
+                                                }
+                                                color: "#dde"; font.pixelSize: 10; font.bold: true
+                                                font.family: "Menlo, Monaco, Consolas, monospace"
+                                                textFormat: Text.RichText
+                                            }
                                         }
                                     }
                                 }
@@ -913,5 +1443,22 @@ Item {
                 }
             }
         }
+    }
+
+    // ── 对比模式浮窗组：YUV-A / YUV-B / 差异Δ 三个面板挨在一起 ─────────────
+    // 顶层放置（z 最高），不受任何 slot 的 clip:true 裁剪；跟随鼠标或固定后
+    // 冻结在 cmpGroupX/Y；拖动其中任一面板的网格都会更新共享的
+    // cmpScrollX/cmpScrollY，故三者始终同步滚动。
+    Row {
+        id: cmpGroup
+        visible: yuvView.cmpActive && yuvView.cmpShow
+        spacing: 8
+        z: 1000
+        x: yuvView.cmpPinned ? yuvView.cmpGroupX : yuvView.cmpComputeGroupX(yuvView.cmpMouseX)
+        y: yuvView.cmpPinned ? yuvView.cmpGroupY : yuvView.cmpComputeGroupY(yuvView.cmpMouseY)
+
+        CompareMatrixPanel { title: "YUV-A · slot " + yuvView.cmpSlotA; mode: "a" }
+        CompareMatrixPanel { title: "YUV-B · slot " + yuvView.cmpSlotB; mode: "b" }
+        CompareMatrixPanel { title: "差异 Δ = A − B"; mode: "diff" }
     }
 }

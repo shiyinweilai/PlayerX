@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdio>
+#include <cstdlib>
 
 // 将路径标准化：统一分隔符为 '/'，处理 file:// URL 前缀
 static QString normalizePath(const QString& input) {
@@ -312,6 +313,74 @@ QVariantMap YuvBridge::blockHistogram(int slot, int plane, int px, int py) const
     result["min"]      = h.minVal;
     result["max"]      = h.maxVal;
     result["binCount"] = h.binCount;
+    return result;
+}
+
+QVariantMap YuvBridge::blockDiffOverview(int slotA, int slotB, int plane) const {
+    QVariantMap result;
+    if (slotA < 0 || slotA >= MaxSlots || slotB < 0 || slotB >= MaxSlots) return result;
+    if (!m_analyzers[slotA]->isOpen() || !m_analyzers[slotB]->isOpen()) return result;
+
+    // 取两路的公共分辨率（交集），避免分辨率不一致时越界。
+    const int w = std::min(m_analyzers[slotA]->width(),  m_analyzers[slotB]->width());
+    const int h = std::min(m_analyzers[slotA]->height(), m_analyzers[slotB]->height());
+    if (w <= 0 || h <= 0) return result;
+
+    const int bs = std::max(1, m_blockSize);
+    const int cols = (w + bs - 1) / bs;
+    const int rows = (h + bs - 1) / bs;
+    if (cols <= 0 || rows <= 0) return result;
+
+    QVariantList values;
+    values.reserve(cols * rows);
+    double maxDiff = 0.0;
+    int firstCol = -1, firstRow = -1;
+    // 判定为"有差异"的阈值（avg abs diff），过滤掉量化误差等噪声级别的抖动。
+    const double diffThreshold = 1.0;
+
+    for (int by = 0; by < rows; ++by) {
+        for (int bx = 0; bx < cols; ++bx) {
+            const int x0 = bx * bs;
+            const int y0 = by * bs;
+            const int x1 = std::min(x0 + bs, w);
+            const int y1 = std::min(y0 + bs, h);
+
+            long long sum = 0;
+            int count = 0;
+            for (int y = y0; y < y1; ++y) {
+                for (int x = x0; x < x1; ++x) {
+                    const auto pa = m_analyzers[slotA]->getPixelYUV(x, y);
+                    const auto pb = m_analyzers[slotB]->getPixelYUV(x, y);
+                    int va, vb;
+                    switch (plane) {
+                        case 1:  va = pa.u; vb = pb.u; break;
+                        case 2:  va = pa.v; vb = pb.v; break;
+                        default: va = pa.y; vb = pb.y; break;
+                    }
+                    if (va < 0 || vb < 0) continue;
+                    sum += std::abs(va - vb);
+                    ++count;
+                }
+            }
+            const double avgDiff = (count > 0) ? (double(sum) / count) : 0.0;
+            values.append(avgDiff);
+            if (avgDiff > maxDiff) maxDiff = avgDiff;
+            if (firstCol < 0 && avgDiff >= diffThreshold) {
+                firstCol = bx;
+                firstRow = by;
+            }
+        }
+    }
+
+    result["cols"] = cols;
+    result["rows"] = rows;
+    result["blockSize"] = bs;
+    result["width"] = w;
+    result["height"] = h;
+    result["values"] = values;
+    result["maxDiff"] = maxDiff;
+    result["firstDiffCol"] = firstCol;
+    result["firstDiffRow"] = firstRow;
     return result;
 }
 

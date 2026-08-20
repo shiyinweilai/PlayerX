@@ -19,7 +19,18 @@ Rectangle {
     property int activeSlot: 0
     property int ver: 0
     property int hoverVer: 0
-    property int statsMode: 0   // 0=帧级别, 1=块级别
+    property int statsMode: 0   // 0=帧级别, 1=块级别, 2=差异总览（仅双路时可用）
+    property int diffPlane: 0   // 差异总览通道：0=Y / 1=U / 2=V
+    readonly property bool cmpAvailable: YuvBridge.slotCount === 2
+
+    // 差异总览数据（切到该 tab / 帧变化 / 块大小变化 / 通道切换时重新拉取）
+    property var diffData: null
+    property int diffVer: 0
+    function refreshDiffOverview() {
+        if (!panel.cmpAvailable) { panel.diffData = null; return }
+        panel.diffData = YuvBridge.blockDiffOverview(0, 1, panel.diffPlane)
+        panel.diffVer++
+    }
 
     // 根据当前 statsMode 取对应的统计数据（bins/mean/stddev/min/max）
     function statsFor(plane) {
@@ -33,11 +44,21 @@ Rectangle {
 
     Connections {
         target: YuvBridge
-        function onFrameChanged(slot) { if (slot === panel.activeSlot) panel.ver++ }
-        function onFileOpened(slot) { panel.ver++ }
-        function onSlotCountChanged() { panel.ver++ }
+        function onFrameChanged(slot) {
+            if (slot === panel.activeSlot) panel.ver++
+            if (panel.statsMode === 2 && (slot === 0 || slot === 1)) panel.refreshDiffOverview()
+        }
+        function onFileOpened(slot) { panel.ver++; if (panel.statsMode === 2) panel.refreshDiffOverview() }
+        function onSlotCountChanged() {
+            panel.ver++
+            if (!panel.cmpAvailable && panel.statsMode === 2) panel.statsMode = 0
+            if (panel.statsMode === 2) panel.refreshDiffOverview()
+        }
         function onHoverChanged() { panel.hoverVer++ }
+        function onBlockSizeChanged() { if (panel.statsMode === 2) panel.refreshDiffOverview() }
     }
+    onStatsModeChanged: if (statsMode === 2) refreshDiffOverview()
+    onDiffPlaneChanged: if (statsMode === 2) refreshDiffOverview()
 
     // 左侧分隔线
     Rectangle {
@@ -84,16 +105,18 @@ Rectangle {
                 }
             }
 
-            // ── 帧级别 / 块级别 切换 tab ──
+            // ── 帧级别 / 块级别 / 差异总览 切换 tab（差异总览仅双路打开时可用）──
             Row {
+                id: modeTabRow
                 width: parent.width
                 spacing: 4
+                readonly property var tabLabels: panel.cmpAvailable ? ["帧级别", "块级别", "差异总览"] : ["帧级别", "块级别"]
                 Repeater {
-                    model: ["帧级别", "块级别"]
+                    model: modeTabRow.tabLabels
                     delegate: Rectangle {
                         required property int index
                         required property string modelData
-                        width: (col.width - 4) / 2
+                        width: (col.width - (modeTabRow.tabLabels.length - 1) * 4) / modeTabRow.tabLabels.length
                         height: 24
                         radius: 4
                         color: panel.statsMode === index ? "#2a3a55" : "#1e1e26"
@@ -129,6 +152,170 @@ Rectangle {
                 }
                 color: "#9aa0a6"; font.pixelSize: 11
                 wrapMode: Text.WordWrap
+            }
+
+            // ── 差异总览（整帧块级差异热力图，快速定位第一个不同的块）──
+            Column {
+                width: parent.width
+                visible: panel.statsMode === 2
+                spacing: 10
+
+                // Y/U/V 通道切换（决定按哪个通道计算差异）
+                Row {
+                    width: parent.width
+                    spacing: 4
+                    Repeater {
+                        model: ["Y", "U", "V"]
+                        delegate: Rectangle {
+                            required property int index
+                            required property string modelData
+                            width: (col.width - 8) / 3
+                            height: 22
+                            radius: 4
+                            color: panel.diffPlane === index ? "#2a3a55" : "#1e1e26"
+                            border.color: panel.diffPlane === index ? "#3a6fd8" : "#2a2a32"
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData
+                                color: panel.diffPlane === index ? "#ffffff" : "#a0a4ac"
+                                font.pixelSize: 11
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: panel.diffPlane = index
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    text: {
+                        const _ = panel.diffVer
+                        const d = panel.diffData
+                        if (!d || !d.cols) return "暂无差异数据"
+                        if (d.firstDiffCol < 0) return "两路完全一致（当前通道无差异）"
+                        const bs = d.blockSize
+                        return "首个差异块 [" + d.firstDiffCol + "," + d.firstDiffRow + "]" +
+                               "（像素坐标约 " + (d.firstDiffCol * bs) + "," + (d.firstDiffRow * bs) + "）" +
+                               "  最大差异 " + Number(d.maxDiff).toFixed(1)
+                    }
+                    color: "#9aa0a6"; font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                }
+
+                // 热力图 Canvas：cols×rows 网格，每格颜色按 |avgDiff| 归一化到 maxDiff
+                Canvas {
+                    id: diffCanvas
+                    width: parent.width
+                    height: {
+                        const d = panel.diffData
+                        if (!d || !d.cols || !d.rows) return 160
+                        const w = parent.width
+                        const cellW = w / d.cols
+                        return Math.max(80, Math.min(420, cellW * d.rows))
+                    }
+                    property real hoverFx: -1
+                    property real hoverFy: -1
+
+                    Connections {
+                        target: panel
+                        function onDiffVerChanged() { diffCanvas.requestPaint() }
+                    }
+
+                    onPaint: {
+                        const ctx = getContext("2d")
+                        const w = diffCanvas.width
+                        const h = diffCanvas.height
+                        ctx.clearRect(0, 0, w, h)
+                        ctx.fillStyle = "#0c0d10"
+                        ctx.fillRect(0, 0, w, h)
+
+                        const d = panel.diffData
+                        if (!d || !d.cols || !d.rows) {
+                            ctx.fillStyle = "#5a5f66"
+                            ctx.font = "10px sans-serif"
+                            ctx.fillText("需打开两路 YUV 才能查看差异总览", 8, h / 2)
+                            return
+                        }
+                        const cols = d.cols, rows = d.rows
+                        const vals = d.values
+                        const maxDiff = Math.max(1e-6, Number(d.maxDiff))
+                        const cellW = w / cols
+                        const cellH = h / rows
+                        for (let ry = 0; ry < rows; ry++) {
+                            for (let rx = 0; rx < cols; rx++) {
+                                const v = Number(vals[ry * cols + rx]) || 0
+                                const t = Math.max(0, Math.min(1, v / maxDiff))
+                                // 蓝(无差异) → 黄 → 红(差异大)，直观区分"完全一致"与"有差异"区域
+                                let r, g, b
+                                if (t < 0.5) {
+                                    const k = t / 0.5
+                                    r = Math.round(20 + k * 200); g = Math.round(40 + k * 170); b = Math.round(70 - k * 40)
+                                } else {
+                                    const k = (t - 0.5) / 0.5
+                                    r = Math.round(220 + k * 35); g = Math.round(210 - k * 180); b = Math.round(30 - k * 20)
+                                }
+                                ctx.fillStyle = "rgb(" + r + "," + g + "," + b + ")"
+                                ctx.fillRect(rx * cellW, ry * cellH, Math.ceil(cellW), Math.ceil(cellH))
+                            }
+                        }
+
+                        // 首个差异块描边标记
+                        if (d.firstDiffCol >= 0) {
+                            ctx.strokeStyle = "#ffffff"
+                            ctx.lineWidth = 1.5
+                            ctx.strokeRect(d.firstDiffCol * cellW + 0.5, d.firstDiffRow * cellH + 0.5,
+                                           Math.max(1, cellW - 1), Math.max(1, cellH - 1))
+                        }
+
+                        // hover 高亮
+                        if (diffCanvas.hoverFx >= 0 && diffCanvas.hoverFy >= 0) {
+                            const hc = Math.min(cols - 1, Math.floor(diffCanvas.hoverFx / cellW))
+                            const hr = Math.min(rows - 1, Math.floor(diffCanvas.hoverFy / cellH))
+                            ctx.strokeStyle = "#3a6fd8"
+                            ctx.lineWidth = 2
+                            ctx.strokeRect(hc * cellW + 1, hr * cellH + 1,
+                                           Math.max(1, cellW - 2), Math.max(1, cellH - 2))
+                        }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onPositionChanged: function(mouse) {
+                            diffCanvas.hoverFx = mouse.x
+                            diffCanvas.hoverFy = mouse.y
+                            diffCanvas.requestPaint()
+                        }
+                        onExited: {
+                            diffCanvas.hoverFx = -1
+                            diffCanvas.hoverFy = -1
+                            diffCanvas.requestPaint()
+                        }
+                        onClicked: function(mouse) {
+                            const d = panel.diffData
+                            if (!d || !d.cols || !d.rows) return
+                            const cellW = diffCanvas.width / d.cols
+                            const cellH = diffCanvas.height / d.rows
+                            const cx = Math.min(d.cols - 1, Math.floor(mouse.x / cellW))
+                            const cy = Math.min(d.rows - 1, Math.floor(mouse.y / cellH))
+                            const bs = d.blockSize
+                            // 通知左侧对比浮窗跳转并固定到该块（块中心像素坐标）
+                            YuvBridge.requestPixelInspect(cx * bs + Math.floor(bs / 2), cy * bs + Math.floor(bs / 2))
+                        }
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    text: "深蓝=一致 · 黄红=差异较大 · 白框=首个差异块位置 · 点击任意块可在左侧打开该处的像素对比浮窗。"
+                    color: "#6a6f76"; font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
             }
 
             // ── slot 选择 tabs（多路时，仅帧级别模式下有意义）──

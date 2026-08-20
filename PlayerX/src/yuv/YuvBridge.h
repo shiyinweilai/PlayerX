@@ -97,6 +97,16 @@ public:
     // ── 块级直方图统计（右侧栏"块级别"模式，8×8 块，对齐规则与 pixelBlock8x8 一致）──
     Q_INVOKABLE QVariantMap blockHistogram(int slot, int plane, int px, int py) const;
 
+    // ── 双路块级差异总览（右侧栏"差异总览"热力图，plane: 0=Y,1=U,2=V）────────
+    // 按 blockSize 网格划分两路的公共分辨率（取交集宽高），逐块计算平均绝对差，
+    // 用于绘制整帧差异热力图快速定位"从哪个块开始出现差异"。
+    // 返回 QVariantMap：
+    //   { "cols","rows","blockSize","width","height",
+    //     "values": [double,...],   // cols*rows 个块的平均绝对差（行优先）
+    //     "maxDiff": double,        // 最大差异值（用于归一化色阶）
+    //     "firstDiffCol","firstDiffRow": int }  // 第一个有效差异块坐标，-1=完全一致
+    Q_INVOKABLE QVariantMap blockDiffOverview(int slotA, int slotB, int plane) const;
+
     // ── 全局鼠标悬浮像素坐标（供右侧栏"块级别"统计随鼠标实时刷新）───────
     // 由 YuvWindow.qml 的像素悬浮 MouseArea 在 positionChanged / exited 时上报。
     Q_INVOKABLE void setHoverPixel(int slot, int px, int py, bool valid);
@@ -104,6 +114,11 @@ public:
     Q_INVOKABLE int  hoverPixelX() const { return m_hoverPixelX; }
     Q_INVOKABLE int  hoverPixelY() const { return m_hoverPixelY; }
     Q_INVOKABLE bool hoverValid() const { return m_hoverValid; }
+
+    // ── 右侧栏"差异总览"热力图 → 左侧对比浮窗 联动跳转 ──────────────────
+    // 用户在右侧栏热力图上点击某个块时调用，YuvWindow.qml 监听
+    // pixelInspectRequested 信号，在双路对比模式下把浮窗组固定到该像素坐标。
+    Q_INVOKABLE void requestPixelInspect(int px, int py) { emit pixelInspectRequested(px, py); }
 
     // ── 块大小设置（8/16/32/64，全局唯一）───────────────────────────────
     int  blockSize() const { return m_blockSize; }
@@ -138,6 +153,7 @@ signals:
     void playStateChanged(int slot);
     void hoverChanged();
     void blockSizeChanged();
+    void pixelInspectRequested(int px, int py);
 
 private:
     void refreshFrameImage(int slot);
