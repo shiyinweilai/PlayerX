@@ -174,6 +174,35 @@ Dialog {
                 height: 1
                 color: "#2c2c32"
             }
+            // 信息行：Token（与「上传设置」对话框共用同一份配置）
+            Item {
+                width: parent.width - 32
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: 38
+                Text {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Token"
+                    color: "#9a9aa8"
+                    font.pixelSize: 12
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: {
+                        var t = (typeof Rating !== "undefined" ? String(Rating.uploadToken || "") : "")
+                        return t.length > 0 ? t : "未配置"
+                    }
+                    color: "#c8c8cc"
+                    font.pixelSize: 12
+                }
+            }
+            Rectangle {
+                width: parent.width - 32
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: 1
+                color: "#2c2c32"
+            }
             Item { width: 1; height: 16 }
             // 按钮行：退出登录（左，警示色） / 修改资料（右，主色）
             Item {
@@ -213,6 +242,8 @@ Dialog {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             loginNameField.text = (typeof Rating !== "undefined") ? Rating.currentUser : ""
+                            uploadUrlField.text = (typeof Rating !== "undefined") ? (Rating.uploadServerUrl || "") : ""
+                            uploadTokenField.text = (typeof Rating !== "undefined") ? (Rating.uploadToken || "") : ""
                             loginDialog._editing = true
                             loginNameField.forceActiveFocus()
                             loginNameField.selectAll()
@@ -263,6 +294,76 @@ Dialog {
                         text: "请输入姓名，如 张三"
                         color: "#55555e"
                         font.pixelSize: 12
+                    }
+                }
+            }
+
+            // 上传服务器地址 / Token：与「上传设置」对话框共用同一份配置
+            // （Rating.uploadServerUrl / Rating.uploadToken），首次登录时暂不
+            // 展示，避免登录表单过重；已登录后「修改资料」时一并编辑。
+            Column {
+                width: parent.width
+                visible: root._loggedIn
+                spacing: 10
+
+                Text {
+                    width: parent.width
+                    text: "上传服务器地址（可选）"
+                    color: "#9a9aa8"
+                    font.pixelSize: 11
+                }
+                Rectangle {
+                    width: parent.width
+                    height: 34
+                    radius: 5
+                    color: "#101013"
+                    border.color: uploadUrlField.activeFocus ? "#5a8fd8" : "#2c2c32"
+                    border.width: 1
+                    TextInput {
+                        id: uploadUrlField
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        verticalAlignment: TextInput.AlignVCenter
+                        color: "#e8e8ec"
+                        font.pixelSize: 13
+                        selectByMouse: true
+                        Keys.onReturnPressed: loginSaveMa.clicked(null)
+                        Keys.onEnterPressed: loginSaveMa.clicked(null)
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: uploadUrlField.text.length === 0
+                            text: "http://<host>:<port>/"
+                            color: "#55555e"
+                            font.pixelSize: 12
+                        }
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    text: "Token（可选，服务未启 PLAYERX_TOKEN 时留空）"
+                    color: "#9a9aa8"
+                    font.pixelSize: 11
+                }
+                Rectangle {
+                    width: parent.width
+                    height: 34
+                    radius: 5
+                    color: "#101013"
+                    border.color: uploadTokenField.activeFocus ? "#5a8fd8" : "#2c2c32"
+                    border.width: 1
+                    TextInput {
+                        id: uploadTokenField
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        verticalAlignment: TextInput.AlignVCenter
+                        color: "#e8e8ec"
+                        font.pixelSize: 13
+                        selectByMouse: true
+                        Keys.onReturnPressed: loginSaveMa.clicked(null)
+                        Keys.onEnterPressed: loginSaveMa.clicked(null)
                     }
                 }
             }
@@ -318,7 +419,13 @@ Dialog {
                             var v = loginNameField.text.trim()
                             if (v.length === 0) { loginNameField.forceActiveFocus(); return }
                             var firstLogin = !root._loggedIn
-                            if (typeof Rating !== "undefined") Rating.currentUser = v
+                            if (typeof Rating !== "undefined") {
+                                Rating.currentUser = v
+                                if (root._loggedIn) {
+                                    Rating.uploadServerUrl = uploadUrlField.text.trim()
+                                    Rating.uploadToken = uploadTokenField.text
+                                }
+                            }
                             console.log("[Login]", firstLogin ? "登录:" : "评分人更新为:", v)
                             updateToast.text = firstLogin
                                     ? "已登录，欢迎「" + v + "」"

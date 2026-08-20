@@ -369,7 +369,7 @@ function _configFingerprint(obj) {
 
 function _hintRemoteTaskEmpty(hiddenCount) {
     _updateToast.text = hiddenCount > 0
-        ? "有 " + hiddenCount + " 个测试模式任务，开启「设置→开发者模式」后可见"
+        ? "有 " + hiddenCount + " 个测试模式任务，开启「通用→开发者模式」后可见"
         : "暂无远程任务"
     _updateToast.open()
 }

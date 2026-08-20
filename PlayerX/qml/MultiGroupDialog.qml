@@ -659,6 +659,27 @@ ApplicationWindow {
                 else curIdx = 0
             }
             var curPath = (curIdx >= 0 && curIdx < visible.length) ? visible[curIdx] : ""
+            // 二次保险：恢复出来的 curPath 可能在历史与磁盘之间出现"过期"。
+            // （例如上次评分时被接受的目录，文件名 13.mp4 仍存在但当前文件列表已被改名；
+            // 或跨平台大小写差异、文件系统 unicode 归一化等）。这里用 Fs.fileExists
+            // 真实探测一次；不存在则在 visibleFiles 中按 savedIdx clamp 一次，
+            // 仍找不到有效项就 fallback 到 0，避免把无效路径持久化为 currentPath
+            // 让 start() 把它喂给 Engine.openFiles。
+            if (curPath && curPath.length > 0) {
+                var exists = false
+                try { exists = Fs.fileExists(curPath) } catch (e) { exists = false }
+                if (!exists) {
+                    var fbIdx = (savedIdx >= 0 && savedIdx < visible.length) ? savedIdx : 0
+                    var found = false
+                    for (var fbi = 0; fbi < visible.length; ++fbi) {
+                        if (Fs.fileExists(visible[fbi])) { fbIdx = fbi; found = true; break }
+                    }
+                    if (found) { curIdx = fbIdx; curPath = visible[fbIdx] }
+                    else      { curIdx = 0; curPath = visible[0] || "" }
+                    console.warn("[MGD] _restoreLanes: currentPath 已失效，回退到第", curIdx, "项:",
+                                 " savedIdx=", savedIdx, " → ", curPath)
+                }
+            }
 
             _laneRuntime.push({ allFiles: allFiles, visibleFiles: visible })
             _rowsModel.append({
@@ -1840,6 +1861,81 @@ ApplicationWindow {
         }
         if (selIdx.length === 0) return false
 
+        // 启动前的「最终闸」：对每条 currentPath 做 Fs.fileExists 校验；
+        // 文件不存在（典型：测试源自动化"重新下载"后文件列表/文件名变了）
+        // 则尝试从该路 visibleFiles 里按"原 basename 优先 → clamp savedIdx →
+        //   第一个存在的"回退到有效项；仍找不到就跳过该路。
+        // 此举防止 Engine.openFiles 拿到过期路径直接 demuxer 失败、整轮无法启动。
+        // 优先使用 row 自身的 visibleFiles（按 sortMode 排序），与 _reconcileLaneFiles
+        // 保持索引语义一致。
+        var finalSel = []
+        for (var si = 0; si < selIdx.length; ++si) {
+            var li = selIdx[si]
+            var lr = _rowsModel.get(li)
+            if (!lr) continue
+            var p = lr.currentPath || ""
+            if (p.length > 0) {
+                var ok2 = false
+                try { ok2 = Fs.fileExists(p) } catch (e) { ok2 = false }
+                if (!ok2) {
+                    console.warn("[MGD] start() 发现 currentPath 已失效，回退:", li, p)
+                    var rowItPre = (typeof rowsRepeater !== "undefined" && rowsRepeater)
+                                    ? rowsRepeater.itemAt(li) : null
+                    var vis = []
+                    if (rowItPre && rowItPre.visibleFiles && rowItPre.visibleFiles.length > 0) {
+                        vis = rowItPre.visibleFiles
+                    } else if (_laneRuntime[li] && _laneRuntime[li].visibleFiles) {
+                        vis = _laneRuntime[li].visibleFiles
+                    }
+                    var replacement = ""
+                    // ① 优先：basename 命中 visibleFiles
+                    var bn = ""
+                    try {
+                        var kk = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"))
+                        bn = (kk >= 0) ? p.substring(kk + 1) : p
+                    } catch (e) { bn = "" }
+                    if (bn.length > 0) {
+                        for (var vj = 0; vj < vis.length; ++vj) {
+                            if (Fs.fileName(vis[vj]) === bn
+                                && Fs.fileExists(vis[vj])) { replacement = vis[vj]; break }
+                        }
+                    }
+                    // ② clamp savedIdx 附近找一项存在的
+                    if (replacement.length === 0 && vis.length > 0) {
+                        var startI = (typeof lr.currentIndex === "number" && lr.currentIndex >= 0)
+                                     ? lr.currentIndex : 0
+                        for (var off = 0; off < vis.length; ++off) {
+                            var ci = (startI + off) % vis.length
+                            if (Fs.fileExists(vis[ci])) { replacement = vis[ci]; break }
+                        }
+                    }
+                    if (replacement.length > 0) {
+                        // 回写模型 + runtime + 行
+                        if (_laneRuntime[li]) _laneRuntime[li].currentPath = replacement
+                        _rowsModel.setProperty(li, "currentPath", replacement)
+                        var rowIt = (typeof rowsRepeater !== "undefined" && rowsRepeater)
+                                    ? rowsRepeater.itemAt(li) : null
+                        // 同步行的 currentIndex：定位 replacement 在 vis 的真实索引
+                        var newIdx = -1
+                        for (var vii = 0; vii < vis.length; ++vii) {
+                            if (vis[vii] === replacement) { newIdx = vii; break }
+                        }
+                        if (newIdx >= 0) {
+                            _rowsModel.setProperty(li, "currentIndex", newIdx)
+                            if (rowIt && rowIt.currentIndex !== newIdx) rowIt.currentIndex = newIdx
+                        }
+                        lr = _rowsModel.get(li)   // 刷新当前快照
+                    } else {
+                        console.warn("[MGD] start() 该路没有任何可播放视频，跳过:", li, lr.folderPath || "")
+                        continue
+                    }
+                }
+            }
+            finalSel.push(li)
+        }
+        if (finalSel.length === 0) return false
+        selIdx = finalSel
+
         // 仅有效 1 路：单视频浏览模式 —— 只打开当前选中那个视频，可用上一组/下一组循环切换
         if (selIdx.length === 1) {
             var onlyI = selIdx[0]
@@ -2116,6 +2212,99 @@ ApplicationWindow {
         return true
     }
 
+    // ─── 重新调和「内容已变」的路 ──────────────────────────────
+    // 触发场景：测试源自动化重新下发，folderPath 与缓存一致（同一目录），
+    // 但目录里 mp4 数目发生了变化（增/减/替换）。原缓存的 currentPath /
+    //   currentIndex 可能不再对应有效文件 —— 直接给 Engine.openFiles 会
+    //   报"无法打开文件"。本函数按以下优先级重新定位 currentIndex：
+    //     ① 当前 currentPath 的 basename 仍在新 visibleFiles 中 → 锁定它
+    //     ② 否则按 savedIdx(=原 currentIndex) 在新范围内 clamp
+    //     ③ 还不行 → 落到 0
+    // 同步刷新 allFiles/visibleFiles/allCount/visibleCount 并回写模型。
+    // 与 _refreshLaneIfEmpty 不同：本函数**不论 currentPath 是否为空**都执行
+    //   （已存在路的内容发生了变化也要重新对齐），覆盖自动化重新下发这类场景。
+    //
+    // 【索引语义】行已实例化时，使用 row.visibleFiles 而不是顶层 _filterAndSort
+    //   的结果作为查找表——因为 MultiGroupRow 内部有自己的 sortMode（升/降），
+    //   索引含义可能与 dialog 顶层的"始终升序"不同；以行自身 visibleFiles 为
+    //   准可保证 currentIndex 在写入 row.currentIndex 后仍然指向同一个 basename。
+    // prefFiles：调用方已扫描好的文件列表（可选，省去重复扫描）。
+    function _reconcileLaneFiles(idx, prefFiles) {
+        if (idx < 0 || idx >= _rowsModel.count) return false
+        var l = _rowsModel.get(idx)
+        if (!l) return false
+        var fp = l.folderPath || ""
+        if (fp.length === 0) return false
+
+        var files = prefFiles
+        if (!files || files.length === 0) {
+            try { files = Fs.scanVideoFolderPath(fp, true) || [] } catch (e) { files = [] }
+        }
+        if (!files || files.length === 0) return false
+
+        var kw = l.keyword || ""
+        var visible = _filterAndSort(files, kw)
+
+        // 行已实例化时，"目标 currentIndex" 必须按 row.visibleFiles 算，
+        // 否则对 sortMode=1（降序）的行会出现索引错位。
+        var rowItem = rowsRepeater.itemAt(idx)
+        var lookupList = (rowItem && rowItem.visibleFiles && rowItem.visibleFiles.length > 0)
+                          ? rowItem.visibleFiles : visible
+
+        // 计算"目标 currentIndex"
+        var targetIdx = -1
+        // ① 优先：当前 currentPath 的 basename 命中 lookupList
+        if (l.currentPath && l.currentPath.length > 0) {
+            var bn = ""
+            try {
+                var k1 = Math.max(l.currentPath.lastIndexOf("/"), l.currentPath.lastIndexOf("\\"))
+                bn = (k1 >= 0) ? l.currentPath.substring(k1 + 1) : l.currentPath
+            } catch (e) { bn = "" }
+            if (bn.length > 0) {
+                for (var vi = 0; vi < lookupList.length; ++vi) {
+                    if (Fs.fileName(lookupList[vi]) === bn) { targetIdx = vi; break }
+                }
+            }
+        }
+        // ② fallback：clamp savedIdx 到 lookupList
+        if (targetIdx < 0 && l.currentIndex >= 0 && l.currentIndex < lookupList.length) {
+            targetIdx = l.currentIndex
+        }
+        // ③ fallback：0
+        if (targetIdx < 0 && lookupList.length > 0) targetIdx = 0
+
+        var targetPath = (targetIdx >= 0 && targetIdx < lookupList.length) ? lookupList[targetIdx] : ""
+
+        // ① 行已实例化（常规）：走行自身注入路径 —— 行内 _recomputeVisible
+        //    会重排 visibleFiles（用 row.sortMode），但我们已按 row.visibleFiles
+        //    算出 targetIdx，写回 row.currentIndex 后行内会保持同一索引
+        //    （仅在 currentIndex 越界时才回退到 0，见 MultiGroupRow._recomputeVisible）。
+        if (rowItem) {
+            if (targetIdx >= 0) rowItem.currentIndex = targetIdx
+            rowItem.allFiles = files
+            console.log("[MGD] 路已重新调和(经行注入):", fp,
+                        " old currentIndex=", l.currentIndex, "old currentPath=", l.currentPath || "",
+                        " → new targetIdx=", targetIdx, "target=", targetPath)
+            return true
+        }
+
+        // ② 行未实例化：直接写回 runtime + 模型
+        if (idx < _laneRuntime.length) {
+            _laneRuntime[idx] = { allFiles: files, visibleFiles: visible }
+        } else {
+            while (_laneRuntime.length < idx) _laneRuntime.push({ allFiles: [], visibleFiles: [] })
+            _laneRuntime.push({ allFiles: files, visibleFiles: visible })
+        }
+        _rowsModel.setProperty(idx, "currentIndex", targetIdx)
+        _rowsModel.setProperty(idx, "currentPath", targetPath)
+        _rowsModel.setProperty(idx, "allCount", files.length)
+        _rowsModel.setProperty(idx, "visibleCount", visible.length)
+        console.log("[MGD] 路已重新调和:", fp,
+                    " old currentIndex=", l.currentIndex, "old currentPath=", l.currentPath || "",
+                    " → new targetIdx=", targetIdx, "target=", targetPath)
+        return true
+    }
+
     // ─── 把若干文件夹路径「追加合并」进 lanes 历史（仅写入，不启动）──
     //   · 已存在同路径的 lane → 跳过（不重复添加）
     //   · 不在历史中且能扫出视频 → 追加为新 lane（默认 selected=false：
@@ -2186,12 +2375,15 @@ ApplicationWindow {
 
             // 已在 lanes 中：
             //   · 默认行为：直接跳过，不再强制 selected=true ——
-            //     "任何时候不替用户勾选"原则：重复拖入/选择也不自动勾上已有路，
-            //     其余字段（keyword / currentIndex / currentPath）保留不动。
-            //   · 例外：已有路处于「未导入」空态（currentPath 为空）时，用本次扫描
-            //     结果刷新它 —— 典型场景：缓存恢复时文件夹为空/不存在，测试源自动化
-            //     随后才把新内容解压进同一目录；不刷新的话 start() 会因 currentPath
-            //     为空跳过这些路，报"没有可播放的视频/路数上限"。
+            //     "任何时候不替用户勾选"原则：重复拖入/选择也不自动勾上已有路。
+            //   · 但**对文件列表做一次"调和"**：即便 currentPath 不为空，只要本次扫描的
+            //     文件列表与缓存的（allCount/visibleCount）不一致（说明服务端重新打包后
+            //     mp4 数目变了），就以"原 currentPath 的 basename 优先"在新列表里重新定位
+            //     currentIndex，避免直接给 Engine.openFiles 喂一个过期/已被删除的文件
+            //     —— 否则 demuxer 会报"无法打开文件"，多组对比完全无法启动
+            //     （典型场景：测试源自动化"重新下载"接受任务，folderPath 没变但 mp4 数变了）。
+            //   · 若 currentPath 本来就为空（恢复缓存时文件夹为空/不存在，自动化随后把新内容
+            //     解压进同一目录），按原本 _refreshLaneIfEmpty 走"未导入空态"分支。
             //   · allowDuplicate=true：跳过该分支，继续走下方的「新增一路」逻辑，
             //     让用户得到一条与已有路同目录的新路（典型场景：刻意做同源对比）。
             if (existing[folderPath] && !allowDup) {
@@ -2199,7 +2391,14 @@ ApplicationWindow {
                 for (var ei = 0; ei < _rowsModel.count; ++ei) {
                     var el = _rowsModel.get(ei)
                     if (el && el.folderPath === folderPath) {
-                        _refreshLaneIfEmpty(ei, files)
+                        if (!el.currentPath || el.currentPath.length === 0) {
+                            // 已有路为空态 → 走"未导入空态"分支
+                            _refreshLaneIfEmpty(ei, files)
+                        } else {
+                            // 已有路已有 currentPath，但文件列表可能变了（mp4 数变化）
+                            // → 走"重新调和"分支（按 basename/savedIdx 重新定位 currentIndex）
+                            _reconcileLaneFiles(ei, files)
+                        }
                     }
                 }
                 continue
