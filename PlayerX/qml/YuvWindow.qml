@@ -384,47 +384,58 @@ Item {
         color: "#101012"
     }
 
+    // 全局刷新版本号：任意 slot 的帧/播放状态/通道变化都 ++，驱动最下方"总控"栏的
+    // 按钮态（如通道高亮、播放/暂停图标）跟随刷新。
+    property int globalVer: 0
+    Connections {
+        target: YuvBridge
+        function onFrameChanged(slot) { yuvView.globalVer++ }
+        function onDisplayModeChanged(slot) { yuvView.globalVer++ }
+        function onPlayStateChanged(slot) { yuvView.globalVer++ }
+    }
+
+    // ── 总控：同时作用于所有已打开 slot 的批量操作 ──────────────────────
+    signal centerAllRequested()   // 通知各 slot 复位平移（画面居中），纯 QML 端状态，无法通过 YuvBridge 统一处理
+    function globalSetDisplayMode(mode) {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.setDisplayMode(i, mode)
+    }
+    function globalTogglePlayPause() {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.togglePlayPause(i)
+    }
+    function globalPrevFrame() {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.prevFrame(i)
+    }
+    function globalNextFrame() {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.nextFrame(i)
+    }
+    function globalSkipBackward() {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.skipBackward(i, 15)
+    }
+    function globalSkipForward() {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.skipForward(i, 15)
+    }
+    function globalResetFrame() {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.resetFrame(i)
+    }
+    function globalToggleReverse() {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) {
+            if (YuvBridge.isReversing(i)) YuvBridge.pause(i)
+            else YuvBridge.playReverse(i)
+        }
+    }
+    function globalAnyPlaying() {
+        for (let i = 0; i < yuvView.openSlotCount; ++i) if (YuvBridge.isPlaying(i)) return true
+        return false
+    }
+    function globalAllModeIs(mode) {
+        if (yuvView.openSlotCount <= 0) return false
+        for (let i = 0; i < yuvView.openSlotCount; ++i) if (YuvBridge.displayMode(i) !== mode) return false
+        return true
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
-
-        // ── 顶部栏：返回 + 标题 ─────────────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 40
-            color: "#18181c"
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                spacing: 12
-
-                Rectangle {
-                    width: 72; height: 28; radius: 4
-                    color: backBtnMa.containsMouse ? "#3a3a3d" : "#252528"
-                    Text {
-                        anchors.centerIn: parent
-                        text: "← 返回"
-                        color: "#ccc"; font.pixelSize: 12
-                    }
-                    MouseArea {
-                        id: backBtnMa
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: yuvView.closeRequested()
-                    }
-                }
-
-                Text {
-                    text: "YUV 渲染 · " + yuvView.openSlotCount + " 路"
-                    color: "#e0e0e0"; font.pixelSize: 15; font.bold: true
-                }
-
-                Item { Layout.fillWidth: true }
-            }
-        }
 
         // ── 中间：多窗口画面区域 ─────────────────────────────────────
         RowLayout {
@@ -508,10 +519,28 @@ Item {
                             }
                         }
 
-                        // ── 画面区域 ──
+                        // ── 画面区域（画面 + 悬浮内嵌控制条，鼠标悬浮画面时显示控制条）──
                         Item {
+                            id: slotStage
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+
+                            // 悬浮检测覆盖整个画面+控制条区域，用于淡入淡出内嵌控制条；
+                            // HoverHandler 非独占抓取，不影响下方已有 MouseArea 的事件响应。
+                            HoverHandler { id: slotStageHover }
+
+                            // 响应最下方"全局总控"栏的一键居中：复位本 slot 的画面平移
+                            Connections {
+                                target: yuvView
+                                function onCenterAllRequested() {
+                                    yuvDisp.panX = 0
+                                    yuvDisp.panY = 0
+                                }
+                            }
+
+                        Item {
+                            id: slotScreen
+                            anchors.fill: parent
                             clip: true
 
                             YuvDisplayItem {
@@ -1236,13 +1265,20 @@ Item {
                                     }
                                 }
                             }
-                        }
+                        } // end Item slotScreen
 
-                        // ── 底部控制栏 ──
+                        // ── 内嵌悬浮控制条：叠加在画面底部，鼠标悬浮画面区域时淡入，
+                        //    移出后淡出。样式沿用原底部控制栏（胶囊通道按钮 + 播放控制组）。
                         Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 36
-                            color: "#18181c"
+                            id: slotFloatBar
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: 36
+                            color: "#cc18181c"
+                            opacity: (slotStageHover.hovered || pixelHoverArea.pinned) ? 1.0 : 0.0
+                            visible: opacity > 0.01
+                            Behavior on opacity { NumberAnimation { duration: 160 } }
 
                             RowLayout {
                                 anchors.fill: parent
@@ -1438,9 +1474,206 @@ Item {
                                     }
                                 }
                             }
+                        } // end Rectangle slotFloatBar
+                        } // end Item slotStage
+                    }
+                }
+            }
+        }
+
+        // ── 最下方：返回 + 全局总控（同时作用于所有已打开 slot）──────────
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 40
+            color: "#18181c"
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                spacing: 6
+
+                // 返回
+                Rectangle {
+                    width: 68; height: 26; radius: 4
+                    color: backBtnMa.containsMouse ? "#3a3a3d" : "#252528"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "← 返回"
+                        color: "#ccc"; font.pixelSize: 12
+                    }
+                    MouseArea {
+                        id: backBtnMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: yuvView.closeRequested()
+                    }
+                }
+
+                Rectangle { width: 1; height: 20; color: "#333" }
+
+                Text {
+                    text: "总控 · " + yuvView.openSlotCount + " 路"
+                    color: "#9aa0a6"; font.pixelSize: 11
+                }
+
+                // 通道切换（作用于所有 slot）
+                Row {
+                    spacing: 0
+                    Repeater {
+                        model: ["YUV", "Y", "U", "V"]
+                        delegate: Rectangle {
+                            required property int index
+                            required property string modelData
+                            property bool isActive: {
+                                const _ = yuvView.globalVer
+                                return yuvView.globalAllModeIs(index)
+                            }
+                            width: index === 0 ? 38 : 28
+                            height: 22
+                            radius: index === 0 ? 4 : (index === 3 ? 4 : 0)
+
+                            Rectangle {
+                                visible: index === 0
+                                anchors.right: parent.right
+                                width: parent.radius
+                                height: parent.height
+                                color: parent.color
+                            }
+                            Rectangle {
+                                visible: index === 3
+                                anchors.left: parent.left
+                                width: parent.radius
+                                height: parent.height
+                                color: parent.color
+                            }
+
+                            color: isActive ? "#e05050" : "#2a2a34"
+                            border.color: isActive ? "#e05050" : "#3a3a44"
+                            border.width: isActive ? 0 : 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData
+                                color: isActive ? "#fff" : "#aaa"
+                                font.pixelSize: 10
+                                font.bold: isActive
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: yuvView.globalSetDisplayMode(index)
+                            }
                         }
                     }
                 }
+
+                Item { width: 8 }
+
+                // 播放控制（作用于所有 slot）
+                Row {
+                    spacing: 2
+
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: gSkipBackMa.containsMouse ? "#3a3a3d" : "#252528"
+                        Text { anchors.centerIn: parent; text: "⏮"; color: "#ccc"; font.pixelSize: 11 }
+                        MouseArea {
+                            id: gSkipBackMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: yuvView.globalSkipBackward()
+                        }
+                    }
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: gPrevMa.containsMouse ? "#3a3a3d" : "#252528"
+                        Text { anchors.centerIn: parent; text: "◀"; color: "#ccc"; font.pixelSize: 11 }
+                        MouseArea {
+                            id: gPrevMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: yuvView.globalPrevFrame()
+                        }
+                    }
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: gPlayMa.containsMouse ? "#3a6fd8" : "#2a5fc0"
+                        Text {
+                            anchors.centerIn: parent
+                            text: {
+                                const _ = yuvView.globalVer
+                                return yuvView.globalAnyPlaying() ? "⏸" : "▶"
+                            }
+                            color: "#fff"; font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: gPlayMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: yuvView.globalTogglePlayPause()
+                        }
+                    }
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: gNextMa.containsMouse ? "#3a3a3d" : "#252528"
+                        Text { anchors.centerIn: parent; text: "▶"; color: "#ccc"; font.pixelSize: 11 }
+                        MouseArea {
+                            id: gNextMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: yuvView.globalNextFrame()
+                        }
+                    }
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: gSkipFwdMa.containsMouse ? "#3a3a3d" : "#252528"
+                        Text { anchors.centerIn: parent; text: "⏭"; color: "#ccc"; font.pixelSize: 11 }
+                        MouseArea {
+                            id: gSkipFwdMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: yuvView.globalSkipForward()
+                        }
+                    }
+
+                    Item { width: 8 }
+
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: gResetMa.containsMouse ? "#3a3a3d" : "#252528"
+                        Text { anchors.centerIn: parent; text: "↺"; color: "#ccc"; font.pixelSize: 14 }
+                        MouseArea {
+                            id: gResetMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: yuvView.globalResetFrame()
+                        }
+                    }
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: {
+                            const _ = yuvView.globalVer
+                            return gRevMa.containsMouse ? "#3a3a3d" : "#252528"
+                        }
+                        Text { anchors.centerIn: parent; text: "◀◀"; color: "#ccc"; font.pixelSize: 9 }
+                        MouseArea {
+                            id: gRevMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: yuvView.globalToggleReverse()
+                        }
+                    }
+
+                    Item { width: 8 }
+
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: gCenterMa.containsMouse ? "#3a3a3d" : "#252528"
+                        Text { anchors.centerIn: parent; text: "⊙"; color: "#ccc"; font.pixelSize: 13 }
+                        MouseArea {
+                            id: gCenterMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: yuvView.centerAllRequested()
+                        }
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
             }
         }
     }
