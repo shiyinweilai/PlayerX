@@ -34,6 +34,12 @@ class YuvBridge : public QObject {
     // / blockHistogram 以及悬浮矩阵浮窗的对齐块大小。
     Q_PROPERTY(int blockSize READ blockSize WRITE setBlockSize NOTIFY blockSizeChanged)
 
+    // ── 是否隐藏渲染区底部内嵌操作按钮（顶部菜单"YUV 分析 ▸ 内嵌操作"开关）──
+    // true  = 隐藏（默认；用户专注画面不被按钮遮挡）
+    // false = 显示（hover 时淡入淡出浮起）
+    // 持久化到 QSettings，跨会话保留用户选择。
+    Q_PROPERTY(bool inlineControlsHidden READ inlineControlsHidden WRITE setInlineControlsHidden NOTIFY inlineControlsHiddenChanged)
+
 public:
     static constexpr int MaxSlots = 3;
 
@@ -124,6 +130,10 @@ public:
     int  blockSize() const { return m_blockSize; }
     void setBlockSize(int size);
 
+    // ── 是否隐藏渲染区底部内嵌操作按钮 ────────────────────────────────
+    bool inlineControlsHidden() const { return m_inlineControlsHidden; }
+    void setInlineControlsHidden(bool hidden);
+
     // ── 预设持久化（用 QSettings 保存到磁盘）───────────────────────────
     Q_INVOKABLE QStringList yuvSizePresets() const;
     Q_INVOKABLE void addYuvSizePreset(const QString& size);
@@ -144,6 +154,11 @@ public:
     Q_INVOKABLE QString yuvFileParams(const QString& path) const;
     Q_INVOKABLE void setYuvFileParams(const QString& path, const QString& params);
 
+    // ── "上次打开"位置持久化：FileDialog/FolderDialog 打开前读取、关闭后写入，
+    //    让"添加文件/添加文件夹"按钮下次打开时跳回上次选的目录，而非根目录。 ──
+    Q_INVOKABLE QString lastOpenedFolder() const;
+    Q_INVOKABLE void    setLastOpenedFolder(const QString& folder);
+
 signals:
     void frameChanged(int slot);
     void fileOpened(int slot);
@@ -154,6 +169,7 @@ signals:
     void hoverChanged();
     void blockSizeChanged();
     void pixelInspectRequested(int px, int py);
+    void inlineControlsHiddenChanged();
 
 private:
     void refreshFrameImage(int slot);
@@ -176,4 +192,7 @@ private:
 
     // 像素块统计/悬浮矩阵的块大小，默认 8×8，可选 8/16/32/64
     int  m_blockSize{8};
+
+    // 是否隐藏渲染区底部内嵌操作按钮；默认 true（隐藏，让用户专注画面）
+    bool m_inlineControlsHidden{true};
 };

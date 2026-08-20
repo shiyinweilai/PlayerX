@@ -15,8 +15,17 @@ Item {
     // ── 供顶部菜单「YUV 分析 ▸ 打开 YUV 文件/文件夹」调用的入口 ──
     // 仅触发本模块自带的 FileDialog / FolderDialog（见下方 yuvSetupView 内），
     // 与「播放对比」的视频打开入口（addDialog / multiGroupDialog）完全隔离。
-    function openFileDialog() { yuvSetupFileDialog.open() }
-    function openFolderDialog() { yuvSetupFolderDialog.open() }
+    // 打开前先回填上次选中的目录（持久化在 YuvBridge），避免首次按下就跳到根目录。
+    function openFileDialog() {
+        const last = YuvBridge.lastOpenedFolder()
+        if (last && last.length > 0) yuvSetupFileDialog.currentFolder = "file://" + last
+        yuvSetupFileDialog.open()
+    }
+    function openFolderDialog() {
+        const last = YuvBridge.lastOpenedFolder()
+        if (last && last.length > 0) yuvSetupFolderDialog.currentFolder = "file://" + last
+        yuvSetupFolderDialog.open()
+    }
 
     // ── 路径工具函数（兼容 Windows / macOS / Linux）──
     // 使用 Fs.urlToLocalFile() 转换 file:// URL 为本地路径（与播放对比一致）
@@ -46,6 +55,47 @@ Item {
         property int selectedIndex: -1
         // 勾选要渲染的文件路径（最多 3 个）
         property var checkedList: []
+        // 排序方式：0=添加顺序（默认）/ 1=名称 A→Z / 2=名称 Z→A
+        property int sortMode: 0
+        readonly property var sortOptions: [
+            { mode: 0, label: "默认",   short: "默认" },
+            { mode: 1, label: "名称升序", short: "升序" },
+            { mode: 2, label: "名称降序", short: "降序" }
+        ]
+        readonly property string sortLabel: sortOptions[sortMode].short
+
+        // 按当前 sortMode 返回有序的展示列表（用于驱动 ListView.model）。
+        //   - 添加顺序：保持原始顺序
+        //   - 名称 A→Z / Z→A：按 basename 不区分大小写排序
+        readonly property var sortedFileList: {
+            const arr = fileList.slice()
+            if (sortMode === 1) {
+                arr.sort(function(a, b) {
+                    const A = String(a).toLowerCase(), B = String(b).toLowerCase()
+                    const ai = A.lastIndexOf("/"), bi = B.lastIndexOf("/")
+                    const an = (ai >= 0 ? A.substring(ai + 1) : A)
+                    const bn = (bi >= 0 ? B.substring(bi + 1) : B)
+                    if (an < bn) return -1
+                    if (an > bn) return 1
+                    return 0
+                })
+            } else if (sortMode === 2) {
+                arr.sort(function(a, b) {
+                    const A = String(a).toLowerCase(), B = String(b).toLowerCase()
+                    const ai = A.lastIndexOf("/"), bi = B.lastIndexOf("/")
+                    const an = (ai >= 0 ? A.substring(ai + 1) : A)
+                    const bn = (bi >= 0 ? B.substring(bi + 1) : B)
+                    if (an < bn) return 1
+                    if (an > bn) return -1
+                    return 0
+                })
+            }
+            return arr
+        }
+
+        function _indexInFileList(path) {
+            return fileList.indexOf(path)
+        }
         // 当前正在编辑参数的文件（用于切换时保存旧参数、加载新参数）
         property string currentPath: ""
         // 防止初始化时空列表覆盖持久化数据
@@ -299,6 +349,115 @@ Item {
                             color: "#9aa0a6"; font.pixelSize: 12
                         }
                         Item { Layout.fillWidth: true }
+
+                        // ── 排序下拉按钮：默认 / 升序 / 降序 三选一 ──
+                        // 按钮宽高固定（implicitWidth:76），不跟随 label 内容浮动，
+                        // 切换排序模式时按钮位置/尺寸绝对稳定。
+                        // 浮层 sortMenu 借助 QML 绘制深度优势（深度 > ListView），自然叠在列表之上。
+                        Item {
+                            id: sortBtn
+                            implicitWidth: 76
+                            implicitHeight: 28
+                            Layout.preferredWidth: implicitWidth
+                            Layout.preferredHeight: implicitHeight
+
+                            Rectangle {
+                                id: sortTrigger
+                                anchors.fill: parent
+                                radius: 6
+                                color: (sortMa.containsMouse || sortMenu.visible)
+                                       ? "#2a2a34" : "#1e1e24"
+                                border.color: (sortMa.containsMouse || sortMenu.visible)
+                                              ? "#4a4a56" : "#3a3a44"
+                                border.width: 1
+                                Row {
+                                    anchors.centerIn: parent
+                                    spacing: 4
+                                    Text {
+                                        id: sortLbl
+                                        text: yuvSetupView.sortLabel
+                                        color: "#e8e8ec"; font.pixelSize: 12
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "▾"; color: "#9aa0a6"; font.pixelSize: 10
+                                    }
+                                }
+                                MouseArea {
+                                    id: sortMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: sortMenu.visible = !sortMenu.visible
+                                }
+                            }
+
+                            // 下拉浮层：相对 sortTrigger 定位；深度大于 ListView，
+                            // 在 QML 默认绘制顺序下自然叠在列表之上。
+                            Rectangle {
+                                id: sortMenu
+                                visible: false
+                                width: 110
+                                anchors.top: sortTrigger.bottom
+                                anchors.topMargin: 4
+                                anchors.horizontalCenter: sortTrigger.horizontalCenter
+                                radius: 6
+                                color: "#1a1a22"
+                                border.color: "#3a3a44"; border.width: 1
+                                z: 30
+                                Column {
+                                    anchors.fill: parent
+                                    anchors.margins: 4
+                                    spacing: 2
+                                    Repeater {
+                                        model: yuvSetupView.sortOptions
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            required property int index
+                                            width: parent.width; height: 26; radius: 4
+                                            color: (sortItemMa.containsMouse || yuvSetupView.sortMode === index)
+                                                   ? "#2a3a55" : "transparent"
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: modelData.label
+                                                color: (yuvSetupView.sortMode === index)
+                                                       ? "#ffffff" : "#c8c8d0"
+                                                font.pixelSize: 12
+                                                font.bold: yuvSetupView.sortMode === index
+                                            }
+                                            MouseArea {
+                                                id: sortItemMa
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    yuvSetupView.sortMode = index
+                                                    sortMenu.visible = false
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 点击浮层外关闭：在 sortBtn 自身铺一层透明 MouseArea，
+                            // 仅当 sortMenu.visible 时启用，propagateComposedEvents 让
+                            // 事件穿透到下方兄弟按钮（添加/清空等仍可点击）。
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: sortMenu.visible
+                                propagateComposedEvents: true
+                                preventStealing: false
+                                onPressed: function(mouse) {
+                                    // 点击位置映射到 sortTrigger 坐标系判断是否在按钮范围内
+                                    const local = sortTrigger.mapFromItem(sortBtn, mouse.x, mouse.y)
+                                    const inBtn = local.x >= 0 && local.x <= sortTrigger.width
+                                                  && local.y >= 0 && local.y <= sortTrigger.height
+                                    if (!inBtn) sortMenu.visible = false
+                                }
+                            }
+                        }
+
                         Rectangle {
                             width: 76; height: 28; radius: 6
                             color: yuvAddMoreMa.containsMouse ? "#2a2a34" : "#1e1e24"
@@ -313,7 +472,7 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: yuvSetupFileDialog.open()
+                                onClicked: yuvView.openFileDialog()
                             }
                         }
                         Rectangle {
@@ -330,7 +489,7 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: yuvSetupFolderDialog.open()
+                                onClicked: yuvView.openFolderDialog()
                             }
                         }
                         Rectangle {
@@ -422,7 +581,7 @@ Item {
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: yuvSetupFileDialog.open()
+                                        onClicked: yuvView.openFileDialog()
                                     }
                                 }
                                 Rectangle {
@@ -440,28 +599,32 @@ Item {
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: yuvSetupFolderDialog.open()
+                                        onClicked: yuvView.openFolderDialog()
                                     }
                                 }
                             }
                         }
 
                         // 有文件时：ListView，每项支持单独删除
+                        // model 走 sortedFileList，按 sortMode（添加顺序 / A→Z / Z→A）实时排序；
+                        // delegate 内通过 modelData 反查 fileList 中的真实索引，
+                        // 保证 selectedIndex / 删除等操作始终指向源数组的正确位置。
                         ListView {
                             anchors.fill: parent
                             anchors.margins: 4
                             visible: yuvSetupView.fileList.length > 0
                             clip: true; spacing: 4
-                            model: yuvSetupView.fileList
+                            model: yuvSetupView.sortedFileList
                             delegate: Rectangle {
                                 required property string modelData
                                 required property int index
+                                readonly property int srcIndex: yuvSetupView._indexInFileList(modelData)
                                 width: ListView.view.width; height: 48
                                 radius: 6
-                                color: yuvSetupView.selectedIndex === index
+                                color: yuvSetupView.selectedIndex === srcIndex
                                        ? "#2a2a32"
                                        : (fileItemMa.containsMouse ? "#22222a" : "transparent")
-                                border.color: yuvSetupView.selectedIndex === index
+                                border.color: yuvSetupView.selectedIndex === srcIndex
                                               ? "#4a4a56"
                                               : (fileItemMa.containsMouse ? "#2c2c34" : "transparent")
                                 border.width: 1
@@ -515,7 +678,7 @@ Item {
                                         Text {
                                             text: yuvView.fileBasename(modelData)
                                             color: "#e8e8ec"; font.pixelSize: 13
-                                            font.bold: yuvSetupView.selectedIndex === index
+                                            font.bold: yuvSetupView.selectedIndex === srcIndex
                                         }
                                         Text {
                                             text: modelData
@@ -528,7 +691,7 @@ Item {
                                     Rectangle {
                                         anchors.verticalCenter: parent.verticalCenter
                                         width: 22; height: 22; radius: 11
-                                        visible: fileItemMa.containsMouse || yuvSetupView.selectedIndex === index
+                                        visible: fileItemMa.containsMouse || yuvSetupView.selectedIndex === srcIndex
                                         color: fileItemDelMa.containsMouse ? "#b85a5a" : "transparent"
                                         Text {
                                             anchors.centerIn: parent
@@ -541,7 +704,7 @@ Item {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: yuvSetupView.selectedIndex = index
+                                    onClicked: yuvSetupView.selectedIndex = srcIndex
                                 }
                                 // checkbox 勾选的 hit zone：声明在 fileItemMa 之后（z 更高），
                                 // 定位到 checkbox 位置，避免被 fileItemMa 拦截点击。
@@ -560,13 +723,13 @@ Item {
                                             arr.splice(pos, 1)
                                         } else {
                                             if (arr.length >= 3) {
-                                                yuvSetupView.selectedIndex = index
+                                                yuvSetupView.selectedIndex = srcIndex
                                                 yuvSetupStatus.text = "最多同时渲染 3 个 YUV"
                                                 return
                                             }
                                             arr.push(modelData)
                                             // 勾选时同步点选，让右侧参数栏显示
-                                            yuvSetupView.selectedIndex = index
+                                            yuvSetupView.selectedIndex = srcIndex
                                         }
                                         yuvSetupView.checkedList = arr
                                     }
@@ -579,16 +742,20 @@ Item {
                                     width: 30; height: 30
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    visible: fileItemMa.containsMouse || yuvSetupView.selectedIndex === index
+                                    visible: fileItemMa.containsMouse || yuvSetupView.selectedIndex === srcIndex
                                     propagateComposedEvents: false
                                     onClicked: {
                                         const arr = yuvSetupView.fileList.slice()
-                                        arr.splice(index, 1)
+                                        // 用 srcIndex 删除 fileList 中的真实条目，
+                                        // 避免排序后 ListView.index 与 fileList 索引错位。
+                                        if (srcIndex >= 0 && srcIndex < arr.length) arr.splice(srcIndex, 1)
                                         yuvSetupView.fileList = arr
-                                        // 选中索引修正：删掉后保持选中不变，或取消选中
-                                        if (yuvSetupView.selectedIndex >= arr.length) {
-                                            yuvSetupView.selectedIndex = arr.length - 1
-                                        }
+                                        // 选中索引修正：指向与被删项相同路径（若仍存在）的位置，
+                                        // 否则回退到末尾。
+                                        let newSel = -1
+                                        if (srcIndex >= 0 && srcIndex < arr.length) newSel = srcIndex
+                                        else if (arr.length > 0) newSel = arr.length - 1
+                                        yuvSetupView.selectedIndex = newSel
                                     }
                                 }
                             }
@@ -1272,6 +1439,8 @@ Item {
         }
 
         // 文件对话框（多选 .yuv / .y4m，按追加方式合并到现有列表）
+        // currentFolder 在 open() 时由外部调用者（_openFileDialog）回填上次值，确保
+        // "添加文件"按钮首次按下就能跳回上次选的目录，而不是默认根目录。
         FileDialog {
             id: yuvSetupFileDialog
             title: "选择 YUV 文件"
@@ -1286,6 +1455,12 @@ Item {
                     newPaths.push(yuvView.normalizeFilePath(selectedFiles[i]))
                 }
                 if (newPaths.length === 0) return
+                // 记住首个文件所在目录，下次打开时自动跳回去
+                if (newPaths.length > 0) {
+                    const firstPath = String(newPaths[0])
+                    const sep = Math.max(firstPath.lastIndexOf("/"), firstPath.lastIndexOf("\\"))
+                    if (sep > 0) YuvBridge.setLastOpenedFolder(firstPath.substring(0, sep))
+                }
                 // 追加到现有列表末尾并去重，保留用户原有顺序。
                 const merged = yuvSetupView.fileList.slice()
                 for (let i = 0; i < newPaths.length; ++i) {
@@ -1299,11 +1474,13 @@ Item {
 
         // 文件夹对话框（扫描 .yuv / .y4m，按追加方式合并到现有列表）
         // 利用 Fs.scanVideoFolderPath 的白名单（含 yuv / y4m）递归扫描。
+        // currentFolder 同样在 open() 时回填上次值。
         FolderDialog {
             id: yuvSetupFolderDialog
             title: "选择 YUV 文件夹"
             onAccepted: {
                 const folder = yuvView.normalizeFilePath(selectedFolder)
+                YuvBridge.setLastOpenedFolder(folder)
                 let found = []
                 try { found = Fs.scanVideoFolderPath(folder, true) || [] } catch (e) { found = [] }
                 if (found.length === 0) {

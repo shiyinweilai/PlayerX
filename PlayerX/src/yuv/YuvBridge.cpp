@@ -23,12 +23,22 @@ static QString normalizePath(const QString& input) {
     return p;
 }
 
+// 前向声明：yuvSettings() 的完整定义在文件下方（预设持久化区块的匿名命名空间内）。
+// 同一翻译单元内所有匿名命名空间引用同一命名空间，故此处声明与下方定义会正确合并，
+// 使得构造函数可在其定义之前调用它。
+namespace {
+QSettings& yuvSettings();
+}
+
 YuvBridge::YuvBridge(QObject* parent)
     : QObject(parent) {
     for (int i = 0; i < MaxSlots; ++i) {
         m_analyzers[i] = std::make_unique<rb::YuvAnalyzer>();
         m_displayModes[i] = 0;
     }
+    // 从 QSettings 恢复"内嵌操作按钮隐藏"偏好；缺省值 true（隐藏）。
+    m_inlineControlsHidden =
+        yuvSettings().value("yuv_presets/inlineControlsHidden", true).toBool();
 }
 
 YuvBridge::~YuvBridge() = default;
@@ -579,6 +589,29 @@ void YuvBridge::setYuvFileParams(const QString& path, const QString& params) {
     const QString key = QString::fromLatin1(kFileParamsPrefix) + basenameOf(path);
     yuvSettings().setValue(key, params);
     yuvSettingsSync();
+}
+
+// ── "上次打开"位置持久化 ──────────────────────────────────────────────
+// QML 的 FileDialog/FolderDialog 在某些平台 / 首次打开时不会自动记忆目录，
+// 显式把"上次成功选中的目录"写到 QSettings，下次打开时回填到 currentFolder。
+namespace {
+constexpr const char* kLastFolderKey = "yuv_presets/lastFolder";
+}
+QString YuvBridge::lastOpenedFolder() const {
+    return yuvSettings().value(kLastFolderKey).toString();
+}
+void YuvBridge::setLastOpenedFolder(const QString& folder) {
+    if (folder.isEmpty()) return;
+    yuvSettings().setValue(kLastFolderKey, folder);
+    yuvSettingsSync();
+}
+
+void YuvBridge::setInlineControlsHidden(bool hidden) {
+    if (m_inlineControlsHidden == hidden) return;
+    m_inlineControlsHidden = hidden;
+    yuvSettings().setValue("yuv_presets/inlineControlsHidden", hidden);
+    yuvSettingsSync();
+    emit inlineControlsHiddenChanged();
 }
 
 // ── 内部 ──────────────────────────────────────────────────────────────

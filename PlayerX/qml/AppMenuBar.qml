@@ -560,6 +560,18 @@ MenuBar {
                 onTriggered: YuvBridge.blockSize = 64
             }
         }
+
+        DarkMenuSeparator {}
+
+        // ── 内嵌操作 ▶ ──（渲染区底部内嵌控制条的可见性开关）
+        // 默认勾选 = 隐藏内嵌控制条（避免遮挡画面），让用户专注分析；
+        // 取消勾选后，hover 画面时控制条淡入显示。
+        DarkMenuItem {
+            text: qsTr("隐藏内嵌操作按钮")
+            checkable: true
+            checked: YuvBridge.inlineControlsHidden
+            onTriggered: YuvBridge.inlineControlsHidden = !YuvBridge.inlineControlsHidden
+        }
     }
 
     // ═══ 码流分析（暂未实现，仅留占位提示）══════════════

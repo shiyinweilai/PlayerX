@@ -1267,16 +1267,21 @@ Item {
                             }
                         } // end Item slotScreen
 
-                        // ── 内嵌悬浮控制条：叠加在画面底部，鼠标悬浮画面区域时淡入，
-                        //    移出后淡出。样式沿用原底部控制栏（胶囊通道按钮 + 播放控制组）。
+                        // ── 内嵌悬浮控制条：叠加在画面底部，仅在"未隐藏内嵌操作"且 hover 时淡入，
+                        //    移出后淡出。样式沿用原底部控制栏（胶囊通道按钮 + 播放控制组），
+                        //    按钮背景全部用 50% 透明黑，避免遮挡画面内容。
                         Rectangle {
                             id: slotFloatBar
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.bottom: parent.bottom
                             height: 36
-                            color: "#cc18181c"
-                            opacity: (slotStageHover.hovered || pixelHoverArea.pinned) ? 1.0 : 0.0
+                            color: "#8018181c"   // 50% 透明深色背景
+                            // "内嵌操作"开关打开（hidden=false）时 → 允许 hover 时淡入；
+                            // 开关关闭（hidden=true）时 → 始终不可见，避免遮挡画面。
+                            opacity: (!YuvBridge.inlineControlsHidden
+                                      && (slotStageHover.hovered || pixelHoverArea.pinned))
+                                     ? 1.0 : 0.0
                             visible: opacity > 0.01
                             Behavior on opacity { NumberAnimation { duration: 160 } }
 
@@ -1321,8 +1326,8 @@ Item {
                                                 color: parent.color
                                             }
 
-                                            color: isActive ? "#e05050" : "#2a2a34"
-                                            border.color: isActive ? "#e05050" : "#3a3a44"
+                                            color: isActive ? "#80e05050" : "#802a2a34"
+                                            border.color: isActive ? "#80e05050" : "#803a3a44"
                                             border.width: isActive ? 0 : 1
 
                                             Text {
@@ -1362,7 +1367,7 @@ Item {
                                     // 快退 15 帧
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navSkipBackMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        color: navSkipBackMa.containsMouse ? "#803a3a3d" : "#80252528"
                                         Text { anchors.centerIn: parent; text: "⏮"; color: "#ccc"; font.pixelSize: 11 }
                                         MouseArea {
                                             id: navSkipBackMa; anchors.fill: parent
@@ -1373,7 +1378,7 @@ Item {
                                     // 帧后退（上一帧）
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navPrevMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        color: navPrevMa.containsMouse ? "#803a3a3d" : "#80252528"
                                         Text { anchors.centerIn: parent; text: "◀"; color: "#ccc"; font.pixelSize: 11 }
                                         MouseArea {
                                             id: navPrevMa; anchors.fill: parent
@@ -1384,7 +1389,7 @@ Item {
                                     // 播放/暂停
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navPlayMa.containsMouse ? "#3a6fd8" : "#2a5fc0"
+                                        color: navPlayMa.containsMouse ? "#803a6fd8" : "#802a5fc0"
                                         Text {
                                             anchors.centerIn: parent
                                             text: {
@@ -1402,7 +1407,7 @@ Item {
                                     // 帧前进（下一帧）
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navNextMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        color: navNextMa.containsMouse ? "#803a3a3d" : "#80252528"
                                         Text { anchors.centerIn: parent; text: "▶"; color: "#ccc"; font.pixelSize: 11 }
                                         MouseArea {
                                             id: navNextMa; anchors.fill: parent
@@ -1413,7 +1418,7 @@ Item {
                                     // 快进 15 帧
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navSkipFwdMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        color: navSkipFwdMa.containsMouse ? "#803a3a3d" : "#80252528"
                                         Text { anchors.centerIn: parent; text: "⏭"; color: "#ccc"; font.pixelSize: 11 }
                                         MouseArea {
                                             id: navSkipFwdMa; anchors.fill: parent
@@ -1427,7 +1432,7 @@ Item {
                                     // 重置（回首帧）
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navResetMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        color: navResetMa.containsMouse ? "#803a3a3d" : "#80252528"
                                         Text { anchors.centerIn: parent; text: "↺"; color: "#ccc"; font.pixelSize: 14 }
                                         MouseArea {
                                             id: navResetMa; anchors.fill: parent
@@ -1440,8 +1445,8 @@ Item {
                                         width: 28; height: 22; radius: 3
                                         color: {
                                             const _ = slotWin.ver
-                                            if (YuvBridge.isReversing(slotWin.index)) return "#b85a5a"
-                                            return navRevMa.containsMouse ? "#3a3a3d" : "#252528"
+                                            if (YuvBridge.isReversing(slotWin.index)) return "#80b85a5a"
+                                            return navRevMa.containsMouse ? "#803a3a3d" : "#80252528"
                                         }
                                         Text { anchors.centerIn: parent; text: "◀◀"; color: "#ccc"; font.pixelSize: 9 }
                                         MouseArea {
@@ -1461,7 +1466,7 @@ Item {
                                     // 一键居中（重置平移）
                                     Rectangle {
                                         width: 28; height: 22; radius: 3
-                                        color: navCenterMa.containsMouse ? "#3a3a3d" : "#252528"
+                                        color: navCenterMa.containsMouse ? "#803a3a3d" : "#80252528"
                                         Text { anchors.centerIn: parent; text: "⊙"; color: "#ccc"; font.pixelSize: 13 }
                                         MouseArea {
                                             id: navCenterMa; anchors.fill: parent
