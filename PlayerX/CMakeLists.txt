@@ -143,6 +143,9 @@ qt_add_qml_module(PlayerX
         # 视频宫格单元格组件：从 Main.qml 抽离，便于后续按媒体类型扩展
         # （未来加 ImageCellDelegate.qml 等只需在此追加，宫格容器无需改动）。
         qml/VideoCellDelegate.qml
+        # 视频信息面板块：从 VideoCellDelegate.infoPanel 抽离为可复用组件，
+        # 供"右键浮层 / 播放对比右侧栏"等任意容器展示当前 player 的元信息。
+        qml/VideoInfoBlock.qml
         # 扁平工具按钮：从 Main.qml inline component 抽出，便于跨文件复用。
         # （inline component 仅在定义文件内可见，独立 .qml 才能被外部引用）
         qml/FlatToolButton.qml

@@ -1795,9 +1795,19 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        // 避开 YUV 渲染区底部 36px 控制栏（通道切换 + 帧导航按钮），
-        // 避免右侧栏盖住这些播放控制按钮。
-        anchors.bottomMargin: 36
+        // 底部避让策略按 tab 分别处理，避免底部按钮栏下方露出空白：
+        //   · play / stream：避开底部 TopBar（44px）；不避开 = 右侧栏盖住播放按钮
+        //   · yuv        ：避开 YUV 渲染区内嵌控制条（36px）
+        //   · home       ：不显示右栏（visible=false），bottomMargin 不影响
+        anchors.bottomMargin: {
+            // 注意：ApplicationWindow 的子项 anchors.bottom: parent.bottom 实际指
+            // contentItem.bottom（已自动避开 footer TopBar 44px），无需再加 44。
+            // · play：videoArea 延伸到 contentItem.bottom（footer 顶部），无内嵌控制条，bottomMargin=0
+            // · yuv：YUV 视频区内嵌控制条 36px 高，需避开
+            // · stream：与 play 同
+            if (root.currentTab === "yuv") return 36
+            return 0
+        }
         width: 320
         visible: root.rightSidebarOpen
         z: 200
@@ -1815,34 +1825,129 @@ ApplicationWindow {
         YuvStatsPanel { }
     }
 
-    // ── 播放对比面板（占位）────────────────────────
-    Component {
-        id: playComparePanelComp
+    // ── 播放对比面板 ────────────────────────────────────────
+// 展示当前 player 列表，让用户在右侧栏切换查看哪一路的视频元信息。
+// 单路时：直接显示该路信息。
+// 多路时：顶部加一行「通道 N / 通道 N+1 ...」切换按钮（pill 样式）。
+// 完全独立：yuvStatsPanelComp / streamPanelComp 不受影响。
+Component {
+    id: playComparePanelComp
+    Rectangle {
+        id: panelRoot
+        color: "#141419"
+
+        // 左侧 1px 分隔线（与 YUV/Stream 面板风格一致）
         Rectangle {
-            color: "#141419"
-            Rectangle {
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                width: 1
-                color: "#26262e"
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 1
+            color: "#26262e"
+        }
+
+        // 当前面板要显示哪一路：用户主动选择；默认跟随 Engine.activeIndex
+        // 多路时显示切换器；单路时无切换器直接显示。
+        property int selectedIdx: Engine.activeIndex >= 0 && Engine.activeIndex < Engine.fileCount
+                                   ? Engine.activeIndex : 0
+        // Engine 切换 activeIndex / fileCount 变化时回退到 activeIndex（避免选中已删除的路）
+        Connections {
+            target: Engine
+            function onActiveIndexChanged() {
+                if (Engine.activeIndex >= 0 && Engine.activeIndex < Engine.fileCount)
+                    panelRoot.selectedIdx = Engine.activeIndex
             }
-            Column {
-                anchors.centerIn: parent
-                spacing: 6
-                Text {
-                    text: "播放对比"
-                    color: "#e8e8ee"; font.pixelSize: 14; font.bold: true
-                    anchors.horizontalCenter: parent.horizontalCenter
+            function onFileCountChanged() {
+                if (panelRoot.selectedIdx >= Engine.fileCount)
+                    panelRoot.selectedIdx = Math.max(0, Engine.fileCount - 1)
+            }
+        }
+
+        // 显示用的文件路径（绝对路径）
+        property string selectedPath: (panelRoot.selectedIdx >= 0
+                                       && panelRoot.selectedIdx < Engine.fileCount)
+                                       ? Engine.filePathAt(panelRoot.selectedIdx) : ""
+
+        // 用 Item 而非 Column 作为容器：让"通道切换器" + "视频信息块"通过 anchors
+        // 显式分配纵向空间（顶部 fixed-height + 底部 fill），避免 Column 的
+        // 子节点高度求和循环导致信息块只占内容自然高度、不撑满到面板底部。
+        Item {
+            id: panelBody
+            anchors.fill: parent
+            anchors.topMargin: 8
+            anchors.bottomMargin: 8
+
+            // ── 多路时显示通道切换器（pill 风格）──
+            Item {
+                id: laneSwitcherBox
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: Engine.fileCount > 1 ? 28 : 0
+                visible: height > 0
+
+                Flickable {
+                    anchors.fill: parent
+                    contentWidth: laneRow.implicitWidth
+                    contentHeight: height
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    Row {
+                        id: laneRow
+                        spacing: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 10
+                        Repeater {
+                            model: Engine.fileCount
+                            delegate: Rectangle {
+                                required property int index
+                                property bool isSel: panelRoot.selectedIdx === index
+                                radius: 11
+                                height: 22
+                                implicitWidth: laneLabel.implicitWidth + 18
+                                color: isSel ? "#2a5fc0"
+                                      : (laneMa.containsMouse ? "#2a2a30" : "#1d1d22")
+                                border.color: isSel ? "#3d7adf" : "#33333a"
+                                border.width: 1
+                                Label {
+                                    id: laneLabel
+                                    anchors.centerIn: parent
+                                    text: "通道 " + (index + 1)
+                                    color: parent.isSel ? "#ffffff" : "#c8c8d0"
+                                    font.pixelSize: 11
+                                }
+                                MouseArea {
+                                    id: laneMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: panelRoot.selectedIdx = index
+                                }
+                            }
+                        }
+                    }
                 }
-                Text {
-                    text: "设置面板待实现"
-                    color: "#7a7f86"; font.pixelSize: 11
-                    anchors.horizontalCenter: parent.horizontalCenter
-                }
+            }
+
+            // ── 视频信息面板（独立可复用面板块）──
+            // 顶部紧贴切换器（单路时切换器高度为 0，直接顶到 body 顶部），
+            // 底部/左/右全部锚定 parent，自动撑满整个面板剩余高度。
+            VideoInfoBlock {
+                anchors.top: laneSwitcherBox.bottom
+                anchors.bottom: parent.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                playerIdx: panelRoot.selectedIdx
+                title: "视频信息"
+                showCloseHint: false       // 右侧栏不需要"右键关闭"提示
+                showFileName: true
+                filePath: panelRoot.selectedPath
+                hasContent: true
             }
         }
     }
+}
 
     // ── 码流分析面板（占位）────────────────────────
     Component {
