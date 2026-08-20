@@ -501,9 +501,9 @@ Item {
                 // 文件夹判定方式：先用 Fs.scanVideoFolder 试扫，能扫出视频则认定为文件夹。
                 // 这样既覆盖目录拖拽，又不会把"含视频后缀但实际是文件"的项误判为文件夹。
                 var folderUrls   = []   // 仅"扫出视频"的文件夹的 url 原样
-                var fileFromDirs = []   // 文件夹展开后的视频文件路径（散文件兜底用）
-                var standaloneFiles = []  // 直接拖入的视频散文件 url
+                var standaloneFiles = []  // 直接拖入的视频散文件 url（字符串形式）
 
+                console.log("[dropZone] drop.urls.length =", drop.urls.length)
                 for (var i = 0; i < drop.urls.length; ++i) {
                     var u = drop.urls[i]
                     var s = String(u)
@@ -512,31 +512,52 @@ Item {
 
                     if (scanned && scanned.length > 0) {
                         folderUrls.push(u)
-                        for (var j = 0; j < scanned.length; ++j) fileFromDirs.push("file://" + scanned[j])
+                        console.log("[dropZone]  [", i, "] folder (", scanned.length, "videos):", s)
                     } else if (hasVideoExt(s)) {
                         standaloneFiles.push(s)
+                        console.log("[dropZone]  [", i, "] standalone file:", s)
+                    } else {
+                        console.log("[dropZone]  [", i, "] skipped (not a video / not a folder with videos):", s)
                     }
                 }
+                console.log("[dropZone] summary: folderUrls=", folderUrls.length,
+                            " standaloneFiles=", standaloneFiles.length)
 
-                // ── 拖入含文件夹 → 直接打开 MultiGroupDialog（等同点击"打开文件夹"）──
-                //   · 拖入的文件夹默认勾选；历史文件夹默认不勾选（由 addFoldersAndShow 保证）
-                //   · 不再静默 "loadFolders 立即播放"，而是把选择权交给用户：
-                //     在 Dialog 里确认勾选后点击"开始/确认"再启动播放。
-                //   · 混合（文件夹 + 散文件）时，文件夹优先 → 走 Dialog；散文件被忽略（语义不明）。
-                if (folderUrls.length > 0) {
+                if (folderUrls.length === 0 && standaloneFiles.length === 0) return
+
+                // ── 仅文件夹 → 走 MultiGroupDialog（等同点击"打开文件夹"）──
+                //   拖入的文件夹默认勾选；历史文件夹默认不勾选（由 addFoldersAndShow 保证）。
+                //   不再静默 "loadFolders 立即播放"，把选择权交给用户。
+                if (folderUrls.length > 0 && standaloneFiles.length === 0) {
                     try { multiGroupDialog.addFoldersAndShow(folderUrls) } catch (e) {}
                     return
                 }
 
-                // ── 仅散文件场景：保留"直接铺开播放"的旧体验 ──
-                var collected = []
-                for (var m = 0; m < standaloneFiles.length && collected.length < 9; ++m) {
-                    collected.push(standaloneFiles[m])
+                // ── 仅散文件 → 保留"直接铺开播放"的旧体验（最多 9 路）──
+                if (folderUrls.length === 0 && standaloneFiles.length > 0) {
+                    var collected = []
+                    for (var m = 0; m < standaloneFiles.length && collected.length < 9; ++m) {
+                        collected.push(standaloneFiles[m])
+                    }
+                    if (collected.length === 0) return
+                    if (collected.length > 9) collected = collected.slice(0, 9)
+                    console.log("[dropZone] Engine.openFiles collected:", collected)
+                    Engine.openFiles(collected)
+                    return
                 }
 
-                if (collected.length === 0) return
-                if (collected.length > 9) collected = collected.slice(0, 9)
-                Engine.openFiles(collected)
+                // ── 混合（文件夹 + 散文件）→ 合并展示在 MultiGroupDialog ──
+                //   · 文件夹走 addFoldersWithConfirm（默认勾选 / 重复提示）
+                //   · 散文件走 addAnonymousFiles（作为 folderPath="" 的匿名 lane，
+                //     默认勾选、不入文件夹历史）
+                //   · 一次性 show + raise，避免分两次调用带来的闪烁
+                // 旧逻辑：混合时散文件被静默丢弃 —— 用户拖 5 个 mp4 + 1 个文件夹，
+                //   只会看到 1 个文件夹 lane，对比时只剩 1 路。已修复。
+                console.log("[dropZone] mixed drop: folders + files → MultiGroupDialog")
+                try { multiGroupDialog.addFoldersAndShow(folderUrls, standaloneFiles) } catch (e) {
+                    // 兜底：极端异常时退化为"仅文件夹"路径，至少保证可用
+                    try { multiGroupDialog.addFoldersAndShow(folderUrls) } catch (e2) {}
+                }
             }
         }
     }

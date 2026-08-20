@@ -2614,7 +2614,7 @@ ApplicationWindow {
     // 调用方：dropZone / liveDropZone 在拖入时调用此方法，**不**再静默改播放队列。
     // 参数：urls —— QUrl 数组或字符串数组（file:// URL 或本地路径均可）。
     // 返回：本次涉及到的文件夹路径列表（命中 + 新增）。
-    function addFoldersAndShow(urls) {
+    function addFoldersAndShow(urls, fileUrls) {
         // 1) 历史合并（默认不勾选）
         try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
         _folderHistMerged = true
@@ -2622,13 +2622,72 @@ ApplicationWindow {
         // 2) 本次拖入：新增的默认不勾选；已存在的会触发"重复目录"确认
         //    （让用户决定再开一路还是仅勾选已有）。
         var hits = []
-        try { hits = addFoldersWithConfirm(urls) || [] } catch (e) { hits = [] }
+        if (urls && urls.length > 0) {
+            try { hits = addFoldersWithConfirm(urls) || [] } catch (e) { hits = [] }
+        }
 
-        // 3) 弹出 Dialog
-        show()
-        raise()
-        requestActivate()
+        // 3) 散文件（与文件夹混拖场景）作为"匿名 lane"加入 —— folderPath 为空，
+        //    直接用 currentPath 指向该文件本身，allFiles/visibleFiles 各仅含这一项，
+        //    不入"文件夹历史"。避免"文件夹+散文件"混拖时散文件被静默丢弃。
+        if (fileUrls && fileUrls.length > 0) {
+            try { addAnonymousFiles(fileUrls) } catch (e) { /* ignore */ }
+        }
+
+        // 4) 弹出 Dialog（仅在确实有内容时）
+        if ((urls && urls.length > 0) || (fileUrls && fileUrls.length > 0)
+                || _rowsModel.count > 0) {
+            show()
+            raise()
+            requestActivate()
+        }
         return hits
+    }
+
+    // ─── 批量添加"散文件 lane"（拖拽时与文件夹混拖的场景）────────────
+    // 不依赖文件夹存在，仅用 currentPath 指向该文件本身。
+    // 与 addFoldersToHistory 的关键区别：
+    //   · folderPath = ""     —— 不参与文件夹历史、不被 _mergeFolderHistoryIntoLanes 还原
+    //   · 不调 scanVideoFolder —— 跳过扫描，避免触发系统权限弹窗、避免无谓 IO
+    //   · 默认 selected = true —— 用户主动拖入的散文件本身就是想加入对比
+    //   · 不触发"重复目录"确认 —— 散文件没"目录"概念，多个同名散文件也允许并存
+    function addAnonymousFiles(fileUrls) {
+        if (!fileUrls || fileUrls.length === 0) return
+        for (var i = 0; i < fileUrls.length; ++i) {
+            if (_rowsModel.count >= kMaxLanes) break
+            var u = fileUrls[i]
+            var localPath = ""
+            try {
+                if (typeof u === "string") {
+                    localPath = (u.indexOf("file://") === 0)
+                                ? Fs.urlToLocalFile(u) : u
+                } else {
+                    localPath = Fs.urlToLocalFile(u)
+                }
+            } catch (e) { localPath = "" }
+            if (!localPath || localPath.length === 0) continue
+
+            // 文件存在性校验：拖入时点击的散文件可能已被移动/删除（罕见）。
+            // 不可用的跳过、不占 lane 槽位。
+            var exists = false
+            try { exists = Fs.fileExists(localPath) } catch (e2) { exists = false }
+            if (!exists) {
+                console.warn("[MGD] addAnonymousFiles: 散文件不存在，跳过:", localPath)
+                continue
+            }
+
+            _rowsModel.append({
+                selected: true,
+                folderPath: "",
+                keyword: "",
+                currentIndex: 0,
+                currentPath: localPath,
+                allCount: 1,
+                visibleCount: 1
+            })
+            _laneRuntime.push({ allFiles: [localPath], visibleFiles: [localPath] })
+        }
+        _bumpState()
+        _persistLanes()
     }
 
     // ─── 单路浏览：切换「同时显示 N 个」 ────────────────────────────
