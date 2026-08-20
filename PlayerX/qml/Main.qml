@@ -116,6 +116,11 @@ ApplicationWindow {
     // 各内容区（refSidebar/videoArea/csvBottomBar/yuvView/homeView/streamView）
     // 以及底部工具栏（footer topBar）都据此决定是否显示，逻辑互不侵入。
     property string currentTab: "play"
+    // 回到首页时，右侧栏（YUV 统计 / 播放对比设置 / 码流分析）没有对应内容，
+    // 自动收起，避免露出空白面板。
+    onCurrentTabChanged: {
+        if (root.currentTab === "home") root.rightSidebarOpen = false
+    }
 
     // ─── 沉浸模式 ───────────────────────────────────────────────────────
     // true 表示已进入"独立子界面"：左右导航栏 / 参考图栏 全部隐藏，
@@ -2093,6 +2098,16 @@ ApplicationWindow {
         refCanNav2: root.refCanNav2
         onRefImgOffsetChanged: root._refImgOffset = refImgOffset
         onRefImgOffset2Changed: root._refImgOffset2 = refImgOffset2
+    }
+
+    // ── YUV slot 数变 0（关闭全部 / 点 ← 返回）时，若仍在 YUV tab，
+    //    直方图面板无画面可统计，自动收起右侧栏。──
+    Connections {
+        target: YuvBridge
+        function onSlotCountChanged() {
+            if (YuvBridge.slotCount === 0 && root.currentTab === "yuv" && root.rightSidebarOpen)
+                root.rightSidebarOpen = false
+        }
     }
 
     // ── YUV 分析视图（拆分至 YuvSetupView.qml） ──────────────────────
