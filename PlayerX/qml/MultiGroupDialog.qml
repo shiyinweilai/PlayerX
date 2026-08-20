@@ -645,6 +645,13 @@ ApplicationWindow {
             var sel    = false
             var savedIdx = (typeof rec.currentIndex === "number") ? rec.currentIndex : -1
 
+            // 历史里若残留 home/user 根目录，恢复时直接跳过（扫描前拦截），
+            // 否则启动阶段就会整树扫描并触发系统权限弹窗、拖慢启动。
+            if (folder && _isHomeOrUserDir(folder)) {
+                console.warn("[MGD] _restoreLanes 跳过 home/user 根目录:", folder)
+                continue
+            }
+
             // 重新扫描文件夹（仅当为非空路径时）
             var allFiles = []
             if (folder && folder.length > 0) {
@@ -1620,6 +1627,40 @@ ApplicationWindow {
         }
     }
 
+    // ─── 批量勾选 / 取消勾选 所有通道 ──────────────────────────────
+    // 行为：把所有 lane 的 selected 同步置为目标值：
+    //   · 「全选」→ 把所有 lane.selected 置 true（含当前未勾选 + folderPath 为空的占位行
+    //     也都勾上）。start() 内部已经校验 currentPath 为空会跳过这些路，所以勾上空行
+    //     不会引入副作用；用户可手动取消单条恢复。
+    //   · 「清空所有通道」→ 把所有 lane.selected 置 false。
+    // 与 addLane / removeLane 保持同样的"改动后落盘 + 触发 _bumpState"流程，
+    // 保证勾选状态被持久化、能被 canStart 等属性正确读到。
+    function selectAllLanes() {
+        if (_rowsModel.count === 0) return
+        var changed = false
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var l = _rowsModel.get(i)
+            if (l && !l.selected) {
+                _rowsModel.setProperty(i, "selected", true)
+                changed = true
+            }
+        }
+        if (changed) { _bumpState(); _persistLanes() }
+    }
+
+    function deselectAllLanes() {
+        if (_rowsModel.count === 0) return
+        var changed = false
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var l = _rowsModel.get(i)
+            if (l && l.selected) {
+                _rowsModel.setProperty(i, "selected", false)
+                changed = true
+            }
+        }
+        if (changed) { _bumpState(); _persistLanes() }
+    }
+
     // 由 MultiGroupRow.laneChanged 调用，将当前行 UI 状态写回模型
     function _syncLaneFromRow(i, selected, folderPath, keyword, allFiles, visibleFiles, currentIndex) {
         if (i < 0 || i >= _rowsModel.count) return
@@ -2305,6 +2346,39 @@ ApplicationWindow {
         return true
     }
 
+    // ─── 判断路径是否为 home 根目录 / user 目录 ──────────────────
+    // 目的：home 根目录（如 /Users/rbyang）或它的父目录（如 /Users，即"用户"目录）
+    // 属于"整树扫描"重灾区——递归进去会遍历海量目录并触发 macOS 的 TCC 隐私弹窗
+    // （音乐 / 相册 / 桌面 / 文稿 / 下载等）。这类路径直接拒绝加入，避免无谓扫描。
+    // 比较策略：与 Fs.homeDir() 及其父目录做"规范化后大小写不敏感"全等匹配，
+    // 兼容 macOS / Windows 文件系统的大小写不敏感特性与尾部斜杠差异。
+    function _isHomeOrUserDir(path) {
+        if (!path || path.length === 0) return false
+        var home = ""
+        try { home = (typeof Fs !== "undefined" && Fs && Fs.homeDir) ? (Fs.homeDir() || "") : "" } catch (e) { home = "" }
+        if (home.length === 0) return false
+
+        // 规范化：去掉尾部斜杠、统一小写
+        function norm(s) {
+            var r = String(s)
+            while (r.length > 1 && (r.charAt(r.length - 1) === "/" || r.charAt(r.length - 1) === "\\")) {
+                r = r.substring(0, r.length - 1)
+            }
+            return r.toLowerCase()
+        }
+        var np = norm(path)
+        var nh = norm(home)
+        if (np === nh) return true   // home 根目录
+
+        // user 目录 = home 的父目录（如 /Users、C:\Users）
+        var idx = Math.max(home.lastIndexOf("/"), home.lastIndexOf("\\"))
+        if (idx > 0) {
+            var parent = norm(home.substring(0, idx))
+            if (parent.length > 0 && np === parent) return true
+        }
+        return false
+    }
+
     // ─── 把若干文件夹路径「追加合并」进 lanes 历史（仅写入，不启动）──
     //   · 已存在同路径的 lane → 跳过（不重复添加）
     //   · 不在历史中且能扫出视频 → 追加为新 lane（默认 selected=false：
@@ -2339,23 +2413,39 @@ ApplicationWindow {
             var u = urls[k]
             if (u === undefined || u === null) continue
 
-            // 规范化：QUrl/字符串都转成本地目录路径，并扫描视频
-            // 双路兜底：先按"原类型"扫一次；不行就转成另一种再扫一次。
-            var files = []
+            // ① 先把 QUrl/字符串统一成本地目录路径（此时**不扫描**）
             var folderPath = ""
             try {
                 if (typeof u === "string") {
-                    var s0 = u
-                    if (s0.indexOf("file://") === 0) folderPath = Fs.urlToLocalFile(s0)
-                    else                              folderPath = s0
+                    folderPath = (u.indexOf("file://") === 0) ? Fs.urlToLocalFile(u) : u
+                } else {
+                    folderPath = Fs.urlToLocalFile(u)
+                }
+            } catch (e) {
+                folderPath = ""
+            }
+            if (!folderPath || folderPath.length === 0) {
+                continue
+            }
+
+            // ② 拦截 home 根目录 / user 目录：直接拒绝加入，避免整树扫描
+            //    触发系统权限弹窗、拖慢启动。判断放在扫描**之前**，杜绝无谓扫描。
+            if (_isHomeOrUserDir(folderPath)) {
+                console.warn("[MGD] 拒绝加入 home/user 根目录（避免整树扫描）:", folderPath)
+                continue
+            }
+
+            // ③ 扫描视频：双路兜底（先按原类型扫；不行转成另一种再扫一次）
+            var files = []
+            try {
+                if (typeof u === "string") {
                     files = Fs.scanVideoFolderPath(folderPath, true) || []
                     if (!files || files.length === 0) {
                         // 兜底：用 url 形式再扫一次
-                        try { files = Fs.scanVideoFolder(s0, true) || [] } catch (e2) { /* ignore */ }
+                        try { files = Fs.scanVideoFolder(u, true) || [] } catch (e2) { /* ignore */ }
                     }
                 } else {
                     // QUrl 对象
-                    folderPath = Fs.urlToLocalFile(u)
                     files = Fs.scanVideoFolder(u, true) || []
                     if ((!files || files.length === 0) && folderPath) {
                         // 兜底：用本地路径再扫一次
@@ -2366,9 +2456,6 @@ ApplicationWindow {
                 files = []
             }
 
-            if (!folderPath || folderPath.length === 0) {
-                continue
-            }
             if (!files || files.length === 0) {
                 continue
             }
@@ -2467,6 +2554,13 @@ ApplicationWindow {
             if (_rowsModel.count >= kMaxLanes) break
             var folderPath = hist[k]
             if (!folderPath || existing[folderPath]) continue
+
+            // 历史里若残留 home/user 根目录，恢复时也直接跳过（扫描前拦截），
+            // 否则又会触发整树扫描 + 系统权限弹窗，拖慢每次打开对话框。
+            if (_isHomeOrUserDir(folderPath)) {
+                console.warn("[MGD] 历史中跳过 home/user 根目录:", folderPath)
+                continue
+            }
 
             // 重新扫描；扫不到任何视频就跳过（文件夹被删/移走的情况）
             var files = []
@@ -2842,22 +2936,110 @@ ApplicationWindow {
         anchors.margins: 14
         spacing: 10
 
-        // 标题
+        // 标题 + 右侧操作按钮（新增 / 全选 / 清空）
+        // 三个动作都搬到这里：底部原来「+新增一行 (最多 9 路)」RowLayout 已删除。
         RowLayout {
             Layout.fillWidth: true
             spacing: 10
-            Label {
-                text: "🗂️ 打开文件夹 / 多组对比"
-                color: "#e8e8ec"
-                font.pixelSize: 16
-                font.bold: true
-            }
-            Label {
-                text: "勾选 1 路 = 单视频浏览（用上一组/下一组在该文件夹内循环切换）；勾选 ≥2 路 = 多组对比"
-                color: "#888"
-                font.pixelSize: 11
+            ColumnLayout {
                 Layout.fillWidth: true
-                elide: Text.ElideRight
+                spacing: 4
+                Label {
+                    text: "🗂️ 打开文件夹 / 多组对比"
+                    color: "#e8e8ec"
+                    font.pixelSize: 16
+                    font.bold: true
+                }
+                Label {
+                    text: "勾选 1 路 = 单视频浏览（用上一组/下一组在该文件夹内循环切换）；勾选 ≥2 路 = 多组对比"
+                    color: "#888"
+                    font.pixelSize: 11
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+            }
+
+            // 右上角操作按钮组：等高三连 + 统一圆角/边框样式，竖向居中对齐。
+            // 全选/清空仅当 ≥1 路时启用；空态时禁用并降透明度，避免误操作。
+            // 右上角固定位置让出最大可视空间给列表区，与底部状态栏分离。
+            RowLayout {
+                spacing: 8
+                Layout.alignment: Qt.AlignVCenter
+                Button {
+                    id: addLaneBtn
+                    text: "➕ 新增"
+                    enabled: _rowsModel.count < kMaxLanes
+                    // 点击【多选】：弹出多选文件夹对话框，选中 N 个后一次性追加 N 路。
+                    // 取消时退化为原来的「加一条空行」语义，用户仍可在空行内点 📁 逐个选。
+                    onClicked: _pickFoldersAndAddLanes("addEmpty")
+                    background: Rectangle {
+                        color: !addLaneBtn.enabled ? "#1a1a1d"
+                              : addLaneBtn.down ? "#4a4a55"
+                              : addLaneBtn.hovered ? "#33333a"
+                                                : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: addLaneBtn.text
+                        color: addLaneBtn.enabled ? "#e8e8ec" : "#555"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    Layout.preferredHeight: 30
+                    Layout.preferredWidth: 110
+                }
+                Button {
+                    id: selectAllBtn
+                    text: "全选"
+                    enabled: _rowsModel.count > 0
+                    onClicked: selectAllLanes()
+                    background: Rectangle {
+                        color: !selectAllBtn.enabled ? "#1a1a1d"
+                              : selectAllBtn.down ? "#4a4a55"
+                              : selectAllBtn.hovered ? "#33333a"
+                                                   : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: selectAllBtn.text
+                        color: selectAllBtn.enabled ? "#e8e8ec" : "#555"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    Layout.preferredHeight: 30
+                    Layout.preferredWidth: 84
+                }
+                Button {
+                    id: deselectAllBtn
+                    text: "清空"
+                    enabled: _rowsModel.count > 0
+                    onClicked: deselectAllLanes()
+                    background: Rectangle {
+                        color: !deselectAllBtn.enabled ? "#1a1a1d"
+                              : deselectAllBtn.down ? "#4a4a55"
+                              : deselectAllBtn.hovered ? "#33333a"
+                                                     : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: deselectAllBtn.text
+                        color: deselectAllBtn.enabled ? "#c8c8d0" : "#555"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    Layout.preferredHeight: 30
+                    // "清空"两字自适应宽度，避免被截断；保留富余 20px 防边距贴边。
+                    Layout.preferredWidth: deselectAllBtn.implicitWidth + 20
+                }
             }
         }
 
@@ -3025,47 +3207,11 @@ ApplicationWindow {
                     }
                 }
 
-                // ➕ 新增一行（已经有路时显示；空态下让位给上面的占位卡）
-                RowLayout {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 36
-                    spacing: 12
-                    visible: _rowsModel.count > 0
-                    Button {
-                        id: addLaneBtn
-                        text: "➕ 新增一路"
-                        enabled: _rowsModel.count < kMaxLanes
-                        // 点击【多选】：弹出多选文件夹对话框，选中 N 个后一次性追加 N 路。
-                        // 取消时退化为原来的「加一条空行」语义，用户仍可在空行内点 📁 逐个选。
-                        onClicked: _pickFoldersAndAddLanes("addEmpty")
-                        background: Rectangle {
-                            color: !addLaneBtn.enabled ? "#1a1a1d"
-                                  : addLaneBtn.down ? "#4a4a55"
-                                  : addLaneBtn.hovered ? "#33333a"
-                                                    : "#202024"
-                            border.color: "#3a3a42"
-                            border.width: 1
-                            radius: 4
-                        }
-                        contentItem: Text {
-                            text: addLaneBtn.text
-                            color: addLaneBtn.enabled ? "#e8e8ec" : "#555"
-                            font.pixelSize: 12
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        Layout.preferredHeight: 30
-                        Layout.preferredWidth: 110
-                    }
-                    Label {
-                        text: "（最多 " + kMaxLanes + " 路）"
-                        color: "#666"
-                        font.pixelSize: 11
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-                    Item { Layout.fillWidth: true }
-                }
-            }
+                // 注：原底部「➕ 新增一行」RowLayout + 顶部三按钮已合并到标题栏右侧
+            // （上面那个带 addLaneBtn / selectAllBtn / deselectAllBtn 的 RowLayout），
+            // 这里不再重复实现 —— 否则会出现 id 重复导致 QML 解析失败 / 行为不可预期。
+
+        }
         }
 
         // 分隔线

@@ -56,6 +56,29 @@ static bool isVideoFile(const QFileInfo& fi) {
     return false;
 }
 
+// macOS 隐私（TCC）受保护的家目录子目录：递归扫描时直接跳过，避免触发
+// 系统权限弹窗（"想要访问您的照片 / 音乐 / 桌面 / 文稿 / 下载"等）。
+// 仅当这些目录是"扫描根目录的子目录"时才会走到这里并跳过；用户显式选择的
+// 根目录本身不经过此拦截（例如用户直接选 ~/Downloads 时仍会正常扫描其内容）。
+// macOS 家目录下这些目录在磁盘上的真实名称固定为英文（Finder 显示的是本地化名），
+// 故按英文名做大小写不敏感匹配是可靠的。
+static bool isProtectedDir(const QFileInfo& fi) {
+#if defined(Q_OS_MACOS)
+    static const QStringList kProtected = {
+        "Desktop", "Documents", "Downloads", "Library",
+        "Movies", "Music", "Pictures",
+        ".Trash"  // 废纸篓：递归扫描无意义，且可能很大拖慢启动
+    };
+    const QString name = fi.fileName();
+    for (const auto& p : kProtected) {
+        if (name.compare(p, Qt::CaseInsensitive) == 0) return true;
+    }
+#else
+    Q_UNUSED(fi);
+#endif
+    return false;
+}
+
 static QString urlToLocal(const QUrl& url) {
     if (url.isLocalFile()) return url.toLocalFile();
     // 兼容 QML DropArea 传入的 file:// URL 字符串
@@ -73,22 +96,41 @@ QStringList FsUtils::scanVideoFolderPath(const QString& dirPath, bool recursive)
     QFileInfo dirFi(dirPath);
     if (!dirFi.exists() || !dirFi.isDir()) return out;
 
-    QDirIterator::IteratorFlags flags = recursive
-        ? QDirIterator::Subdirectories
-        : QDirIterator::NoIteratorFlags;
-    QDirIterator it(dirPath,
-                    QDir::Files | QDir::NoDotAndDotDot | QDir::Readable,
-                    flags);
+    QSet<QString> seen;         // 文件去重（极少数情况下可能重复返回）
+    QSet<QString> visitedDirs;  // 目录去重（防符号链接环）
 
-    QSet<QString> seen;  // 去重保护（极少数情况下 iterator 可能重复返回）
-    while (it.hasNext()) {
-        it.next();
-        const QFileInfo fi = it.fileInfo();
-        if (!isVideoFile(fi)) continue;
-        const QString abs = fi.absoluteFilePath();
-        if (seen.contains(abs)) continue;
-        seen.insert(abs);
-        out << abs;
+    // 手动栈式递归（DFS），替代原来的 QDirIterator::Subdirectories：
+    // 递归进入子目录前先做"受保护目录"拦截（见 isProtectedDir），避免扫描器
+    // 闯入 macOS TCC 隐私目录（~/Music、~/Pictures、~/Desktop、~/Documents、
+    // ~/Downloads 等）。否则一旦进入这些目录，macOS 就会弹出"访问相册 / 音乐 /
+    // 桌面 / 文稿 / 下载"等权限确认 —— 尤其当历史记录里存的是 home 目录 ~
+    // 时，整树递归会触发一连串弹窗并拖慢启动。
+    QStringList stack;
+    stack << dirPath;
+
+    while (!stack.isEmpty()) {
+        const QString cur = stack.takeLast();
+        QString canon = QFileInfo(cur).canonicalFilePath();
+        if (canon.isEmpty()) canon = QDir(cur).absolutePath();
+        if (visitedDirs.contains(canon)) continue;
+        visitedDirs.insert(canon);
+
+        QDir d(cur);
+        const auto entries = d.entryInfoList(
+            QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable,
+            QDir::Name);
+        for (const QFileInfo& fi : entries) {
+            if (fi.isDir()) {
+                if (!recursive) continue;
+                if (isProtectedDir(fi)) continue;  // 关键：拦截 TCC 受保护目录
+                stack << fi.absoluteFilePath();
+            } else if (isVideoFile(fi)) {
+                const QString abs = fi.absoluteFilePath();
+                if (seen.contains(abs)) continue;
+                seen.insert(abs);
+                out << abs;
+            }
+        }
     }
     // 自然序排序：让 "1.mp4 < 2.mp4 < 10.mp4"，而不是字典序的 "1 < 10 < 2"。
     // 与 macOS Finder / Windows Explorer 行为一致，避免用户预览到的顺序
