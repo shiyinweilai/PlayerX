@@ -33,21 +33,22 @@ Item {
             "所有文件 (*)"
         ]
         onAccepted: {
-            // 从空状态打开 → 走 MultiGroupDialog.loadFlatFiles 接管，获得 N 宫格切换 / 翻页能力；
+            // 从空状态打开 → 与"拖拽多文件"保持一致：直接横向铺开（1×N 横排）。
             // 已有视频时 → 维持原"逐个 addFile"的追加语义（不打断当前对比）。
             if (Engine.fileCount === 0) {
                 if (selectedFiles.length === 1) {
                     // 单个文件：直接打开即可，不进 active 态（用户没想进队列模式）
                     Engine.openFiles(selectedFiles)
                 } else if (selectedFiles.length > 1) {
-                    // 多个文件：纳入 MultiGroupDialog 接管，默认以 1 宫格启动，
-                    // 之后用底栏 ▦ 按钮切宫格、⏮⏭ 翻页。
-                    if (!multiGroupDialog.loadFlatFiles(selectedFiles)) {
-                        // 兜底：接管失败仍按老逻辑直开（截前 9 个）
-                        var arr = selectedFiles
-                        if (arr.length > 9) arr = arr.slice(0, 9)
-                        Engine.openFiles(arr)
-                    }
+                    // 多个文件：直接横向铺开（等价于拖拽多个文件到窗口）。
+                    // 不再走 loadFlatFiles（它只打开第 0 个并把布局切成 Single 单视图，
+                    // 导致"点击打开多文件"与"拖拽多文件"行为不一致）。
+                    var arr = selectedFiles
+                    if (arr.length > 9) arr = arr.slice(0, 9)
+                    // 确保横向铺开：layoutMode=1（SideBySide）。若用户此前手动
+                    // 切到了 Single/宫格，这里强制回到横排，避免多选后只看到一路。
+                    if (Engine.layoutMode !== 1) Engine.layoutMode = 1
+                    Engine.openFiles(arr)
                 }
             } else {
                 for (var i = 0; i < selectedFiles.length; ++i) {
