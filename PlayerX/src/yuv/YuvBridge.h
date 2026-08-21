@@ -97,11 +97,22 @@ public:
     // ── 直方图统计（当前帧，plane: 0=Y, 1=U, 2=V）──────────────────────
     // 返回 QVariantMap：
     //   { "bins": [int,...],       // 桶计数（8bit=256, 10bit=1024）
-    //     "mean", "stddev", "min", "max", "binCount" }
+    //     "mean", "stddev", "variance", "min", "max", "range", "binCount" }
     Q_INVOKABLE QVariantMap histogram(int slot, int plane) const;
 
     // ── 块级直方图统计（右侧栏"块级别"模式，8×8 块，对齐规则与 pixelBlock8x8 一致）──
     Q_INVOKABLE QVariantMap blockHistogram(int slot, int plane, int px, int py) const;
+
+    // ── 帧级"梯度 / 纹理 / 锐利度"全方向统计（plane: 0=Y, 1=U, 2=V）──────
+    // 返回 QVariantMap：
+    //   { "mean", "stddev", "variance", "min", "max", "range",
+    //     "gradHorizMean", "gradVertMean",
+    //     "gradDiag45Mean", "gradDiag135Mean",
+    //     "gradMean", "laplacianEnergy", "tenengrad",
+    //     "sampleCount" }
+    //   单位：均值/标准差/方差/极差在 0..255（或 0..1023）值域；
+    //   梯度幅值、能量、Tenengrad 等越大代表画面纹理越强/越锐利。
+    Q_INVOKABLE QVariantMap planeStats(int slot, int plane) const;
 
     // ── 双路块级差异总览（右侧栏"差异总览"热力图，plane: 0=Y,1=U,2=V）────────
     // 按 blockSize 网格划分两路的公共分辨率（取交集宽高），逐块计算平均绝对差，

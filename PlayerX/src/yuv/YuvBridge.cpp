@@ -298,8 +298,10 @@ QVariantMap YuvBridge::histogram(int slot, int plane) const {
     result["bins"]     = bins;
     result["mean"]     = h.mean;
     result["stddev"]   = h.stddev;
+    result["variance"] = h.variance;
     result["min"]      = h.minVal;
     result["max"]      = h.maxVal;
+    result["range"]    = h.range;
     result["binCount"] = h.binCount;
     return result;
 }
@@ -320,9 +322,38 @@ QVariantMap YuvBridge::blockHistogram(int slot, int plane, int px, int py) const
     result["bins"]     = bins;
     result["mean"]     = h.mean;
     result["stddev"]   = h.stddev;
+    result["variance"] = h.variance;
     result["min"]      = h.minVal;
     result["max"]      = h.maxVal;
+    result["range"]    = h.range;
     result["binCount"] = h.binCount;
+    return result;
+}
+
+// ── 帧级"梯度 / 纹理 / 锐利度"全方向统计 ─────────────────────────────
+QVariantMap YuvBridge::planeStats(int slot, int plane) const {
+    QVariantMap result;
+    if (slot < 0 || slot >= MaxSlots) return result;
+    if (!m_analyzers[slot]->isOpen()) return result;
+
+    const rb::YuvAnalyzer::PlaneStats s =
+        m_analyzers[slot]->computeStats(plane);
+    if (s.sampleCount == 0) return result;
+
+    result["mean"]            = s.mean;
+    result["stddev"]          = s.stddev;
+    result["variance"]        = s.variance;
+    result["min"]             = s.minVal;
+    result["max"]             = s.maxVal;
+    result["range"]           = s.range;
+    result["gradHorizMean"]   = s.gradHorizMean;
+    result["gradVertMean"]    = s.gradVertMean;
+    result["gradDiag45Mean"]  = s.gradDiag45Mean;
+    result["gradDiag135Mean"] = s.gradDiag135Mean;
+    result["gradMean"]        = s.gradMean;
+    result["laplacianEnergy"] = s.laplacianEnergy;
+    result["tenengrad"]       = s.tenengrad;
+    result["sampleCount"]     = static_cast<qlonglong>(s.sampleCount);
     return result;
 }
 

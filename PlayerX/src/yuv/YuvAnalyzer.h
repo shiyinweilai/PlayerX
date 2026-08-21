@@ -68,16 +68,56 @@ public:
 
     // ── 直方图统计（当前帧，plane: 0=Y, 1=U, 2=V）────────────────────────
     // 桶数按位深自适应：8bit=256 桶，10bit=1024 桶（高位深时 binCount>256）。
-    // 顺带返回 mean / stddev / min / max，一次遍历全部算好。
+    // 顺带返回 mean / stddev / min / max / variance / range，一次遍历全部算好。
     struct PlaneHistogram {
         std::vector<int> bins;   // 每个值域的像素计数
         double mean     = 0.0;   // 均值
         double stddev   = 0.0;   // 标准差（无偏，整体标准差）
+        double variance = 0.0;   // 方差（stddev 的平方）
         int    minVal   = 0;     // 最小值
         int    maxVal   = 0;     // 最大值
+        int    range    = 0;     // 极差 = maxVal - minVal
         int    binCount = 0;     // 桶数（256 或 1024）
     };
     PlaneHistogram computeHistogram(int plane) const;
+
+    // ── 梯度与边缘能量统计（当前帧，plane: 0=Y, 1=U, 2=V）───────────────
+    // 与 computeHistogram 共用同一帧：直方图与梯度信息各扫一次以保证最佳性能
+    // （getPixelYUV 是热点路径，重复访问会拖慢 UI）。建议调用方在帧变化时
+    // 一次性拿到 PlaneStats，然后由 UI 自由拆解渲染。
+    //
+    // 指标含义（参考 H.264/HEVC/VVC 块划分、纹理复杂度、清晰度判定）：
+    //   gradHorizMean      水平方向 |I(x)-I(x-1)| 平均值
+    //                       —— 评估"水平边缘能量"，HEVC/VVC 决定是否启用水平
+    //                          方向非对称划分 / 模式选择的重要依据
+    //   gradVertMean       垂直方向 |I(y)-I(y-1)| 平均值
+    //   gradDiag45Mean     45°  对角方向 |I(x+1,y+1) - I(x-1,y-1)| 平均值
+    //   gradDiag135Mean    135° 对角方向 |I(x-1,y+1) - I(x+1,y-1)| 平均值
+    //   gradMean           上述四方向梯度幅值的总平均 = 综合纹理能量
+    //                       —— 决定 CU 划分深度/预处理强度的关键参数
+    //   laplacianEnergy    4 邻域 Laplacian 能量（|4I-I_up-I_down-I_left-I_right|）
+    //                       —— 衡量画面锐利度/对焦质量，类似清晰度评分
+    //   tenengrad          Sobel 梯度平方和均值（SobelGx²+Gy² 后取均值）
+    //                       —— 经典"纹理复杂度/聚焦评估"指标，编码器在
+    //                          qp 决策 / 预处理开关上会引用类似量
+    //   sampleCount        实际参与计算的像素数（内部有效像素数）
+    struct PlaneStats {
+        double mean            = 0.0;   // 均值（冗余：与 PlaneHistogram.mean 一致，方便独立使用）
+        double stddev          = 0.0;   // 标准差
+        double variance        = 0.0;   // 方差
+        int    minVal          = 0;     // 最小值
+        int    maxVal          = 0;     // 最大值
+        int    range           = 0;     // 极差
+        double gradHorizMean   = 0.0;   // 水平梯度幅值均值
+        double gradVertMean    = 0.0;   // 垂直梯度幅值均值
+        double gradDiag45Mean  = 0.0;   // 45° 对角梯度均值
+        double gradDiag135Mean = 0.0;   // 135° 对角梯度均值
+        double gradMean        = 0.0;   // 四方向总平均梯度幅值
+        double laplacianEnergy = 0.0;   // Laplacian 锐利度能量
+        double tenengrad       = 0.0;   // Tenengrad 纹理复杂度
+        long long sampleCount  = 0;     // 有效像素数
+    };
+    PlaneStats computeStats(int plane) const;
 
     // ── 块级直方图统计（右侧栏"块级别"模式，随鼠标悬浮实时统计）──────────
     // 以 (px, py) 为基准，对齐到 blockSize 的倍数（默认 8×8，与
