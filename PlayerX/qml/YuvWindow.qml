@@ -394,6 +394,20 @@ Item {
         function onPlayStateChanged(slot) { yuvView.globalVer++ }
     }
 
+    // ── 帧数进度（底部控制条左侧的帧号显示）──
+    // 取 slot 0 的帧进度作为代表：1 路时完全准确；多路时进度一致（同一序列），
+    // 也足够作为播放头参考。如果未来要"独立多路进度"再拆 per-slot。
+    readonly property int progressCurrent: {
+        const _ = yuvView.globalVer
+        if (YuvBridge.slotCount <= 0) return 0
+        return YuvBridge.currentFrame(0) + 1   // 1-based 给人看
+    }
+    readonly property int progressTotal: {
+        const _ = yuvView.globalVer
+        if (YuvBridge.slotCount <= 0) return 0
+        return YuvBridge.totalFrames(0)
+    }
+
     // ── 总控：同时作用于所有已打开 slot 的批量操作 ──────────────────────
     signal centerAllRequested()   // 通知各 slot 复位平移（画面居中），纯 QML 端状态，无法通过 YuvBridge 统一处理
     function globalSetDisplayMode(mode) {
@@ -1511,6 +1525,19 @@ Item {
                 // 弹性空白：把所有按钮推到最右侧（与"清空"对齐靠右）。
                 // 注意："总控 · N 路"等纯文字标签已删除（用户反馈：右侧贴边更简洁）。
                 Item { Layout.fillWidth: true }
+
+                // 帧数进度（左侧贴边）：仅显示"当前帧 / 总帧数"，不画进度条。
+                // 取 slot 0 作为代表（多路时进度一致）。
+                Text {
+                    Layout.alignment: Qt.AlignVCenter
+                    text: {
+                        const _ = yuvView.globalVer
+                        return yuvView.progressCurrent + " / " + yuvView.progressTotal
+                    }
+                    color: "#a0a4ac"
+                    font.pixelSize: 11
+                    font.family: "Monospace"
+                }
 
                 // 通道切换（作用于所有 slot）—— 与内嵌控制条完全一致：YUV 标签 38x22，
                 // 其它通道按钮 28x22，激活态 `#80e05050`，未激活 `#802a2a34`，

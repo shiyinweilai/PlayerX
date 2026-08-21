@@ -30,7 +30,15 @@ Item {
 // 后空格、左右键等"全局控制"快捷键失效。
 Shortcut {
     sequence: "Space"; context: Qt.ApplicationShortcut
-    onActivated: Engine.togglePause()
+    onActivated: {
+        // YUV 分析 tab：空格 = 播放/暂停所有已打开的 YUV slot（用 YuvBridge，不是 Engine）
+        if (root.currentTab === "yuv") {
+            const n = YuvBridge.slotCount
+            for (let i = 0; i < n; ++i) YuvBridge.togglePlayPause(i)
+            return
+        }
+        Engine.togglePause()
+    }
 }
 // V：切换全局显示视频信息。全屏抑制状下会先清抑制再强制显示。
 Shortcut {
@@ -60,6 +68,12 @@ Shortcut {
     sequence: "Left"; context: Qt.ApplicationShortcut
     // 首帧守卫（即时判定）：与工具栏 `<<` 按钮语义一致。
     onActivated: {
+        // YUV 分析 tab：左键 = 单帧快退所有 slot
+        if (root.currentTab === "yuv") {
+            const n = YuvBridge.slotCount
+            for (let i = 0; i < n; ++i) YuvBridge.prevFrame(i)
+            return
+        }
         if (Logic._isAtFirstFrameNow()) return
         Engine.seek(Math.max(0, Engine.position - 5))
     }
@@ -68,8 +82,31 @@ Shortcut {
     sequence: "Right"; context: Qt.ApplicationShortcut
     // 末帧守卫（即时判定）：与工具栏 `>>` 按钮语义一致。
     onActivated: {
+        // YUV 分析 tab：右键 = 单帧快进所有 slot
+        if (root.currentTab === "yuv") {
+            const n = YuvBridge.slotCount
+            for (let i = 0; i < n; ++i) YuvBridge.nextFrame(i)
+            return
+        }
         if (Logic._isAtLastFrameNow()) return
         Engine.seek(Math.min(Engine.duration, Engine.position + 5))
+    }
+}
+// YUV 分析专用：上/下键 = 15 帧快进/快退（仅 yuv tab 生效，避免与播放 tab 冲突）
+Shortcut {
+    sequence: "Up"; context: Qt.ApplicationShortcut
+    enabled: root.currentTab === "yuv"
+    onActivated: {
+        const n = YuvBridge.slotCount
+        for (let i = 0; i < n; ++i) YuvBridge.skipForward(i, 15)
+    }
+}
+Shortcut {
+    sequence: "Down"; context: Qt.ApplicationShortcut
+    enabled: root.currentTab === "yuv"
+    onActivated: {
+        const n = YuvBridge.slotCount
+        for (let i = 0; i < n; ++i) YuvBridge.skipBackward(i, 15)
     }
 }
 Shortcut {
