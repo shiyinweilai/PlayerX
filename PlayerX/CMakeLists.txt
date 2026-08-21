@@ -177,7 +177,6 @@ qt_add_qml_module(PlayerX
         qml/TestSourceDownloadDialog.qml
         qml/TestSourceGroupDialog.qml
         qml/TestSourceRedownloadDialog.qml
-        qml/ConfirmCloseAllDialog.qml
         qml/RestoreDefaultConfirmDialog.qml
         qml/ClearHistoryConfirmDialog.qml
         qml/QuickUploadConfirmDialog.qml

@@ -147,7 +147,6 @@ ApplicationWindow {
         root: root
         shortcutsAboutDialogs: shortcutsAboutDialogs
         updateDialog: updateDialog
-        confirmCloseAllDialog: confirmCloseAllDialog
         restoreDefaultConfirmDialog: restoreDefaultConfirmDialog
         clearHistoryConfirmDialog: clearHistoryConfirmDialog
         addDialog: fileDialogs.addDialog
@@ -358,11 +357,12 @@ ApplicationWindow {
         onActivated: multiGroupDialog.showAndRefresh()
     }
     // 关闭所有视频：⌘W / Ctrl+W（行业惯例的"关闭文档"键，对我们等价于清空所有路）
+    // 直接清空，不再二次确认（用户明确要求）
     Shortcut {
         sequences: [StandardKey.Close]
         context: Qt.ApplicationShortcut
         enabled: Engine.fileCount > 0
-        onActivated: confirmCloseAllDialog.open()
+        onActivated: Engine.closeAll()
     }
     Shortcut {
         sequences: [StandardKey.Quit]                 // macOS: ⌘Q / Win: Ctrl+Q
@@ -449,14 +449,7 @@ ApplicationWindow {
     }
 
 
-    // ─── 关闭全部视频：二次确认（深色，与 about/shortcuts 风格一致）──
-    //  · 触发源：工具栏【✕ 全部】、菜单【文件 ▸ 关闭所有视频】、快捷键 ⌘W/Ctrl+W
-    //  · 设计：modal + 深色面板 + 阴影 + 自绘 footer（取消/确认清空），避免误触
-    //  · 操作只调 Engine.closeAll()，不影响本地 ratings.csv（评分独立保存）
-    ConfirmCloseAllDialog {
-        id: confirmCloseAllDialog
-        root: root
-    }
+    // ─── 关闭全部视频：已取消二次确认（点击 ✕ 返回 / 菜单 / ⌘W 直接调 Engine.closeAll）──
 
     // ─── 恢复默认配置确认对话框 ─────────────────────────────────────────
     // 触发源：顶部菜单【设置 ▸ 测试配置 ▸ 恢复默认】。
@@ -467,7 +460,6 @@ ApplicationWindow {
         id: restoreDefaultConfirmDialog
         root: root
         updateToast: updateToast
-        confirmCloseAllDialog: confirmCloseAllDialog
     }
 
     ClearHistoryConfirmDialog {
@@ -1695,7 +1687,6 @@ ApplicationWindow {
         id: topBar
         root: root
         updateDialog: updateDialog
-        confirmCloseAllDialog: confirmCloseAllDialog
         multiGroupDialog: multiGroupDialog
         quickUploadConfirmDialog: quickUploadConfirmDialog
         updateToast: updateToast

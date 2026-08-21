@@ -9,7 +9,6 @@ Dialog {
     id: restoreDefaultConfirmDialog
     property var root: null
     property var updateToast: null
-    property var confirmCloseAllDialog: null
     modal: true
     anchors.centerIn: parent
     standardButtons: Dialog.NoButton
@@ -35,7 +34,7 @@ Dialog {
         border.color: "#3a3a42"
         border.width: 1
         radius: 6
-        // 双层外阴影（与 confirmCloseAllDialog 一致）
+        // 双层外阴影（深色对话框风格）
         Rectangle {
             z: -1
             anchors.fill: parent

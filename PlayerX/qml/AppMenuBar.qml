@@ -10,7 +10,6 @@ MenuBar {
     property var root: null
     property var shortcutsAboutDialogs: null
     property var updateDialog: null
-    property var confirmCloseAllDialog: null
     property var restoreDefaultConfirmDialog: null
     property var clearHistoryConfirmDialog: null
     property var addDialog: null
@@ -589,12 +588,12 @@ MenuBar {
         id: generalMenu
         title: qsTr("通用")
 
-        // 一次性关闭所有视频（与单路 ✕ 一致；带二次确认）
+        // 一次性关闭所有视频（与单路 ✕ 一致；已去除二次确认，直接清空）
         DarkMenuItem {
             id: miCloseAll
             text: qsTr("关闭所有视频")
             enabled: Engine.fileCount > 0
-            onTriggered: confirmCloseAllDialog.open()
+            onTriggered: Engine.closeAll()
         }
         // 打开日志目录（排查问题用：每次启动在 <CacheLocation>/logs/ 下生成日志）
         DarkMenuItem {

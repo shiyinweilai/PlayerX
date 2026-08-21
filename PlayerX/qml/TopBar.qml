@@ -10,7 +10,6 @@ ToolBar {
     id: topBar
     property var root: null
     property var updateDialog: null
-    property var confirmCloseAllDialog: null
     property var multiGroupDialog: null
     property var quickUploadConfirmDialog: null
     property var updateToast: null
@@ -1474,7 +1473,7 @@ ToolBar {
         // 设计：
         //   · 只在 fileCount > 0 时显示，与单路 ✕ 一致；
         //   · 文案 "✕ 返回" 用红色调色，悬停加深，与单路关闭按钮的语义/视觉对齐；
-        //   · 点击先弹深色二次确认弹窗，避免误触一次性丢失全部正在比较的视频；
+        //   · 点击直接清空，不再二次确认（用户明确要求）；
         //   · 也可通过【文件】▸ 关闭所有视频 / ⌘W 触发。
         FlatButton {
             id: closeAllBtn
@@ -1491,7 +1490,7 @@ ToolBar {
             ToolTip.visible: hovered
             ToolTip.delay: 600
             ToolTip.text: qsTr("关闭所有视频（⌘W / Ctrl+W）")
-            onClicked: confirmCloseAllDialog.open()
+            onClicked: Engine.closeAll()
         }
 
         // 说明：早期这里有一个"当前倍速胶囊 speedBadge"（仅非 1.0x 时显示、点击复位）。
