@@ -456,25 +456,44 @@ YuvAnalyzer::PlaneStats YuvAnalyzer::computeBlockStats(int plane, int px, int py
 
     // 平面有效宽高（与 computeStats 同源，处理 chroma_subsampling / NV12 interleaved）
     int pw = m_width, ph = m_height;
+    // 来自 QML hover 的 (px, py) 是 Y 平面坐标，对色度平面需先换算到色度子采样坐标系
+    int sx = px, sy = py;
+    // 块大小：色度下采样后，色度上的 1 像素 = Y 上的 2 像素（420/422），因此
+    // 色度上"对齐到 blockSize 色度像素"≈ Y 平面的 2*blockSize Y 像素。这里直接
+    // 用传入的 blockSize 作为色度步长（即色度上扫描 blockSize×blockSize 范围），
+    // 与 computeBlockHistogram 行为一致——getPixelYUV 内部也是按 Y 坐标循环读，
+    // 每 2×2 个 Y 像素只产生 1 个色度采样。
+    int bs = blockSize;
     if (plane > 0) {
         if (desc) {
             pw = m_width  >> desc->log2_chroma_w;
             ph = m_height >> desc->log2_chroma_h;
+            // Y→色度坐标的换算（与 getPixelYUV 中的 cx/cy 完全一致）：
+            // 420 → cx = px >> 1, cy = py >> 1
+            // 422 → cx = px >> 1, cy = py
+            sx = px >> desc->log2_chroma_w;
+            sy = py >> desc->log2_chroma_h;
         }
         if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
-            if (plane >= 1) { pw = m_width; ph = m_height / 2; }
+            if (plane >= 1) {
+                // NV12/NV21 的 UV 交错在 plane 1，UV 平面的几何分辨率 = Y 的 W × (H/2)
+                pw = m_width;
+                ph = m_height / 2;
+                sx = px;
+                sy = py / 2;
+            }
         }
     }
     if (pw <= 0 || ph <= 0) return r;
 
-    // 对齐到块边界（与 computeBlockHistogram / pixelBlock8x8 同源）
-    const int bx = (px / blockSize) * blockSize;
-    const int by = (py / blockSize) * blockSize;
+    // 对齐到块边界（用换算后的色度坐标 sx/sy；与 computeBlockHistogram / pixelBlock8x8 同源语义）
+    const int bx = (sx / bs) * bs;
+    const int by = (sy / bs) * bs;
     // 块在平面坐标系下的范围 [x0..x1] × [y0..y1]，对越界做 clamp
     const int x0 = std::max(0, bx);
     const int y0 = std::max(0, by);
-    const int x1 = std::min(pw - 1, bx + blockSize - 1);
-    const int y1 = std::min(ph - 1, by + blockSize - 1);
+    const int x1 = std::min(pw - 1, bx + bs - 1);
+    const int y1 = std::min(ph - 1, by + bs - 1);
     if (x1 < x0 || y1 < y0) return r;
 
     auto getPlanePtr = [&](int y) -> const uint8_t* {
