@@ -359,6 +359,36 @@ QVariantMap YuvBridge::planeStats(int slot, int plane) const {
     return result;
 }
 
+// ── 块级"梯度 / 纹理 / 锐利度"统计（与 blockHistogram 同一块）──────────
+// 字段与 planeStats 完全一致，方便 UI 端共用同一组 QML 组件。差异：
+//   - 计算范围限制在对齐到 blockSize 倍数后的 [bx..bx+blockSize-1]×[by..by+blockSize-1]
+//   - sampleCount 反映该块实际参与计算的像素数（通常 = blockSize²）
+QVariantMap YuvBridge::blockStats(int slot, int plane, int px, int py) const {
+    QVariantMap result;
+    if (slot < 0 || slot >= MaxSlots) return result;
+    if (!m_analyzers[slot]->isOpen()) return result;
+
+    const rb::YuvAnalyzer::PlaneStats s =
+        m_analyzers[slot]->computeBlockStats(plane, px, py, m_blockSize);
+    if (s.sampleCount == 0) return result;
+
+    result["mean"]            = s.mean;
+    result["stddev"]          = s.stddev;
+    result["variance"]        = s.variance;
+    result["min"]             = s.minVal;
+    result["max"]             = s.maxVal;
+    result["range"]           = s.range;
+    result["gradHorizMean"]   = s.gradHorizMean;
+    result["gradVertMean"]    = s.gradVertMean;
+    result["gradDiag45Mean"]  = s.gradDiag45Mean;
+    result["gradDiag135Mean"] = s.gradDiag135Mean;
+    result["gradMean"]        = s.gradMean;
+    result["laplacianEnergy"] = s.laplacianEnergy;
+    result["tenengrad"]       = s.tenengrad;
+    result["sampleCount"]     = static_cast<qlonglong>(s.sampleCount);
+    return result;
+}
+
 QVariantMap YuvBridge::blockDiffOverview(int slotA, int slotB, int plane) const {
     QVariantMap result;
     if (slotA < 0 || slotA >= MaxSlots || slotB < 0 || slotB >= MaxSlots) return result;

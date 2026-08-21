@@ -124,6 +124,14 @@ public:
     // pixelBlock8x8 / pixelBlockStats8x8 的对齐规则保持一致）。
     PlaneHistogram computeBlockHistogram(int plane, int px, int py, int blockSize = 8) const;
 
+    // ── 块级"梯度 / 纹理 / 锐利度"统计（与 computeBlockHistogram 同一块）──
+    // 计算范围与 computeBlockHistogram 完全一致：先按 (px/blockSize)*blockSize
+    // 对齐到块边界，再扫 [0..blockSize-1]² 像素；返回的 PlaneStats 各字段含义
+    // 与 computeStats 相同，区别只在于"扫的是子区域而非整帧"。
+    //   - 块太小（< 3×3，无法形成完整 8 邻域）则全部梯度置 0，避免被边界裁剪
+    //     的伪梯度污染；sampleCount 反映有效像素数。
+    PlaneStats computeBlockStats(int plane, int px, int py, int blockSize = 8) const;
+
 private:
     void initSwsContext();
     void freeSwsContext();

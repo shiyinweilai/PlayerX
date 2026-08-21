@@ -103,6 +103,11 @@ public:
     // ── 块级直方图统计（右侧栏"块级别"模式，8×8 块，对齐规则与 pixelBlock8x8 一致）──
     Q_INVOKABLE QVariantMap blockHistogram(int slot, int plane, int px, int py) const;
 
+    // ── 块级"梯度 / 纹理 / 锐利度"统计（与 blockHistogram 同一块，对齐规则同源）──
+    // 返回字段与 planeStats 一致，但 sampleCount 反映该块的像素数（通常 = blockSize²）。
+    // 块太小（如 8×8 < 3×3）算不出有意义的梯度时 sampleCount=0 + 梯度全 0。
+    Q_INVOKABLE QVariantMap blockStats(int slot, int plane, int px, int py) const;
+
     // ── 帧级"梯度 / 纹理 / 锐利度"全方向统计（plane: 0=Y, 1=U, 2=V）──────
     // 返回 QVariantMap：
     //   { "mean", "stddev", "variance", "min", "max", "range",

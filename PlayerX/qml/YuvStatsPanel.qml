@@ -44,6 +44,19 @@ Rectangle {
         return YuvBridge.histogram(panel.activeSlot, plane)
     }
 
+    // 梯度纹理视图用的"块级/帧级 PlaneStats"取数函数：
+    //   帧级（statsMode=0）→ 全帧 planeStats
+    //   块级（statsMode=1）→ 当前悬浮块的 blockStats（与直方图 blockHistogram 对齐）
+    // 字段集与 planeStats 一致，PlaneGradientCard 直接读同名属性即可。
+    function statsForPlane(plane) {
+        if (panel.statsMode === 1) {
+            if (!YuvBridge.hoverValid()) return null
+            return YuvBridge.blockStats(YuvBridge.hoverSlot(), plane,
+                                        YuvBridge.hoverPixelX(), YuvBridge.hoverPixelY())
+        }
+        return YuvBridge.planeStats(panel.activeSlot, plane)
+    }
+
     Connections {
         target: YuvBridge
         function onFrameChanged(slot) {
@@ -60,9 +73,10 @@ Rectangle {
         function onBlockSizeChanged() { if (panel.statsMode === 2) panel.refreshDiffOverview() }
     }
     onStatsModeChanged: {
-        // 切到非帧级别模式时，把二级 tab 重置到"直方图"，避免"梯度纹理/编码参考"
-        // 在块级别下显示空白（这两类视图仅帧级别有数据）。
-        if (statsMode !== 0) viewMode = 0
+        // 切到非帧级别模式时，把二级 tab 重置到"直方图"（避免"梯度纹理"在
+        // 差异总览下显示空白，差异总览无梯度数据；"编码参考"同理仅帧级别）。
+        // 块级别下"梯度纹理"是有数据的（blockStats），允许保留。
+        if (statsMode !== 0 && viewMode !== 0) viewMode = 0
         if (statsMode === 2) refreshDiffOverview()
     }
     onDiffPlaneChanged: if (statsMode === 2) refreshDiffOverview()
@@ -144,22 +158,8 @@ Rectangle {
                 }
             }
 
-            // 块级别模式下：提示当前悬浮的块坐标 / 无悬浮时的引导文案
-            Text {
-                width: parent.width
-                visible: panel.statsMode === 1
-                text: {
-                    const _ = panel.hoverVer
-                    const __ = YuvBridge.blockSize
-                    if (!YuvBridge.hoverValid()) return "将鼠标移动到画面上查看块级统计"
-                    const bs = YuvBridge.blockSize
-                    const bx = Math.floor(YuvBridge.hoverPixelX() / bs) * bs
-                    const by = Math.floor(YuvBridge.hoverPixelY() / bs) * bs
-                    return "块 [" + bx + "," + by + "] ~ [" + (bx + bs - 1) + "," + (by + bs - 1) + "]（" + bs + "×" + bs + "）"
-                }
-                color: "#9aa0a6"; font.pixelSize: 11
-                wrapMode: Text.WordWrap
-            }
+            // 块级别模式下的引导条已统一挪到二级 tab 下方（见下），此处不再夹提示。
+            // 保留空注释作为维护者提示：两级 tab 之间不应再放任何文字。
 
             // ── 差异总览（整帧块级差异热力图，快速定位第一个不同的块）──
             Column {
@@ -392,6 +392,31 @@ Rectangle {
                 }
             }
 
+            // ── 块级别引导条：放在二级 tab 下方（不再夹在两级 tab 中间）──
+            //   仅 statsMode === 1 时显示；用黄色加粗明确区分为"块级实时提示"，
+            //   不依赖二级 tab 类型（直方图/梯度纹理都需要这块引导）。
+            //   内容随 hover 状态切换：
+            //     - 无悬浮 → "将鼠标移动到画面上查看块级统计"（引导）
+            //     - 有悬浮 → "块 [bx,by] ~ [bx+bs-1,by+bs-1]（bs×bs）"（当前块坐标）
+            Text {
+                width: parent.width
+                visible: panel.statsMode === 1
+                text: {
+                    const _ = panel.hoverVer
+                    const __ = YuvBridge.blockSize
+                    if (!YuvBridge.hoverValid()) return "▸ 将鼠标移动到画面上查看块级统计"
+                    const bs = YuvBridge.blockSize
+                    const bx = Math.floor(YuvBridge.hoverPixelX() / bs) * bs
+                    const by = Math.floor(YuvBridge.hoverPixelY() / bs) * bs
+                    return "▸ 块 [" + bx + "," + by + "] ~ [" + (bx + bs - 1) + "," + (by + bs - 1) + "]（" + bs + "×" + bs + "）"
+                }
+                // 黄色加粗，与暗色背景形成鲜明对比，提醒用户这是"块级实时"提示
+                color: "#f0c040"
+                font.pixelSize: 12
+                font.bold: true
+                wrapMode: Text.WordWrap
+            }
+
             // ── 直方图视图（viewMode === 0）──
             //   帧级别与块级别都展示：直方图是基础统计，无论哪个模式都该可见。
             //   spacing 较大以便"方差/对比度"行与下一通道标题之间留出呼吸空间，
@@ -532,18 +557,21 @@ Rectangle {
 
             // ── 梯度纹理视图（viewMode === 1）──
             //   单卡渲染三平面：每个平面一张"指标卡片"，整齐对齐便于横向对比。
-            //   复用 HistItem 的 planeStatsData 派生（仅帧级别下有数据；
-            //   块级别下数据缺失，因此该视图仅帧级别生效）。
+            //   帧级别 / 块级别都展示（编码参考 tab 仅帧级别，二级 tab 切换逻辑在 onStatsModeChanged）。
             Column {
                 width: parent.width
-                visible: panel.statsMode === 0 && panel.viewMode === 1
+                visible: panel.statsMode !== 2 && panel.viewMode === 1
                 spacing: 10
 
                 // 顶部说明
                 Text {
                     width: parent.width
-                    text: "四方向一阶差分 + Laplacian 锐利度 + Sobel/Tenengrad 纹理复杂度。" +
-                          "仅基于 Y/U/V 全帧扫描得出，与编码器的 CU 划分 / QP 决策正相关。"
+                    text: panel.statsMode === 1
+                          ? "当前鼠标悬浮块（" + YuvBridge.blockSize + "×" + YuvBridge.blockSize + "）" +
+                            "的四方向一阶差分 + Laplacian 锐利度 + Sobel/Tenengrad 纹理复杂度。" +
+                            "将鼠标移到画面上实时刷新。"
+                          : "四方向一阶差分 + Laplacian 锐利度 + Sobel/Tenengrad 纹理复杂度。" +
+                            "仅基于 Y/U/V 全帧扫描得出，与编码器的 CU 划分 / QP 决策正相关。"
                     color: "#9aa0a6"; font.pixelSize: 12
                     wrapMode: Text.WordWrap
                 }
@@ -562,10 +590,14 @@ Rectangle {
                     property color planeColor: "#ffffff"
                     property int planeIndex: 0
 
+                    // 数据来源：帧级别走 YuvBridge.planeStats（全帧），块级别走
+                    // YuvBridge.blockStats（与直方图 blockHistogram 同一块），并
+                    // 通过 panel.statsForPlane() 自动按 statsMode 分发。
                     readonly property var ps: {
                         const _ = panel.ver
+                        const __ = panel.hoverVer
                         if (YuvBridge.slotCount <= 0) return null
-                        return YuvBridge.planeStats(panel.activeSlot, gradCard.planeIndex)
+                        return panel.statsForPlane(gradCard.planeIndex)
                     }
                     readonly property string mean: {
                         const s = gradCard.ps

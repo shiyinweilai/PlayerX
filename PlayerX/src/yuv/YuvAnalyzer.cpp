@@ -431,6 +431,147 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeBlockHistogram(int plane, int px
 }
 
 // ──────────────────────────────────────────────────────────────────────
+//   computeBlockStats —— 块级"梯度 + 纹理 + 锐利度"统计
+// ──────────────────────────────────────────────────────────────────────
+// 与 computeStats 算法完全一致（同样的算子：水平/垂直/45°/135° 一阶差分 +
+// Sobel 近似 + 4 邻域 Laplacian + Tenengrad 平方和），但扫描范围限制在
+// 对齐到 blockSize 倍数后的 [bx..bx+blockSize-1] × [by..by+blockSize-1]
+// 矩形内。
+//
+// 实现要点：
+//   1. 复用与 computeBlockHistogram 相同的"对齐到块边界"逻辑（bx/by）。
+//   2. 块小于 3×3 时不计算梯度（避免边界裁剪污染），但仍返回 mean/stddev/
+//      variance/min/max/range（这些对单点像素仍然有效）。
+//   3. 块边缘 1 像素 ring 同样不参与梯度计算（与 computeStats 行为一致）。
+//   4. 直接对 m_srcFrame 行指针扫描，与 computeStats 同源，零额外拷贝。
+// ──────────────────────────────────────────────────────────────────────
+YuvAnalyzer::PlaneStats YuvAnalyzer::computeBlockStats(int plane, int px, int py, int blockSize) const {
+    PlaneStats r;
+    if (m_frameBuf.empty() || !m_srcFrame) return r;
+    if (plane < 0 || plane >= planeCount()) return r;
+    if (blockSize <= 0) return r;
+
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
+    const bool isHighDepth = desc && desc->comp[0].depth > 8;
+
+    // 平面有效宽高（与 computeStats 同源，处理 chroma_subsampling / NV12 interleaved）
+    int pw = m_width, ph = m_height;
+    if (plane > 0) {
+        if (desc) {
+            pw = m_width  >> desc->log2_chroma_w;
+            ph = m_height >> desc->log2_chroma_h;
+        }
+        if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
+            if (plane >= 1) { pw = m_width; ph = m_height / 2; }
+        }
+    }
+    if (pw <= 0 || ph <= 0) return r;
+
+    // 对齐到块边界（与 computeBlockHistogram / pixelBlock8x8 同源）
+    const int bx = (px / blockSize) * blockSize;
+    const int by = (py / blockSize) * blockSize;
+    // 块在平面坐标系下的范围 [x0..x1] × [y0..y1]，对越界做 clamp
+    const int x0 = std::max(0, bx);
+    const int y0 = std::max(0, by);
+    const int x1 = std::min(pw - 1, bx + blockSize - 1);
+    const int y1 = std::min(ph - 1, by + blockSize - 1);
+    if (x1 < x0 || y1 < y0) return r;
+
+    auto getPlanePtr = [&](int y) -> const uint8_t* {
+        return (plane == 0) ? m_srcFrame->data[0] + y * m_srcFrame->linesize[0]
+                            : (plane == 1) ? m_srcFrame->data[1] + y * m_srcFrame->linesize[1]
+                                            : m_srcFrame->data[2] + y * m_srcFrame->linesize[2];
+    };
+    auto read = [&](int x, int y) -> int {
+        const uint8_t* row = getPlanePtr(y);
+        if (isHighDepth) {
+            return reinterpret_cast<const uint16_t*>(row)[x];
+        }
+        return row[x];
+    };
+
+    // ── 第一遍：基础统计（均值/方差/极差）──
+    long long sum = 0, sumSq = 0;
+    long long count = 0;
+    int minVal = INT_MAX, maxVal = INT_MIN;
+    for (int y = y0; y <= y1; ++y) {
+        for (int x = x0; x <= x1; ++x) {
+            const int v = read(x, y);
+            sum += v;
+            sumSq += static_cast<long long>(v) * v;
+            if (v < minVal) minVal = v;
+            if (v > maxVal) maxVal = v;
+            ++count;
+        }
+    }
+    if (count == 0) return r;
+    const double mean = static_cast<double>(sum) / count;
+    const double meanSq = mean * mean;
+    const double sqMean = static_cast<double>(sumSq) / count;
+    const double var = (sqMean > meanSq) ? (sqMean - meanSq) : 0.0;
+    r.mean = mean;
+    r.stddev = std::sqrt(var);
+    r.variance = var;
+    r.minVal = minVal;
+    r.maxVal = maxVal;
+    r.range = (count > 0) ? (maxVal - minVal) : 0;
+    r.sampleCount = count;
+
+    // ── 第二遍：四方向梯度 + Laplacian + Tenengrad（仅块中心有完整邻居的部分）──
+    // 块需要至少 3×3 才能形成完整 8 邻域；不足则跳过梯度计算（避免边界伪值）
+    const int blkW = x1 - x0 + 1;
+    const int blkH = y1 - y0 + 1;
+    if (blkW < 3 || blkH < 3) return r;
+
+    long long sGH = 0, sGV = 0, sG45 = 0, sG135 = 0;
+    double sLap = 0, sTgd = 0;
+    long long nGrad = 0;
+    // 梯度有效范围：[x0+1..x1-1] × [y0+1..y1-1]
+    for (int y = y0 + 1; y < y1; ++y) {
+        for (int x = x0 + 1; x < x1; ++x) {
+            const int vC  = read(x,     y);
+            const int vL  = read(x - 1, y);
+            const int vR  = read(x + 1, y);
+            const int vU  = read(x,     y - 1);
+            const int vD  = read(x,     y + 1);
+            const int vTL = read(x - 1, y - 1);
+            const int vTR = read(x + 1, y - 1);
+            const int vBL = read(x - 1, y + 1);
+            const int vBR = read(x + 1, y + 1);
+
+            const int gH  = vR - vL;
+            const int gV  = vD - vU;
+            const int g45 = vBR - vTL;
+            const int g135 = vBL - vTR;
+
+            const int sx = (vTR + 2 * vR + vBR) - (vTL + 2 * vL + vBL);
+            const int sy = (vBL + 2 * vD + vBR) - (vTL + 2 * vU + vTR);
+
+            const int lap = (4 * vC) - vL - vR - vU - vD;
+
+            sGH   += std::abs(gH);
+            sGV   += std::abs(gV);
+            sG45  += std::abs(g45);
+            sG135 += std::abs(g135);
+            sLap  += static_cast<double>(lap) * lap;
+            sTgd  += static_cast<double>(sx) * sx + static_cast<double>(sy) * sy;
+            ++nGrad;
+        }
+    }
+
+    if (nGrad > 0) {
+        r.gradHorizMean   = static_cast<double>(sGH) / nGrad;
+        r.gradVertMean    = static_cast<double>(sGV) / nGrad;
+        r.gradDiag45Mean  = static_cast<double>(sG45) / nGrad;
+        r.gradDiag135Mean = static_cast<double>(sG135) / nGrad;
+        r.gradMean = (r.gradHorizMean + r.gradVertMean + r.gradDiag45Mean + r.gradDiag135Mean) / 4.0;
+        r.laplacianEnergy = sLap / nGrad;
+        r.tenengrad       = sTgd / nGrad;
+    }
+    return r;
+}
+
+// ──────────────────────────────────────────────────────────────────────
 //   computeStats —— 帧级"梯度 + 纹理 + 锐利度"全方向统计
 // ──────────────────────────────────────────────────────────────────────
 //
