@@ -36,9 +36,11 @@ YuvBridge::YuvBridge(QObject* parent)
         m_analyzers[i] = std::make_unique<rb::YuvAnalyzer>();
         m_displayModes[i] = 0;
     }
-    // 从 QSettings 恢复"内嵌操作按钮隐藏"偏好；缺省值 true（隐藏）。
-    m_inlineControlsHidden =
-        yuvSettings().value("yuv_presets/inlineControlsHidden", true).toBool();
+    // "内嵌操作按钮隐藏" 偏好：固定每次启动为 true（隐藏内嵌控制条），
+    // 不做持久化恢复，避免老用户在 QSettings 里残留的旧值导致菜单默认勾选状态错乱。
+    // 同时主动清掉历史持久化值，确保干净状态。
+    yuvSettings().remove("yuv_presets/inlineControlsHidden");
+    m_inlineControlsHidden = true;
 }
 
 YuvBridge::~YuvBridge() = default;
@@ -640,8 +642,8 @@ void YuvBridge::setLastOpenedFolder(const QString& folder) {
 void YuvBridge::setInlineControlsHidden(bool hidden) {
     if (m_inlineControlsHidden == hidden) return;
     m_inlineControlsHidden = hidden;
-    yuvSettings().setValue("yuv_presets/inlineControlsHidden", hidden);
-    yuvSettingsSync();
+    // 不再持久化该偏好：每次启动固定为"隐藏内嵌控制条"。
+    // 如果用户曾勾选显示，下次重启也会自动回到隐藏状态。
     emit inlineControlsHiddenChanged();
 }
 

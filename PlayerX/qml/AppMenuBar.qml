@@ -563,13 +563,14 @@ MenuBar {
         DarkMenuSeparator {}
 
         // ── 内嵌操作 ▶ ──（渲染区底部内嵌控制条的可见性开关）
-        // 默认勾选 = 隐藏内嵌控制条（避免遮挡画面），让用户专注分析；
-        // 取消勾选后，hover 画面时控制条淡入显示。
+        // 默认不勾选 = 隐藏内嵌控制条（避免遮挡画面），让用户专注分析；
+        // 勾选后，hover 画面时控制条淡入显示。
+        // （语义：checked = "悬浮控制条可见"，与设置项 inlineControlsHidden 取反）
         DarkMenuItem {
-            text: qsTr("隐藏内嵌操作按钮")
-            checkable: true
-            checked: YuvBridge.inlineControlsHidden
-            onTriggered: YuvBridge.inlineControlsHidden = !YuvBridge.inlineControlsHidden
+            text: qsTr("内嵌悬浮控制条")
+            checkable: false
+            checked: !YuvBridge.inlineControlsHidden
+            onTriggered: YuvBridge.inlineControlsHidden = !checked
         }
     }
 
