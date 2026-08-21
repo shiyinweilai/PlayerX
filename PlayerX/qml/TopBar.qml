@@ -200,17 +200,18 @@ ToolBar {
             onPressed: console.log("[TaskUpdate] 铃铛按钮按下（输入事件已到达按钮）")
 
             onClicked: {
+                // 无论走哪条分支，先播一次铃铛摇晃动效作为即时反馈
+                //（静默模式下也能一眼确认"点到了、在响应"）。
+                bellRingAnim.restart()
                 // 卡片已展开 → 再次点击直接收起（无论有无更新）
                 if (root._taskUpdateVisible) {
                     root._taskUpdateVisible = false
                     return
                 }
-                // 卡片未展开 → 展开：有更新直接开；无更新则主动检测并打开卡片。
-                // hasPending 需按可见性过滤：pending 可能全是测试模式，
-                // 未开开发者模式时直接开卡片会是一张空卡片。
-                var hasPending = Array.isArray(root._pendingRemoteConfig)
-                    && root._pendingRemoteConfig.some(function(it) { return root.developerMode || it.mode !== "test" })
-                if (hasPending) {
+                // 卡片未展开 → 展开：有可见更新直接开；否则主动检测并按规则决定是否弹卡片。
+                // 用 _visiblePendingCount 判定（已包含"测试模式隐藏 / 测试源评分人不命中隐藏"），
+                // 避免直接打开一张"对当前用户全无可见项"的空卡片。
+                if (root._visiblePendingCount > 0) {
                     root._taskUpdateVisible = true
                 } else {
                     if (_checking) return
@@ -225,10 +226,9 @@ ToolBar {
             ToolTip.visible: hovered
             ToolTip.delay: 400
             ToolTip.text: {
-                var _pend = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
-                // 计数同样过滤「测试模式」（开发者模式未开启时对普通用户不可见）
-                var cnt = root.developerMode ? _pend.length
-                                             : _pend.filter(function(it) { return it.mode !== "test" }).length
+                // 用 _visiblePendingCount 取已过滤后的可见项数：含「测试模式」与
+                // 「测试源未绑定当前评分人」的任务一律不算数，避免角标 / tooltip 与卡片显示撕裂。
+                var cnt = root._visiblePendingCount
                 return cnt > 0 ? "远程有 " + cnt + " 个任务更新（点击查看）" : "点击检测远程任务更新"
             }
 
@@ -247,17 +247,28 @@ ToolBar {
                     font.pixelSize: 14
                     opacity: taskUpdateEntryBtn._checking ? 0.5 : 1.0
                     Behavior on opacity { NumberAnimation { duration: 200 } }
+                    transformOrigin: Item.Center
+
+                    // 点击反馈动效：按压缩放 → 左右摇晃（模拟"收到点击 + 正在检测"）
+                    // 纯本地动画，不依赖网络时序，静默模式下也能给出明确反馈。
+                    SequentialAnimation {
+                        id: bellRingAnim
+                        // 1) 按压缩放
+                        NumberAnimation { target: bellIcon; property: "scale"; from: 1.0; to: 1.28; duration: 110; easing.type: Easing.OutQuad }
+                        NumberAnimation { target: bellIcon; property: "scale"; from: 1.28; to: 1.0; duration: 150; easing.type: Easing.InBack }
+                        // 2) 左右摇晃 3 次
+                        NumberAnimation { target: bellIcon; property: "rotation"; from: 0; to: -18; duration: 90; easing.type: Easing.InOutQuad }
+                        NumberAnimation { target: bellIcon; property: "rotation"; from: -18; to: 18; duration: 160; easing.type: Easing.InOutQuad }
+                        NumberAnimation { target: bellIcon; property: "rotation"; from: 18; to: -14; duration: 140; easing.type: Easing.InOutQuad }
+                        NumberAnimation { target: bellIcon; property: "rotation"; from: -14; to: 14; duration: 120; easing.type: Easing.InOutQuad }
+                        NumberAnimation { target: bellIcon; property: "rotation"; from: 14; to: 0; duration: 90; easing.type: Easing.OutQuad }
+                    }
                 }
                 // 红色数字角标，贴在 🔔 右上角
-                // 与 ToolTip / 卡片显示一致：开发者模式未开启时，测试模式任务
-                // 不计入角标数字（不显示、不提醒），让普通用户不被打扰。
+                // 与 ToolTip / 卡片显示一致：用 _visiblePendingCount（已过滤），
+                // 含「测试模式」与「测试源未绑定当前评分人」的任务一律不计入角标。
                 Rectangle {
-                    visible: {
-                        var _pend = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
-                        var _cnt = root.developerMode ? _pend.length
-                                                      : _pend.filter(function(it) { return it.mode !== "test" }).length
-                        return _cnt > 0
-                    }
+                    visible: root._visiblePendingCount > 0
                     x: bellIcon.x + bellIcon.width - 4
                     y: bellIcon.y - 3
                     width: 13
@@ -266,11 +277,7 @@ ToolBar {
                     color: "#e05050"
                     Text {
                         anchors.centerIn: parent
-                        text: {
-                            var _pend = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
-                            return root.developerMode ? _pend.length
-                                                      : _pend.filter(function(it) { return it.mode !== "test" }).length
-                        }
+                        text: root._visiblePendingCount
                         color: "#ffffff"
                         font.pixelSize: 8
                         font.bold: true

@@ -833,6 +833,11 @@ ApplicationWindow {
     //   · 优先放 _pendingRemoteConfig（有差异的，标注"有更新"）；
     //   · 再把 _remoteAllConfigs 里有、但不在 pending 的配置补进来（标注"当前最新"）。
     //   用 mode:configName 去重，避免同一条显示两次。
+    //   过滤规则：
+    //     ① 非开发者模式：隐藏「测试模式」（mode === "test"）的任务；
+    //     ② 非开发者模式：含 testSource 的「测试源自动化任务」，若其组别映射
+    //        （ts.groups / ts.groupMap）中没有当前登录用户，过滤掉（免打扰）；
+    //     ③ 开发者模式：上述两条均跳过，可看全部任务。
     readonly property var _remoteConfigCardList: {
         var pending = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
         var all = Array.isArray(root._remoteAllConfigs) ? root._remoteAllConfigs : []
@@ -844,11 +849,92 @@ ApplicationWindow {
             var k = _key(it)
             if (!seen[k]) { seen[k] = true; out.push(it) }
         })
-        // 开发者模式未开启时，过滤掉「测试模式」的远程任务（测试配置仅开发者可见，避免影响用户）
         if (!root.developerMode) {
-            out = out.filter(function(it) { return it.mode !== "test" })
+            // 当前登录的评分人（与上传署名一致；未登录则视为空，命中不到任何映射 → 全部隐藏）
+            var rater = ""
+            try {
+                if (typeof Rating !== "undefined") {
+                    rater = String(Rating.currentUser || "").trim()
+                    if (rater.length === 0 && typeof Rating.systemUserName === "function")
+                        rater = String(Rating.systemUserName() || "").trim()
+                }
+            } catch (e) {}
+            // 含 testSource 的任务是否对当前评分人可见
+            function _isTestSourceVisibleForRater(it) {
+                var obj = (it && it.obj) || {}
+                var ts = obj.testSource
+                if (!ts || typeof ts !== "object") return true   // 非测试源任务，不过滤
+                // 新格式：{ groupName: [rater, ...] }
+                var gs = ts.groups
+                if (gs && typeof gs === "object" && !Array.isArray(gs)) {
+                    for (var name in gs) {
+                        var arr = gs[name]
+                        if (Array.isArray(arr) && rater.length > 0 && arr.indexOf(rater) >= 0) return true
+                    }
+                }
+                // 旧格式：字符串 "rater1:groupA\nrater2:groupB"
+                var raw = String(ts.groupMap || "").trim()
+                if (raw.length > 0) {
+                    var entries = raw.split(/[,，;；\n]+/)
+                    for (var i = 0; i < entries.length; ++i) {
+                        var kv = entries[i].split(/[:：]/)
+                        if (kv.length >= 2 && kv[0].trim() === rater) return true
+                    }
+                }
+                return false   // 含 testSource 但当前评分人不命中 → 隐藏
+            }
+            out = out.filter(function(it) {
+                if (it.mode === "test") return false       // 规则 ①
+                return _isTestSourceVisibleForRater(it)   // 规则 ②
+            })
         }
         return out
+    }
+    // 【铃铛入口专用】_pendingRemoteConfig 中按"对当前用户可见"规则过滤后的项数。
+    // 与 _remoteConfigCardList 共用同一套过滤语义，保证铃铛角标 / tooltip /
+    // 点击展开判断与卡片实际渲染三者严格一致。
+    readonly property int _visiblePendingCount: {
+        var pend = Array.isArray(root._pendingRemoteConfig) ? root._pendingRemoteConfig : []
+        if (root.developerMode) return pend.length
+        // 非开发者模式：按可见性逐一过滤。逻辑与 _remoteConfigCardList 保持完全一致。
+        var rater = ""
+        try {
+            if (typeof Rating !== "undefined") {
+                rater = String(Rating.currentUser || "").trim()
+                if (rater.length === 0 && typeof Rating.systemUserName === "function")
+                    rater = String(Rating.systemUserName() || "").trim()
+            }
+        } catch (e) {}
+        var n = 0
+        for (var i = 0; i < pend.length; ++i) {
+            var it = pend[i]
+            if (!it) continue
+            if ((it.mode || "") === "test") continue   // 隐藏「测试模式」
+            var obj = (it && it.obj) || {}
+            var ts = obj.testSource
+            if (!ts || typeof ts !== "object") { n++; continue }  // 非测试源任务：计 1
+            // 含 testSource：必须命中当前评分人
+            var hit = false
+            var gs = ts.groups
+            if (gs && typeof gs === "object" && !Array.isArray(gs)) {
+                for (var name in gs) {
+                    var arr = gs[name]
+                    if (Array.isArray(arr) && rater.length > 0 && arr.indexOf(rater) >= 0) { hit = true; break }
+                }
+            }
+            if (!hit) {
+                var raw = String(ts.groupMap || "").trim()
+                if (raw.length > 0) {
+                    var entries = raw.split(/[,，;；\n]+/)
+                    for (var j = 0; j < entries.length && !hit; ++j) {
+                        var kv = entries[j].split(/[:：]/)
+                        if (kv.length >= 2 && kv[0].trim() === rater) hit = true
+                    }
+                }
+            }
+            if (hit) n++
+        }
+        return n
     }
     // 通知卡片是否可见
     property bool   _taskUpdateVisible: false
@@ -1805,6 +1891,8 @@ ApplicationWindow {
             if (root.currentTab === "yuv") return 36
             return 0
         }
+        // 宽度策略：固定 320，与参考侧栏（refSidebarUserWidth）保持视觉对齐，
+        // 不随窗口剩余宽度变化，避免挤压视频内容。
         width: 320
         visible: root.rightSidebarOpen
         z: 200

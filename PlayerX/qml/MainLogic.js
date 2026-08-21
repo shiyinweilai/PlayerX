@@ -367,11 +367,50 @@ function _configFingerprint(obj) {
     } catch (e) { return "" }
 }
 
-function _hintRemoteTaskEmpty(hiddenCount) {
-    _updateToast.text = hiddenCount > 0
-        ? "有 " + hiddenCount + " 个测试模式任务，开启「通用→开发者模式」后可见"
-        : "暂无远程任务"
-    _updateToast.open()
+function _hintRemoteTaskEmpty(hiddenCount, hiddenForRater) {
+    // 【静默策略】用户要求点🔔后无可见项时不再弹任何 toast 提示
+    // （避免右侧"开启开发者模式后可见"这种打扰性横幅）。
+    // 静默并不影响功能：开发者模式未开启时被隐藏的任务依然可在开启后查看。
+    return
+}
+
+// 判断一项远程配置对当前用户是否"可见"：
+//   · 开发者模式开启 → 全部可见（拥有绝对访问权限）；
+//   · 否则先按 mode === "test" 隐藏；再按 testSource.groups / testSource.groupMap
+//     是否命中当前评分人来隐藏「测试源自动化」任务（避免无差打扰）。
+// 跨模块共用，避免 _checkRemoteConfigUpdate 与 Main._remoteConfigCardList 规则撕裂。
+function _isRemoteItemVisibleForUser(it) {
+    if (_root.developerMode) return true
+    if (!it) return true
+    if ((it.mode || "") === "test") return false
+    var obj = (it && it.obj) || {}
+    var ts = obj.testSource
+    if (!ts || typeof ts !== "object") return true   // 非测试源任务，不过滤
+    var rater = ""
+    try {
+        if (typeof Rating !== "undefined") {
+            rater = String(Rating.currentUser || "").trim()
+            if (rater.length === 0 && typeof Rating.systemUserName === "function")
+                rater = String(Rating.systemUserName() || "").trim()
+        }
+    } catch (e) {}
+    if (rater.length === 0) return false             // 未登录 / 无系统用户名 → 全部隐藏
+    var gs = ts.groups
+    if (gs && typeof gs === "object" && !Array.isArray(gs)) {
+        for (var name in gs) {
+            var arr = gs[name]
+            if (Array.isArray(arr) && arr.indexOf(rater) >= 0) return true
+        }
+    }
+    var raw = String(ts.groupMap || "").trim()
+    if (raw.length > 0) {
+        var entries = raw.split(/[,，;；\n]+/)
+        for (var i = 0; i < entries.length; ++i) {
+            var kv = entries[i].split(/[:：]/)
+            if (kv.length >= 2 && kv[0].trim() === rater) return true
+        }
+    }
+    return false
 }
 
 function _checkRemoteConfigUpdate(onNoUpdate, openCardOnNoUpdate) {
@@ -477,13 +516,21 @@ function _checkRemoteConfigUpdate(onNoUpdate, openCardOnNoUpdate) {
                     // 让用户能主动选择远程配置作为启动项。
                     _root._remoteHasUpdate = false
                     if (openCardOnNoUpdate) {
-                        // 可见列表非空才开卡片；为空（如仅剩测试模式任务但未开
-                        // 开发者模式）→ 不开空卡片，改轻提示告知原因
+                        // 可见列表非空才开卡片；为空（仅剩测试模式任务或评分人未命中）
+                        // → 不开空卡片，改轻提示告知原因
                         if (_root._remoteConfigCardList.length > 0) {
                             _root._taskUpdateVisible = true
                         } else {
                             _root._taskUpdateVisible = false
-                            _hintRemoteTaskEmpty(allFetched.length)
+                            // 区分两类隐藏原因：测试模式 / 未绑定当前评分人
+                            var hiddenTest = 0, hiddenForRater = 0
+                            for (var _hi2 = 0; _hi2 < allFetched.length; ++_hi2) {
+                                var _vIt = allFetched[_hi2]
+                                if (_isRemoteItemVisibleForUser(_vIt)) continue
+                                if ((_vIt.mode || "") === "test") hiddenTest++
+                                else hiddenForRater++
+                            }
+                            _hintRemoteTaskEmpty(hiddenTest, hiddenForRater)
                         }
                     }
                     if (typeof onNoUpdate === "function") onNoUpdate()
@@ -503,23 +550,36 @@ function _checkRemoteConfigUpdate(onNoUpdate, openCardOnNoUpdate) {
                     if (!found) merged.push(newItem)
                 })
                 _root._pendingRemoteConfig = merged
-                // 开发者模式未开启时，若待应用项全是「测试模式」则不弹出卡片
-                //（测试配置仅开发者可见）；pending 数据保留，开启开发者模式后可见。
-                // 但手动点 🔔 时，_remoteAllConfigs 中可能还有非测试模式的"当前最新"项
-                // 值得展示给用户主动选择应用，因此只要卡片列表非空就打开。
-                var _visiblePending = merged.filter(function(it) { return _root.developerMode || it.mode !== "test" })
+                // 开发者模式未开启时，遵循"免打扰"规则：
+                //   · 隐藏 mode === "test" 的测试模式任务；
+                //   · 隐藏"测试源自动化任务"中组别映射不含当前评分人的项。
+                // pending 数据保留，开启开发者模式后可见（开发者拥有绝对访问权限）。
+                // 但手动点 🔔 时，_remoteAllConfigs 中可能还有非测试模式/已命中的
+                // "当前最新"项值得展示给用户主动选择应用，因此只要卡片列表非空就打开。
+                var _visiblePending = merged.filter(_isRemoteItemVisibleForUser)
                 if (_visiblePending.length > 0) {
                     _root._taskUpdateVisible = true
                 } else if (openCardOnNoUpdate && _root._remoteConfigCardList.length > 0) {
-                    // 无可见 pending，但有非测试模式的远程项可应用 → 弹卡片
+                    // 无可见 pending，但仍有可应用的远程项 → 弹卡片
                     _root._taskUpdateVisible = true
                 } else {
                     _root._taskUpdateVisible = false
                 }
                 _root._remoteHasUpdate = _visiblePending.length > 0
-                // 手动点🔔但卡片确实为空（全是被过滤的测试模式）→ 轻提示
-                if (openCardOnNoUpdate && !_root._taskUpdateVisible)
-                    _hintRemoteTaskEmpty(merged.length)
+                // 手动点🔔但卡片确实为空（全是隐藏项）→ 轻提示
+                // 区分两类隐藏原因：测试模式 / 未绑定当前评分人
+                if (openCardOnNoUpdate && !_root._taskUpdateVisible) {
+                    var hiddenTest = merged.length - _visiblePending.length
+                    // 当前评分人不命中的项数（与 _visiblePending 相对）
+                    var hiddenForRater = 0
+                    for (var _hi = 0; _hi < merged.length; ++_hi) {
+                        if (!_isRemoteItemVisibleForUser(merged[_hi])) {
+                            // 进一步细分：测试模式单独计
+                            if ((merged[_hi].mode || "") !== "test") hiddenForRater++
+                        }
+                    }
+                    _hintRemoteTaskEmpty(merged.length - hiddenForRater, hiddenForRater)
+                }
                 console.log("[ConfigCheck] 检测到", pending.length, "个模式配置有更新，当前待应用", merged.length, "个（可见", _visiblePending.length, "个）")
             }
 
