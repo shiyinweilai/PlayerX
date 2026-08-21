@@ -14,22 +14,34 @@ Rectangle {
     // 文字颜色（可选）：外部不设时走默认配色；设了则覆盖（按下/悬停/禁用三态自动派生）。
     // 主要给"危险动作"按钮用（如 ✕ 全部 → 红色），不影响普通按钮。
     property color  textColor: "transparent"   // 透明 = 走默认逻辑
+    // 背景/描边三态可选覆盖：不传则走下方默认配色，任何既有调用方不传这些
+    // 属性时也能拿到统一的新外观（下面这套默认值本身就是本次改版的目标风格）。
+    // 默认值对齐 YUV 分析模块全局总控栏（YuvWindow.qml 最下方那条）的按钮
+    // 配色体系：无描边的纯色圆角胶囊、灰底为主，hover 提亮一档；
+    // 播放/复位/危险等"关键按钮"通过覆盖这些属性单独换成蓝/红，具体见调用处。
+    property color  bgNormal:     "#80252528"
+    property color  bgHover:      "#803a3a3d"
+    property color  bgDown:       "#804a4a55"
+    // 描边默认与背景同色 = 视觉上无描边，纯色胶囊（呼应 YUV 按钮的 flat 风格）
+    property color  borderNormal: bgNormal
+    property color  borderHover:  bgHover
+    property color  borderDown:   bgDown
     signal clicked()
 
     // 尺寸：根据文字自适应；外部仍可 Layout.preferredWidth 覆盖
     implicitWidth:  Math.max(56, fbText.implicitWidth + 24)
     implicitHeight: 28
-    radius: 5
+    radius: 4
 
-    // 颜色分层：down(明亮灰) > hovered(中灰) > normal(深灰) > disabled(几乎隐隐)
+    // 颜色分层：down(明亮) > hovered(中间态) > normal(默认) > disabled(几乎隐隐)
     color: !fb.enabled ? "#1a1a1d"
-          : fb.down    ? "#4a4a55"   // 按下：明显的亮灰
-          : fb.hovered ? "#33333a"   // 悬停：中灰
-                       : "#202024"   // 默认：深灰
+          : fb.down    ? fb.bgDown
+          : fb.hovered ? fb.bgHover
+                       : fb.bgNormal
     border.color: !fb.enabled ? "#252528"
-                 : fb.down    ? "#6a6a78"
-                 : fb.hovered ? "#3d3d46"
-                              : "#2c2c32"
+                 : fb.down    ? fb.borderDown
+                 : fb.hovered ? fb.borderHover
+                              : fb.borderNormal
     border.width: 1
     Behavior on color        { ColorAnimation  { duration: 90 } }
     Behavior on border.color { ColorAnimation  { duration: 90 } }

@@ -48,8 +48,20 @@ ToolBar {
     height: 44
     // 底部工具栏属于「播放」tab：切换到首页/YUV/码流分析时整条隐藏。
     visible: root.currentTab === "play"
+    // 底部栏视觉与 YUV 分析模块的全局总控栏（YuvWindow.qml 最下方那条）保持
+    // 同一风格：深色控制条 + 顶部细分隔线，与内嵌控制条同源配色体系。
     background: Rectangle {
-        color: "#17171a"
+        // 深色底色对齐 YUV 分析模块全局总控栏（YuvWindow.qml 最下方那条,
+        // #8018181c 半透明深色叠加视频内容后的视觉基调）。
+        color: "#8018181c"
+        // 顶部细分隔线（与内容区分界，呼应 YUV 总控栏的"悬浮控制条"质感）
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 1
+            color: "#14ffffff"
+        }
         // 底部分隔线
         Rectangle {
             anchors.left: parent.left
@@ -1271,6 +1283,7 @@ ToolBar {
             ToolTip.text: qsTr("上一帧（,）")
         }
         // 播放/暂停按钮：固定宽度，避免图标切换时旁边按钮抖动
+        // 配色对齐 YUV 分析模块全局总控栏的播放按钮（蓝色突出，一眼可辨）。
         FlatButton {
             id: playPauseBtn
             visible: Engine.fileCount > 0
@@ -1278,6 +1291,9 @@ ToolBar {
             Layout.preferredWidth: visible ? 56 : 0
             text: Engine.playing ? "⏸" : "▶"
             font.pixelSize: 16
+            bgNormal: "#802a5fc0"
+            bgHover:  "#803d7adf"
+            bgDown:   "#805090f0"
             onClicked: Engine.togglePause()
             ToolTip.visible: hovered
             ToolTip.delay: 400
@@ -1318,12 +1334,16 @@ ToolBar {
             ToolTip.text: qsTr("快进 5 秒（→）")
         }
         // 全局重置：所有路 seek 回 0（与快捷键 R 等价）
+        // 配色对齐 YUV 分析模块全局总控栏的复位按钮（红色提醒，与"清空"呼应）。
         FlatButton {
             text: "⟲"
             visible: Engine.fileCount > 0
             Layout.preferredWidth: visible ? implicitWidth : 0
             font.pixelSize: 16
             enabled: Engine.fileCount > 0
+            bgNormal: "#80b85a5a"
+            bgHover:  "#80c87070"
+            bgDown:   "#80d88a8a"
             onClicked: Engine.seek(0)
             ToolTip.visible: hovered
             ToolTip.delay: 400
@@ -1462,7 +1482,12 @@ ToolBar {
             visible: Engine.fileCount > 0
             Layout.preferredWidth: visible ? implicitWidth : 0
             font.pixelSize: 12
-            textColor: "#e07070"
+            // 配色对齐 YUV 分析模块全局总控栏的"清空"按钮（红色危险色块，
+            // 而非仅红色文字），在深色背景下更醒目、语义更明确。
+            bgNormal: "#807a2e2e"
+            bgHover:  "#809c3c3c"
+            bgDown:   "#80b84848"
+            textColor: "#f5c6c6"
             ToolTip.visible: hovered
             ToolTip.delay: 600
             ToolTip.text: qsTr("关闭所有视频（⌘W / Ctrl+W）")
