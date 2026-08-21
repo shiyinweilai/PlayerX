@@ -564,6 +564,22 @@ Item {
                                     const _ = slotWin.ver
                                     return YuvBridge.frameImage(slotWin.index)
                                 }
+                                // 监听 YuvBridge.globalScaleChanged，把最新的 scale
+                                // 推给 YuvDisplayItem::onGlobalScaleChanged() 触发
+                                // 预缩放重算 + 1:1 重绘。
+                                Connections {
+                                    target: YuvBridge
+                                    function onGlobalScaleChanged() {
+                                        yuvDisp.onGlobalScaleChanged(YuvBridge.globalScale)
+                                    }
+                                    // 还原视图：把 panX/panY 归零（图像回到 1:1 居中）
+                                    // 缩放 1X 部分由 onGlobalScaleChanged 配合
+                                    // YuvBridge.resetView() 设置 globalScale=1.0 处理
+                                    function onResetViewChanged() {
+                                        yuvDisp.panX = 0
+                                        yuvDisp.panY = 0
+                                    }
+                                }
                             }
 
                             // ── 右键按住拖拽平移 ──
@@ -621,6 +637,11 @@ Item {
                                 // 固定时冻结的弹窗屏幕坐标（点击瞬间算好存这里，不再跟随鼠标）
                                 property real pinnedPopupX: 0
                                 property real pinnedPopupY: 0
+                                // 滚轮缩放累积器：触控板/高分辨率鼠标会产生大量细碎的
+                                // angleDelta 事件（每次仅 1~30），若每个事件都切一档会
+                                // 缩放过猛。这里累积到 240（= 普通鼠标两格）才做一次
+                                // 线性缩放（×1.1），显著降低敏感度；余数保留供后续累积。
+                                property real wheelAccum: 0
 
                                 // 按当前块大小（YuvBridge.blockSize）拉取一次悬浮矩阵数据，
                                 // hover 移动 / 块大小切换共用此函数。
@@ -739,6 +760,38 @@ Item {
                                         gridFlick.contentX = 0
                                         gridFlick.contentY = 0
                                     }
+                                }
+
+                                // ── 滚轮缩放（放在覆盖画面的 MouseArea 上，事件必然到达）──
+                                // 为什么不挂在根 Item 的 WheelHandler：MouseArea 即使没写
+                                // onWheel 也会默认吞掉滚轮事件，导致父级 WheelHandler 收不到；
+                                // 直接写在 pixelHoverArea 的 onWheel 里最可靠。
+                                //   - 全局缩放走 YuvBridge.zoomBy（线性连续缩放，非档位跳变），
+                                //     所有 slot 通过 globalScaleChanged 同步重算预缩放图。
+                                //   - 以鼠标为锚点：只调整鼠标所在 slot 的 pan，让缩放后
+                                //     鼠标下的像素位置基本不漂移（标准体验）。
+                                //   - 敏感度控制：累积滚轮增量，凑满 240（= 普通鼠标 2 格）
+                                //     才做一次缩放，且每次只乘 1.1（缩小乘 1/1.1），
+                                //     跳变感弱、缩放平缓。
+                                onWheel: function(wheel) {
+                                    if (YuvBridge.slotCount <= 0) return
+                                    const dy = wheel.angleDelta.y
+                                    if (dy === 0) return
+                                    // 累积滚轮增量，凑满 240（普通鼠标两格）才缩放一次
+                                    wheelAccum += dy
+                                    let zoomFactor = 0
+                                    if (wheelAccum >= 240)      { zoomFactor = 1.1; wheelAccum -= 240 }
+                                    else if (wheelAccum <= -240) { zoomFactor = 1 / 1.1; wheelAccum += 240 }
+                                    if (zoomFactor === 0) { wheel.accepted = true; return }
+                                    const oldScale = YuvBridge.globalScale
+                                    YuvBridge.zoomBy(zoomFactor)
+                                    const newScale = YuvBridge.globalScale
+                                    if (Math.abs(oldScale - newScale) < 1e-6) { wheel.accepted = true; return }
+                                    // panNew = panOld + (1 - r) * (mouseX - dispW/2)
+                                    const r = oldScale / newScale
+                                    yuvDisp.panX = yuvDisp.panX + (1 - r) * (wheel.x - pixelHoverArea.width / 2.0)
+                                    yuvDisp.panY = yuvDisp.panY + (1 - r) * (wheel.y - pixelHoverArea.height / 2.0)
+                                    wheel.accepted = true
                                 }
                             }
 

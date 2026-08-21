@@ -677,6 +677,68 @@ void YuvBridge::setInlineControlsHidden(bool hidden) {
     emit inlineControlsHiddenChanged();
 }
 
+// ── 全局缩放比例 ──────────────────────────────────────────────────────
+// 档位常量：与 YuvDisplayItem 内部 m_scalePresets / m_scaleValues 严格保持一致。
+//   0: 1/8, 1: 1/4, 2: 1/2, 3: 1X, 4: 2X, 5: 4X, 6: 8X
+static const qreal kScaleValues[7] = {0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0};
+
+void YuvBridge::setGlobalScale(qreal s) {
+    if (s <= 0) s = 1.0;
+    if (qFuzzyCompare(m_globalScale, s)) return;
+    m_globalScale = s;
+    // 不持久化：每次启动固定为 1X（用户要求"超大视频缩放到当前屏幕"，避免
+    // 老用户上次关闭时是 1/8，下次启动首屏只看到 1/8 的小图）。
+    emit globalScaleChanged();
+}
+
+int YuvBridge::currentScaleIndex() const {
+    for (int i = 0; i < 7; ++i) {
+        if (qFuzzyCompare(m_globalScale, kScaleValues[i])) return i;
+    }
+    return 3;  // 兜底指向 1X
+}
+
+void YuvBridge::setCurrentScaleIndex(int idx) {
+    if (idx < 0 || idx >= 7) idx = 3;
+    setGlobalScale(kScaleValues[idx]);
+}
+
+QStringList YuvBridge::scalePresetLabels() const {
+    return QStringList{"1/8", "1/4", "1/2", "1X", "2X", "4X", "8X"};
+}
+
+// 滚轮缩放：delta>0 放大一档，delta<0 缩小一档。QML 滚轮事件一般以 ±120 为一格。
+void YuvBridge::bumpScale(int delta) {
+    int idx = currentScaleIndex();
+    if (delta > 0)      ++idx;
+    else if (delta < 0) --idx;
+    if (idx < 0) idx = 0;
+    if (idx > 6) idx = 6;
+    if (idx == currentScaleIndex()) return;  // 已到边界，不再触发 change
+    setCurrentScaleIndex(idx);
+}
+
+// 线性连续缩放：globalScale × factor，clamp 到 [1/8, 8]。
+// 与 bumpScale 的档位式跳变（1→2→4→8，每次翻倍）不同，这里做平滑连续缩放，
+// 滚轮每次只乘一个小系数（如 1.1），视觉跳变感弱很多。
+void YuvBridge::zoomBy(qreal factor) {
+    if (factor <= 0) return;
+    qreal target = m_globalScale * factor;
+    constexpr qreal kMinScale = 0.125;  // 1/8
+    constexpr qreal kMaxScale = 8.0;    // 8X
+    if (target < kMinScale) target = kMinScale;
+    if (target > kMaxScale) target = kMaxScale;
+    setGlobalScale(target);
+}
+
+// 还原视图：缩放回 1X（发 globalScaleChanged → 预缩放图重算 + paint 重绘），
+// 并发 resetViewChanged 让所有 YuvDisplayItem 把自己内部的 panX/panY 归零。
+// 这样 QML 端只需一句 YuvBridge.resetView() 即可完整还原视图。
+void YuvBridge::resetView() {
+    setGlobalScale(1.0);   // 内部会判断是否变化，未变则不发 change，避免无谓重算
+    emit resetViewChanged();
+}
+
 // ── 内部 ──────────────────────────────────────────────────────────────
 
 void YuvBridge::refreshFrameImage(int slot) {

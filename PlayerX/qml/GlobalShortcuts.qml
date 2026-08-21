@@ -156,7 +156,25 @@ Shortcut {
 }
 Shortcut {
     sequence: "R"; context: Qt.ApplicationShortcut
-    onActivated: Engine.seek(0)
+    onActivated: {
+        // YUV 分析 tab：R = 重置到开头（所有 slot 跳到首帧，多路对齐）
+        if (root.currentTab === "yuv") {
+            const n = YuvBridge.slotCount
+            for (let i = 0; i < n; ++i) YuvBridge.firstFrame(i)
+            return
+        }
+        // 播放 tab：R = 回到开头
+        Engine.seek(0)
+    }
+}
+// Ctrl+R（macOS 上 ⌘+R）= 还原视图（缩放回 1X + 平移归零），仅 yuv tab 生效
+//   - 与裸 R "重置到开头"分离，避免混淆语义
+//   - Qt 跨平台：macOS 上 CtrlModifier 自动对应 Command 键，无需特殊处理
+Shortcut {
+    sequence: StandardKey.Refresh  // 在不同平台映射为 Ctrl+R / ⌘+R
+    context: Qt.ApplicationShortcut
+    enabled: root.currentTab === "yuv" && YuvBridge.slotCount > 0
+    onActivated: YuvBridge.resetView()
 }
 // B：切换"滑动对比"模式（仅 2 路视频可用）
 Shortcut {

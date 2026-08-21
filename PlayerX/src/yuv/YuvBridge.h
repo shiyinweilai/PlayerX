@@ -40,6 +40,11 @@ class YuvBridge : public QObject {
     // 持久化到 QSettings，跨会话保留用户选择。
     Q_PROPERTY(bool inlineControlsHidden READ inlineControlsHidden WRITE setInlineControlsHidden NOTIFY inlineControlsHiddenChanged)
 
+    // ── 全局缩放比例（底部"缩放按钮组"1/8 / 1/4 / 1/2 / 1X / 2X / 4X / 8X）──
+    // 默认 1.0（1X），不持久化（每次启动固定为 1X，避免老用户历史设置让首屏
+    // 看不到全图）。所有 YuvDisplayItem 都监听此属性变化，多路对比自动同步。
+    Q_PROPERTY(qreal globalScale READ globalScale WRITE setGlobalScale NOTIFY globalScaleChanged)
+
 public:
     static constexpr int MaxSlots = 3;
 
@@ -69,6 +74,12 @@ public:
     Q_INVOKABLE void skipForward(int slot, int frames = 15);  // 快进 N 帧
     Q_INVOKABLE void skipBackward(int slot, int frames = 15); // 快退 N 帧
     Q_INVOKABLE void resetFrame(int slot);      // 重置到首帧
+
+    // ── 还原视图（缩放 1X + 平移归零）──────────────────────────────────
+    // 发出 resetViewChanged() 信号，所有 YuvDisplayItem 监听此信号并把
+    // 自己的 panX/panY 归零，同时把 globalScale 设回 1.0（发 globalScaleChanged
+    // 触发预缩放图重算）。仅 yuv tab 生效（QML 端 enabled 限制）。
+    Q_INVOKABLE void resetView();
 
     // ── 单 slot 查询 ──────────────────────────────────────────────────
     Q_INVOKABLE QImage  frameImage(int slot) const;
@@ -150,6 +161,22 @@ public:
     bool inlineControlsHidden() const { return m_inlineControlsHidden; }
     void setInlineControlsHidden(bool hidden);
 
+    // ── 全局缩放比例（所有 YuvDisplayItem 共享）────────────────────────
+    qreal globalScale() const { return m_globalScale; }
+    void setGlobalScale(qreal s);
+    // 缩放档位索引（0..6 → 1/8, 1/4, 1/2, 1X, 2X, 4X, 8X），
+    // 供 QML "Repeater" 选中态绑定使用
+    Q_INVOKABLE int currentScaleIndex() const;
+    Q_INVOKABLE void setCurrentScaleIndex(int idx);
+    Q_INVOKABLE QStringList scalePresetLabels() const;
+    // 滚轮缩放：按 delta 正负沿档位上下切一格（delta>0 放大，<0 缩小）。
+    // 边界自动 clamp 到 [0, 6]，不会越界。
+    Q_INVOKABLE void bumpScale(int delta);
+    // 线性连续缩放：globalScale 乘以 factor（factor>1 放大，<1 缩小）。
+    // 与 bumpScale 的档位式跳变不同，这里做平滑的连续缩放，滚轮每次只放大/缩小
+    // 一小步（如 ×1.1），跳变感弱得多。边界自动 clamp 到 [1/8, 8]。
+    Q_INVOKABLE void zoomBy(qreal factor);
+
     // ── 预设持久化（用 QSettings 保存到磁盘）───────────────────────────
     Q_INVOKABLE QStringList yuvSizePresets() const;
     Q_INVOKABLE void addYuvSizePreset(const QString& size);
@@ -182,10 +209,12 @@ signals:
     void slotCountChanged();
     void yuvPresetsChanged();
     void playStateChanged(int slot);
+    void resetViewChanged();
     void hoverChanged();
     void blockSizeChanged();
     void pixelInspectRequested(int px, int py);
     void inlineControlsHiddenChanged();
+    void globalScaleChanged();
 
 private:
     void refreshFrameImage(int slot);
@@ -211,4 +240,7 @@ private:
 
     // 是否隐藏渲染区底部内嵌操作按钮；默认 true（隐藏，让用户专注画面）
     bool m_inlineControlsHidden{true};
+
+    // 全局缩放比例（底部缩放按钮组驱动）；默认 1.0（1X），不持久化
+    qreal m_globalScale{1.0};
 };
