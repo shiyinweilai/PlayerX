@@ -70,17 +70,40 @@ Item {
         }
         return 0
     }
-    readonly property bool   slotActive:    StreamBridge.hasFile(effectiveSlot)
+    // 注意：hasFile() 是 Q_INVOKABLE 函数而非属性，QML 绑定只在依赖的属性变化时才重求值。
+    // effectiveSlot 在 slotCount 0→1 时值可能不变（0→0），导致 slotActive 不刷新。
+    // 解决：显式依赖 StreamBridge.slotCount，确保 slotCount 变化时 slotActive 强制重求值。
+    readonly property bool   slotActive:    StreamBridge.slotCount > 0 && StreamBridge.hasFile(effectiveSlot)
+    // globalVer 在 fileOpened/fileClosed/currentFrameChanged/slotCountChanged 时 ++，
+    // 确保同一 slot 打开不同文件、帧切换等场景下 slotInfo/slotFrames/... 也能刷新。
     readonly property string slotName:      slotActive ? StreamBridge.fileName(effectiveSlot) : ""
-    readonly property var    slotInfo:      slotActive ? StreamBridge.streamInfo(effectiveSlot)
-                                                       : ({ width: 0, height: 0, fps: 0,
-                                                            codecLong: "", profile: "", level: 0,
-                                                            bitrate: 0, fileName: "" })
-    readonly property int    slotFrames:    slotActive ? StreamBridge.frameCount(effectiveSlot) : 0
-    readonly property int    slotCurrent:   slotActive ? StreamBridge.currentFrame(effectiveSlot) : 0
-    readonly property var    slotFrameList: slotActive ? StreamBridge.frameList(effectiveSlot) : []
-    readonly property var    slotGopList:   slotActive ? StreamBridge.gopList(effectiveSlot) : []
-    readonly property var    slotBlocks:    slotActive ? StreamBridge.blockInfoAt(effectiveSlot, slotCurrent) : []
+    readonly property var    slotInfo: {
+        const _ = streamView.globalVer  // 强制依赖
+        return slotActive ? StreamBridge.streamInfo(effectiveSlot)
+                          : ({ width: 0, height: 0, fps: 0,
+                               codecLong: "", profile: "", level: 0,
+                               bitrate: 0, fileName: "" })
+    }
+    readonly property int    slotFrames: {
+        const _ = streamView.globalVer
+        return slotActive ? StreamBridge.frameCount(effectiveSlot) : 0
+    }
+    readonly property int    slotCurrent: {
+        const _ = streamView.globalVer
+        return slotActive ? StreamBridge.currentFrame(effectiveSlot) : 0
+    }
+    readonly property var    slotFrameList: {
+        const _ = streamView.globalVer
+        return slotActive ? StreamBridge.frameList(effectiveSlot) : []
+    }
+    readonly property var    slotGopList: {
+        const _ = streamView.globalVer
+        return slotActive ? StreamBridge.gopList(effectiveSlot) : []
+    }
+    readonly property var    slotBlocks: {
+        const _ = streamView.globalVer
+        return slotActive ? StreamBridge.blockInfoAt(effectiveSlot, slotCurrent) : []
+    }
     readonly property bool   blockSupported: slotBlocks && slotBlocks.length > 0
     property bool qpOverlayEnabled: false
 
