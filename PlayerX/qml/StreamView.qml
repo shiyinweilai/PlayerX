@@ -32,9 +32,13 @@ Item {
     property bool _pendingLoaded: false
 
     // ── 文件探测（setup 阶段点击文件时调用 probeFile） ──────────────
-    property var _probeCache: ({})       // { index: { ...probeData } }
+    property var _probeCache: ({})       // { path: { ...probeData } }（以路径为键，排序后仍命中）
     property var _probeData: ({})        // 当前选中文件的探测信息
     property bool _probing: false
+
+    // ── 排序 ──
+    property string _sortMode: "default"   // default | name_asc | name_desc | size_desc | size_asc | resolution_desc | resolution_asc | duration_desc | duration_asc
+    property bool _dragHovering: false     // 拖拽悬停高亮
 
     Component.onCompleted: {
         // 从 QSettings 恢复上次的码流文件列表（与 YuvBridge 一致）
@@ -67,21 +71,139 @@ Item {
     // 点击文件项：切换选中 + 调 probeFile 获取基本信息
     function _onFileSelected(idx) {
         streamView.pendingSelectedIndex = idx
+        if (idx < 0 || idx >= streamView.pendingFiles.length) {
+            streamView._probeData = ({})
+            return
+        }
+        const path = streamView.pendingFiles[idx]
         // 有缓存直接用
-        if (streamView._probeCache[idx]) {
-            streamView._probeData = streamView._probeCache[idx]
+        if (streamView._probeCache[path]) {
+            streamView._probeData = streamView._probeCache[path]
             return
         }
         // 无缓存：调 probeFile
         streamView._probeData = ({})
         streamView._probing = true
-        const path = streamView.pendingFiles[idx]
         const data = StreamBridge.probeFile(path)
         streamView._probing = false
         if (data && Object.keys(data).length > 0) {
-            streamView._probeCache[idx] = data
+            streamView._probeCache[path] = data
             streamView._probeData = data
         }
+    }
+
+    // ── 排序 ──
+    // 对 pendingFiles 做排序。排序完成后清空 probeCache 键映射并重选第一个文件。
+    function _sortFiles(mode) {
+        const files = streamView.pendingFiles.slice()
+        if (files.length <= 1) { streamView._sortMode = mode; return }
+
+        // 预取每个文件的 probe 数据（利用缓存，避免重复 probe）
+        const items = []
+        for (let i = 0; i < files.length; ++i) {
+            const p = files[i]
+            let info = streamView._probeCache[p]
+            if (!info) {
+                info = StreamBridge.probeFile(p)
+                if (info && Object.keys(info).length > 0)
+                    streamView._probeCache[p] = info
+            }
+            items.push({ path: p, info: info || {} })
+        }
+
+        switch (mode) {
+            case "name_asc":
+                items.sort((a, b) => streamView._fileBasename(a.path).toLowerCase()
+                                     .localeCompare(streamView._fileBasename(b.path).toLowerCase()))
+                break
+            case "name_desc":
+                items.sort((a, b) => streamView._fileBasename(b.path).toLowerCase()
+                                     .localeCompare(streamView._fileBasename(a.path).toLowerCase()))
+                break
+            case "size_asc":
+                items.sort((a, b) => (a.info.fileSize || 0) - (b.info.fileSize || 0))
+                break
+            case "size_desc":
+                items.sort((a, b) => (b.info.fileSize || 0) - (a.info.fileSize || 0))
+                break
+            case "resolution_asc":
+                items.sort((a, b) => {
+                    const pa = (a.info.width || 0) * (a.info.height || 0)
+                    const pb = (b.info.width || 0) * (b.info.height || 0)
+                    return pa - pb
+                })
+                break
+            case "resolution_desc":
+                items.sort((a, b) => {
+                    const pa = (a.info.width || 0) * (a.info.height || 0)
+                    const pb = (b.info.width || 0) * (b.info.height || 0)
+                    return pb - pa
+                })
+                break
+            case "duration_asc":
+                items.sort((a, b) => (a.info.duration || 0) - (b.info.duration || 0))
+                break
+            case "duration_desc":
+                items.sort((a, b) => (b.info.duration || 0) - (a.info.duration || 0))
+                break
+            default:
+                // default：恢复添加顺序（无操作，items 已按原顺序）
+                break
+        }
+
+        const sortedPaths = items.map(it => it.path)
+        streamView._sortMode = mode
+        streamView.pendingFiles = sortedPaths
+        streamView.pendingSelectedIndex = 0
+        streamView._onFileSelected(0)
+    }
+
+    // ── 排序按钮文字 ──
+    function _sortLabel() {
+        const m = {
+            "default": "默认",
+            "name_asc": "名称 ↑",
+            "name_desc": "名称 ↓",
+            "size_asc": "大小 ↑",
+            "size_desc": "大小 ↓",
+            "resolution_asc": "分辨率 ↑",
+            "resolution_desc": "分辨率 ↓",
+            "duration_asc": "时长 ↑",
+            "duration_desc": "时长 ↓"
+        }
+        return m[streamView._sortMode] || "默认"
+    }
+
+    // ── 拖拽导入：从 DropArea 接收文件 URL 列表 ──
+    function _handleDroppedFiles(urls) {
+        if (!urls || urls.length === 0) return
+        const videoExts = ["mp4", "mov", "mkv", "avi", "webm", "flv", "ts", "m4v",
+                           "wmv", "mpg", "mpeg", "m2ts", "mts", "vob", "ogv",
+                           "3gp", "asf", "h264", "h265", "hevc", "264", "265",
+                           "y4m", "yuv"]
+        const newPaths = []
+        for (let i = 0; i < urls.length; ++i) {
+            const localPath = streamView._normalizeFilePath(urls[i])
+            if (!localPath || localPath.length === 0) continue
+            // 扩展名过滤
+            const dotIdx = localPath.lastIndexOf(".")
+            if (dotIdx < 0) continue
+            const ext = localPath.substring(dotIdx + 1).toLowerCase()
+            if (videoExts.indexOf(ext) < 0) continue
+            // 去重
+            if (newPaths.indexOf(localPath) < 0
+                && streamView.pendingFiles.indexOf(localPath) < 0)
+                newPaths.push(localPath)
+        }
+        if (newPaths.length === 0) {
+            streamView.pendingStatus = "拖入的文件中未找到支持的视频格式"
+            return
+        }
+        const merged = streamView.pendingFiles.slice()
+        for (let i = 0; i < newPaths.length; ++i) merged.push(newPaths[i])
+        streamView.pendingFiles = merged
+        streamView.pendingSelectedIndex = merged.length - newPaths.length
+        streamView.pendingStatus = ""
     }
 
     // 格式化码率
@@ -217,11 +339,190 @@ Item {
             anchors.rightMargin: 24
             spacing: 8
 
-            // 默认排序
+            // 排序按钮 + 下拉菜单
             StreamFlatButton {
-                text: "默认 ▾"
+                text: streamView._sortLabel() + " ▾"
                 enabled: streamView.pendingFiles.length > 0
-                onClicked: console.log("[StreamView] 排序待实现（一期仅按添加顺序）")
+                onClicked: sortMenu.open()
+
+                Menu {
+                    id: sortMenu
+                    width: 160
+                    y: parent.height + 4
+
+                    background: Rectangle {
+                        implicitWidth: 160
+                        implicitHeight: 32
+                        color: "#cc1a1a1f"
+                        border.color: "#33ffffff"
+                        border.width: 1
+                        radius: 6
+                    }
+                    topPadding: 6; bottomPadding: 6
+                    leftPadding: 4; rightPadding: 4
+                    spacing: 0
+
+                    MenuItem {
+                        text: "默认（添加顺序）"
+                        height: 28
+                        onTriggered: streamView._sortFiles("default")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "default" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
+                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                        background: Rectangle { color: "transparent" }
+                    }
+                    MenuItem {
+                        text: "名称 ↑ (A→Z)"
+                        height: 28
+                        onTriggered: streamView._sortFiles("name_asc")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "name_asc" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    MenuItem {
+                        text: "名称 ↓ (Z→A)"
+                        height: 28
+                        onTriggered: streamView._sortFiles("name_desc")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "name_desc" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
+                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                        background: Rectangle { color: "transparent" }
+                    }
+                    MenuItem {
+                        text: "大小 ↓ (大→小)"
+                        height: 28
+                        onTriggered: streamView._sortFiles("size_desc")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "size_desc" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    MenuItem {
+                        text: "大小 ↑ (小→大)"
+                        height: 28
+                        onTriggered: streamView._sortFiles("size_asc")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "size_asc" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
+                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                        background: Rectangle { color: "transparent" }
+                    }
+                    MenuItem {
+                        text: "分辨率 ↓ (高→低)"
+                        height: 28
+                        onTriggered: streamView._sortFiles("resolution_desc")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "resolution_desc" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    MenuItem {
+                        text: "分辨率 ↑ (低→高)"
+                        height: 28
+                        onTriggered: streamView._sortFiles("resolution_asc")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "resolution_asc" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
+                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                        background: Rectangle { color: "transparent" }
+                    }
+                    MenuItem {
+                        text: "时长 ↓ (长→短)"
+                        height: 28
+                        onTriggered: streamView._sortFiles("duration_desc")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "duration_desc" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    MenuItem {
+                        text: "时长 ↑ (短→长)"
+                        height: 28
+                        onTriggered: streamView._sortFiles("duration_asc")
+                        contentItem: Text {
+                            text: parent.text
+                            color: streamView._sortMode === "duration_asc" ? "#3d7adf" : "#e8e8ec"
+                            font.pixelSize: 12
+                            leftPadding: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                            radius: 4
+                        }
+                    }
+                }
             }
             StreamFlatButton {
                 text: "+ 添加"
@@ -265,8 +566,11 @@ Item {
                 Layout.fillHeight: true
                 Layout.minimumWidth: 400
                 radius: 4
-                color: "#16161b"
-                border.color: "#2a2e33"; border.width: 1
+                color: streamView._dragHovering ? "#1a1a22" : "#16161b"
+                border.color: streamView._dragHovering ? "#3a78c8" : "#2a2e33"
+                border.width: streamView._dragHovering ? 2 : 1
+                Behavior on border.color { ColorAnimation { duration: 120 } }
+                Behavior on color { ColorAnimation { duration: 120 } }
 
                 ListView {
                     id: fileListView
@@ -326,13 +630,17 @@ Item {
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
                                         var arr = streamView.pendingFiles.slice()
+                                        const removedPath = arr[index]
                                         arr.splice(index, 1)
                                         streamView.pendingFiles = arr
                                         if (streamView.pendingSelectedIndex >= arr.length)
                                             streamView.pendingSelectedIndex = arr.length - 1
-                                        // 清除该文件的缓存探测信息
-                                        if (streamView._probeCache[index])
-                                            delete streamView._probeCache[index]
+                                        // 清除该文件的缓存探测信息（以路径为键）
+                                        if (removedPath && streamView._probeCache[removedPath])
+                                            delete streamView._probeCache[removedPath]
+                                        // 删除后自动选中相邻文件
+                                        if (streamView.pendingSelectedIndex >= 0)
+                                            streamView._onFileSelected(streamView.pendingSelectedIndex)
                                     }
                                 }
                             }
@@ -348,8 +656,43 @@ Item {
                     Text {
                         anchors.centerIn: parent
                         visible: streamView.pendingFiles.length === 0
-                        text: "暂无文件 — 点右上「+ 添加」选择 H.264 / H.265 视频"
+                        text: "拖拽视频文件到此处，或点右上「+ 添加」选择 H.264 / H.265 视频"
                         color: "#6a6f76"; font.pixelSize: 12
+                    }
+                }
+
+                // ── 拖拽导入（在 ListView 之后声明，z 序最高，覆盖其上接收事件） ──
+                DropArea {
+                    id: fileDropArea
+                    anchors.fill: parent
+                    // 不设 keys：接受所有拖拽类型（Finder 拖文件用 text/uri-list，非 text/plain）
+
+                    onEntered: (drag) => {
+                        streamView._dragHovering = true
+                        drag.accepted = true
+                    }
+                    onExited: streamView._dragHovering = false
+                    onDropped: (drop) => {
+                        streamView._dragHovering = false
+                        drop.accepted = true
+                        // 优先用 urls（Finder 拖文件的标准通道）
+                        var urls = drop.urls || []
+                        if (urls.length > 0) {
+                            streamView._handleDroppedFiles(urls)
+                            return
+                        }
+                        // 退化：某些场景 drop.text 包含 file:// 路径列表
+                        var txt = drop.text || ""
+                        if (txt.length > 0) {
+                            var lines = txt.split("\n")
+                            var paths = []
+                            for (var i = 0; i < lines.length; ++i) {
+                                var line = lines[i].trim()
+                                if (line.length > 0) paths.push(line)
+                            }
+                            if (paths.length > 0)
+                                streamView._handleDroppedFiles(paths)
+                        }
                     }
                 }
             }
