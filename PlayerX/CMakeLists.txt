@@ -160,7 +160,8 @@ qt_add_qml_module(PlayerX
         # ── 从 Main.qml 拆分的功能模块 ──
         qml/ShortcutsAboutDialogs.qml
         qml/RefLightbox.qml
-        qml/YuvSetupView.qml
+        # ── YUV 分析模块（拆分至独立子目录 qml/yuv/） ──
+        qml/yuv/YuvSetupView.qml
         qml/HomeView.qml
         # ── MenuBar 下拉菜单深色主题三件套 ──
         # Windows/Linux 上 Basic style 的下拉菜单是白底黑字，与应用整体
@@ -196,7 +197,7 @@ qt_add_qml_module(PlayerX
         qml/CsvBottomVSplitter.qml
         qml/VideoArea.qml
         qml/LeftNavBar.qml
-        qml/YuvStatsPanel.qml
+        qml/yuv/YuvStatsPanel.qml
         # ── 码流分析模块（拆分至独立子目录 qml/stream/） ──
         qml/stream/StreamView.qml
         qml/stream/StreamInfoCard.qml

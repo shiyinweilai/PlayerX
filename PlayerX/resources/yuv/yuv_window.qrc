@@ -1,5 +1,5 @@
 <RCC>
     <qresource prefix="/yuv">
-        <file alias="YuvWindow.qml">../../qml/YuvWindow.qml</file>
+        <file alias="YuvWindow.qml">../../qml/yuv/YuvWindow.qml</file>
     </qresource>
 </RCC>
