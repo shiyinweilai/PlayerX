@@ -46,6 +46,7 @@
 #include "qt/Updater.h"
 #include "yuv/YuvBridge.h"
 #include "yuv/YuvDisplayItem.h"
+#include "stream/RBStreamBridge.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -238,6 +239,11 @@ int main(int argc, char* argv[]) {
     // YuvBridge：YUV 裸数据分析工具桥接（独立窗口，不与主播放器联动）
     YuvBridge yuvBridge;
 
+    // StreamBridge：码流分析工具桥接（独立窗口，不与主播放器联动）。
+    // 多 slot 设计，结构与 YuvBridge 一致；一期仅提供顶层流参数 / 帧类型 / GOP
+    // 统计，块级深度信息返回空数组（见 码流分析架构.md §4 的 FFmpeg 补丁路径）。
+    RBStreamBridge streamBridge;
+
     QQmlApplicationEngine engine;
 
     // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
@@ -249,6 +255,7 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty("Updater",     &updater);
     engine.rootContext()->setContextProperty("ScreenProbe", &screenProbe);
     engine.rootContext()->setContextProperty("YuvBridge",   &yuvBridge);
+    engine.rootContext()->setContextProperty("StreamBridge", &streamBridge);
 
     // 注册 YuvDisplayItem 为 QML 类型（供 YuvWindow.qml 使用）。
     // URI 用独立前缀，避免和 qt_add_qml_module(URI PlayerX) 冲突。

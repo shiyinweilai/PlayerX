@@ -108,6 +108,9 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     src/yuv/YuvAnalyzer.cpp
     src/yuv/YuvBridge.cpp
     src/yuv/YuvDisplayItem.cpp
+    # 码流分析工具（独立模块，依赖 RBDemuxer 复用做预扫描；块级深度信息
+    # 走"FFmpeg 解码器打补丁导出"路径，本期返回空数组占位）
+    src/stream/RBStreamBridge.cpp
     # 异步文件下载器（供 QML 测试源下载使用，不阻塞 UI 线程）
     src/qt/FileDownloader.cpp
     # 平台原生多选文件夹对话框：仅 macOS 走 NSOpenPanel。
@@ -194,6 +197,11 @@ qt_add_qml_module(PlayerX
         qml/VideoArea.qml
         qml/LeftNavBar.qml
         qml/YuvStatsPanel.qml
+        # ── 码流分析模块（拆分至独立文件） ──
+        qml/StreamView.qml
+        qml/StreamInfoCard.qml
+        qml/StreamInfoCardSection.qml
+        qml/StreamFlatButton.qml
         # ── Main.qml 拆出的纯逻辑 JS ──
         qml/MainLogic.js
         qml/RatingLogic.js
@@ -206,6 +214,7 @@ target_include_directories(PlayerX PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/player
     ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
     ${CMAKE_CURRENT_SOURCE_DIR}/src/yuv
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/stream
     ${FFMPEG_INSTALL_DIR}/include
 )
 

@@ -135,7 +135,7 @@ ApplicationWindow {
     readonly property bool immersive:
         (root.currentTab === "play" && Engine.fileCount > 0)
         || (root.currentTab === "yuv" && YuvBridge.slotCount > 0)
-        || root.currentTab === "stream"
+        || (root.currentTab === "stream" && StreamBridge.slotCount > 0)
 
     // ─── 系统菜单栏（macOS 全局菜单 / Windows 窗口菜单） ──────────────────
     // 仅作为系统级入口，与现有 ToolBar 上的"打开 ▾ / ⚙ 设置 ▾"按钮共存。
@@ -2034,32 +2034,14 @@ Component {
     }
 }
 
-    // ── 码流分析面板（占位）────────────────────────
+    // ── 码流分析面板（StreamInfoCard.qml）────────────────────────
+    // 跟随 StreamView.currentSlot 切换查看哪一路的统计。
+    // 仅当 currentTab === "stream" 且右侧栏打开时显示。
     Component {
         id: streamPanelComp
-        Rectangle {
-            color: "#141419"
-            Rectangle {
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                width: 1
-                color: "#26262e"
-            }
-            Column {
-                anchors.centerIn: parent
-                spacing: 6
-                Text {
-                    text: "码流分析"
-                    color: "#e8e8ee"; font.pixelSize: 14; font.bold: true
-                    anchors.horizontalCenter: parent.horizontalCenter
-                }
-                Text {
-                    text: "统计面板待实现"
-                    color: "#7a7f86"; font.pixelSize: 11
-                    anchors.horizontalCenter: parent.horizontalCenter
-                }
-            }
+        StreamInfoCard {
+            slot: (typeof streamViewComp !== "undefined" && streamViewComp.effectiveSlot !== undefined)
+                  ? streamViewComp.effectiveSlot : 0
         }
     }
 
@@ -2299,6 +2281,14 @@ Component {
                 root.rightSidebarOpen = false
         }
     }
+    // ── StreamBridge 同上：码流文件全关时收起右侧统计卡片。──
+    Connections {
+        target: StreamBridge
+        function onSlotCountChanged() {
+            if (StreamBridge.slotCount === 0 && root.currentTab === "stream" && root.rightSidebarOpen)
+                root.rightSidebarOpen = false
+        }
+    }
 
     // ── YUV 分析视图（拆分至 YuvSetupView.qml） ──────────────────────
     YuvSetupView {
@@ -2323,17 +2313,32 @@ Component {
 
     
 
-    // ══════════════ 首页 + 码流分析视图（拆分至 HomeView.qml） ══════════════
+    // ══════════════ 首页（拆分至 HomeView.qml） ══════════════
     HomeView {
         id: homeStreamView
         anchors.left: leftNavBar.right
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        visible: root.currentTab === "home" || root.currentTab === "stream"
+        visible: root.currentTab === "home"
         currentTab: root.currentTab
         onSwitchTab: function(tab) { root.currentTab = tab }
         onRequestOpenFile: fileDialogs.addDialog.open()
         onRequestMultiGroup: multiGroupDialog.showAndRefresh()
+    }
+
+    // ══════════════ 码流分析视图（拆分至 StreamView.qml） ══════════════
+    // 仿 YuvSetupView 的两阶段锚点策略：
+    //   · setup 阶段（slotCount === 0）→ 让出左侧导航栏（anchors.left = leftNavBar.right）
+    //   · render 阶段（slotCount > 0） → 铺满整个 contentItem（沉浸满屏）
+    StreamView {
+        id: streamViewComp
+        anchors.left: (StreamBridge.slotCount > 0) ? parent.left : leftNavBar.right
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        visible: root.currentTab === "stream"
+        currentSlot: 0
+        onSwitchTab: function(tab) { root.currentTab = tab }
     }
 }

@@ -1,4 +1,4 @@
-// HomeView.qml — 首页视图 + 码流占位（从 Main.qml 拆分）
+// HomeView.qml — 首页视图（码流占位段已迁移到独立 StreamView.qml）
 // 用法：在 Main.qml 中实例化，外部设置 anchors 和 visible。
 
 import QtQuick
@@ -178,72 +178,9 @@ Item {
         }
     }
 
-    // ══════════════ 码流分析视图（占位） ══════════════
-    Item {
-        id: streamView
-        anchors.fill: parent
-        visible: homeViewRoot.currentTab === "stream"
-
-        Rectangle {
-            anchors.fill: parent
-            color: "#101012"
-        }
-
-        // ── 左上角返回按钮 ──
-        Rectangle {
-            id: streamBackBtn
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.leftMargin: 20
-            anchors.topMargin: 20
-            width: 84
-            height: 36
-            radius: 6
-            color: streamBackMA.containsMouse ? "#2a2a32" : "#1e1e24"
-            border.color: "#3a3a44"
-            border.width: 1
-            Row {
-                anchors.centerIn: parent
-                spacing: 6
-                Text { text: "←"; color: "#e8e8ec"; font.pixelSize: 14; font.bold: true }
-                Text { text: "返回"; color: "#e8e8ec"; font.pixelSize: 13 }
-            }
-            MouseArea {
-                id: streamBackMA
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: homeViewRoot.switchTab("play")
-            }
-        }
-
-        ColumnLayout {
-            anchors.centerIn: parent
-            spacing: 14
-            Text {
-                Layout.alignment: Qt.AlignHCenter
-                text: "📡"
-                font.pixelSize: 48
-            }
-            Text {
-                Layout.alignment: Qt.AlignHCenter
-                text: "码流分析"
-                color: "#e8e8ec"
-                font.pixelSize: 22
-                font.bold: true
-            }
-            Text {
-                Layout.alignment: Qt.AlignHCenter
-                text: "功能开发中，敬请期待"
-                color: "#9aa0a6"
-                font.pixelSize: 14
-            }
-            Text {
-                Layout.alignment: Qt.AlignHCenter
-                text: "将支持 H.264 / H.265 Annex-B 裸码流解析与逐帧分析"
-                color: "#6a6a78"
-                font.pixelSize: 12
-            }
-        }
-    }
+    // ══════════════ 码流分析视图（迁移至独立 StreamView.qml） ══════════════
+    // 本组件在 Main.qml 中与 homeView 平行；homeViewRoot 仍保留 currentTab
+    // 路由，但 streamView 的实际渲染由 main.qml 直接装载 StreamView.qml。
+    // 这里仅保留一个空 Item 占位，避免破坏 currentTab 逻辑；实际显示由
+    // main.qml 内部的 streamView 节点负责（见 Main.qml）。
 }
