@@ -541,6 +541,316 @@ void RBStreamBridge::seekPlayerTo(int slot, int frameIndex) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// 轻量探测（setup 阶段用）
+// ═════════════════════════════════════════════════════════════════════════
+
+// 从 h264 裸流中解析 SPS，提取 max_num_ref_frames（参考帧数）
+// 返回 -1 表示解析失败
+static int parseH264MaxRefFrames(const uint8_t* data, int64_t size) {
+    int64_t i = 0;
+    while (i + 4 <= size) {
+        int scLen = 0;
+        if (data[i] == 0 && data[i+1] == 0) {
+            if (data[i+2] == 1) scLen = 3;
+            else if (i + 3 < size && data[i+2] == 0 && data[i+3] == 1) scLen = 4;
+        }
+        if (scLen == 0) { ++i; continue; }
+        if (i + scLen >= size) break;
+        int nalType = data[i + scLen] & 0x1F;
+        // nal_type 7 = SPS
+        if (nalType == 7) {
+            const uint8_t* sps = data + i + scLen + 1; // 跳过 NAL header
+            int64_t spsSize = size - (i + scLen + 1);
+            // 找下一个 start code 作为 SPS 结束
+            for (int64_t j = 0; j + 3 < spsSize; ++j) {
+                if (sps[j] == 0 && sps[j+1] == 0 &&
+                    (sps[j+2] == 1 || (j + 3 < spsSize && sps[j+2] == 0 && sps[j+3] == 1))) {
+                    spsSize = j;
+                    break;
+                }
+            }
+            // 简易 Exp-Golomb 解析器
+            // SPS 结构：profile_idc(1) constraint_flags(1) level_idc(1) seq_parameter_set_id(ue)
+            //   然后根据 profile 跳过 chroma/transform/scaling 相关字段
+            //   接着：log2_max_frame_num_minus4(ue) → pic_order_cnt_type(ue)
+            //   根据 poc_type 跳过 → max_num_ref_frames(ue)
+            int bitPos = 0;
+            auto readBit = [&]() -> int {
+                if (bitPos / 8 >= spsSize) return 0;
+                int byteIdx = bitPos / 8;
+                int bitIdx = 7 - (bitPos % 8);
+                bitPos++;
+                return (sps[byteIdx] >> bitIdx) & 1;
+            };
+            auto readUE = [&]() -> uint32_t {
+                int leadingZeros = 0;
+                while (readBit() == 0 && leadingZeros < 32) ++leadingZeros;
+                uint32_t val = 0;
+                for (int k = 0; k < leadingZeros; ++k)
+                    val = (val << 1) | readBit();
+                return (1 << leadingZeros) - 1 + val;
+            };
+            // profile_idc(8) + constraint(8) + level(8)
+            if (spsSize < 3) return -1;
+            int profileIdc = sps[0];
+            bitPos = 24; // 跳过前 3 字节
+            uint32_t spsId = readUE();
+            // High profile 系列有额外字段
+            if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 ||
+                profileIdc == 244 || profileIdc == 44  || profileIdc == 83  ||
+                profileIdc == 86  || profileIdc == 118 || profileIdc == 128) {
+                uint32_t chromaFormatIdc = readUE();
+                if (chromaFormatIdc == 3) readBit(); // separate_colour_plane_flag
+                readUE(); // bit_depth_luma_minus8
+                readUE(); // bit_depth_chroma_minus8
+                readBit(); // qpprime_y_zero_transform_bypass_flag
+                int seqScalingMatrixPresent = readBit();
+                if (seqScalingMatrixPresent) {
+                    int loops = (chromaFormatIdc != 3) ? 8 : 12;
+                    for (int k = 0; k < loops; ++k) {
+                        if (readBit()) { // seq_scaling_list_present_flag
+                            // 跳过 scaling list（简化：粗略跳过）
+                            int listSize = (k < 6) ? 16 : 64;
+                            for (int n = 0; n < listSize; ++n) {
+                                readUE(); // delta_scale
+                            }
+                        }
+                    }
+                }
+            }
+            readUE(); // log2_max_frame_num_minus4
+            uint32_t pocType = readUE();
+            if (pocType == 0) {
+                readUE(); // log2_max_pic_order_cnt_lsb_minus4
+            } else if (pocType == 1) {
+                readBit(); // delta_pic_order_always_zero_flag
+                readUE();  // offset_for_non_ref_pic (se, 但 ue 读法相同)
+                readUE();  // offset_for_top_to_bottom_field (se)
+                uint32_t numRefFramesInPoc = readUE();
+                for (uint32_t k = 0; k < numRefFramesInPoc; ++k)
+                    readUE(); // offset_for_ref_frame (se)
+            }
+            // max_num_ref_frames
+            uint32_t maxRefFrames = readUE();
+            return int(maxRefFrames);
+        }
+        // 跳到下一个 start code
+        int64_t j = i + scLen + 1;
+        while (j + 3 < size) {
+            if (data[j] == 0 && data[j+1] == 0 &&
+                (data[j+2] == 1 ||
+                 (j + 3 < size && data[j+2] == 0 && data[j+3] == 1)))
+                break;
+            ++j;
+        }
+        if (j + 3 >= size) break;
+        i = j;
+    }
+    return -1;
+}
+
+QVariantMap RBStreamBridge::probeFile(const QString& path) const {
+    QVariantMap m;
+    if (path.isEmpty()) return m;
+
+    AVFormatContext* fmt = nullptr;
+    int ret = avformat_open_input(&fmt, path.toUtf8().constData(), nullptr, nullptr);
+    if (ret < 0 || !fmt) {
+        qWarning() << "[StreamBridge] probeFile avformat_open_input failed:" << path;
+        return m;
+    }
+    ret = avformat_find_stream_info(fmt, nullptr);
+    if (ret < 0) {
+        qWarning() << "[StreamBridge] probeFile avformat_find_stream_info failed:" << path;
+        avformat_close_input(&fmt);
+        return m;
+    }
+
+    // 找视频流
+    int vIdx = -1;
+    for (unsigned i = 0; i < fmt->nb_streams; ++i) {
+        if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            vIdx = int(i); break;
+        }
+    }
+
+    // 文件名
+    QString fn;
+    int slash = path.lastIndexOf('/');
+    fn = (slash >= 0) ? path.mid(slash + 1) : path;
+
+    m["fileName"]     = fn;
+    m["filePath"]     = path;
+    m["format"]       = QString::fromUtf8(fmt->iformat ? fmt->iformat->name : "");
+    m["formatLong"]   = QString::fromUtf8(fmt->iformat ? fmt->iformat->long_name : "");
+    m["duration"]     = (fmt->duration > 0) ? double(fmt->duration) / AV_TIME_BASE : 0.0;
+    m["bitrate"]      = double(fmt->bit_rate);
+    m["fileSize"]     = qint64(fmt->pb ? avio_size(fmt->pb) : 0);
+
+    if (vIdx >= 0) {
+        AVCodecParameters* par = fmt->streams[vIdx]->codecpar;
+        // 不用 desc->long_name（FFmpeg 返回 "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10" 太冗长）
+        m["codec"]        = codecIdToShortName(par->codec_id);
+        m["codecLong"]    = codecIdToLongName(par->codec_id);
+        m["width"]        = par->width;
+        m["height"]       = par->height;
+        m["profile"]      = profileIdToString(par->codec_id, par->profile);
+        m["level"]        = QString::number(par->level);
+        AVRational fr = av_guess_frame_rate(fmt, fmt->streams[vIdx], nullptr);
+        m["fps"]          = (fr.den > 0) ? double(fr.num) / fr.den : 0.0;
+        m["pixFmt"]       = pixFmtToString(AVPixelFormat(par->format));
+        m["colorSpace"]   = colorSpaceToString(par->color_space);
+        m["colorRange"]   = colorRangeToString(par->color_range);
+        m["frameCount"]   = int(fmt->streams[vIdx]->nb_frames);
+        // ── 补充字段 ──
+        m["colorPrimaries"] = colorPrimariesToString(par->color_primaries);
+        m["colorTransfer"]  = colorTransferToString(par->color_trc);
+        m["chromaLocation"] = chromaLocationToString(par->chroma_location);
+        m["fieldOrder"]     = fieldOrderToString(par->field_order);
+        m["bitsPerRawSample"] = (par->bits_per_raw_sample > 0)
+                                ? QString::number(par->bits_per_raw_sample) : "—";
+        m["hasBFrames"]     = (fmt->streams[vIdx]->codecpar->video_delay > 0)
+                                ? QString::number(fmt->streams[vIdx]->codecpar->video_delay)
+                                : "0";
+        m["refs"]           = "—";  // AVCodecParameters 无此字段，后续从 SPS 解析
+        m["isAvc"]          = (par->codec_id == AV_CODEC_ID_H264 || par->codec_id == AV_CODEC_ID_HEVC)
+                                ? (par->extradata_size > 0 && par->extradata[0] == 1)
+                                : false;
+    } else {
+        m["codec"]        = "";
+        m["codecLong"]    = "";
+        m["width"]        = 0;
+        m["height"]       = 0;
+        m["profile"]      = "";
+        m["level"]        = "";
+        m["fps"]          = 0.0;
+        m["pixFmt"]       = "";
+        m["colorSpace"]   = "";
+        m["colorRange"]   = "";
+        m["frameCount"]   = 0;
+    }
+
+    avformat_close_input(&fmt);
+
+    // ── 裸流信息补全 ──
+    // 裸 h264/hevc 文件缺少容器元数据：bitrate / duration / frameCount 全为 0。
+    // 扫描 NAL start codes 数出 slice 帧数，再反推时长和码率。
+    bool isRawBitstream = (m["format"].toString() == "h264"
+                           || m["format"].toString() == "hevc");
+    if (isRawBitstream && vIdx >= 0) {
+        int fc = m["frameCount"].toInt();
+        double dur = m["duration"].toDouble();
+        double br = m["bitrate"].toDouble();
+
+        if (fc <= 0 || dur <= 0 || br <= 0) {
+            QFile f(path);
+            if (f.open(QIODevice::ReadOnly)) {
+                QByteArray bytes = f.readAll();
+                f.close();
+                int64_t fileSize = bytes.size();
+                const uint8_t* data = reinterpret_cast<const uint8_t*>(bytes.constData());
+                bool isHevc = (m["codec"].toString() == "hevc");
+
+                // 扫描 NAL start codes，统计 slice NAL 数量
+                int sliceCount = 0;
+                int64_t i = 0;
+                while (i + 4 <= fileSize) {
+                    int scLen = 0;
+                    if (data[i] == 0 && data[i+1] == 0) {
+                        if (data[i+2] == 1) scLen = 3;
+                        else if (i + 3 < fileSize && data[i+2] == 0 && data[i+3] == 1) scLen = 4;
+                    }
+                    if (scLen == 0) { ++i; continue; }
+                    if (i + scLen >= fileSize) break;
+                    int nalType = isHevc ? ((data[i + scLen] & 0x7E) >> 1)
+                                         : (data[i + scLen] & 0x1F);
+                    // h264: 1=non-IDR slice, 5=IDR slice
+                    // hevc: 0-9=TRAIL/TSA/STSA/RADL/RASL, 16-21=BLA/IDR/CRA
+                    if (!isHevc) {
+                        if (nalType == 1 || nalType == 5) ++sliceCount;
+                    } else {
+                        if (nalType <= 9 || (nalType >= 16 && nalType <= 21)) ++sliceCount;
+                    }
+                    // 跳到下一个 start code
+                    int64_t j = i + scLen + 1;
+                    while (j + 3 < fileSize) {
+                        if (data[j] == 0 && data[j+1] == 0 &&
+                            (data[j+2] == 1 ||
+                             (j + 3 < fileSize && data[j+2] == 0 && data[j+3] == 1)))
+                            break;
+                        ++j;
+                    }
+                    if (j + 3 >= fileSize) break;
+                    i = j;
+                }
+
+                double fpsVal = m["fps"].toDouble();
+                if (fc <= 0 && sliceCount > 0) {
+                    m["frameCount"] = sliceCount;
+                    fc = sliceCount;
+                }
+                if (dur <= 0 && fc > 0 && fpsVal > 0) {
+                    dur = double(fc) / fpsVal;
+                    m["duration"] = dur;
+                }
+                if (br <= 0 && dur > 0 && fileSize > 0) {
+                    m["bitrate"] = double(fileSize) * 8.0 / dur;
+                }
+
+                qInfo() << "[StreamBridge] probeFile raw enhancement:"
+                        << "sliceCount=" << sliceCount
+                        << "duration=" << dur
+                        << "bitrate=" << m["bitrate"].toDouble()
+                        << "fileSize=" << fileSize;
+            }
+        }
+
+        // 色彩空间启发式推断（裸流 VUI 常为 unspecified）
+        // SD(宽<1280) → BT.601, HD(宽≥1280) → BT.709
+        QString cs = m["colorSpace"].toString();
+        if (cs == "Unknown" || cs.isEmpty()) {
+            int w = m["width"].toInt();
+            m["colorSpace"] = (w >= 1280) ? "BT.709 (推断)" : "BT.601 (推断)";
+        }
+
+        // 参考帧数：从 SPS max_num_ref_frames 解析
+        if (m["refs"].toString() == "—") {
+            QFile f2(path);
+            if (f2.open(QIODevice::ReadOnly)) {
+                QByteArray bytes2 = f2.readAll();
+                f2.close();
+                const uint8_t* raw = reinterpret_cast<const uint8_t*>(bytes2.constData());
+                int maxRefs = parseH264MaxRefFrames(raw, bytes2.size());
+                if (maxRefs >= 0)
+                    m["refs"] = QString::number(maxRefs);
+            }
+        }
+    }
+
+    // 裸流 fallback：avformat 打不开时（纯 annexb .h264/.265）
+    if (vIdx < 0) {
+        QFileInfo fi(path);
+        QString suf = fi.suffix().toLower();
+        if (suf == "h264" || suf == "264") {
+            m["codec"]     = "h264";
+            m["codecLong"] = "H.264 / AVC";
+        } else if (suf == "hevc" || suf == "h265" || suf == "265") {
+            m["codec"]     = "hevc";
+            m["codecLong"] = "H.265 / HEVC";
+        }
+        m["format"]    = "annexb";
+        m["formatLong"] = "Raw Annex-B bitstream";
+    }
+
+    qInfo() << "[StreamBridge] probeFile ok:" << path
+            << "codec=" << m.value("codec").toString()
+            << "w=" << m.value("width").toInt()
+            << "h=" << m.value("height").toInt()
+            << "fps=" << m.value("fps").toDouble();
+    return m;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 // 文件列表持久化（QSettings）—— 与 YuvBridge.yuvFileList 对齐
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -606,6 +916,106 @@ QString RBStreamBridge::colorRangeToString(AVColorRange cr) {
         case AVCOL_RANGE_JPEG: return "full";
         case AVCOL_RANGE_MPEG: return "tv";
         default:               return "unspecified";
+    }
+}
+
+// 色彩原色（ primaries ）
+QString RBStreamBridge::colorPrimariesToString(AVColorPrimaries cp) {
+    switch (cp) {
+        case AVCOL_PRI_BT709:      return "BT.709";
+        case AVCOL_PRI_BT470M:
+        case AVCOL_PRI_BT470BG:
+        case AVCOL_PRI_SMPTE170M:  return "BT.601";
+        case AVCOL_PRI_SMPTE240M:  return "SMPTE-240M";
+        case AVCOL_PRI_BT2020:     return "BT.2020";
+        case AVCOL_PRI_SMPTE428:   return "SMPTE-428";
+        case AVCOL_PRI_SMPTE431:   return "DCI-P3";
+        case AVCOL_PRI_SMPTE432:   return "Display P3";
+        case AVCOL_PRI_EBU3213:    return "EBU-3213";
+        default:                   return "unspecified";
+    }
+}
+
+// 传输特性（ transfer characteristics ）
+QString RBStreamBridge::colorTransferToString(AVColorTransferCharacteristic trc) {
+    switch (trc) {
+        case AVCOL_TRC_BT709:      return "BT.709";
+        case AVCOL_TRC_GAMMA22:
+        case AVCOL_TRC_GAMMA28:    return "Gamma";
+        case AVCOL_TRC_SMPTE170M:  return "BT.601";
+        case AVCOL_TRC_SMPTE240M:  return "SMPTE-240M";
+        case AVCOL_TRC_LINEAR:     return "Linear";
+        case AVCOL_TRC_LOG:
+        case AVCOL_TRC_LOG_SQRT:   return "Log";
+        case AVCOL_TRC_IEC61966_2_4: return "IEC-61966-2-4";
+        case AVCOL_TRC_BT1361_ECG: return "BT.1361";
+        case AVCOL_TRC_IEC61966_2_1: return "sRGB";
+        case AVCOL_TRC_BT2020_10:
+        case AVCOL_TRC_BT2020_12:  return "BT.2020";
+        case AVCOL_TRC_SMPTE2084:  return "PQ (HDR)";
+        case AVCOL_TRC_SMPTE428:   return "SMPTE-428";
+        case AVCOL_TRC_ARIB_STD_B67: return "HLG (HDR)";
+        default:                   return "unspecified";
+    }
+}
+
+// 色度位置
+QString RBStreamBridge::chromaLocationToString(AVChromaLocation cl) {
+    switch (cl) {
+        case AVCHROMA_LOC_LEFT:        return "left";
+        case AVCHROMA_LOC_CENTER:      return "center";
+        case AVCHROMA_LOC_TOPLEFT:     return "top-left";
+        case AVCHROMA_LOC_TOP:         return "top";
+        case AVCHROMA_LOC_BOTTOMLEFT:  return "bottom-left";
+        case AVCHROMA_LOC_BOTTOM:      return "bottom";
+        default:                        return "unspecified";
+    }
+}
+
+// 场序
+QString RBStreamBridge::fieldOrderToString(AVFieldOrder fo) {
+    switch (fo) {
+        case AV_FIELD_PROGRESSIVE: return "progressive";
+        case AV_FIELD_TT:          return "top-first";
+        case AV_FIELD_BB:          return "bottom-first";
+        case AV_FIELD_TB:          return "top-coded, bottom-display";
+        case AV_FIELD_BT:          return "bottom-coded, top-display";
+        default:                   return "unspecified";
+    }
+}
+
+// ── codec_id → 简洁可读名称 ──
+// FFmpeg desc->long_name 太冗长（如 "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10"），
+// 这里给出简短中文友好名称，与其他代码路径保持一致。
+QString RBStreamBridge::codecIdToShortName(AVCodecID id) {
+    switch (id) {
+        case AV_CODEC_ID_H264:       return "h264";
+        case AV_CODEC_ID_HEVC:       return "hevc";
+        case AV_CODEC_ID_VP9:        return "vp9";
+        case AV_CODEC_ID_AV1:        return "av1";
+        case AV_CODEC_ID_MPEG1VIDEO: return "mpeg1";
+        case AV_CODEC_ID_MPEG2VIDEO: return "mpeg2";
+        case AV_CODEC_ID_MPEG4:      return "mpeg4";
+        default: {
+            const AVCodecDescriptor* d = avcodec_descriptor_get(id);
+            return QString::fromUtf8(d ? d->name : "unknown");
+        }
+    }
+}
+
+QString RBStreamBridge::codecIdToLongName(AVCodecID id) {
+    switch (id) {
+        case AV_CODEC_ID_H264:       return "H.264 / AVC";
+        case AV_CODEC_ID_HEVC:       return "H.265 / HEVC";
+        case AV_CODEC_ID_VP9:        return "VP9";
+        case AV_CODEC_ID_AV1:        return "AV1";
+        case AV_CODEC_ID_MPEG1VIDEO: return "MPEG-1 Video";
+        case AV_CODEC_ID_MPEG2VIDEO: return "MPEG-2 Video";
+        case AV_CODEC_ID_MPEG4:      return "MPEG-4 Video";
+        default: {
+            const AVCodecDescriptor* d = avcodec_descriptor_get(id);
+            return QString::fromUtf8(d ? d->long_name : "Unknown");
+        }
     }
 }
 

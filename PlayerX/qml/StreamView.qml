@@ -31,12 +31,19 @@ Item {
     property string pendingStatus: ""
     property bool _pendingLoaded: false
 
+    // ── 文件探测（setup 阶段点击文件时调用 probeFile） ──────────────
+    property var _probeCache: ({})       // { index: { ...probeData } }
+    property var _probeData: ({})        // 当前选中文件的探测信息
+    property bool _probing: false
+
     Component.onCompleted: {
         // 从 QSettings 恢复上次的码流文件列表（与 YuvBridge 一致）
         const saved = StreamBridge.streamFileList()
         if (saved && saved.length > 0) {
             streamView.pendingFiles = saved
             streamView.pendingSelectedIndex = 0
+            // 自动探测第一个文件
+            streamView._onFileSelected(0)
         }
         streamView._pendingLoaded = true
     }
@@ -55,6 +62,56 @@ Item {
             clean.push(p)
         }
         StreamBridge.setStreamFileList(clean)
+    }
+
+    // 点击文件项：切换选中 + 调 probeFile 获取基本信息
+    function _onFileSelected(idx) {
+        streamView.pendingSelectedIndex = idx
+        // 有缓存直接用
+        if (streamView._probeCache[idx]) {
+            streamView._probeData = streamView._probeCache[idx]
+            return
+        }
+        // 无缓存：调 probeFile
+        streamView._probeData = ({})
+        streamView._probing = true
+        const path = streamView.pendingFiles[idx]
+        const data = StreamBridge.probeFile(path)
+        streamView._probing = false
+        if (data && Object.keys(data).length > 0) {
+            streamView._probeCache[idx] = data
+            streamView._probeData = data
+        }
+    }
+
+    // 格式化码率
+    function _formatBitrate(bps) {
+        if (bps >= 1000000)
+            return (bps / 1000000).toFixed(2) + " Mbps"
+        if (bps >= 1000)
+            return (bps / 1000).toFixed(0) + " kbps"
+        return bps + " bps"
+    }
+
+    // 格式化时长
+    function _formatDuration(secs) {
+        if (secs <= 0) return "—"
+        const h = Math.floor(secs / 3600)
+        const m = Math.floor((secs % 3600) / 60)
+        const s = Math.floor(secs % 60)
+        if (h > 0)
+            return h + ":" + String(m).padStart(2, '0') + ":" + String(s).padStart(2, '0')
+        return m + ":" + String(s).padStart(2, '0')
+    }
+
+    // 格式化文件大小
+    function _formatFileSize(bytes) {
+        if (bytes <= 0) return "—"
+        if (bytes >= 1048576)
+            return (bytes / 1048576).toFixed(2) + " MB"
+        if (bytes >= 1024)
+            return (bytes / 1024).toFixed(1) + " KB"
+        return bytes + " B"
     }
 
     // ── 当前 slot 的派生状态（render 阶段用） ───────────────────────
@@ -190,7 +247,7 @@ Item {
             }
         }
 
-        // ── 主区：左侧文件列表 + 右侧参数预览 ──
+        // ── 主区：左侧文件列表（宽） + 右侧文件信息面板 ──
         RowLayout {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
@@ -202,10 +259,11 @@ Item {
             anchors.rightMargin: 24
             spacing: 16
 
-            // 左：文件列表卡片
+            // 左：文件列表卡片（占大部分宽度）
             Rectangle {
-                Layout.preferredWidth: 520
+                Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumWidth: 400
                 radius: 4
                 color: "#16161b"
                 border.color: "#2a2e33"; border.width: 1
@@ -223,7 +281,7 @@ Item {
                         required property int index
                         required property string modelData
                         width: ListView.view.width
-                        height: 32
+                        height: 36
                         radius: 3
                         color: streamView.pendingSelectedIndex === index
                                ? "#2a3a55" : (rowMa.containsMouse ? "#1e1e24" : "transparent")
@@ -231,30 +289,30 @@ Item {
                         border.width: 1
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 10
+                            anchors.leftMargin: 12
                             anchors.rightMargin: 10
-                            spacing: 8
+                            spacing: 10
                             Text {
                                 text: String.fromCharCode(0x2460 + index)  // ① ② ③ ...
-                                color: "#9aa0a6"; font.pixelSize: 11
-                                Layout.preferredWidth: 18
+                                color: "#9aa0a6"; font.pixelSize: 12
+                                Layout.preferredWidth: 20
                             }
                             Text {
                                 text: streamView._fileBasename(modelData)
-                                color: "#e8e8ec"; font.pixelSize: 12
+                                color: "#e8e8ec"; font.pixelSize: 13
                                 Layout.fillWidth: true
                                 elide: Text.ElideMiddle
                             }
                             Text {
                                 text: streamView._fileDir(modelData)
                                 color: "#6a6f76"; font.pixelSize: 10
-                                Layout.maximumWidth: 200
+                                Layout.maximumWidth: 260
                                 elide: Text.ElideLeft
                             }
                             // 删除按钮（hover 时显示）
                             Rectangle {
                                 visible: rowMa.containsMouse
-                                Layout.preferredWidth: 20; Layout.preferredHeight: 20
+                                Layout.preferredWidth: 22; Layout.preferredHeight: 22
                                 radius: 3
                                 color: delFileMa.containsMouse ? "#80b84848" : "transparent"
                                 Text {
@@ -272,6 +330,9 @@ Item {
                                         streamView.pendingFiles = arr
                                         if (streamView.pendingSelectedIndex >= arr.length)
                                             streamView.pendingSelectedIndex = arr.length - 1
+                                        // 清除该文件的缓存探测信息
+                                        if (streamView._probeCache[index])
+                                            delete streamView._probeCache[index]
                                     }
                                 }
                             }
@@ -280,7 +341,7 @@ Item {
                             id: rowMa
                             anchors.fill: parent
                             hoverEnabled: true
-                            onClicked: streamView.pendingSelectedIndex = index
+                            onClicked: streamView._onFileSelected(index)
                         }
                     }
 
@@ -293,74 +354,156 @@ Item {
                 }
             }
 
-            // 右：参数预览 + 开始按钮
-            Item {
-                Layout.fillWidth: true
+            // 右：文件信息面板（固定宽度 320px）
+            Rectangle {
+                Layout.preferredWidth: 320
                 Layout.fillHeight: true
+                radius: 4
+                color: "#16161b"
+                border.color: "#2a2e33"; border.width: 1
 
-                // 文件未选中时：占位提示
+                // 未选中文件时：占位
                 ColumnLayout {
                     anchors.centerIn: parent
                     spacing: 10
                     visible: streamView.pendingFiles.length === 0
+                              || streamView.pendingSelectedIndex < 0
+                              || streamView.pendingSelectedIndex >= streamView.pendingFiles.length
                     Text {
                         Layout.alignment: Qt.AlignHCenter
-                        text: "🎞"
-                        font.pixelSize: 56
+                        text: "📋"
+                        font.pixelSize: 40
                     }
                     Text {
                         Layout.alignment: Qt.AlignHCenter
-                        text: "选择 1～3 个码流文件开始分析"
-                        color: "#9aa0a6"; font.pixelSize: 13
-                    }
-                    Text {
-                        Layout.alignment: Qt.AlignHCenter
-                        text: "支持 H.264 / H.265 / mp4 / mkv / ts / flv / 裸流"
-                        color: "#6a6f76"; font.pixelSize: 11
+                        text: "点击左侧文件查看信息"
+                        color: "#9aa0a6"; font.pixelSize: 12
                     }
                 }
 
-                // 文件已选中：显示参数预览
+                // 已选中文件：显示 probeFile 解析的基本信息
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 12
+                    anchors.margins: 16
+                    spacing: 0
                     visible: streamView.pendingFiles.length > 0
                               && streamView.pendingSelectedIndex >= 0
                               && streamView.pendingSelectedIndex < streamView.pendingFiles.length
 
+                    // 标题
                     Text {
-                        text: "参数预览（来自文件）"
-                        color: "#bbbbbb"; font.pixelSize: 13; font.bold: true
+                        text: "文件信息"
+                        color: "#e8e8ec"; font.pixelSize: 14; font.bold: true
+                        Layout.bottomMargin: 12
                     }
+
+                    // 文件名
                     Text {
-                        text: "码流分析无需手动设置参数：宽高 / 帧率 / 编码 / profile / level / 码率"
-                              + " 全部从文件头自动解析，点「开始分析」即可。"
-                        color: "#6a6f76"; font.pixelSize: 11
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
-                    Text {
-                        text: "当前文件：" + (streamView.pendingSelectedIndex >= 0
-                              ? streamView._fileBasename(streamView.pendingFiles[streamView.pendingSelectedIndex])
-                              : "—")
+                        text: streamView._probeData.fileName || "—"
                         color: "#cccccc"; font.pixelSize: 12
                         font.family: "Monospace"
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
+                        Layout.bottomMargin: 4
                     }
+                    Text {
+                        text: streamView._probeData.filePath || ""
+                        color: "#6a6f76"; font.pixelSize: 10
+                        elide: Text.ElideLeft
+                        Layout.fillWidth: true
+                        Layout.bottomMargin: 16
+                    }
+
+                    // 分隔线
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.preferredHeight: 1
+                        color: "#2a2e33"
+                        Layout.bottomMargin: 12
+                    }
+
+                    // 信息行
+                    Repeater {
+                        model: [
+                            // ── 基本编码信息 ──
+                            { label: "编码格式", value: streamView._probeData.codecLong || "—" },
+                            { label: "封装格式", value: streamView._probeData.formatLong || streamView._probeData.format || "—" },
+                            { label: "Profile",  value: streamView._probeData.profile || "—" },
+                            { label: "Level",    value: streamView._probeData.level && streamView._probeData.level !== "0"
+                                                ? streamView._probeData.level : "—" },
+                            { label: "分辨率",   value: (streamView._probeData.width > 0 && streamView._probeData.height > 0)
+                                                ? (streamView._probeData.width + " × " + streamView._probeData.height)
+                                                : "—" },
+                            { label: "帧率",     value: streamView._probeData.fps > 0
+                                                ? (streamView._probeData.fps.toFixed(2) + " fps")
+                                                : "—" },
+                            { label: "总帧数",   value: streamView._probeData.frameCount > 0
+                                                ? streamView._probeData.frameCount : "—" },
+                            { label: "时长",     value: streamView._probeData.duration > 0
+                                                ? (streamView._formatDuration(streamView._probeData.duration))
+                                                : "—" },
+                            { label: "码率",     value: streamView._probeData.bitrate > 0
+                                                ? (streamView._formatBitrate(streamView._probeData.bitrate))
+                                                : "—" },
+                            // ── 像素与色彩 ──
+                            { label: "像素格式", value: streamView._probeData.pixFmt || "—" },
+                            { label: "位深",     value: streamView._probeData.bitsPerRawSample || "—" },
+                            { label: "色彩空间", value: streamView._probeData.colorSpace || "—" },
+                            { label: "色彩范围", value: streamView._probeData.colorRange || "—" },
+                            { label: "色彩原色", value: streamView._probeData.colorPrimaries || "—" },
+                            { label: "传输特性", value: streamView._probeData.colorTransfer || "—" },
+                            { label: "色度位置", value: streamView._probeData.chromaLocation || "—" },
+                            // ── 编码特征 ──
+                            { label: "场序",     value: streamView._probeData.fieldOrder || "—" },
+                            { label: "B帧延迟",  value: streamView._probeData.hasBFrames !== undefined
+                                                ? streamView._probeData.hasBFrames : "—" },
+                            { label: "参考帧数", value: streamView._probeData.refs || "—" },
+                            // ── 文件信息 ──
+                            { label: "文件大小", value: streamView._probeData.fileSize > 0
+                                                ? (streamView._formatFileSize(streamView._probeData.fileSize))
+                                                : "—" },
+                            { label: "封装类型", value: streamView._probeData.isAvc !== undefined
+                                                ? (streamView._probeData.isAvc ? "AVCC" : "Annex-B")
+                                                : "—" }
+                        ]
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 24
+                            spacing: 8
+                            Text {
+                                text: modelData.label
+                                color: "#9aa0a6"; font.pixelSize: 11
+                                Layout.preferredWidth: 70
+                            }
+                            Text {
+                                text: modelData.value
+                                color: "#e8e8ec"; font.pixelSize: 12
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                            }
+                        }
+                    }
+
+                    // 探测中提示
+                    Text {
+                        visible: streamView._probing
+                        text: "正在解析…"
+                        color: "#6a6f76"; font.pixelSize: 11
+                        Layout.topMargin: 12
+                    }
+
+                    Item { Layout.fillHeight: true }
 
                     // 状态文本（错误提示等）
                     Text {
                         text: streamView.pendingStatus
                         color: "#e05050"; font.pixelSize: 11
                         visible: streamView.pendingStatus.length > 0
+                        Layout.bottomMargin: 8
                     }
-
-                    Item { Layout.fillHeight: true }   // 弹性空白：把开始按钮顶到底
 
                     // 开始分析按钮
                     Rectangle {
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: 220
+                        Layout.fillWidth: true
                         Layout.preferredHeight: 40
                         radius: 6
                         color: startMa.containsMouse ? "#3d7adf" : "#2a5fc0"

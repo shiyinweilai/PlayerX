@@ -140,6 +140,13 @@ public:
     // 帧号 → 秒数（按 fps 反推），再交给 Engine。
     Q_INVOKABLE void seekPlayerTo(int slot, int frameIndex);
 
+    // ── 轻量探测（setup 阶段用）──────────────────────────────────
+    // 不打开 slot、不做帧级预扫描，只调 avformat_open_input +
+    // avformat_find_stream_info 拿基本流信息。
+    // 返回 QVariantMap 字段与 streamInfo() 一致。
+    // 用于 setup 阶段点击文件时即时显示基本信息。
+    Q_INVOKABLE QVariantMap probeFile(const QString& path) const;
+
 signals:
     void slotCountChanged();
     void prescanningChanged();
@@ -188,8 +195,14 @@ private:
                                       double pts, double dts, int poc, double avgQp);
     static QString colorSpaceToString(AVColorSpace cs);
     static QString colorRangeToString(AVColorRange cr);
+    static QString colorPrimariesToString(AVColorPrimaries cp);
+    static QString colorTransferToString(AVColorTransferCharacteristic trc);
+    static QString chromaLocationToString(AVChromaLocation cl);
+    static QString fieldOrderToString(AVFieldOrder fo);
     static QString pixFmtToString(AVPixelFormat f);
     static QString profileIdToString(AVCodecID id, int profileId);
+    static QString codecIdToShortName(AVCodecID id);
+    static QString codecIdToLongName(AVCodecID id);
 
     Slot m_slots[MaxSlots];
     int  m_slotCount = 0;
