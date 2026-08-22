@@ -197,11 +197,11 @@ qt_add_qml_module(PlayerX
         qml/VideoArea.qml
         qml/LeftNavBar.qml
         qml/YuvStatsPanel.qml
-        # ── 码流分析模块（拆分至独立文件） ──
-        qml/StreamView.qml
-        qml/StreamInfoCard.qml
-        qml/StreamInfoCardSection.qml
-        qml/StreamFlatButton.qml
+        # ── 码流分析模块（拆分至独立子目录 qml/stream/） ──
+        qml/stream/StreamView.qml
+        qml/stream/StreamInfoCard.qml
+        qml/stream/StreamInfoCardSection.qml
+        qml/stream/StreamFlatButton.qml
         # ── Main.qml 拆出的纯逻辑 JS ──
         qml/MainLogic.js
         qml/RatingLogic.js
