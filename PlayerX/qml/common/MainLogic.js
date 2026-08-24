@@ -901,13 +901,61 @@ function _tsResolveUrl(rawUrl) {
     return u
 }
 
+// 按 {group} 模板解析实际下载 URL 和 rootDir：
+//   url 含 {group} → 按组拆分模式，先确定评分人所属组别再替换
+//   url 不含 {group} → 旧模式，返回原值
+// 返回 { url, rootDir, group } ；group 为空表示未命中映射（旧模式或无 groups 配置）
+function _tsResolveGroup(ts) {
+    var rawUrl = String(ts.url || "").trim()
+    var rootRel = String(ts.rootDir || "").trim()
+    if (rawUrl.indexOf("{group}") < 0 && rootRel.indexOf("{group}") < 0) {
+        return { url: _tsResolveUrl(rawUrl), rootDir: rootRel, group: "" }
+    }
+
+    // 按组拆分模式：先确定评分人所属组别
+    var rater = ""
+    try {
+        if (typeof Rating !== "undefined") {
+            rater = String(Rating.currentUser || "").trim()
+            if (rater.length === 0 && typeof Rating.systemUserName === "function")
+                rater = String(Rating.systemUserName() || "").trim()
+        }
+    } catch (e) {}
+
+    var group = _tsGroupForRater(ts, rater)
+    if (group.length === 0) {
+        console.warn("[TestSource] url 含 {group} 模板但评分人「" + rater + "」未命中组别映射")
+        // 未命中映射：{group} 无法替换，返回空 url 让调用方报错
+        return { url: "", rootDir: rootRel, group: "" }
+    }
+
+    console.log("[TestSource] 评分人「" + rater + "」命中组别「" + group + "」→ 按组下载")
+    var resolvedUrl = _tsResolveUrl(rawUrl.replace(/\{group\}/g, group))
+    var resolvedRoot = rootRel.replace(/\{group\}/g, group)
+    return { url: resolvedUrl, rootDir: resolvedRoot, group: group }
+}
+
 function _startTestSourceAutomation(ts, configName) {
     if (_root._tsAuto) {
         console.warn("[TestSource] 已有自动化任务进行中，忽略本次触发")
         return
     }
-    var url = _tsResolveUrl(ts.url)
-    if (url.length === 0) return
+
+    // 按组拆分模式：先确定评分人所属组别，替换 {group} 模板
+    var resolved = _tsResolveGroup(ts)
+    var url = resolved.url
+    if (url.length === 0) {
+        _testSourceDownloadDialog._status = "error"
+        _testSourceDownloadDialog._statusText = "无法确定下载地址：url 含 {group} 模板但评分人未命中组别映射"
+        _testSourceDownloadDialog.open()
+        return
+    }
+
+    // 按组拆分模式下，组别已确定，直接写入 st 避免后续 _tsGateGroup 再弹窗
+    if (resolved.group.length > 0) {
+        ts = Object.assign({}, ts, { rootDir: resolved.rootDir })
+    }
+
     var fileName = url.split("/").pop().split("?")[0] || "test-source.zip"
     var workDir = _tsExpandHome(String(ts.workDir || "").trim())
     if (!workDir) workDir = (typeof Fs !== "undefined" ? Fs.downloadsDir() : "")
@@ -916,6 +964,14 @@ function _startTestSourceAutomation(ts, configName) {
     // zip 内顶层目录 test_auto/ 解压后落在 workDir/test_auto，
     // 不再额外多套一层与 zip 同名的目录）
     var extractTarget = workDir
+
+    // 构造 st 对象，预置 chosenGroup（按组拆分模式下组别已在下载前确定）
+    var _stObj = { ts: ts, configName: configName,
+                   zipPath: zipPath, extractTarget: extractTarget }
+    if (resolved.group.length > 0) {
+        _stObj._chosenGroup = resolved.group
+        _root._tsLastGroup = resolved.group
+    }
 
     // ── 重复下载检测：同配置 + zip 在 + 解压根在 → 弹「直接开始/重新下载」──
     var canon = _tsCanonical(ts)
@@ -932,14 +988,23 @@ function _startTestSourceAutomation(ts, configName) {
         return
     }
 
-    _tsBeginDownload(ts, configName, fileName, zipPath, extractTarget)
+    _tsBeginDownload(ts, configName, fileName, zipPath, extractTarget, resolved.group)
 }
 
-function _tsBeginDownload(ts, configName, fileName, zipPath, extractTarget) {
+function _tsBeginDownload(ts, configName, fileName, zipPath, extractTarget, group) {
     var url = _tsResolveUrl(ts.url)   // 相对路径在此兜底解析（幂等）
+    // 按组拆分模式：url 含 {group}，需替换后再下载
+    if (ts.url && String(ts.url).indexOf("{group}") >= 0) {
+        var resolved = _tsResolveGroup(ts)
+        url = resolved.url
+    }
     _root._tsAuto = {
         ts: ts, configName: configName,
         zipPath: zipPath, extractTarget: extractTarget
+    }
+    // 按组拆分模式：组别已在下载前确定，预置到 st 避免后续 _tsGateGroup 再弹窗
+    if (group && group.length > 0) {
+        _root._tsAuto._chosenGroup = group
     }
     console.log("[TestSource] 自动化启动:", url, "→ 解压到", extractTarget)
     // 直接驱动下载（不走 startDownload：它内部写死 ~/Downloads，会无视 workDir 配置）
@@ -975,12 +1040,20 @@ function _tsImportAndStart(st, extractTarget) {
     if (!Fs.isDirectoryPath(rootDir))
         return "内容根目录不存在：" + rootDir + "\n（请检查 testSource.rootDir 配置）"
 
-    // 组别：选组流程已在 _tsGateGroup 完成，这里把有效根切到所选组目录
-    // （g1/g2 等二级目录内各自包含完整的 laneDirs / 参考图 / 提示词）
+    // 组别处理：
+    //   · 按组拆分模式（rootDir 含 {group} 已被替换为实际值如 cfg_g1）：
+    //     zip 内顶层目录就是 cfg_g1，直接作为 effRoot，不再拼接 chosenGroup
+    //   · 旧模式（一个 zip 含 g1/g2/...）：effRoot = rootDir + chosenGroup
     var effRoot = rootDir
     if (st._chosenGroup) {
-        effRoot = rootDir + "/" + st._chosenGroup
-        if (!Fs.isDirectoryPath(effRoot)) return "所选组别目录不存在：" + effRoot
+        // 按组拆分模式：rootDir 已是 cfg_g1 这种实际路径，不再拼接组目录
+        // 判定方式：rootDir 末段已包含组名（如 _g1）→ 不拼接
+        var rootBase = rootDir.split("/").pop()
+        if (rootBase.indexOf(st._chosenGroup) < 0) {
+            // 旧模式：rootDir 是 cfg，需拼接 /g1
+            effRoot = rootDir + "/" + st._chosenGroup
+            if (!Fs.isDirectoryPath(effRoot)) return "所选组别目录不存在：" + effRoot
+        }
     }
 
     // 收集 lane 绝对路径并校验存在性
@@ -1085,6 +1158,15 @@ function _tsGateGroup(st, extractTarget) {
     if (laneDirs.length === 0) return false
     var rootDir = _tsRootDirFor(ts, extractTarget)
     if (!Fs.isDirectoryPath(rootDir)) return false   // 交给原逻辑报"根目录不存在"
+
+    // 按组拆分模式：rootDir 含 {group}（已被替换为实际值如 cfg_g1），
+    // zip 内只有一个组的顶层目录，无需也无法检测多个组别
+    var rootBase = String(ts.rootDir || "").trim()
+    if (rootBase.indexOf("{group}") >= 0 || /_g\d+$/.test(rootBase.split("/").pop())) {
+        console.log("[TestSource] 按组拆分模式，rootDir 已含组别，跳过组别检测")
+        return false
+    }
+
     var groups = _tsDetectGroups(rootDir, laneDirs)
     if (groups.length === 0) return false
 

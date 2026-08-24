@@ -84,8 +84,21 @@ Dialog {
         d._status     = "downloading"
         d._statusText = "跳过下载，正在导入…"
         d.open()
-        var _stObj = { ts: st.ts, configName: st.configName,
+
+        // 按组拆分模式：替换 {group} 模板为实际组别
+        var _ts = st.ts
+        var _group = ""
+        if (String(_ts.url || "").indexOf("{group}") >= 0) {
+            var _resolved = Logic._tsResolveGroup(_ts)
+            _group = _resolved.group
+            _ts = Object.assign({}, _ts, { rootDir: _resolved.rootDir })
+        }
+
+        var _stObj = { ts: _ts, configName: st.configName,
                        zipPath: st.zipPath, extractTarget: st.extractTarget }
+        if (_group.length > 0) {
+            _stObj._chosenGroup = _group
+        }
         // 组别门：跳过下载同样可能遇到多组别包，先弹窗选组
         if (Logic._tsGateGroup(_stObj, st.extractTarget)) { d.close(); return }
         var err = Logic._tsImportAndStart(_stObj, st.extractTarget)
@@ -266,7 +279,13 @@ Dialog {
                     var st = testSourceRedownloadDialog._pending
                     if (!st) return
                     console.log("[TestSource] 用户选择强制重新下载:", st.fileName)
-                    Logic._tsBeginDownload(st.ts, st.configName, st.fileName, st.zipPath, st.extractTarget)
+                    // 按组拆分模式：从 ts.url 判断是否含 {group}，传递组别
+                    var _group = ""
+                    if (st.ts && String(st.ts.url || "").indexOf("{group}") >= 0) {
+                        var _resolved = Logic._tsResolveGroup(st.ts)
+                        _group = _resolved.group
+                    }
+                    Logic._tsBeginDownload(st.ts, st.configName, st.fileName, st.zipPath, st.extractTarget, _group)
                 }
             }
             FlatButton {
