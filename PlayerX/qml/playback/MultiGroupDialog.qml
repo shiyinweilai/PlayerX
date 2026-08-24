@@ -1627,25 +1627,38 @@ ApplicationWindow {
         }
     }
 
-    // ─── 批量勾选 / 取消勾选 所有通道 ──────────────────────────────
-    // 行为：把所有 lane 的 selected 同步置为目标值：
-    //   · 「全选」→ 把所有 lane.selected 置 true（含当前未勾选 + folderPath 为空的占位行
-    //     也都勾上）。start() 内部已经校验 currentPath 为空会跳过这些路，所以勾上空行
-    //     不会引入副作用；用户可手动取消单条恢复。
-    //   · 「清空所有通道」→ 把所有 lane.selected 置 false。
-    // 与 addLane / removeLane 保持同样的"改动后落盘 + 触发 _bumpState"流程，
-    // 保证勾选状态被持久化、能被 canStart 等属性正确读到。
+    // ─── 批量勾选 / 取消勾选 / 清空所有通道 ─────────────────────────
+    // 行为：
+    //   · 「全选」→ toggle 语义：首次点把所有 lane.selected 置 true；
+    //     再次点（已全部勾选时）把所有 lane.selected 置 false（相当于全不选）。
+    //   · 「清空」→ 删除所有通道（不是取消勾选），等同于逐个 removeLane。
     function selectAllLanes() {
         if (_rowsModel.count === 0) return
-        var changed = false
+        // 判断是否已全部勾选
+        var allSelected = true
         for (var i = 0; i < _rowsModel.count; ++i) {
             var l = _rowsModel.get(i)
-            if (l && !l.selected) {
-                _rowsModel.setProperty(i, "selected", true)
+            if (l && !l.selected) { allSelected = false; break }
+        }
+        // toggle：全选 → 全不选；未全选 → 全选
+        var target = !allSelected
+        var changed = false
+        for (var j = 0; j < _rowsModel.count; ++j) {
+            var lj = _rowsModel.get(j)
+            if (lj && lj.selected !== target) {
+                _rowsModel.setProperty(j, "selected", target)
                 changed = true
             }
         }
         if (changed) { _bumpState(); _persistLanes() }
+    }
+
+    // 清空所有通道：逐个 removeLane（会同步移除文件夹历史 + 落盘）
+    function clearAllLanes() {
+        if (_rowsModel.count === 0) return
+        while (_rowsModel.count > 0) {
+            removeLane(0)
+        }
     }
 
     function deselectAllLanes() {
@@ -3078,7 +3091,7 @@ ApplicationWindow {
                     id: deselectAllBtn
                     text: "清空"
                     enabled: _rowsModel.count > 0
-                    onClicked: deselectAllLanes()
+                    onClicked: clearAllLanes()
                     background: Rectangle {
                         color: !deselectAllBtn.enabled ? "#1a1a1d"
                               : deselectAllBtn.down ? "#4a4a55"
