@@ -878,7 +878,7 @@ ApplicationWindow {
         if (configName.length === 0) return ""
         var m = base.match(/^(https?:\/\/[^/]+)/)
         var origin = m ? m[1] : base.replace(/\/$/, "")
-        return origin + "/#tasks/" + encodeURIComponent(configName)
+        return origin + "/?tab=dims#tasks/" + encodeURIComponent(configName)
     }
 
     // ─── 单路浏览模式的「N 宫格」状态 ───────────────────────────────
