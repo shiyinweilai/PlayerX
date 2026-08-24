@@ -34,6 +34,8 @@
 #include <QMessageLogContext>
 #include <QString>
 #include <QByteArray>
+#include <QList>
+#include <algorithm>
 
 #include <cstdio>
 
@@ -89,49 +91,84 @@ static QString g_logFilePath;
 // 计算并准备好日志目录与本次运行的日志文件路径。
 // 路径与 FsUtils::appLogDir 保持一致：<CacheLocation>/logs。
 //
-// 同时清理过旧日志，避免无限增长：
-//   ① 数量上限：仅保留最近 kKeepCount 个 playerx_*.log（按修改时间倒序）
-//   ② 总大小上限：超过 kMaxTotalBytes 时，从最旧的开始删，直到总和 ≤ 上限
-// 两条规则并行生效，谁先命中谁先删。这样既能避免文件数过多（用户终端
-// 被无限文件污染），也能防止单次长跑写出超大日志撑爆磁盘。
+// 文件名格式：playerx_<unix_timestamp>_<NN>.log
+//   - <unix_timestamp>：秒级时间戳，天然单调递增，一眼可看出"哪个最新"
+//   - <NN>：两位十进制序号（00~99），同一秒内多次启动时递增，确保不撞名
+//   示例：playerx_1755900000_03.log（第 3 次启动且时间戳为 1755900000）
+//
+// 日志轮转策略（最多保留 kKeepCount 份）：
+//   ① 扫描目录下所有 playerx_*.log，按文件名中的时间戳+序号降序排列（最新在前）
+//   ② 保留前 kKeepCount 个，其余全部删除
+//   ③ 总大小上限兜底：即使文件数 ≤ kKeepCount，若总和超过 kMaxTotalBytes，
+//      从最旧的开始删，直到总和 ≤ 上限
+// 这样既满足"最多 10 份日志"的硬上限，又能防止单份日志过大撑爆磁盘。
 static QString prepareLogFilePath() {
     QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
     if (cache.isEmpty()) cache = QDir::homePath() + "/.playerx_cache";
     QString logDir = cache + "/logs";
     QDir().mkpath(logDir);
 
-    // 旧日志清理
+    // ── 计算本次序号：取已有日志中的最大序号 +1，每次启动序号都递增 ──
+    //   旧逻辑只在"同一秒内多次启动"时才递增，正常使用间隔超过 1 秒 → 永远是 00。
+    //   新逻辑扫描所有 playerx_*.log 的序号，取最大值 +1，使每次启动序号都不同。
+    //   序号范围 00~99，溢出后回绕到 00（约 100 次启动才回绕一次，此时时间戳已不同，不会撞名）。
+    qint64 nowSecs = QDateTime::currentSecsSinceEpoch();
+    int seq = 0;
     {
-        constexpr int      kKeepCount     = 100;                  // 保留最近 100 个文件
-        constexpr qint64   kMaxTotalBytes = 100LL * 1024 * 1024;  // 总大小不超过 100 MB
+        QDir d(logDir);
+        int maxSeq = -1;
+        for (const QFileInfo& fi : d.entryInfoList({"playerx_*.log"}, QDir::Files | QDir::NoSymLinks)) {
+            QString base = fi.completeBaseName();   // e.g. "playerx_1755900000_03"
+            int lastUnderscore = base.lastIndexOf('_');
+            if (lastUnderscore >= 0) {
+                QString seqStr = base.mid(lastUnderscore + 1);
+                bool ok = false;
+                int s = seqStr.toInt(&ok);
+                if (ok && s > maxSeq) maxSeq = s;
+            }
+        }
+        seq = (maxSeq + 1) % 100;  // 00~99 循环递增
+    }
+
+    // ── 旧日志清理 ──
+    {
+        constexpr int    kKeepCount     = 10;                  // 最多保留 10 份日志
+        constexpr qint64 kMaxTotalBytes = 20LL * 1024 * 1024;  // 总大小不超过 20 MB
 
         QDir d(logDir);
-        QFileInfoList olds = d.entryInfoList({"playerx_*.log"},
-                                              QDir::Files | QDir::NoSymLinks,
-                                              QDir::Time);  // 最新在前
+        QFileInfoList all = d.entryInfoList({"playerx_*.log"},
+                                            QDir::Files | QDir::NoSymLinks,
+                                            QDir::Name);  // 按文件名升序
 
-        // ① 数量裁剪
-        for (int i = kKeepCount; i < olds.size(); ++i) {
-            QFile::remove(olds.at(i).absoluteFilePath());
+        // 按文件名降序排列（时间戳+序号大的在前 = 最新在前）
+        std::sort(all.begin(), all.end(), [](const QFileInfo& a, const QFileInfo& b) {
+            return a.fileName() > b.fileName();
+        });
+
+        // ① 数量裁剪：保留前 kKeepCount 个，其余删除
+        if (all.size() > kKeepCount) {
+            for (int i = kKeepCount; i < all.size(); ++i) {
+                QFile::remove(all.at(i).absoluteFilePath());
+            }
+            all = all.mid(0, kKeepCount);
         }
-        if (olds.size() > kKeepCount) olds = olds.mid(0, kKeepCount);
 
         // ② 总大小裁剪：从最新往最旧累计；累计值首次超过上限的那一刻起，
         //    后续（更旧的）全部删掉。这样保证留下来的都是"最新一批"。
         qint64 acc = 0;
-        for (int i = 0; i < olds.size(); ++i) {
-            acc += olds.at(i).size();
-            if (acc > kMaxTotalBytes && i + 1 < olds.size()) {
-                for (int j = i + 1; j < olds.size(); ++j) {
-                    QFile::remove(olds.at(j).absoluteFilePath());
+        for (int i = 0; i < all.size(); ++i) {
+            acc += all.at(i).size();
+            if (acc > kMaxTotalBytes && i + 1 < all.size()) {
+                for (int j = i + 1; j < all.size(); ++j) {
+                    QFile::remove(all.at(j).absoluteFilePath());
                 }
                 break;
             }
         }
     }
 
-    QString stamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
-    return logDir + "/playerx_" + stamp + ".log";
+    QString seqStr = QString("%1").arg(seq, 2, 10, QChar('0'));   // 两位补零
+    return logDir + "/playerx_" + QString::number(nowSecs) + "_" + seqStr + ".log";
 }
 
 // Qt 日志 handler：把 qDebug/qInfo/qWarning/... 同时输出到 stderr（已被重定向到文件）。
