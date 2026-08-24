@@ -90,6 +90,8 @@ Item {
         streamView._probing = false
         if (data && Object.keys(data).length > 0) {
             streamView._probeCache[path] = data
+            // 强制刷新 _probeCache 绑定（与 _batchProbe 同理），使列表中该行大小/时间立即显示
+            streamView._probeCache = Object.assign({}, streamView._probeCache)
             streamView._probeData = data
         }
     }
@@ -186,6 +188,10 @@ Item {
             if (info && Object.keys(info).length > 0)
                 streamView._probeCache[p] = info
         }
+        // 强制刷新 _probeCache 绑定：QML 对 property var 的原地修改（obj[key]=val）
+        // 不会触发绑定刷新，ListView 中已存在的 delegate 不会重新求值。
+        // 重新赋值一个浅拷贝对象，使依赖 _probeCache[modelData] 的 delegate 全部刷新。
+        streamView._probeCache = Object.assign({}, streamView._probeCache)
         // 刷新当前选中文件的详情（可能刚被 probe 过）
         if (streamView.pendingSelectedIndex >= 0
             && streamView.pendingSelectedIndex < streamView.pendingFiles.length) {
@@ -1270,6 +1276,9 @@ Item {
             streamView.pendingFiles = merged
             streamView.pendingSelectedIndex = merged.length - newPaths.length
             streamView.pendingStatus = ""
+            // 批量预 probe，使列表中每行都能显示大小和修改时间
+            streamView._batchProbe()
+            streamView._onFileSelected(streamView.pendingSelectedIndex)
         }
     }
     FolderDialog {
