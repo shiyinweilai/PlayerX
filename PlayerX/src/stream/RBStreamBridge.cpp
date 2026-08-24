@@ -210,10 +210,14 @@ bool RBStreamBridge::parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer) {
         s.codecName = "hevc";
         s.codecLongName = "H.265 / HEVC";
     } else {
-        s.codecName = QString::fromUtf8(fmt->iformat->name);
-        s.codecLongName = QString::fromUtf8(par->codec_id == AV_CODEC_ID_NONE
-                                            ? "unknown" : avcodec_get_name(par->codec_id));
+        // 非 h264/hevc（vp9/av1/mpeg 等）：用编码器短名，不要用容器名
+        s.codecName = codecIdToShortName(par->codec_id);
+        s.codecLongName = codecIdToLongName(par->codec_id);
     }
+
+    // 记录容器格式名（供 UI 展示）
+    s.containerFormat = fmt->iformat ? QString::fromUtf8(fmt->iformat->name) : "";
+    s.containerLongName = fmt->iformat ? QString::fromUtf8(fmt->iformat->long_name) : "";
 
     // 决定 NAL 读取方式：AnnexB（裸流）vs AVCC（mp4 等封装）
     //   · annexb：H.265 raw / h264 raw / m2ts / ts / flv 等
@@ -453,6 +457,8 @@ QVariantMap RBStreamBridge::streamInfo(int slot) const {
     m["frameCount"]   = int(s.frameTypes.size());
     m["fileName"]     = fileName(slot);
     m["filePath"]     = s.path;
+    m["containerFormat"]   = s.containerFormat;
+    m["containerLongName"] = s.containerLongName;
     return m;
 }
 
@@ -686,6 +692,10 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
     m["duration"]     = (fmt->duration > 0) ? double(fmt->duration) / AV_TIME_BASE : 0.0;
     m["bitrate"]      = double(fmt->bit_rate);
     m["fileSize"]     = qint64(fmt->pb ? avio_size(fmt->pb) : 0);
+    {
+        QFileInfo fi(path);
+        m["fileModified"] = fi.lastModified().toString("yyyy-MM-dd HH:mm:ss");
+    }
 
     if (vIdx >= 0) {
         AVCodecParameters* par = fmt->streams[vIdx]->codecpar;

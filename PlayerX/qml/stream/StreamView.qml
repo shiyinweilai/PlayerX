@@ -46,7 +46,9 @@ Item {
         if (saved && saved.length > 0) {
             streamView.pendingFiles = saved
             streamView.pendingSelectedIndex = 0
-            // 自动探测第一个文件
+            // 批量预 probe 所有文件（列表显示大小+修改时间）
+            streamView._batchProbe()
+            // 选中第一个文件并展示详情
             streamView._onFileSelected(0)
         }
         streamView._pendingLoaded = true
@@ -174,6 +176,25 @@ Item {
         return m[streamView._sortMode] || "默认"
     }
 
+    // ── 批量预 probe：添加文件后遍历所有未缓存的路径，逐个探测并填充 _probeCache ──
+    // 使文件列表中每行都能显示文件大小和修改时间，而不仅仅是被点击的那一个。
+    function _batchProbe() {
+        for (let i = 0; i < streamView.pendingFiles.length; ++i) {
+            const p = streamView.pendingFiles[i]
+            if (streamView._probeCache[p]) continue
+            const info = StreamBridge.probeFile(p)
+            if (info && Object.keys(info).length > 0)
+                streamView._probeCache[p] = info
+        }
+        // 刷新当前选中文件的详情（可能刚被 probe 过）
+        if (streamView.pendingSelectedIndex >= 0
+            && streamView.pendingSelectedIndex < streamView.pendingFiles.length) {
+            const curPath = streamView.pendingFiles[streamView.pendingSelectedIndex]
+            if (streamView._probeCache[curPath])
+                streamView._probeData = streamView._probeCache[curPath]
+        }
+    }
+
     // ── 拖拽导入：从 DropArea 接收文件 URL 列表 ──
     function _handleDroppedFiles(urls) {
         if (!urls || urls.length === 0) return
@@ -185,7 +206,20 @@ Item {
         for (let i = 0; i < urls.length; ++i) {
             const localPath = streamView._normalizeFilePath(urls[i])
             if (!localPath || localPath.length === 0) continue
-            // 扩展名过滤
+
+            // 文件夹：递归扫描视频文件
+            if (Fs.isDirectoryPath(localPath)) {
+                let found = []
+                try { found = Fs.scanVideoFolderPath(localPath, true) || [] } catch (e) { found = [] }
+                for (let j = 0; j < found.length; ++j) {
+                    const p = found[j]
+                    if (newPaths.indexOf(p) < 0 && streamView.pendingFiles.indexOf(p) < 0)
+                        newPaths.push(p)
+                }
+                continue
+            }
+
+            // 文件：扩展名过滤
             const dotIdx = localPath.lastIndexOf(".")
             if (dotIdx < 0) continue
             const ext = localPath.substring(dotIdx + 1).toLowerCase()
@@ -204,6 +238,10 @@ Item {
         streamView.pendingFiles = merged
         streamView.pendingSelectedIndex = merged.length - newPaths.length
         streamView.pendingStatus = ""
+        // 批量预 probe，使列表中每行都能显示大小和修改时间
+        streamView._batchProbe()
+        // 选中第一个新加入的文件
+        streamView._onFileSelected(streamView.pendingSelectedIndex)
     }
 
     // 格式化码率
@@ -592,6 +630,7 @@ Item {
                         border.color: streamView.pendingSelectedIndex === index ? "#3a78c8" : "transparent"
                         border.width: 1
                         RowLayout {
+                            z: 1  // 置于 rowMa 之上，使删除按钮可点击
                             anchors.fill: parent
                             anchors.leftMargin: 12
                             anchors.rightMargin: 10
@@ -610,12 +649,35 @@ Item {
                             Text {
                                 text: streamView._fileDir(modelData)
                                 color: "#6a6f76"; font.pixelSize: 10
-                                Layout.maximumWidth: 260
+                                Layout.maximumWidth: 200
                                 elide: Text.ElideLeft
+                            }
+                            Text {
+                                // 文件大小（从 probeCache 取，无缓存时显示 —）
+                                text: {
+                                    var info = streamView._probeCache[modelData]
+                                    if (info && info.fileSize > 0)
+                                        return streamView._formatFileSize(info.fileSize)
+                                    return "—"
+                                }
+                                color: "#6a6f76"; font.pixelSize: 10
+                                Layout.preferredWidth: 64
+                                horizontalAlignment: Text.AlignRight
+                            }
+                            Text {
+                                // 修改时间（从 probeCache 取，无缓存时显示 —）
+                                text: {
+                                    var info = streamView._probeCache[modelData]
+                                    if (info && info.fileModified)
+                                        return info.fileModified
+                                    return "—"
+                                }
+                                color: "#6a6f76"; font.pixelSize: 10
+                                Layout.preferredWidth: 140
                             }
                             // 删除按钮（hover 时显示）
                             Rectangle {
-                                visible: rowMa.containsMouse
+                                visible: rowMa.containsMouse || delFileMa.containsMouse
                                 Layout.preferredWidth: 22; Layout.preferredHeight: 22
                                 radius: 3
                                 color: delFileMa.containsMouse ? "#80b84848" : "transparent"
@@ -627,6 +689,7 @@ Item {
                                 MouseArea {
                                     id: delFileMa
                                     anchors.fill: parent
+                                    hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
                                         var arr = streamView.pendingFiles.slice()
@@ -656,7 +719,7 @@ Item {
                     Text {
                         anchors.centerIn: parent
                         visible: streamView.pendingFiles.length === 0
-                        text: "拖拽视频文件到此处，或点右上「+ 添加」选择 H.264 / H.265 视频"
+                        text: "拖拽视频文件到此处，或点右上「+ 添加」选择视频文件"
                         color: "#6a6f76"; font.pixelSize: 12
                     }
                 }
@@ -804,6 +867,7 @@ Item {
                             { label: "文件大小", value: streamView._probeData.fileSize > 0
                                                 ? (streamView._formatFileSize(streamView._probeData.fileSize))
                                                 : "—" },
+                            { label: "修改时间", value: streamView._probeData.fileModified || "—" },
                             { label: "封装类型", value: streamView._probeData.isAvc !== undefined
                                                 ? (streamView._probeData.isAvc ? "AVCC" : "Annex-B")
                                                 : "—" }
@@ -1190,7 +1254,7 @@ Item {
         title: "添加码流文件"
         fileMode: FileDialog.OpenFiles
         nameFilters: [
-            "码流文件 (*.mp4 *.mov *.m4v *.mkv *.ts *.flv *.h264 *.hevc *.h265 *.265)",
+            "视频文件 (*.mp4 *.mov *.m4v *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv *.mpg *.mpeg *.m2ts *.mts *.vob *.ogv *.3gp *.asf *.h264 *.hevc *.h265 *.265 *.264 *.y4m *.yuv)",
             "所有文件 (*)"
         ]
         onAccepted: {
@@ -1226,6 +1290,9 @@ Item {
             streamView.pendingFiles = merged
             streamView.pendingSelectedIndex = merged.length - found.length
             streamView.pendingStatus = ""
+            // 批量预 probe
+            streamView._batchProbe()
+            streamView._onFileSelected(streamView.pendingSelectedIndex)
         }
     }
 

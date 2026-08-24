@@ -163,6 +163,8 @@ private:
         // 顶层流参数（来自 AVFormatContext / AVCodecParameters）
         QString codecName;
         QString codecLongName;
+        QString containerFormat;      // 容器格式短名（mp4 / mov / matroska / avi …）
+        QString containerLongName;    // 容器格式长名
         int     width = 0;
         int     height = 0;
         AVRational fps{0, 1};
