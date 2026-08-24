@@ -52,15 +52,21 @@ Shortcut {
         }
     }
 }
-// C：切换全局通道信息（序号+文件名）。全屏抑制状下会先清抑制再强制显示。
+// C：切换通道/路径信息显隐
+//   - 播放对比 tab → 切换全局通道信息（序号+文件名）
+//   - YUV tab → 切换画面内侧路径信息 overlay（序号+文件名+关闭）
 Shortcut {
     sequence: "C"; context: Qt.ApplicationShortcut
     onActivated: {
-        if (root.fullscreenSuppressChannel) {
-            root.fullscreenSuppressChannel = false
-            root.globalChannelVisible = true
+        if (root.currentTab === "yuv") {
+            YuvBridge.requestToggleSlotInfo()
         } else {
-            root.globalChannelVisible = !root.globalChannelVisible
+            if (root.fullscreenSuppressChannel) {
+                root.fullscreenSuppressChannel = false
+                root.globalChannelVisible = true
+            } else {
+                root.globalChannelVisible = !root.globalChannelVisible
+            }
         }
     }
 }
@@ -176,10 +182,19 @@ Shortcut {
     enabled: root.currentTab === "yuv" && YuvBridge.slotCount > 0
     onActivated: YuvBridge.resetView()
 }
-// B：切换"滑动对比"模式（仅 2 路视频可用）
+// B：切换"滑动对比"模式
+//   - YUV tab（2 路）→ 切换 YUV 滑动对比（通过 YuvBridge 信号转发到 YuvWindow）
+//   - 播放对比 tab（2 路）→ 切换播放对比滑动对比（RatingLogic._toggleCompareSlider）
 Shortcut {
     sequence: "B"; context: Qt.ApplicationShortcut
-    onActivated: RatingLogic._toggleCompareSlider()
+    onActivated: {
+        if (root.currentTab === "yuv") {
+            // 通过 YuvBridge 发出信号，YuvWindow 监听并切换
+            YuvBridge.requestToggleSliderCompare()
+        } else {
+            RatingLogic._toggleCompareSlider()
+        }
+    }
 }
 // 倍速快捷键（参考 video-compare）：- 慢、= 快、0 复位
 // 同时支持小键盘 + / - 与主键盘 + 的常见组合

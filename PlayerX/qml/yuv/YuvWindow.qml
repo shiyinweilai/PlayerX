@@ -23,6 +23,34 @@ Item {
     // 挨在一起的悬浮矩阵浮窗；拖动任意一个浮窗的网格，三者共享同一滚动位置
     // 同步滚动；两路视频的同坐标块同时描边高亮。
     property bool cmpActive: openSlotCount === 2
+
+    // ── 滑动对比模式（仅 2 路时可用，B 快捷键或按钮切换）──────────────────
+    // 启用后，Repeater 的双窗口隐藏，改为加载 YuvSliderCompareView 单画面滑动对比。
+    property bool sliderCompareActive: false
+
+    // 切换滑动对比模式（供快捷键 B 和底部按钮调用）
+    function toggleSliderCompare() {
+        if (!yuvView.cmpActive) return
+        yuvView.sliderCompareActive = !yuvView.sliderCompareActive
+    }
+
+    // ── 画面内侧路径信息显隐（C 快捷键切换）────────────────────────────
+    // 默认显示；C 键切换后隐藏画面内侧的序号+文件名 overlay。
+    property bool slotInfoVisible: true
+    function toggleSlotInfo() {
+        yuvView.slotInfoVisible = !yuvView.slotInfoVisible
+    }
+
+    // cmpActive 变为 false（从 2 路变非 2 路）时强制退出滑动对比
+    onCmpActiveChanged: {
+        // 打开/关闭对比模式（第三路打开或关闭时）复位状态，避免残留数据/滚动位置
+        cmpShow = false
+        cmpPinned = false
+        cmpScrollX = 0
+        cmpScrollY = 0
+        sliderCompareActive = false
+    }
+
     property bool cmpShow: false
     property bool cmpPinned: false
     property int cmpSlotA: 0
@@ -72,13 +100,6 @@ Item {
         else return Math.max(8, areaH - gh - 8)
     }
 
-    onCmpActiveChanged: {
-        // 打开/关闭对比模式（第三路打开或关闭时）复位状态，避免残留数据/滚动位置
-        cmpShow = false
-        cmpPinned = false
-        cmpScrollX = 0
-        cmpScrollY = 0
-    }
     onCmpPinnedChanged: {
         if (!cmpPinned) {
             cmpScrollX = 0
@@ -106,6 +127,14 @@ Item {
             yuvView.cmpGroupX = Math.max(8, (yuvView.width - cmpGroup.width) / 2)
             yuvView.cmpGroupY = Math.max(8, (yuvView.height - cmpGroup.height) / 2)
             yuvView.cmpPinned = true
+        }
+        // 快捷键 B → YuvBridge.requestToggleSliderCompare() → 本信号
+        function onToggleSliderCompareRequested() {
+            yuvView.toggleSliderCompare()
+        }
+        // 快捷键 C → YuvBridge.requestToggleSlotInfo() → 本信号
+        function onToggleSlotInfoRequested() {
+            yuvView.toggleSlotInfo()
         }
     }
 
@@ -456,6 +485,8 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 2
+            // 滑动对比模式时隐藏多窗口布局，改为下方 Loader 全屏显示滑动对比
+            visible: !yuvView.sliderCompareActive
 
             Repeater {
                 model: yuvView.openSlotCount
@@ -480,64 +511,11 @@ Item {
                         }
                     }
 
-                    ColumnLayout {
+                    // 画面区域直接填充整个 slot delegate（原顶部信息条已移除，
+                    // 序号+文件名改为画面内侧 overlay，C 键切换显隐）
+                    Item {
+                        id: slotStage
                         anchors.fill: parent
-                        spacing: 0
-
-                        // ── 顶部信息条：序号 + 文件名 + 关闭 ──
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 28
-                            color: "#14141a"
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 8
-                                anchors.rightMargin: 8
-                                spacing: 6
-
-                                // 序号标签
-                                Rectangle {
-                                    width: 20; height: 18; radius: 3
-                                    color: "#3a6fd8"
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: (slotWin.index + 1).toString()
-                                        color: "#fff"; font.pixelSize: 11; font.bold: true
-                                    }
-                                }
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: YuvBridge.fileName(slotWin.index)
-                                    color: "#c8c8d0"; font.pixelSize: 11
-                                    elide: Text.ElideMiddle
-                                }
-
-                                // 关闭按钮
-                                Rectangle {
-                                    width: 18; height: 18; radius: 9
-                                    color: slotCloseMa.containsMouse ? "#b85a5a" : "transparent"
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: "×"; color: "#f5a3a3"; font.pixelSize: 12; font.bold: true
-                                    }
-                                    MouseArea {
-                                        id: slotCloseMa
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: YuvBridge.closeFile(slotWin.index)
-                                    }
-                                }
-                            }
-                        }
-
-                        // ── 画面区域（画面 + 悬浮内嵌控制条，鼠标悬浮画面时显示控制条）──
-                        Item {
-                            id: slotStage
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
 
                             // 悬浮检测覆盖整个画面+控制条区域，用于淡入淡出内嵌控制条；
                             // HoverHandler 非独占抓取，不影响下方已有 MouseArea 的事件响应。
@@ -1547,10 +1525,76 @@ Item {
                                 }
                             }
                         } // end Rectangle slotFloatBar
-                        } // end Item slotStage
-                    }
-                }
-            }
+
+                        // ── 画面内侧顶部 overlay：序号 + 文件名 + 关闭（C 键切换显隐）──
+                        Rectangle {
+                            id: slotInfoBar
+                            anchors.left: slotScreen.left
+                            anchors.top: slotScreen.top
+                            anchors.margins: 6
+                            radius: 3
+                            color: "#aa000000"
+                            visible: yuvView.slotInfoVisible
+                            z: 5
+                            implicitWidth: slotInfoRow.implicitWidth + 12
+                            implicitHeight: slotInfoRow.implicitHeight + 4
+                            width:  implicitWidth
+                            height: implicitHeight
+
+                            RowLayout {
+                                id: slotInfoRow
+                                anchors.centerIn: parent
+                                spacing: 6
+
+                                // 序号标签
+                                Rectangle {
+                                    width: 20; height: 18; radius: 3
+                                    color: "#3a6fd8"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: (slotWin.index + 1).toString()
+                                        color: "#fff"; font.pixelSize: 11; font.bold: true
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: YuvBridge.fileName(slotWin.index)
+                                    color: "#c8c8d0"; font.pixelSize: 11
+                                    elide: Text.ElideMiddle
+                                    Layout.maximumWidth: slotScreen.width - 80
+                                }
+
+                                // 关闭按钮
+                                Rectangle {
+                                    width: 18; height: 18; radius: 9
+                                    color: slotCloseMa.containsMouse ? "#b85a5a" : "transparent"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "×"; color: "#f5a3a3"; font.pixelSize: 12; font.bold: true
+                                    }
+                                    MouseArea {
+                                        id: slotCloseMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: YuvBridge.closeFile(slotWin.index)
+                                    }
+                                }
+                            }
+                        } // end Rectangle slotInfoBar
+                    } // end Item slotStage
+                } // end delegate Rectangle
+            } // end Repeater
+        } // end RowLayout
+
+        // ── 滑动对比模式：全屏覆盖多窗口区域，仅 2 路时可用 ──────────────
+        Loader {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            active: yuvView.sliderCompareActive && yuvView.cmpActive
+            visible: active
+            source: "qrc:/yuv/YuvSliderCompareView.qml"
         }
 
         // ── 最下方：全局总控（同时作用于所有已打开 slot）───────────────
@@ -1753,6 +1797,25 @@ Item {
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: yuvView.centerAllRequested()
                         }
+                    }
+                }
+
+                // ── 滑动对比切换按钮（仅 2 路时显示，等价于快捷键 B）──
+                Rectangle {
+                    visible: yuvView.cmpActive
+                    width: 72; height: 22; radius: 3
+                    color: yuvView.sliderCompareActive
+                        ? "#802a5fc0"
+                        : (gSliderMa.containsMouse ? "#803a3a3d" : "#80252528")
+                    Text {
+                        anchors.centerIn: parent
+                        text: yuvView.sliderCompareActive ? "退出 ⇆" : "⇆ 滑动"
+                        color: "#fff"; font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: gSliderMa; anchors.fill: parent
+                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: yuvView.toggleSliderCompare()
                     }
                 }
 

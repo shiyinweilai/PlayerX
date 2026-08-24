@@ -48,6 +48,7 @@
 #include "qt/Updater.h"
 #include "yuv/YuvBridge.h"
 #include "yuv/YuvDisplayItem.h"
+#include "yuv/YuvSliderCompareItem.h"
 #include "stream/RBStreamBridge.h"
 
 extern "C" {
@@ -297,6 +298,9 @@ int main(int argc, char* argv[]) {
     // 注册 YuvDisplayItem 为 QML 类型（供 YuvWindow.qml 使用）。
     // URI 用独立前缀，避免和 qt_add_qml_module(URI PlayerX) 冲突。
     qmlRegisterType<YuvDisplayItem>("PlayerX.YuvTools", 1, 0, "YuvDisplayItem");
+
+    // 注册 YuvSliderCompareItem（YUV 双路滑动对比渲染组件）。
+    qmlRegisterType<YuvSliderCompareItem>("PlayerX.YuvTools", 1, 0, "YuvSliderCompareItem");
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,

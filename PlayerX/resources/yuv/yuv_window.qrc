@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/yuv">
         <file alias="YuvWindow.qml">../../qml/yuv/YuvWindow.qml</file>
+        <file alias="YuvSliderCompareView.qml">../../qml/yuv/YuvSliderCompareView.qml</file>
     </qresource>
 </RCC>

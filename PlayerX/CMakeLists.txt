@@ -105,9 +105,10 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     # 多组对比模式辅助工具（仅供 QML 配置面板使用，不触达播放内核）
     src/qt/FsUtils.cpp
     # YUV 裸数据分析工具（独立模块，复用 sws_scale 但不依赖播放管线）
-    src/yuv/YuvAnalyzer.cpp
-    src/yuv/YuvBridge.cpp
-    src/yuv/YuvDisplayItem.cpp
+src/yuv/YuvAnalyzer.cpp
+src/yuv/YuvBridge.cpp
+src/yuv/YuvDisplayItem.cpp
+src/yuv/YuvSliderCompareItem.cpp
     # 码流分析工具（独立模块，依赖 RBDemuxer 复用做预扫描；块级深度信息
     # 走"FFmpeg 解码器打补丁导出"路径，本期返回空数组占位）
     src/stream/RBStreamBridge.cpp

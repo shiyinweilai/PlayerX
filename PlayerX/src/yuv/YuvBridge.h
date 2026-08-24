@@ -153,6 +153,12 @@ public:
     // pixelInspectRequested 信号，在双路对比模式下把浮窗组固定到该像素坐标。
     Q_INVOKABLE void requestPixelInspect(int px, int py) { emit pixelInspectRequested(px, py); }
 
+    // ── 滑动对比切换请求（由快捷键 B 触发，YuvWindow 监听信号执行切换）──
+    Q_INVOKABLE void requestToggleSliderCompare() { emit toggleSliderCompareRequested(); }
+
+    // ── 画面内侧路径信息显隐切换（由快捷键 C 触发，YuvWindow 监听信号执行切换）──
+    Q_INVOKABLE void requestToggleSlotInfo() { emit toggleSlotInfoRequested(); }
+
     // ── 块大小设置（8/16/32/64，全局唯一）───────────────────────────────
     int  blockSize() const { return m_blockSize; }
     void setBlockSize(int size);
@@ -213,6 +219,8 @@ signals:
     void hoverChanged();
     void blockSizeChanged();
     void pixelInspectRequested(int px, int py);
+    void toggleSliderCompareRequested();
+    void toggleSlotInfoRequested();
     void inlineControlsHiddenChanged();
     void globalScaleChanged();
 
