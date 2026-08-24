@@ -1097,6 +1097,9 @@ function _tsImportAndStart(st, extractTarget) {
 
     // 导入并直接启动（loadFolders：仅勾选本次导入的路 → start → 进入打分界面；
     // 路满时会先自动清理"文件夹已不存在"的死路再重试）
+    // 传递"重新下载"标记：loadFolders 据此决定是否跳过"继续评分？"弹窗
+    _multiGroupDialog.forceResetProgress = !!_root._tsForceResetProgress
+    _root._tsForceResetProgress = false   // 消费根标记
     if (!_multiGroupDialog.loadFolders(lanes))
         return "导入失败：目录里没有可播放的视频，或路数已达 9 路上限"
     // 绑定到了参考图或提示词 → 自动展开左侧参考图侧栏 + 底部提示词栏

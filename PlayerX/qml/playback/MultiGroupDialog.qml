@@ -793,6 +793,9 @@ ApplicationWindow {
     property var  setRatingAt: null
     // 开发者模式（由 Main.qml 注入）：勾选时模式选择菜单显示「测试模式」
     property bool developerMode: false
+    // 测试源"重新下载"强制重置进度标记（由 MainLogic.js 设置）：
+    //   true = 本次自动化来自"重新下载"路径，导入后直接重置进度+启动，跳过"继续评分？"弹窗。
+    property bool forceResetProgress: false
     // 模式选择菜单实际展示的列表：开发者模式未勾选时过滤掉「测试模式」
     readonly property var _visibleModeList: {
         var ml = (typeof Rating !== "undefined") ? Rating.modeList : []
@@ -2209,7 +2212,17 @@ ApplicationWindow {
         // 注意：这里的返回值语义是"导入是否成功"（上面 addedPaths 非空即成立），
         // 不等于"是否已启动"——弹窗场景下启动被推迟到用户点击后，但导入本身已完成，
         // 不应向调用方（_tsImportAndStart）报错。
-        _startWithResumeCheck()
+        //
+        // 测试源"重新下载"路径：用户已明确选择重新下载，意味着内容可能已更新，
+        // 旧进度不再适用 → 直接重置进度 + 启动，跳过"继续评分？"弹窗。
+        // "直接开始"/首次下载路径：走原有 _startWithResumeCheck 逻辑（有进度则弹窗）。
+        if (dlg.forceResetProgress) {
+            dlg.forceResetProgress = false   // 消费标记，避免影响后续手动操作
+            _resetSelectedLanesProgress()
+            if (start()) dlg.close()
+        } else {
+            _startWithResumeCheck()
+        }
         return true
     }
 

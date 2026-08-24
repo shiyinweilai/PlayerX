@@ -74,6 +74,8 @@ Dialog {
         close()
         var st = _pending
         if (!st) return
+        // "直接开始"路径：确保 flag 为 false，走原有 _startWithResumeCheck 逻辑（有进度则弹窗）
+        root._tsForceResetProgress = false
         console.log("[TestSource] 跳过下载，直接导入:", st.fileName)
         var d = testSourceDownloadDialog
         d._url        = ""
@@ -279,6 +281,8 @@ Dialog {
                     var st = testSourceRedownloadDialog._pending
                     if (!st) return
                     console.log("[TestSource] 用户选择强制重新下载:", st.fileName)
+                    // 标记本次为"重新下载"路径：导入后直接重置进度，跳过"继续评分？"弹窗
+                    root._tsForceResetProgress = true
                     // 按组拆分模式：从 ts.url 判断是否含 {group}，传递组别
                     var _group = ""
                     if (st.ts && String(st.ts.url || "").indexOf("{group}") >= 0) {

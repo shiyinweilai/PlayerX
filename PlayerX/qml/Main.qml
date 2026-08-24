@@ -970,6 +970,10 @@ ApplicationWindow {
     //         multiGroupDialog.loadFolders 导入并直接启动 → 进入打分界面。
     // _tsAuto 非空表示流水线进行中（同时是下面两组 Connections 的使能开关）。
     property var _tsAuto: null
+    // 测试源"重新下载"强制重置进度标记：
+    //   true = 本次自动化来自"重新下载"路径，导入后直接重置进度+启动，跳过"继续评分？"弹窗；
+    //   false = 正常路径（"直接开始"/首次下载），走原有 _startWithResumeCheck 逻辑。
+    property bool _tsForceResetProgress: false
 
 
     // ── 重复下载检测 ──
@@ -1068,6 +1072,7 @@ ApplicationWindow {
             if (!st) return
             root._tsAuto = null
             if (!ok) {
+                root._tsForceResetProgress = false   // 清除标记，避免残留影响后续操作
                 testSourceDownloadDialog._status = "error"
                 testSourceDownloadDialog._statusText = "解压失败：" + (errorMsg || "无法解压 zip")
                 return
