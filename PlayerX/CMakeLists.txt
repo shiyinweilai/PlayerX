@@ -139,27 +139,27 @@ qt_add_qml_module(PlayerX
     VERSION 1.0
     QML_FILES
         qml/Main.qml
-        qml/SliderCompareView.qml
-        qml/MultiGroupRow.qml
-        qml/MultiGroupDialog.qml
-        qml/RatingsDialog.qml
+        qml/playback/SliderCompareView.qml
+        qml/playback/MultiGroupRow.qml
+        qml/playback/MultiGroupDialog.qml
+        qml/playback/RatingsDialog.qml
         # 视频宫格单元格组件：从 Main.qml 抽离，便于后续按媒体类型扩展
         # （未来加 ImageCellDelegate.qml 等只需在此追加，宫格容器无需改动）。
-        qml/VideoCellDelegate.qml
+        qml/playback/VideoCellDelegate.qml
         # 视频信息面板块：从 VideoCellDelegate.infoPanel 抽离为可复用组件，
         # 供"右键浮层 / 播放对比右侧栏"等任意容器展示当前 player 的元信息。
-        qml/VideoInfoBlock.qml
+        qml/common/VideoInfoBlock.qml
         # 扁平工具按钮：从 Main.qml inline component 抽出，便于跨文件复用。
         # （inline component 仅在定义文件内可见，独立 .qml 才能被外部引用）
-        qml/FlatToolButton.qml
+        qml/common/FlatToolButton.qml
         # 扁平按钮：深色主题通用按钮组件
-        qml/FlatButton.qml
+        qml/common/FlatButton.qml
         # 快捷键速查对话框行/分组渲染器
-        qml/ScRow.qml
-        qml/ScSection.qml
+        qml/common/ScRow.qml
+        qml/common/ScSection.qml
         # ── 从 Main.qml 拆分的功能模块 ──
         qml/ShortcutsAboutDialogs.qml
-        qml/RefLightbox.qml
+        qml/playback/RefLightbox.qml
         # ── YUV 分析模块（拆分至独立子目录 qml/yuv/） ──
         qml/yuv/YuvSetupView.qml
         qml/HomeView.qml
@@ -168,34 +168,34 @@ qt_add_qml_module(PlayerX
         # 深色半透明风格严重冲突。这里把 Menu / MenuItem / MenuSeparator
         # 封装成 Dark* 变体，统一预设配色。macOS 走原生 NSMenu，
         # 自动忽略这些自定义（保持系统一致的原生外观）。
-        qml/DarkMenu.qml
-        qml/DarkMenuItem.qml
-        qml/DarkMenuSeparator.qml
+        qml/common/DarkMenu.qml
+        qml/common/DarkMenuItem.qml
+        qml/common/DarkMenuSeparator.qml
         # ── 从 Main.qml 拆分的窗口级组件 / 对话框 ──
         qml/AppMenuBar.qml
         qml/LoginDialog.qml
         qml/UpdateDialog.qml
         qml/UpdateToast.qml
-        qml/TaskUpdateDismissArea.qml
-        qml/TaskUpdateCard.qml
-        qml/TestSourceDownloadDialog.qml
-        qml/TestSourceGroupDialog.qml
-        qml/TestSourceRedownloadDialog.qml
-        qml/RestoreDefaultConfirmDialog.qml
-        qml/ClearHistoryConfirmDialog.qml
-        qml/QuickUploadConfirmDialog.qml
-        qml/QuickUploadResultDialog.qml
-        qml/QuickUploadOverwriteDialog.qml
+        qml/playback/TaskUpdateDismissArea.qml
+        qml/playback/TaskUpdateCard.qml
+        qml/playback/TestSourceDownloadDialog.qml
+        qml/playback/TestSourceGroupDialog.qml
+        qml/playback/TestSourceRedownloadDialog.qml
+        qml/playback/RestoreDefaultConfirmDialog.qml
+        qml/playback/ClearHistoryConfirmDialog.qml
+        qml/playback/QuickUploadConfirmDialog.qml
+        qml/playback/QuickUploadResultDialog.qml
+        qml/playback/QuickUploadOverwriteDialog.qml
         qml/FileDialogs.qml
-        qml/GlobalShortcuts.qml
-        qml/ResizeEdge.qml
+        qml/playback/GlobalShortcuts.qml
+        qml/common/ResizeEdge.qml
         # ── 主界面布局区块 ──
-        qml/TopBar.qml
-        qml/RefSidebar.qml
-        qml/CsvBottomBar.qml
-        qml/RefSidebarHSplitter.qml
-        qml/CsvBottomVSplitter.qml
-        qml/VideoArea.qml
+        qml/playback/TopBar.qml
+        qml/playback/RefSidebar.qml
+        qml/playback/CsvBottomBar.qml
+        qml/playback/RefSidebarHSplitter.qml
+        qml/playback/CsvBottomVSplitter.qml
+        qml/playback/VideoArea.qml
         qml/LeftNavBar.qml
         qml/yuv/YuvStatsPanel.qml
         # ── 码流分析模块（拆分至独立子目录 qml/stream/） ──
@@ -204,8 +204,8 @@ qt_add_qml_module(PlayerX
         qml/stream/StreamInfoCardSection.qml
         qml/stream/StreamFlatButton.qml
         # ── Main.qml 拆出的纯逻辑 JS ──
-        qml/MainLogic.js
-        qml/RatingLogic.js
+        qml/common/MainLogic.js
+        qml/playback/RatingLogic.js
 )
 
 # ─── 头文件搜索路径 ───────────────────────────────────────────────────────────

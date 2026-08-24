@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtQuick.Window
 import PlayerX 1.0
-import "MainLogic.js" as Logic
+import "../common/MainLogic.js" as Logic
 
 Dialog {
     id: testSourceRedownloadDialog

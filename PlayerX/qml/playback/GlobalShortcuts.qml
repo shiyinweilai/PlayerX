@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
 import PlayerX 1.0
-import "MainLogic.js" as Logic
+import "../common/MainLogic.js" as Logic
 import "RatingLogic.js" as RatingLogic
 
 Item {

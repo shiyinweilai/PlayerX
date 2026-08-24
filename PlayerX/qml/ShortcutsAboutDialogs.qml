@@ -4,6 +4,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import PlayerX 1.0
 
 Item {
     id: dialogsRoot

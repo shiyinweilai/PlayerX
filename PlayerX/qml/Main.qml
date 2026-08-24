@@ -15,8 +15,8 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtQuick.Window
 import PlayerX 1.0
-import "MainLogic.js" as Logic
-import "RatingLogic.js" as RatingLogic
+import "common/MainLogic.js" as Logic
+import "playback/RatingLogic.js" as RatingLogic
 
 ApplicationWindow {
     id: root

@@ -1,4 +1,5 @@
-.import "MainLogic.js" as ML
+.import "../common/MainLogic.js" as ML
+// RatingLogic.js 和 MainLogic.js 同在 common/ 目录，相对路径无需修改
 
 // 用空对象兜底，防止 QML 信号在 _initRating 之前触发时崩溃
 var _root = {}
