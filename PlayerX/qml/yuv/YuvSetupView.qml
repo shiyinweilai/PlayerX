@@ -669,9 +669,9 @@ Item {
                                         if (pos >= 0) {
                                             arr.splice(pos, 1)
                                         } else {
-                                            if (arr.length >= 3) {
+                                            if (arr.length >= 9) {
                                                 yuvSetupView.selectedIndex = srcIndex
-                                                yuvSetupStatus.text = "最多同时渲染 3 个 YUV"
+                                                yuvSetupStatus.text = "最多同时渲染 9 个 YUV"
                                                 return
                                             }
                                             arr.push(modelData)

@@ -3,7 +3,7 @@
  * YuvBridge.h — YuvAnalyzer 的 Qt/QML 桥接层（多 slot 版本）
  *
  * 把纯 C++ 的 YuvAnalyzer 包装为 QObject，通过 Q_INVOKABLE 暴露给 QML。
- * 支持最多 MaxSlots(=3) 个 YUV 文件同时打开/渲染，每个 slot 独立管理一个
+ * 支持最多 MaxSlots(=9) 个 YUV 文件同时打开/渲染，每个 slot 独立管理一个
  * YuvAnalyzer；所有操作与查询都带 slot 参数（0..MaxSlots-1）。
  * YuvWindow.qml 通过 "YuvBridge" context property 直接调用。
  */
@@ -46,7 +46,7 @@ class YuvBridge : public QObject {
     Q_PROPERTY(qreal globalScale READ globalScale WRITE setGlobalScale NOTIFY globalScaleChanged)
 
 public:
-    static constexpr int MaxSlots = 3;
+    static constexpr int MaxSlots = 9;
 
     explicit YuvBridge(QObject* parent = nullptr);
     ~YuvBridge() override;
@@ -230,12 +230,12 @@ private:
 
     std::unique_ptr<rb::YuvAnalyzer> m_analyzers[MaxSlots];
     QImage m_frameImages[MaxSlots];
-    int    m_displayModes[MaxSlots]{0, 0, 0};
+    int    m_displayModes[MaxSlots]{0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     // 播放定时器（每个 slot 独立）
-    QTimer* m_playTimers[MaxSlots]{nullptr, nullptr, nullptr};
-    bool    m_playing[MaxSlots]{false, false, false};
-    bool    m_reversing[MaxSlots]{false, false, false};
+    QTimer* m_playTimers[MaxSlots]{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    bool    m_playing[MaxSlots]{false, false, false, false, false, false, false, false, false};
+    bool    m_reversing[MaxSlots]{false, false, false, false, false, false, false, false, false};
 
     // 全局鼠标悬浮像素坐标（跨 slot 共享，供右侧栏"块级别"统计使用）
     int  m_hoverSlot{0};

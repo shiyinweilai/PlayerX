@@ -3,7 +3,7 @@
  * RBStreamBridge.h — 码流分析模块的 Qt/QML 桥接层（多 slot 版本）
  *
  * 设计目标（与 码流分析架构.md §5 一致）：
- *   - 多 slot（最多 3 路，与 YuvBridge 一致），每路独立 RBDemuxer 复用做预扫描；
+ *   - 多 slot（最多 9 路，与 YuvBridge 一致），每路独立 RBDemuxer 复用做预扫描；
  *   - 提供 Q_INVOKABLE 接口给 QML，QML 不感知 RBDemuxer；
  *   - 块级深度信息（CU 划分 / QP）依赖 §4 提到的"FFmpeg 解码器打补丁导出"路径，
  *     一期先返回空数组，UI 自行走"未支持"降级显示；
@@ -55,7 +55,7 @@ class RBStreamBridge : public QObject {
     Q_PROPERTY(int maxSlots READ maxSlots CONSTANT)
 
 public:
-    static constexpr int MaxSlots = 3;
+    static constexpr int MaxSlots = 9;
 
     explicit RBStreamBridge(QObject* parent = nullptr);
     ~RBStreamBridge() override;

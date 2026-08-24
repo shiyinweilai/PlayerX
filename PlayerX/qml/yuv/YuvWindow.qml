@@ -28,6 +28,12 @@ Item {
     // 启用后，Repeater 的双窗口隐藏，改为加载 YuvSliderCompareView 单画面滑动对比。
     property bool sliderCompareActive: false
 
+    // ── 全局活跃 hover slot 追踪 ──────────────────────────────────────
+    // 鼠标进入某个 slot 的画面区域时，将该 slot index 记录到 activeHoverSlot；
+    // 其他 slot 通过 onActiveHoverSlotChanged 检测自己是否被取代，
+    // 若被取代且自身弹窗未固定，则立即关闭，避免多窗口间弹窗残留。
+    property int activeHoverSlot: -1
+
     // 切换滑动对比模式（供快捷键 B 和底部按钮调用）
     function toggleSliderCompare() {
         if (!yuvView.cmpActive) return
@@ -481,12 +487,24 @@ Item {
         spacing: 0
 
         // ── 中间：多窗口画面区域 ─────────────────────────────────────
-        RowLayout {
+        // 使用 GridLayout 自动排列多窗口：1-3个单行，4-6个两行，7-9个三行
+        GridLayout {
+            id: slotGrid
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 2
+            rowSpacing: 2
+            columnSpacing: 2
             // 滑动对比模式时隐藏多窗口布局，改为下方 Loader 全屏显示滑动对比
             visible: !yuvView.sliderCompareActive
+
+            // 根据窗口数量自动计算列数：≤3 → 1行N列，≤6 → 2行3列，≤9 → 3行3列
+            // rows 不显式设置——GridLayout 会根据 columns 和 Repeater model 数量
+            // 自动推算行数；显式设 rows 会导致单元格不自动拉伸填充（塌缩为 0×0 黑屏）。
+            property int cols: openSlotCount <= 1 ? 1
+                         : openSlotCount <= 3 ? openSlotCount
+                         : openSlotCount <= 6 ? 3
+                         : 3
+            columns: slotGrid.cols
 
             Repeater {
                 model: yuvView.openSlotCount
@@ -495,7 +513,23 @@ Item {
                     required property int index
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    Layout.minimumWidth: 1
+                    Layout.minimumHeight: 1
                     color: "#0c0c0e"
+
+                    // 当本 slot 的像素弹窗显示中（未固定跟随 / 已固定冻结）时，
+                    // 提升 z 层级使其覆盖相邻 slot，避免弹窗被相邻 slot 的不透明背景遮挡。
+                    z: pixelHoverArea.showPixelGrid ? 100 : 0
+
+                    // 鼠标进入本 slot 区域时立即更新全局活跃 slot，
+                    // 确保从其他 slot（含弹窗遮挡区域）移入时能及时清除旧弹窗。
+                    HoverHandler {
+                        id: slotWinHover
+                        onHoveredChanged: {
+                            if (hovered && yuvView.activeHoverSlot !== slotWin.index)
+                                yuvView.activeHoverSlot = slotWin.index
+                        }
+                    }
 
                     property int ver: 0
                     Connections {
@@ -533,11 +567,13 @@ Item {
                         Item {
                             id: slotScreen
                             anchors.fill: parent
-                            clip: true
+                            // 弹窗显示时提升 z 到 infoBar(z:5) 之上，避免路径信息条遮挡弹窗
+                            z: pixelHoverArea.showPixelGrid ? 10 : 0
 
                             YuvDisplayItem {
                                 id: yuvDisp
                                 anchors.fill: parent
+                                clip: true
                                 image: {
                                     const _ = slotWin.ver
                                     return YuvBridge.frameImage(slotWin.index)
@@ -634,26 +670,35 @@ Item {
                                 }
 
                                 // 弹窗智能避让定位（"跟随鼠标"实时计算 与 "固定瞬间"取快照共用）
+                                // 边界参照系为 yuvView（整个 YUV 分析窗口），弹窗可超出 slot 范围
                                 function computePopupX(mx) {
-                                    const pw = pixelHoverArea.width
                                     const pgw = pixelGridPopup.width
+                                    // slot 左上角在 yuvView 中的偏移
+                                    const slotOffX = mapToItem(yuvView, 0, 0).x
+                                    // 鼠标在 yuvView 中的全局 x
+                                    const gMx = slotOffX + mx
                                     const rightX = mx + 20
                                     const leftX = mx - pgw - 20
-                                    if (rightX + pgw + 8 <= pw) return rightX
-                                    else if (leftX >= 8) return leftX
-                                    else return pw - pgw - 8
+                                    // 用 yuvView 边界检查，返回 slot 局部坐标
+                                    if (gMx + 20 + pgw + 8 <= yuvView.width) return rightX
+                                    else if (gMx - pgw - 20 >= 8) return leftX
+                                    else return yuvView.width - pgw - 8 - slotOffX
                                 }
                                 function computePopupY(my) {
-                                    const ph = pixelHoverArea.height
                                     const pgh = pixelGridPopup.height
+                                    const slotOffY = mapToItem(yuvView, 0, 0).y
+                                    const gMy = slotOffY + my
                                     const topY = my - pgh - 20
                                     const bottomY = my + 20
-                                    if (topY >= 8) return topY
-                                    else if (bottomY + pgh + 8 <= ph) return bottomY
-                                    else return 8
+                                    if (gMy - pgh - 20 >= 8) return topY
+                                    else if (gMy + 20 + pgh + 8 <= yuvView.height) return bottomY
+                                    else return yuvView.height - pgh - 8 - slotOffY
                                 }
 
                                 onPositionChanged: function(mouse) {
+                                    // 标记当前活跃 slot，其他 slot 检测到被取代后自动关闭弹窗
+                                    if (yuvView.activeHoverSlot !== slotWin.index)
+                                        yuvView.activeHoverSlot = slotWin.index
                                     // ── 双路对比模式：悬浮任一路视频，联动三窗口浮窗组 ──
                                     if (yuvView.cmpActive) {
                                         if (yuvView.cmpPinned) return
@@ -706,6 +751,10 @@ Item {
                                         return
                                     }
                                     if (pinned) return   // 已固定：鼠标移出视频区域也不收起弹窗
+                                    // 鼠标从视频移到弹窗上方时，弹窗 MouseArea 抢走 hover 导致 onExited 触发，
+                                    // 此时弹窗的 HoverHandler 仍报告 hovered=true，不应关闭弹窗。
+                                    // 其余情况（移到渲染窗口外、移到相邻 slot）一律关闭。
+                                    if (popupHoverHandler.hovered) return
                                     showPixelGrid = false
                                     YuvBridge.setHoverPixel(slotWin.index, 0, 0, false)
                                 }
@@ -737,6 +786,18 @@ Item {
                                         // 取消固定后复位滚动位置，下次悬浮从块左上角开始显示
                                         gridFlick.contentX = 0
                                         gridFlick.contentY = 0
+                                    }
+                                }
+
+                                // 全局活跃 slot 被其他 slot 取代时，若本 slot 弹窗未固定则立即关闭，
+                                // 防止多窗口间鼠标快速移动时旧弹窗残留。
+                                Connections {
+                                    target: yuvView
+                                    function onActiveHoverSlotChanged() {
+                                        if (yuvView.activeHoverSlot !== slotWin.index && !pinned) {
+                                            showPixelGrid = false
+                                            YuvBridge.setHoverPixel(slotWin.index, 0, 0, false)
+                                        }
                                     }
                                 }
 
@@ -825,6 +886,8 @@ Item {
                                 id: pixelGridPopup
                                 readonly property int bs: YuvBridge.blockSize
                                 visible: !yuvView.cmpActive && pixelHoverArea.showPixelGrid && pixelHoverArea.pixelData.length === bs * bs
+                                // 弹窗需要覆盖在路径信息条（z:5）和控制条之上
+                                z: 50
                                 // 左对齐（不再水平居中），避免弹窗宽度 > 网格实际宽度时产生大片左侧空白
                                 width: 271
                                 height: contentCol.implicitHeight + 16
@@ -849,6 +912,9 @@ Item {
                                     acceptedButtons: Qt.LeftButton
                                     onClicked: {}
                                 }
+                                // 精确追踪鼠标是否在弹窗上方，供 pixelHoverArea.onExited 判断：
+                                // 鼠标从视频移到弹窗时不应关闭弹窗，移到其他地方则应关闭。
+                                HoverHandler { id: popupHoverHandler }
 
                                 // 一键拷贝：把当前通道（Y/U/V）的 bs×bs 矩阵 + avg/min/max 汇总
                                 // 以 Tab 分隔（TSV）写入系统剪贴板 —— 可直接粘贴进 Excel / Numbers /
