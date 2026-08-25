@@ -102,6 +102,30 @@ Item {
                     }
                 }
 
+                // 图片分析
+                Rectangle {
+                    Layout.preferredWidth: 190
+                    Layout.preferredHeight: 120
+                    radius: 10
+                    color: homeCardImageMA.containsMouse ? "#2a3a55" : "#1e1e24"
+                    border.color: homeCardImageMA.containsMouse ? "#3a78c8" : "#3a3a44"
+                    border.width: 1
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: 8
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "🖼"; font.pixelSize: 34 }
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "图片分析"; color: "#e8e8ec"; font.pixelSize: 15; font.bold: true }
+                        Text { Layout.alignment: Qt.AlignHCenter; text: "多通道对比·滑动模式"; color: "#9aa0a6"; font.pixelSize: 12 }
+                    }
+                    MouseArea {
+                        id: homeCardImageMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: homeViewRoot.switchTab("image")
+                    }
+                }
+
                 // 码流分析
                 Rectangle {
                     Layout.preferredWidth: 190

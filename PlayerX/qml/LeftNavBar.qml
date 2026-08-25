@@ -52,6 +52,7 @@ Rectangle {
                 { key: "home",   label: "首页" },
                 { key: "play",   label: "播放对比" },
                 { key: "yuv",    label: "YUV 分析" },
+                { key: "image",  label: "图片分析" },
                 { key: "stream", label: "码流分析" }
             ]
             delegate: Rectangle {
@@ -140,6 +141,22 @@ Rectangle {
                                 ctx.fillRect(13, 14.5, 2, 2.5)
                                 // 内画面
                                 ctx.strokeRect(5.5, 7, 9, 6)
+                            } else if (navItem.key === "image") {
+                                // 图片图标：矩形画框 + 山脉 + 太阳
+                                ctx.strokeRect(2.5, 3.5, 15, 13)
+                                // 太阳
+                                ctx.beginPath()
+                                ctx.arc(6.5, 7.5, 1.5, 0, Math.PI * 2)
+                                ctx.fill()
+                                // 山脉（三角折线）
+                                ctx.beginPath()
+                                ctx.moveTo(3, 15)
+                                ctx.lineTo(7, 10)
+                                ctx.lineTo(10, 12.5)
+                                ctx.lineTo(14, 8.5)
+                                ctx.lineTo(17, 15)
+                                ctx.closePath()
+                                ctx.stroke()
                             } else if (navItem.key === "stream") {
                                 // 波形/信号图标：三条弧线 + 圆点
                                 ctx.beginPath()

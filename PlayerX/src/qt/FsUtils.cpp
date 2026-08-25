@@ -56,6 +56,22 @@ static bool isVideoFile(const QFileInfo& fi) {
     return false;
 }
 
+// 图片扩展名白名单（常见栅格格式）。
+static const QStringList kImageExts = {
+    "png", "jpg", "jpeg", "bmp", "webp", "tiff", "tif",
+    "gif", "svg", "heic", "heif"
+};
+
+static bool isImageFile(const QFileInfo& fi) {
+    if (!fi.isFile()) return false;
+    const QString suf = fi.suffix().toLower();
+    if (suf.isEmpty()) return false;
+    for (const auto& e : kImageExts) {
+        if (suf == e) return true;
+    }
+    return false;
+}
+
 // macOS 隐私（TCC）受保护的家目录子目录：递归扫描时直接跳过，避免触发
 // 系统权限弹窗（"想要访问您的照片 / 音乐 / 桌面 / 文稿 / 下载"等）。
 // 仅当这些目录是"扫描根目录的子目录"时才会走到这里并跳过；用户显式选择的
@@ -149,6 +165,52 @@ QStringList FsUtils::scanVideoFolderPath(const QString& dirPath, bool recursive)
 
 QStringList FsUtils::scanVideoFolder(const QUrl& dir, bool recursive) const {
     return scanVideoFolderPath(urlToLocal(dir), recursive);
+}
+
+QStringList FsUtils::scanImageFolderPath(const QString& dirPath, bool recursive) const {
+    QStringList out;
+    if (dirPath.isEmpty()) return out;
+    QFileInfo dirFi(dirPath);
+    if (!dirFi.exists() || !dirFi.isDir()) return out;
+
+    QSet<QString> seen;
+    QSet<QString> visitedDirs;
+
+    QStringList stack;
+    stack << dirPath;
+
+    while (!stack.isEmpty()) {
+        const QString cur = stack.takeLast();
+        QString canon = QFileInfo(cur).canonicalFilePath();
+        if (canon.isEmpty()) canon = QDir(cur).absolutePath();
+        if (visitedDirs.contains(canon)) continue;
+        visitedDirs.insert(canon);
+
+        QDir d(cur);
+        const auto entries = d.entryInfoList(
+            QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable,
+            QDir::Name);
+        for (const QFileInfo& fi : entries) {
+            if (fi.isDir()) {
+                if (!recursive) continue;
+                if (isProtectedDir(fi)) continue;
+                stack << fi.absoluteFilePath();
+            } else if (isImageFile(fi)) {
+                const QString abs = fi.absoluteFilePath();
+                if (seen.contains(abs)) continue;
+                seen.insert(abs);
+                out << abs;
+            }
+        }
+    }
+    QCollator coll;
+    coll.setNumericMode(true);
+    coll.setCaseSensitivity(Qt::CaseInsensitive);
+    std::sort(out.begin(), out.end(),
+              [&coll](const QString& a, const QString& b) {
+                  return coll.compare(a, b) < 0;
+              });
+    return out;
 }
 
 bool FsUtils::isDirectoryPath(const QString& path) const {

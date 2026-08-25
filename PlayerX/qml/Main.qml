@@ -111,12 +111,12 @@ ApplicationWindow {
     property url tutorialUrl: "https://iwiki.woa.com/p/4020492089"
 
     // ─── 左侧主导航当前选中的 Tab ──────────────────────────────────────
-    // 取值：home(首页) / play(播放) / yuv(YUV 分析) / stream(码流分析)
+    // 取值：home(首页) / play(播放) / yuv(YUV 分析) / image(图片分析) / stream(码流分析)
     // 默认停留在「播放」tab，与旧版主界面行为一致；设置入口保留在顶栏菜单。
-    // 各内容区（refSidebar/videoArea/csvBottomBar/yuvView/homeView/streamView）
+    // 各内容区（refSidebar/videoArea/csvBottomBar/yuvView/imageView/homeView/streamView）
     // 以及底部工具栏（footer topBar）都据此决定是否显示，逻辑互不侵入。
     property string currentTab: "play"
-    // 回到首页时，右侧栏（YUV 统计 / 播放对比设置 / 码流分析）没有对应内容，
+    // 回到首页时，右侧栏（YUV 统计 / 图片信息 / 码流分析）没有对应内容，
     // 自动收起，避免露出空白面板。
     onCurrentTabChanged: {
         if (root.currentTab === "home") root.rightSidebarOpen = false
@@ -124,17 +124,19 @@ ApplicationWindow {
 
     // ─── 沉浸模式 ───────────────────────────────────────────────────────
     // true 表示已进入"独立子界面"：左右导航栏 / 参考图栏 全部隐藏，
-    // 对应内容区（videoArea / yuvView / streamView）与 CSV 底栏铺满整个
+    // 对应内容区（videoArea / yuvView / imageView / streamView）与 CSV 底栏铺满整个
     // contentItem，真正满屏。
     // 触发条件：
     //   · 播放 tab 加载了视频
     //   · YUV tab 已加载文件（render 阶段）—— setup 阶段（参数输入）不沉浸，
     //     保留左侧导航栏方便用户在 tab 间顺畅切换
+    //   · 图片分析 tab
     //   · 码流分析 tab
-    // 退出方式：播放 tab 用底部"×关闭"清空视频；YUV / 码流分析 tab 用"← 返回"。
+    // 退出方式：播放 tab 用底部"×关闭"清空视频；YUV / 图片 / 码流分析 tab 用"← 返回"。
     readonly property bool immersive:
         (root.currentTab === "play" && Engine.fileCount > 0)
         || (root.currentTab === "yuv" && YuvBridge.slotCount > 0)
+        || (root.currentTab === "image" && ImageBridge.slotCount > 0)
         || (root.currentTab === "stream" && StreamBridge.slotCount > 0)
 
     // ─── 系统菜单栏（macOS 全局菜单 / Windows 窗口菜单） ──────────────────
@@ -152,6 +154,7 @@ ApplicationWindow {
         addDialog: fileDialogs.addDialog
         multiGroupDialog: multiGroupDialog
         ratingsDialog: ratingsDialog
+        imageView: imageViewComp
     }
 
     // 登录态：评分人已设置（Rating.currentUser 非空）
@@ -194,6 +197,16 @@ ApplicationWindow {
     function openYuvFolderDialog() {
         root.currentTab = "yuv"
         yuvView.openFolderDialog()
+    }
+
+    // ── 顶部菜单「图片分析 ▸ 打开图片文件/文件夹」的桥接入口 ──
+    function openImageFileDialog() {
+        root.currentTab = "image"
+        imageViewComp.openFileDialog()
+    }
+    function openImageFolderDialog() {
+        root.currentTab = "image"
+        imageViewComp.openFolderDialog()
     }
 
     // ─── 登录 / 个人信息对话框 ──────────────────────────────────────
@@ -1794,6 +1807,7 @@ ApplicationWindow {
         root: root
         multiGroupDialog: multiGroupDialog
         ratingToast: videoArea.ratingToast
+        imageView: imageViewComp
     }
 
     // ─── 参考图侧边栏 ───────────────────────────────────────────────
@@ -1876,7 +1890,7 @@ ApplicationWindow {
     }
 
     // ─── 右侧栏（标题栏按钮控制，按 currentTab 路由内容） ─────────
-    // 每个模块的右侧栏内容不同：yuv → 直方图统计；play → 播放对比设置（占位）；
+    // 每个模块的右侧栏内容不同：yuv → 直方图统计；image → 图片信息；play → 播放对比设置（占位）；
     // stream → 码流分析（占位）；home → 空（隐藏）。
     Loader {
         id: rightSidebarLoader
@@ -1892,7 +1906,7 @@ ApplicationWindow {
             // contentItem.bottom（已自动避开 footer TopBar 44px），无需再加 44。
             // · play：videoArea 延伸到 contentItem.bottom（footer 顶部），无内嵌控制条，bottomMargin=0
             // · yuv：YUV 视频区内嵌控制条 36px 高，需避开
-            // · stream：与 play 同
+            // · image / stream：与 play 同
             if (root.currentTab === "yuv") return 36
             return 0
         }
@@ -1903,6 +1917,7 @@ ApplicationWindow {
         z: 200
         sourceComponent: {
             if (root.currentTab === "yuv") return yuvStatsPanelComp
+            if (root.currentTab === "image") return imageInfoCardComp
             if (root.currentTab === "play") return playComparePanelComp
             if (root.currentTab === "stream") return streamPanelComp
             return null
@@ -1913,6 +1928,15 @@ ApplicationWindow {
     Component {
         id: yuvStatsPanelComp
         YuvStatsPanel { }
+    }
+
+    // ── 图片信息面板 ────────────────────────────────────────
+    Component {
+        id: imageInfoCardComp
+        ImageInfoCard {
+            slot: (typeof imageViewComp !== "undefined" && imageViewComp.effectiveSlot !== undefined)
+                  ? imageViewComp.effectiveSlot : 0
+        }
     }
 
     // ── 播放对比面板 ────────────────────────────────────────
@@ -2294,6 +2318,14 @@ Component {
                 root.rightSidebarOpen = false
         }
     }
+    // ── ImageBridge 同上：图片全关时收起右侧信息卡片。──
+    Connections {
+        target: ImageBridge
+        function onSlotCountChanged() {
+            if (ImageBridge.slotCount === 0 && root.currentTab === "image" && root.rightSidebarOpen)
+                root.rightSidebarOpen = false
+        }
+    }
 
     // ── YUV 分析视图（拆分至 YuvSetupView.qml） ──────────────────────
     YuvSetupView {
@@ -2343,6 +2375,21 @@ Component {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         visible: root.currentTab === "stream"
+        currentSlot: 0
+        onSwitchTab: function(tab) { root.currentTab = tab }
+    }
+
+    // ══════════════ 图片分析视图（拆分至 ImageView.qml） ══════════════
+    // 仿 YuvSetupView / StreamView 的两阶段锚点策略：
+    //   · setup 阶段（slotCount === 0）→ 让出左侧导航栏
+    //   · render 阶段（slotCount > 0） → 铺满整个 contentItem（沉浸满屏）
+    ImageView {
+        id: imageViewComp
+        anchors.left: (ImageBridge.slotCount > 0) ? parent.left : leftNavBar.right
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        visible: root.currentTab === "image"
         currentSlot: 0
         onSwitchTab: function(tab) { root.currentTab = tab }
     }

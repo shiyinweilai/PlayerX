@@ -50,6 +50,7 @@
 #include "yuv/YuvDisplayItem.h"
 #include "yuv/YuvSliderCompareItem.h"
 #include "stream/RBStreamBridge.h"
+#include "image/ImageBridge.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -282,6 +283,9 @@ int main(int argc, char* argv[]) {
     // 统计，块级深度信息返回空数组（见 码流分析架构.md §4 的 FFmpeg 补丁路径）。
     RBStreamBridge streamBridge;
 
+    // ImageBridge：图片分析工具桥接（独立模块，用 QImageReader 加载图片）
+    ImageBridge imageBridge;
+
     QQmlApplicationEngine engine;
 
     // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
@@ -294,6 +298,7 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty("ScreenProbe", &screenProbe);
     engine.rootContext()->setContextProperty("YuvBridge",   &yuvBridge);
     engine.rootContext()->setContextProperty("StreamBridge", &streamBridge);
+    engine.rootContext()->setContextProperty("ImageBridge",  &imageBridge);
 
     // 注册 YuvDisplayItem 为 QML 类型（供 YuvWindow.qml 使用）。
     // URI 用独立前缀，避免和 qt_add_qml_module(URI PlayerX) 冲突。

@@ -126,7 +126,7 @@ Item {
                 ScRow { keys: "V"; desc: qsTr("切换视频信息叠加（YUV 分析：切换 YUV 值面板）") }
                 ScRow { keys: "C"; desc: qsTr("切换通道/路径信息叠加（播放对比：序号+文件名；YUV：画面内侧路径条）") }
                 ScRow { keys: "S"; desc: qsTr("多路视频时切换布局如1xN / 2x2 / 3x3") }
-                ScRow { keys: "B"; desc: qsTr("滑动对比模式（播放对比 / YUV 分析，仅 2 路）") }
+ScRow { keys: "B"; desc: qsTr("滑动对比模式（播放对比 / YUV 分析 / 图片分析，仅 2 路）") }
             }
             // 左列 2：倍速
             ScSection {

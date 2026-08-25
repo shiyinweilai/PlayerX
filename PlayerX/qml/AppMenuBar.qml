@@ -15,6 +15,7 @@ MenuBar {
     property var addDialog: null
     property var multiGroupDialog: null
     property var ratingsDialog: null
+    property var imageView: null
 
     // ─── Windows 标题栏模式 ────────────────────────────────────────
     // 窗口已设 ExpandedClientAreaHint：menuBar 被布局在窗口 y=0，
@@ -646,6 +647,35 @@ MenuBar {
                 checked: YuvBridge.colorConversion === 5
                 onTriggered: YuvBridge.colorConversion = 5
             }
+        }
+    }
+
+    // ═══ 图片分析（模块打开入口 + 设置）══════════════
+    DarkMenu {
+        id: imageMenu
+        title: qsTr("图片分析")
+        // 打开图片文件
+        DarkMenuItem {
+            text: qsTr("打开图片文件…")
+            onTriggered: root.openImageFileDialog()
+        }
+        // 打开文件夹并递归扫描图片
+        DarkMenuItem {
+            text: qsTr("打开图片文件夹…")
+            onTriggered: root.openImageFolderDialog()
+        }
+
+        DarkMenuSeparator {}
+
+        // ── 内嵌信息条 ──（画面内侧绝对路径+分辨率 overlay，C 快捷键也可切换）
+        // 默认勾选 = 显示
+        // 注意：checkable MenuItem 在 onTriggered 触发前已自动翻转 checked，
+        // 所以不能用 !checked（会翻回原值），必须直接用 imageView.imageInfoVisible 取反。
+        DarkMenuItem {
+            text: qsTr("内嵌信息条")
+            checkable: true
+            checked: imageView.imageInfoVisible
+            onTriggered: imageView.imageInfoVisible = !imageView.imageInfoVisible
         }
     }
 

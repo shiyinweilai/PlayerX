@@ -10,6 +10,7 @@ Item {
     property var root: null
     property var multiGroupDialog: null
     property var ratingToast: null
+    property var imageView: null
 
     // 【与铃铛同一根因】RatingLogic.js 同样没有 `.pragma library`，本文件
     // `import "RatingLogic.js" as RatingLogic` 拿到的是独立于 Main.qml 的
@@ -59,11 +60,14 @@ Shortcut {
 // C：切换通道/路径信息显隐
 //   - 播放对比 tab → 切换全局通道信息（序号+文件名）
 //   - YUV tab → 切换画面内侧路径信息 overlay（序号+文件名+关闭）
+//   - 图片分析 tab → 切换画面内嵌信息条（绝对路径+分辨率等 overlay）
 Shortcut {
     sequence: "C"; context: Qt.ApplicationShortcut
     onActivated: {
         if (root.currentTab === "yuv") {
             YuvBridge.requestToggleSlotInfo()
+        } else if (root.currentTab === "image") {
+            imageView.imageInfoVisible = !imageView.imageInfoVisible
         } else {
             if (root.fullscreenSuppressChannel) {
                 root.fullscreenSuppressChannel = false
@@ -188,6 +192,7 @@ Shortcut {
 }
 // B：切换"滑动对比"模式
 //   - YUV tab（2 路）→ 切换 YUV 滑动对比（通过 YuvBridge 信号转发到 YuvWindow）
+//   - 图片分析 tab（2 路）→ 直接切换 imageView.sliderCompareActive
 //   - 播放对比 tab（2 路）→ 切换播放对比滑动对比（RatingLogic._toggleCompareSlider）
 Shortcut {
     sequence: "B"; context: Qt.ApplicationShortcut
@@ -195,6 +200,9 @@ Shortcut {
         if (root.currentTab === "yuv") {
             // 通过 YuvBridge 发出信号，YuvWindow 监听并切换
             YuvBridge.requestToggleSliderCompare()
+        } else if (root.currentTab === "image") {
+            if (ImageBridge.slotCount === 2)
+                imageView.sliderCompareActive = !imageView.sliderCompareActive
         } else {
             RatingLogic._toggleCompareSlider()
         }

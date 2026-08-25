@@ -31,6 +31,9 @@ public:
     // 与 scanVideoFolder 相同，但接受字符串路径（拖拽场景下 QML 端拿到的可能是裸路径）。
     Q_INVOKABLE QStringList scanVideoFolderPath(const QString& dirPath, bool recursive = true) const;
 
+    // 递归扫描 dir 下的图片文件（png/jpg/jpeg/bmp/webp/tiff/gif/svg/heic/heif）。
+    Q_INVOKABLE QStringList scanImageFolderPath(const QString& dirPath, bool recursive = true) const;
+
     // 判断给定 URL/路径是否是文件夹。
     Q_INVOKABLE bool isDirectory(const QUrl& url) const;
     Q_INVOKABLE bool isDirectoryPath(const QString& path) const;

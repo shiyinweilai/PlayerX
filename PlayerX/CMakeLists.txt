@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 # 应用版本号：单点维护处。会通过 APP_VERSION_STR 注入到 C++（Updater 用作
 # currentVersion）和 QML（关于对话框 / 更新弹窗显示）。
 # 发新版本时只改这一行，不要在源码里另写硬编码版本。
-project(PlayerX VERSION 3.1.7 LANGUAGES CXX C)
+project(PlayerX VERSION 3.1.8 LANGUAGES CXX C)
 
 # 在 macOS 上启用 Objective-C++（用于 ScreenProbe 直接调用 NSScreen / 注册
 # NSApplicationDidChangeScreenParametersNotification —— 绕开 Qt screen 子系统
@@ -105,10 +105,12 @@ qt_add_executable(PlayerX WIN32 MACOSX_BUNDLE
     # 多组对比模式辅助工具（仅供 QML 配置面板使用，不触达播放内核）
     src/qt/FsUtils.cpp
     # YUV 裸数据分析工具（独立模块，复用 sws_scale 但不依赖播放管线）
-src/yuv/YuvAnalyzer.cpp
+    src/yuv/YuvAnalyzer.cpp
 src/yuv/YuvBridge.cpp
 src/yuv/YuvDisplayItem.cpp
 src/yuv/YuvSliderCompareItem.cpp
+    # 图片分析工具（独立模块，QImageReader 加载，不依赖播放管线）
+src/image/ImageBridge.cpp
     # 码流分析工具（独立模块，依赖 RBDemuxer 复用做预扫描；块级深度信息
     # 走"FFmpeg 解码器打补丁导出"路径，本期返回空数组占位）
     src/stream/RBStreamBridge.cpp
@@ -204,6 +206,10 @@ qt_add_qml_module(PlayerX
         qml/stream/StreamInfoCard.qml
         qml/stream/StreamInfoCardSection.qml
         qml/stream/StreamFlatButton.qml
+        # ── 图片分析模块（拆分至独立子目录 qml/image/） ──
+        qml/image/ImageView.qml
+        qml/image/ImageInfoCard.qml
+        qml/image/ImageInfoCardSection.qml
         # ── Main.qml 拆出的纯逻辑 JS ──
         qml/common/MainLogic.js
         qml/playback/RatingLogic.js
@@ -217,6 +223,7 @@ target_include_directories(PlayerX PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
     ${CMAKE_CURRENT_SOURCE_DIR}/src/yuv
     ${CMAKE_CURRENT_SOURCE_DIR}/src/stream
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/image
     ${FFMPEG_INSTALL_DIR}/include
 )
 
