@@ -46,6 +46,26 @@ Item {
         const idx = p.lastIndexOf('/')
         return idx >= 0 ? p.substring(idx + 1) : p
     }
+    // 从绝对路径中提取目录部分
+    function fileDir(path) {
+        const p = String(path).replace(/\\/g, "/")
+        const idx = p.lastIndexOf('/')
+        return idx >= 0 ? p.substring(0, idx) : ""
+    }
+    // 格式化文件大小
+    function formatFileSize(bytes) {
+        if (bytes <= 0) return "—"
+        if (bytes >= 1048576) return (bytes / 1048576).toFixed(2) + " MB"
+        if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB"
+        return bytes + " B"
+    }
+
+    // Ctrl+A 全选 / 取消全选（仅 setup 阶段生效）
+    Shortcut {
+        sequence: StandardKey.SelectAll
+        enabled: YuvBridge.slotCount === 0 && yuvSetupView.fileList.length > 0
+        onActivated: yuvSetupView._toggleSelectAll()
+    }
 
     // ── 参数输入主界面（setup） ────────────────────────────────
     Item {
@@ -53,8 +73,12 @@ Item {
         // 文件列表（多选文件或文件夹扫描结果）
         property var fileList: []
         property int selectedIndex: -1
-        // 勾选要渲染的文件路径（最多 3 个）
-        property var checkedList: []
+        // 多选集合（Ctrl+Click / Shift+Click / 全选），替代旧的 checkbox checkedList
+        property var _selectedFiles: ({})
+        property bool _selectAllChecked: false
+        property int _anchorIndex: -1
+        // 文件信息缓存 { path: { fileSize, fileModified } }
+        property var _fileInfoCache: ({})
         // 排序方式：0=添加顺序（默认）/ 1=名称 A→Z / 2=名称 Z→A
         property int sortMode: 0
         readonly property var sortOptions: [
@@ -96,6 +120,85 @@ Item {
         function _indexInFileList(path) {
             return fileList.indexOf(path)
         }
+
+        // ── 文件夹式多选逻辑（与码流分析一致）──
+        // 选中数量
+        function _selectedCount() {
+            return Object.keys(_selectedFiles).length
+        }
+        // 获取选中的文件路径列表（保持 fileList 顺序）
+        function _selectedPaths() {
+            var paths = []
+            for (var i = 0; i < fileList.length; ++i) {
+                if (_selectedFiles[fileList[i]]) paths.push(fileList[i])
+            }
+            return paths
+        }
+        function _isAllSelected() {
+            if (fileList.length === 0) return false
+            for (var i = 0; i < fileList.length; ++i) {
+                if (!_selectedFiles[fileList[i]]) return false
+            }
+            return true
+        }
+        // 行点击：根据修饰键决定单选 / Ctrl多选 / Shift范围选
+        function _onFileClicked(idx, modifiers) {
+            if (idx < 0 || idx >= fileList.length) return
+            const path = fileList[idx]
+            const ctrl = (modifiers & Qt.ControlModifier) !== 0
+            const shift = (modifiers & Qt.ShiftModifier) !== 0
+
+            if (shift && _anchorIndex >= 0) {
+                var s = Object.assign({}, _selectedFiles)
+                var lo = Math.min(_anchorIndex, idx)
+                var hi = Math.max(_anchorIndex, idx)
+                for (var i = lo; i <= hi; ++i)
+                    s[fileList[i]] = true
+                _selectedFiles = s
+            } else if (ctrl) {
+                var s2 = Object.assign({}, _selectedFiles)
+                if (s2[path]) delete s2[path]
+                else s2[path] = true
+                _selectedFiles = s2
+                _anchorIndex = idx
+            } else {
+                var s3 = {}
+                s3[path] = true
+                _selectedFiles = s3
+                _anchorIndex = idx
+            }
+            _selectAllChecked = _isAllSelected()
+            // 同步 selectedIndex 驱动右侧参数面板
+            selectedIndex = idx
+        }
+        // 全选 / 全不选
+        function _toggleSelectAll() {
+            if (_isAllSelected()) {
+                _selectedFiles = ({})
+                _selectAllChecked = false
+            } else {
+                var s = {}
+                for (var i = 0; i < fileList.length; ++i)
+                    s[fileList[i]] = true
+                _selectedFiles = s
+                _selectAllChecked = true
+            }
+        }
+        // 批量加载文件大小/修改时间（通过 Fs 工具类）
+        function _batchLoadFileInfo() {
+            for (var i = 0; i < fileList.length; ++i) {
+                var p = fileList[i]
+                if (_fileInfoCache[p]) continue
+                try {
+                    var sz = Fs.fileSize(p)
+                    var mt = Fs.fileModified(p)
+                    _fileInfoCache[p] = { fileSize: sz, fileModified: mt }
+                } catch (e) {
+                    _fileInfoCache[p] = { fileSize: 0, fileModified: "" }
+                }
+            }
+            _fileInfoCache = Object.assign({}, _fileInfoCache)
+        }
         // 当前正在编辑参数的文件（用于切换时保存旧参数、加载新参数）
         property string currentPath: ""
         // 防止初始化时空列表覆盖持久化数据
@@ -112,7 +215,17 @@ Item {
                 for (let i = 0; i < saved.length; ++i) {
                     arr.push(saved[i])
                 }
-                if (arr.length > 0) fileList = arr
+                if (arr.length > 0) {
+                    fileList = arr
+                    // 自动选中第一个文件
+                    selectedIndex = 0
+                    var s = {}
+                    s[arr[0]] = true
+                    _selectedFiles = s
+                    _anchorIndex = 0
+                    _selectAllChecked = false
+                }
+                _batchLoadFileInfo()
             }
             _loaded = true
         }
@@ -121,6 +234,24 @@ Item {
             if (!_loaded) return  // 初始化阶段不写入，防止清空持久化
             console.log("[yuvSetupView] fileList changed:", fileList.length, "items")
             YuvBridge.setYuvFileList(fileList)
+            // 同步清理选中集：删除已不在列表中的路径
+            var seen = new Set()
+            for (var i = 0; i < fileList.length; ++i) seen.add(fileList[i])
+            var newSel = {}
+            var changed = false
+            for (var key in _selectedFiles) {
+                if (seen.has(key)) {
+                    newSel[key] = true
+                } else {
+                    changed = true
+                }
+            }
+            if (changed) {
+                _selectedFiles = newSel
+                _selectAllChecked = _isAllSelected()
+            }
+            // 批量加载新文件的文件大小/修改时间
+            _batchLoadFileInfo()
         }
 
         // ── 参数联动：切换文件时保存旧参数、加载新参数 ──
@@ -333,128 +464,97 @@ Item {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 16
-                    spacing: 10
+                    anchors.margins: 0
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 8
+                    anchors.topMargin: 8
+                    anchors.bottomMargin: 8
+                    spacing: 0
 
-                    // 顶部栏
+                    // ── 卡片头部操作栏：左侧（开始渲染）| 右侧（排序+添加+文件夹+清空） ──
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 10
-                        Text {
-                            text: "文件列表"
-                            color: "#e8e8ec"; font.pixelSize: 15; font.bold: true
-                        }
-                        Text {
-                            text: "· " + yuvSetupView.fileList.length + " 个"
-                            color: "#9aa0a6"; font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
+                        Layout.preferredHeight: 36
+                        spacing: 8
 
-                        // ── 排序下拉按钮：默认 / 升序 / 降序 三选一 ──
-                        // 按钮宽高固定（implicitWidth:76），不跟随 label 内容浮动，
-                        // 切换排序模式时按钮位置/尺寸绝对稳定。
-                        // 浮层 sortMenu 放在卡片顶层（见下方 sortMenuLayer），与 ListView 同父，
-                        // z 直接可比，避免被列表的 hover 高亮遮挡。
-                        Item {
-                            id: sortBtn
-                            implicitWidth: 76
-                            implicitHeight: 28
-                            Layout.preferredWidth: implicitWidth
-                            Layout.preferredHeight: implicitHeight
-
-                            Rectangle {
-                                id: sortTrigger
-                                anchors.fill: parent
-                                radius: 6
-                                color: (sortMa.containsMouse || sortMenu.visible)
-                                       ? "#2a2a34" : "#1e1e24"
-                                border.color: (sortMa.containsMouse || sortMenu.visible)
-                                              ? "#4a4a56" : "#3a3a44"
-                                border.width: 1
-                                Row {
-                                    anchors.centerIn: parent
-                                    spacing: 4
-                                    Text {
-                                        id: sortLbl
-                                        text: yuvSetupView.sortLabel
-                                        color: "#e8e8ec"; font.pixelSize: 12
-                                    }
-                                    Text {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        text: "▾"; color: "#9aa0a6"; font.pixelSize: 10
-                                    }
-                                }
-                                MouseArea {
-                                    id: sortMa
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        // mapToItem() 内部读取的祖先 x/y 不会被 QML 绑定依赖
-                                        // 追踪到，声明式绑定在布局未稳定前算出的坐标不会再更新。
-                                        // 因此改为每次“打开”时命令式重新计算一次（此时布局已稳定）。
-                                        if (!sortMenu.visible) {
-                                            const pt = sortTrigger.mapToItem(sortMenuLayer,
-                                                sortTrigger.width / 2, sortTrigger.height)
-                                            sortMenu.x = pt.x - sortMenu.width / 2
-                                            sortMenu.y = pt.y + 4
-                                        }
-                                        sortMenu.visible = !sortMenu.visible
-                                    }
-                                }
-                            }
-                        }
-
+                        // 左侧：开始渲染（蓝色主按钮）
                         Rectangle {
-                            width: 76; height: 28; radius: 6
-                            color: yuvAddMoreMa.containsMouse ? "#2a2a34" : "#1e1e24"
-                            border.color: yuvAddMoreMa.containsMouse ? "#4a4a56" : "#3a3a44"
-                            border.width: 1
+                            width: 100; height: 28; radius: 6
+                            color: yuvRenderHeadMa.containsMouse ? "#3d7adf" : "#2a5fc0"
                             Text {
                                 anchors.centerIn: parent
-                                text: "+ 添加"; color: "#e8e8ec"; font.pixelSize: 12
+                                text: "开始渲染"
+                                color: "#fff"; font.pixelSize: 12; font.bold: true
                             }
                             MouseArea {
-                                id: yuvAddMoreMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: yuvView.openFileDialog()
-                            }
-                        }
-                        Rectangle {
-                            width: 84; height: 28; radius: 6
-                            color: yuvAddFolderMa.containsMouse ? "#2a2a34" : "#1e1e24"
-                            border.color: yuvAddFolderMa.containsMouse ? "#4a4a56" : "#3a3a44"
-                            border.width: 1
-                            Text {
-                                anchors.centerIn: parent
-                                text: "+ 文件夹"; color: "#e8e8ec"; font.pixelSize: 12
-                            }
-                            MouseArea {
-                                id: yuvAddFolderMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: yuvView.openFolderDialog()
-                            }
-                        }
-                        Rectangle {
-                            width: 64; height: 28; radius: 6
-                            color: yuvClearMa.containsMouse ? "#5a3a3a" : "#3a2a2a"
-                            Text {
-                                anchors.centerIn: parent
-                                text: "清空"; color: "#f5a3a3"; font.pixelSize: 12
-                            }
-                            MouseArea {
-                                id: yuvClearMa
+                                id: yuvRenderHeadMa
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    yuvSetupView.fileList = []
-                                    yuvSetupView.selectedIndex = -1
+                                    var selPaths = yuvSetupView._selectedPaths()
+                                    if (selPaths.length === 0) {
+                                        yuvSetupStatus.text = "请先选择要渲染的文件（最多 9 个）"
+                                        return
+                                    }
+                                    if (selPaths.length > 9) {
+                                        yuvSetupStatus.text = "最多同时渲染 9 个 YUV，当前选了 " + selPaths.length + " 个"
+                                        return
+                                    }
+                                    yuvSetupView.saveCurrentParams()
+                                    const opened = YuvBridge.openFiles(selPaths)
+                                    if (opened > 0) {
+                                        yuvSetupStatus.text = ""
+                                    } else {
+                                        yuvSetupStatus.text = "打开失败，请检查路径和参数"
+                                    }
                                 }
+                            }
+                        }
+                        // 已选计数
+                        Text {
+                            visible: yuvSetupView._selectedCount() > 0
+                            text: "已选 " + yuvSetupView._selectedCount() + " 个"
+                            color: "#6a6f76"; font.pixelSize: 11
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        // 右侧：排序 + 添加 + 文件夹 + 清空（使用 StreamFlatButton 对齐码流分析风格）
+                        StreamFlatButton {
+                            id: sortBtn
+                            text: yuvSetupView.sortLabel + " ▾"
+                            enabled: yuvSetupView.fileList.length > 0
+                            onClicked: {
+                                if (!sortMenu.visible) {
+                                    const pt = sortBtn.mapToItem(sortMenuLayer,
+                                        sortBtn.width / 2, sortBtn.height)
+                                    sortMenu.x = pt.x - sortMenu.width / 2
+                                    sortMenu.y = pt.y + 4
+                                }
+                                sortMenu.visible = !sortMenu.visible
+                            }
+                        }
+                        StreamFlatButton {
+                            text: "+ 添加"
+                            onClicked: yuvView.openFileDialog()
+                        }
+                        StreamFlatButton {
+                            text: "+ 文件夹"
+                            onClicked: yuvView.openFolderDialog()
+                        }
+                        StreamFlatButton {
+                            text: "清空"
+                            bgNormal: "#807a2e2e"
+                            bgHover:  "#809c3c3c"
+                            bgDown:   "#80b84848"
+                            textColor: "#f5c6c6"
+                            enabled: yuvSetupView.fileList.length > 0
+                            onClicked: {
+                                yuvSetupView.fileList = []
+                                yuvSetupView.selectedIndex = -1
+                                yuvSetupView._selectedFiles = ({})
+                                yuvSetupView._selectAllChecked = false
                             }
                         }
                     }
@@ -560,89 +660,128 @@ Item {
                             anchors.fill: parent
                             anchors.margins: 4
                             visible: yuvSetupView.fileList.length > 0
-                            clip: true; spacing: 4
+                            clip: true; spacing: 2
                             model: yuvSetupView.sortedFileList
                             delegate: Rectangle {
                                 required property string modelData
                                 required property int index
                                 readonly property int srcIndex: yuvSetupView._indexInFileList(modelData)
-                                width: ListView.view.width; height: 48
-                                radius: 6
-                                color: yuvSetupView.selectedIndex === srcIndex
-                                       ? "#2a2a32"
-                                       : (fileItemMa.containsMouse ? "#22222a" : "transparent")
-                                border.color: yuvSetupView.selectedIndex === srcIndex
-                                              ? "#4a4a56"
-                                              : (fileItemMa.containsMouse ? "#2c2c34" : "transparent")
+                                width: ListView.view.width; height: 36
+                                radius: 3
+                                color: yuvSetupView._selectedFiles[modelData]
+                                       ? "#2a3a55"
+                                       : (fileItemMa.containsMouse ? "#1e1e24" : "transparent")
+                                border.color: yuvSetupView._selectedFiles[modelData] ? "#3a78c8" : "transparent"
                                 border.width: 1
 
-                                Row {
+                                RowLayout {
+                                    z: 1
                                     anchors.fill: parent
-                                    anchors.leftMargin: 12; anchors.rightMargin: 4
+                                    anchors.leftMargin: 12
+                                    anchors.rightMargin: 10
                                     spacing: 10
-                                    // 勾选 checkbox（独立于选中，最多勾选 3 个）
+                                    Text {
+                                        text: String.fromCharCode(0x2460 + index)  // ① ② ③ ...
+                                        color: "#9aa0a6"; font.pixelSize: 12
+                                        Layout.preferredWidth: 20
+                                    }
+                                    Text {
+                                        text: yuvView.fileBasename(modelData)
+                                        color: "#e8e8ec"; font.pixelSize: 13
+                                        Layout.fillWidth: true
+                                        elide: Text.ElideMiddle
+                                    }
+                                    Text {
+                                        text: yuvView.fileDir(modelData)
+                                        color: "#6a6f76"; font.pixelSize: 10
+                                        Layout.maximumWidth: 200
+                                        elide: Text.ElideLeft
+                                    }
+                                    Text {
+                                        text: {
+                                            var info = yuvSetupView._fileInfoCache[modelData]
+                                            if (info && info.fileSize > 0)
+                                                return yuvView.formatFileSize(info.fileSize)
+                                            return "—"
+                                        }
+                                        color: "#6a6f76"; font.pixelSize: 10
+                                        Layout.preferredWidth: 64
+                                        horizontalAlignment: Text.AlignRight
+                                    }
+                                    Text {
+                                        text: {
+                                            var info = yuvSetupView._fileInfoCache[modelData]
+                                            if (info && info.fileModified)
+                                                return info.fileModified
+                                            return "—"
+                                        }
+                                        color: "#6a6f76"; font.pixelSize: 10
+                                        Layout.preferredWidth: 140
+                                    }
+                                    // 跳转到所在文件夹按钮
                                     Rectangle {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        width: 18; height: 18; radius: 4
-                                        color: (yuvSetupView.checkedList.indexOf(modelData) >= 0)
-                                               ? "#3a6fd8" : "#1e1e24"
-                                        border.color: (yuvSetupView.checkedList.indexOf(modelData) >= 0)
-                                                      ? "#4a7cf0" : "#3a3a44"
-                                        border.width: 1
+                                        Layout.preferredWidth: 22; Layout.preferredHeight: 22
+                                        radius: 3
+                                        color: fileItemRevealMa.containsMouse ? "#803a3a44" : "transparent"
+                                        Canvas {
+                                            anchors.centerIn: parent
+                                            width: 14; height: 14
+                                            onPaint: {
+                                                var ctx = getContext("2d")
+                                                ctx.reset()
+                                                ctx.strokeStyle = fileItemRevealMa.containsMouse ? "#e8e8ec" : "#9aa0a6"
+                                                ctx.lineWidth = 1.3
+                                                ctx.fillStyle = "transparent"
+                                                // 文件夹主体
+                                                ctx.beginPath()
+                                                ctx.moveTo(1, 4)
+                                                ctx.lineTo(5, 4)
+                                                ctx.lineTo(6.5, 5.5)
+                                                ctx.lineTo(13, 5.5)
+                                                ctx.lineTo(13, 12)
+                                                ctx.lineTo(1, 12)
+                                                ctx.closePath()
+                                                ctx.stroke()
+                                            }
+                                        }
+                                        MouseArea {
+                                            id: fileItemRevealMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: Fs.revealInFileManager(modelData)
+                                        }
+                                    }
+                                    // 删除按钮
+                                    Rectangle {
+                                        Layout.preferredWidth: 22; Layout.preferredHeight: 22
+                                        radius: 3
+                                        color: fileItemDelMa.containsMouse ? "#80b84848" : "transparent"
                                         Text {
                                             anchors.centerIn: parent
-                                            text: (yuvSetupView.checkedList.indexOf(modelData) >= 0)
-                                                  ? "✓" : ""
-                                            color: "#fff"; font.pixelSize: 12; font.bold: true
+                                            text: "×"; color: fileItemDelMa.containsMouse ? "#fff" : "#9aa0a6"
+                                            font.pixelSize: 14
                                         }
-                                    }
-                                    Canvas {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        width: 20; height: 20
-                                        onPaint: {
-                                            var ctx = getContext("2d")
-                                            ctx.reset()
-                                            ctx.lineWidth = 1.4
-                                            ctx.strokeStyle = "#6a7a90"
-                                            ctx.fillStyle = "#6a7a90"
-                                            ctx.lineJoin = "round"
-                                            // 胶片帧
-                                            ctx.strokeRect(3, 3, 14, 14)
-                                            // 齿孔
-                                            ctx.fillRect(4.5, 3, 1.5, 2)
-                                            ctx.fillRect(8, 3, 1.5, 2)
-                                            ctx.fillRect(11.5, 3, 1.5, 2)
-                                            ctx.fillRect(4.5, 15, 1.5, 2)
-                                            ctx.fillRect(8, 15, 1.5, 2)
-                                            ctx.fillRect(11.5, 15, 1.5, 2)
-                                            // 内画面
-                                            ctx.strokeRect(5.5, 6.5, 9, 7)
-                                        }
-                                    }
-                                    Column {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        spacing: 2
-                                        Text {
-                                            text: yuvView.fileBasename(modelData)
-                                            color: "#e8e8ec"; font.pixelSize: 13
-                                            font.bold: yuvSetupView.selectedIndex === srcIndex
-                                        }
-                                        Text {
-                                            text: modelData
-                                            color: "#6a6a78"; font.pixelSize: 10
-                                            elide: Text.ElideMiddle
-                                            width: ListView.view.width - 110
-                                        }
-                                    }
-                                    // 每项右侧 × 删除按钮
-                                    Rectangle {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        width: 22; height: 22; radius: 11
-                                        visible: fileItemMa.containsMouse || yuvSetupView.selectedIndex === srcIndex
-                                        color: fileItemDelMa.containsMouse ? "#b85a5a" : "transparent"
-                                        Text {
-                                            anchors.centerIn: parent
-                                            text: "×"; color: "#f5a3a3"; font.pixelSize: 14; font.bold: true
+                                        MouseArea {
+                                            id: fileItemDelMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                const arr = yuvSetupView.fileList.slice()
+                                                if (srcIndex >= 0 && srcIndex < arr.length) arr.splice(srcIndex, 1)
+                                                yuvSetupView.fileList = arr
+                                                if (yuvSetupView._selectedFiles[modelData]) {
+                                                    var s = Object.assign({}, yuvSetupView._selectedFiles)
+                                                    delete s[modelData]
+                                                    yuvSetupView._selectedFiles = s
+                                                    yuvSetupView._selectAllChecked = yuvSetupView._isAllSelected()
+                                                }
+                                                let newSel = -1
+                                                if (srcIndex >= 0 && srcIndex < arr.length) newSel = srcIndex
+                                                else if (arr.length > 0) newSel = arr.length - 1
+                                                yuvSetupView.selectedIndex = newSel
+                                            }
                                         }
                                     }
                                 }
@@ -651,59 +790,7 @@ Item {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: yuvSetupView.selectedIndex = srcIndex
-                                }
-                                // checkbox 勾选的 hit zone：声明在 fileItemMa 之后（z 更高），
-                                // 定位到 checkbox 位置，避免被 fileItemMa 拦截点击。
-                                MouseArea {
-                                    id: fileCheckMa
-                                    anchors.left: parent.left
-                                    anchors.leftMargin: 12
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: 18; height: 18
-                                    z: 1
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        const arr = yuvSetupView.checkedList.slice()
-                                        const pos = arr.indexOf(modelData)
-                                        if (pos >= 0) {
-                                            arr.splice(pos, 1)
-                                        } else {
-                                            if (arr.length >= 9) {
-                                                yuvSetupView.selectedIndex = srcIndex
-                                                yuvSetupStatus.text = "最多同时渲染 9 个 YUV"
-                                                return
-                                            }
-                                            arr.push(modelData)
-                                            // 勾选时同步点选，让右侧参数栏显示
-                                            yuvSetupView.selectedIndex = srcIndex
-                                        }
-                                        yuvSetupView.checkedList = arr
-                                    }
-                                }
-                                // × 删除按钮的 hit zone（不冒泡到 fileItemMa）
-                                MouseArea {
-                                    id: fileItemDelMa
-                                    anchors.right: parent.right
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: 30; height: 30
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    visible: fileItemMa.containsMouse || yuvSetupView.selectedIndex === srcIndex
-                                    propagateComposedEvents: false
-                                    onClicked: {
-                                        const arr = yuvSetupView.fileList.slice()
-                                        // 用 srcIndex 删除 fileList 中的真实条目，
-                                        // 避免排序后 ListView.index 与 fileList 索引错位。
-                                        if (srcIndex >= 0 && srcIndex < arr.length) arr.splice(srcIndex, 1)
-                                        yuvSetupView.fileList = arr
-                                        // 选中索引修正：指向与被删项相同路径（若仍存在）的位置，
-                                        // 否则回退到末尾。
-                                        let newSel = -1
-                                        if (srcIndex >= 0 && srcIndex < arr.length) newSel = srcIndex
-                                        else if (arr.length > 0) newSel = arr.length - 1
-                                        yuvSetupView.selectedIndex = newSel
-                                    }
+                                    onClicked: (mouse) => yuvSetupView._onFileClicked(srcIndex, mouse.modifiers)
                                 }
                             }
                         }
@@ -796,10 +883,10 @@ Item {
                         propagateComposedEvents: true
                         preventStealing: false
                         onPressed: function(mouse) {
-                            // 点在 sortTrigger 范围内 → 不关闭，让 sortBtn 自己切换
-                            const local = sortTrigger.mapFromItem(sortMenuLayer, mouse.x, mouse.y)
-                            const inBtn = local.x >= 0 && local.x <= sortTrigger.width
-                                          && local.y >= 0 && local.y <= sortTrigger.height
+                            // 点在 sortBtn 范围内 → 不关闭，让它自己切换
+                            const local = sortBtn.mapFromItem(sortMenuLayer, mouse.x, mouse.y)
+                            const inBtn = local.x >= 0 && local.x <= sortBtn.width
+                                          && local.y >= 0 && local.y <= sortBtn.height
                             if (!inBtn) sortMenu.visible = false
                         }
                     }
@@ -1429,7 +1516,7 @@ Item {
 
                     Item { Layout.fillHeight: true }
 
-                    // 状态 + 渲染按钮
+                    // 状态提示（渲染操作已移至列表头部按钮）
                     ColumnLayout {
                         visible: yuvSetupView.selectedIndex >= 0
                         Layout.fillWidth: true; spacing: 8
@@ -1438,42 +1525,6 @@ Item {
                             color: "#f5a3a3"; font.pixelSize: 11
                             text: ""; Layout.fillWidth: true
                             elide: Text.ElideRight; wrapMode: Text.WordWrap
-                        }
-                        Rectangle {
-                            Layout.fillWidth: true; Layout.preferredHeight: 42; radius: 8
-                            color: yuvRenderMa.containsMouse ? "#2a2a34" : "#1e1e24"
-                            border.color: yuvRenderMa.containsMouse ? "#5a5a66" : "#3a3a44"
-                            border.width: 1
-                            Text {
-                                anchors.centerIn: parent
-                                text: "开始渲染"
-                                color: "#e8e8ec"; font.pixelSize: 14; font.bold: true
-                            }
-                            MouseArea {
-                                id: yuvRenderMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    if (yuvSetupView.checkedList.length === 0) {
-                                        yuvSetupStatus.text = "请先勾选要渲染的文件（最多 3 个）"
-                                        return
-                                    }
-                                    // 关键：只把当前 UI 参数写入当前选中文件（currentPath），
-                                    // 绝不能覆盖其他勾选文件的持久化参数，否则切换查看时
-                                    // 当前 UI 值会把别人冲掉，导致所有文件都用同一个分辨率。
-                                    // 其他文件的参数保持各自独立的持久化值，渲染时由
-                                    // openFiles 内部按文件读取，互不干扰。
-                                    yuvSetupView.saveCurrentParams()
-
-                                    const opened = YuvBridge.openFiles(yuvSetupView.checkedList)
-                                    if (opened > 0) {
-                                        yuvSetupStatus.text = ""
-                                    } else {
-                                        yuvSetupStatus.text = "打开失败，请检查路径和参数"
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -1509,8 +1560,14 @@ Item {
                     if (merged.indexOf(newPaths[i]) < 0) merged.push(newPaths[i])
                 }
                 yuvSetupView.fileList = merged
-                // 选中新追加的第一个，让用户能看到它。
-                yuvSetupView.selectedIndex = merged.length - newPaths.length
+                // 自动选中新追加的第一个文件
+                var newSelIdx = merged.length - newPaths.length
+                yuvSetupView.selectedIndex = newSelIdx
+                var s = {}
+                s[merged[newSelIdx]] = true
+                yuvSetupView._selectedFiles = s
+                yuvSetupView._anchorIndex = newSelIdx
+                yuvSetupView._selectAllChecked = false
             }
         }
 
@@ -1534,8 +1591,14 @@ Item {
                     if (merged.indexOf(found[i]) < 0) merged.push(found[i])
                 }
                 yuvSetupView.fileList = merged
-                // 选中新追加的第一个。
-                yuvSetupView.selectedIndex = merged.length - found.length
+                // 自动选中新追加的第一个文件
+                var newSelIdx = merged.length - found.length
+                yuvSetupView.selectedIndex = newSelIdx
+                var s = {}
+                s[merged[newSelIdx]] = true
+                yuvSetupView._selectedFiles = s
+                yuvSetupView._anchorIndex = newSelIdx
+                yuvSetupView._selectAllChecked = false
                 yuvSetupStatus.text = ""
             }
         }

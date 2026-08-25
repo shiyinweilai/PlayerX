@@ -18,6 +18,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import PlayerX 1.0
 
 Item {
     id: streamView
@@ -39,6 +40,13 @@ Item {
     // ── 排序 ──
     property string _sortMode: "default"   // default | name_asc | name_desc | size_desc | size_asc | resolution_desc | resolution_asc | duration_desc | duration_asc
     property bool _dragHovering: false     // 拖拽悬停高亮
+
+    // Ctrl+A 全选 / 取消全选（仅 setup 阶段生效）
+    Shortcut {
+        sequence: StandardKey.SelectAll
+        enabled: StreamBridge.slotCount === 0 && streamView.pendingFiles.length > 0
+        onActivated: streamView._toggleSelectAll()
+    }
 
     // ── 多选（Ctrl+Click / Shift+Click / 全选） ──
     property var _selectedFiles: ({})      // { path: true } 选中集合
@@ -547,31 +555,10 @@ Item {
         anchors.fill: parent
         visible: StreamBridge.slotCount === 0
 
-        // ── 标题栏 ──
-        Row {
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.leftMargin: 24
-            anchors.topMargin: 18
-            spacing: 12
-            Text {
-                text: "码流分析"
-                color: "#e8e8ec"; font.pixelSize: 18; font.bold: true
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "· " + streamView.pendingFiles.length + " 个"
-                color: "#9aa0a6"; font.pixelSize: 13
-            }
-        }
-
-        // ── 顶部操作按钮（仿 YuvSetupView 的"添加/清空"组） ──
-        Row {
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.topMargin: 18
-            anchors.rightMargin: 24
-            spacing: 8
+        // ── 顶部操作按钮已移入文件列表卡片头部，此处仅保留 sortMenu 定义 ──
+        // sortMenu 通过 id 供卡片头部排序按钮引用
+        Item {
+            visible: false
 
             // 排序按钮 + 下拉菜单
             StreamFlatButton {
@@ -785,14 +772,14 @@ Item {
             }
         }
 
-        // ── 主区：左侧文件列表（宽） + 右侧文件信息面板 ──
+        // ── 主区：左侧文件列表（含操作按钮头） + 右侧文件信息面板 ──
         RowLayout {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.topMargin: 70
-            anchors.bottomMargin: 60
+            anchors.topMargin: 24
+            anchors.bottomMargin: 24
             anchors.leftMargin: 24
             anchors.rightMargin: 24
             spacing: 16
@@ -802,17 +789,116 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumWidth: 400
-                radius: 4
+                radius: 10
                 color: streamView._dragHovering ? "#1a1a22" : "#16161b"
                 border.color: streamView._dragHovering ? "#3a78c8" : "#2a2e33"
                 border.width: streamView._dragHovering ? 2 : 1
                 Behavior on border.color { ColorAnimation { duration: 120 } }
                 Behavior on color { ColorAnimation { duration: 120 } }
 
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 0
+                    spacing: 0
+
+                    // ── 卡片头部操作栏：左侧（开始分析 + 导出码流）| 右侧（排序+添加+文件夹+清空） ──
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 44
+                        Layout.leftMargin: 12
+                        Layout.rightMargin: 8
+                        spacing: 8
+
+                        // 左侧：开始分析 + 导出码流
+                        Rectangle {
+                            width: 100; height: 28; radius: 6
+                            color: startHeadMa.containsMouse ? "#3d7adf" : "#2a5fc0"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "开始分析"
+                                color: "#fff"; font.pixelSize: 12; font.bold: true
+                            }
+                            MouseArea {
+                                id: startHeadMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: streamView._startAnalysis()
+                            }
+                        }
+                        Rectangle {
+                            width: 100; height: 28; radius: 6
+                            color: exportRawHeadMa.containsMouse ? "#2a2a34" : "#1e1e24"
+                            border.color: exportRawHeadMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                            border.width: 1
+                            enabled: streamView._selectedCount() > 0
+                            opacity: streamView._selectedCount() > 0 ? 1.0 : 0.5
+                            Text {
+                                anchors.centerIn: parent
+                                text: "导出码流"
+                                color: "#cccccc"; font.pixelSize: 12
+                            }
+                            MouseArea {
+                                id: exportRawHeadMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: streamView._exportRawBitstream()
+                            }
+                            ToolTip.visible: exportRawHeadMa.containsMouse
+                            ToolTip.text: streamView._selectedCount() > 0
+                                          ? ("导出裸码流（已选 " + streamView._selectedCount() + " 个）")
+                                          : "请先选择文件"
+                            ToolTip.delay: 200
+                        }
+                        // 已选计数
+                        Text {
+                            visible: streamView._selectedCount() > 0
+                            text: "已选 " + streamView._selectedCount() + " 个"
+                            color: "#6a6f76"; font.pixelSize: 11
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        // 右侧：排序 + 添加 + 文件夹 + 清空
+                        StreamFlatButton {
+                            text: streamView._sortLabel() + " ▾"
+                            enabled: streamView.pendingFiles.length > 0
+                            onClicked: sortMenu.open()
+                        }
+                        StreamFlatButton {
+                            text: "+ 添加"
+                            onClicked: streamView._openFile()
+                        }
+                        StreamFlatButton {
+                            text: "+ 文件夹"
+                            onClicked: streamView._openFolder()
+                        }
+                        StreamFlatButton {
+                            text: "清空"
+                            bgNormal: "#807a2e2e"
+                            bgHover:  "#809c3c3c"
+                            bgDown:   "#80b84848"
+                            textColor: "#f5c6c6"
+                            enabled: streamView.pendingFiles.length > 0
+                            onClicked: {
+                                streamView.pendingFiles = []
+                                streamView.pendingSelectedIndex = -1
+                                streamView.pendingStatus = ""
+                                streamView._selectedFiles = ({})
+                                streamView._selectAllChecked = false
+                                streamView._anchorIndex = -1
+                            }
+                        }
+                    }
+
+                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#2a2e33" }
+
                 ListView {
                     id: fileListView
-                    anchors.fill: parent
-                    anchors.margins: 8
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.margins: 8
                     clip: true
                     model: streamView.pendingFiles
                     boundsBehavior: Flickable.StopAtBounds
@@ -874,9 +960,42 @@ Item {
                                 color: "#6a6f76"; font.pixelSize: 10
                                 Layout.preferredWidth: 140
                             }
-                            // 删除按钮（hover 时显示）
+                            // 跳转到所在文件夹按钮
                             Rectangle {
-                                visible: rowMa.containsMouse || delFileMa.containsMouse
+                                Layout.preferredWidth: 22; Layout.preferredHeight: 22
+                                radius: 3
+                                color: revealFileMa.containsMouse ? "#803a3a44" : "transparent"
+                                Canvas {
+                                    anchors.centerIn: parent
+                                    width: 14; height: 14
+                                    onPaint: {
+                                        var ctx = getContext("2d")
+                                        ctx.reset()
+                                        ctx.strokeStyle = revealFileMa.containsMouse ? "#e8e8ec" : "#9aa0a6"
+                                        ctx.lineWidth = 1.3
+                                        ctx.fillStyle = "transparent"
+                                        // 文件夹主体
+                                        ctx.beginPath()
+                                        ctx.moveTo(1, 4)
+                                        ctx.lineTo(5, 4)
+                                        ctx.lineTo(6.5, 5.5)
+                                        ctx.lineTo(13, 5.5)
+                                        ctx.lineTo(13, 12)
+                                        ctx.lineTo(1, 12)
+                                        ctx.closePath()
+                                        ctx.stroke()
+                                    }
+                                }
+                                MouseArea {
+                                    id: revealFileMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: Fs.revealInFileManager(modelData)
+                                }
+                            }
+                            // 删除按钮
+                            Rectangle {
                                 Layout.preferredWidth: 22; Layout.preferredHeight: 22
                                 radius: 3
                                 color: delFileMa.containsMouse ? "#80b84848" : "transparent"
@@ -923,12 +1042,13 @@ Item {
                     }
 
                     Text {
-                        anchors.centerIn: parent
+                        Layout.alignment: Qt.AlignHCenter
                         visible: streamView.pendingFiles.length === 0
                         text: "拖拽视频文件到此处，或点右上「+ 添加」选择视频文件"
                         color: "#6a6f76"; font.pixelSize: 12
                     }
                 }
+                }  // ColumnLayout 闭合
 
                 // ── 拖拽导入（在 ListView 之后声明，z 序最高，覆盖其上接收事件） ──
                 DropArea {
@@ -970,7 +1090,7 @@ Item {
             Rectangle {
                 Layout.preferredWidth: 320
                 Layout.fillHeight: true
-                radius: 4
+                radius: 10
                 color: "#16161b"
                 border.color: "#2a2e33"; border.width: 1
 
@@ -1121,107 +1241,6 @@ Item {
                         visible: streamView._exportStatus.length > 0
                         Layout.topMargin: 4
                         Layout.bottomMargin: 4
-                    }
-                }
-            }
-        }
-
-        // ── 底部工具栏（全宽：全选 | 导出码流 + 开始分析） ──
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 52
-            color: "#121215"
-            border.color: "#2a2e33"; border.width: 1
-
-            // 左侧：全选按钮 + 已选计数
-            Row {
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.leftMargin: 24
-                spacing: 12
-
-                Rectangle {
-                    width: 64; height: 32; radius: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: selectAllMa.containsMouse ? "#3a3a44" : "#252528"
-                    border.color: "#3a3a44"; border.width: 1
-                    enabled: streamView.pendingFiles.length > 0
-                    opacity: streamView.pendingFiles.length > 0 ? 1.0 : 0.5
-                    Text {
-                        anchors.centerIn: parent
-                        text: streamView._selectAllChecked ? "取消全选" : "全选"
-                        color: "#cccccc"; font.pixelSize: 13
-                    }
-                    MouseArea {
-                        id: selectAllMa
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: streamView._toggleSelectAll()
-                    }
-                }
-
-                // 已选计数
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    visible: streamView._selectedCount() > 0
-                    text: "已选 " + streamView._selectedCount() + " 个"
-                    color: "#6a6f76"; font.pixelSize: 12
-                }
-            }
-
-            // 右侧：导出码流 + 开始分析
-            Row {
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.rightMargin: 24
-                spacing: 12
-
-                // 导出码流按钮
-                Rectangle {
-                    width: 100; height: 32; radius: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: exportRawBottomMa.containsMouse ? "#3a3a44" : "#252528"
-                    border.color: "#3a3a44"; border.width: 1
-                    enabled: streamView._selectedCount() > 0
-                    opacity: streamView._selectedCount() > 0 ? 1.0 : 0.5
-                    Text {
-                        anchors.centerIn: parent
-                        text: "导出码流"
-                        color: "#cccccc"; font.pixelSize: 13
-                    }
-                    MouseArea {
-                        id: exportRawBottomMa
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: streamView._exportRawBitstream()
-                    }
-                    ToolTip.visible: exportRawBottomMa.containsMouse
-                    ToolTip.text: streamView._selectedCount() > 0
-                                  ? ("导出裸码流（已选 " + streamView._selectedCount() + " 个）")
-                                  : "请先选择文件"
-                    ToolTip.delay: 200
-                }
-
-                // 开始分析按钮
-                Rectangle {
-                    width: 100; height: 32; radius: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: startBottomMa.containsMouse ? "#3d7adf" : "#2a5fc0"
-                    Text {
-                        anchors.centerIn: parent
-                        text: "开始分析"
-                        color: "#fff"; font.pixelSize: 13; font.bold: true
-                    }
-                    MouseArea {
-                        id: startBottomMa
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: streamView._startAnalysis()
                     }
                 }
             }

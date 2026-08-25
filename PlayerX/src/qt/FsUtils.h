@@ -44,6 +44,12 @@ public:
     // 工具：取路径文件名部分。
     Q_INVOKABLE QString fileName(const QString& path) const;
 
+    // 工具：获取文件大小（字节）。文件不存在返回 0。
+    Q_INVOKABLE qint64 fileSize(const QString& path) const;
+
+    // 工具：获取文件最后修改时间（格式 yyyy-MM-dd HH:mm:ss）。不存在返回空串。
+    Q_INVOKABLE QString fileModified(const QString& path) const;
+
     // 工具：把 QUrl（典型来自 QML FolderDialog/FileDialog）转成平台本地路径。
     // 跨平台正确：macOS 返回 "/Users/..."，Windows 返回 "C:/Users/..."。
     // QML 端禁止用 url.toString().substring(7) 之类的字符串截断方式，那在 Windows

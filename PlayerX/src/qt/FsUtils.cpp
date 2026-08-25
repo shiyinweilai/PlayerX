@@ -187,6 +187,20 @@ QString FsUtils::fileName(const QString& path) const {
     return QFileInfo(path).fileName();
 }
 
+qint64 FsUtils::fileSize(const QString& path) const {
+    if (path.isEmpty()) return 0;
+    QFileInfo fi(path);
+    if (!fi.exists() || !fi.isFile()) return 0;
+    return fi.size();
+}
+
+QString FsUtils::fileModified(const QString& path) const {
+    if (path.isEmpty()) return {};
+    QFileInfo fi(path);
+    if (!fi.exists()) return {};
+    return fi.lastModified().toString("yyyy-MM-dd HH:mm:ss");
+}
+
 QString FsUtils::urlToLocalFile(const QUrl& url) const {
     return urlToLocal(url);
 }
