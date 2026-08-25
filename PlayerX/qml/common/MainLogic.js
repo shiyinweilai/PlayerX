@@ -470,7 +470,20 @@ function _checkRemoteConfigUpdate(onNoUpdate, openCardOnNoUpdate) {
                 // 【手动应用】无论有无差异，都把"远程当前绑定的全部配置"存下来，
                 // 供卡片在无更新时也展示完整列表、每条带"应用"按钮。
                 _root._remoteAllConfigs = allFetched.slice()
+                // 【修复】无论有无差异，都清除 pending 中不再被远程当前版本支持的残留条目。
+                // 否则旧 pending（如 testSource 旧版不含当前评分人）会遮蔽 allFetched 中的
+                // 新版（含当前评分人），导致铃铛点击后卡片列表被过滤为空、看不到配置。
+                if (_root._pendingRemoteConfig) {
+                    var _allKeys = {}
+                    allFetched.forEach(function(it) { _allKeys[(it.mode||"") + ":" + (it.configName||"")] = true })
+                    var _cleaned = (_root._pendingRemoteConfig).filter(function(x) {
+                        return _allKeys[(x.mode||"") + ":" + (x.configName||"")]
+                    })
+                    _root._pendingRemoteConfig = _cleaned.length > 0 ? _cleaned : null
+                }
                 if (pending.length === 0) {
+                    // 无更新：清除所有残留 pending（远程当前版本与本地指纹一致，无新变化）
+                    _root._pendingRemoteConfig = null
                     // 无更新（含首次启动静默应用完毕）：把当前 mode 的维度同步到 reviewDimensions
                     // 这样首次启动时用户无需手动应用，打开评分规则面板就能看到配置
                     var curMode = (typeof Rating !== "undefined") ? Rating.currentMode : ""
@@ -549,6 +562,11 @@ function _checkRemoteConfigUpdate(onNoUpdate, openCardOnNoUpdate) {
                     }
                     if (!found) merged.push(newItem)
                 })
+                // 【修复】合并后清除不再被远程当前版本支持的残留条目
+                // （如配置已从绑定中移除，或 testSource 变化后旧条目已被新条目覆盖但 key 不同的情况）
+                var _allKeysMerge = {}
+                allFetched.forEach(function(it) { _allKeysMerge[(it.mode||"") + ":" + (it.configName||"")] = true })
+                merged = merged.filter(function(x) { return _allKeysMerge[(x.mode||"") + ":" + (x.configName||"")] })
                 _root._pendingRemoteConfig = merged
                 // 开发者模式未开启时，遵循"免打扰"规则：
                 //   · 隐藏 mode === "test" 的测试模式任务；

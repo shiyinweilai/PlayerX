@@ -208,19 +208,15 @@ ToolBar {
                     root._taskUpdateVisible = false
                     return
                 }
-                // 卡片未展开 → 展开：有可见更新直接开；否则主动检测并按规则决定是否弹卡片。
-                // 用 _visiblePendingCount 判定（已包含"测试模式隐藏 / 测试源评分人不命中隐藏"），
-                // 避免直接打开一张"对当前用户全无可见项"的空卡片。
-                if (root._visiblePendingCount > 0) {
-                    root._taskUpdateVisible = true
-                } else {
-                    if (_checking) return
-                    _checking = true
-                    Logic._checkRemoteConfigUpdate(function() {
-                        taskUpdateEntryBtn._checking = false
-                    }, true)  // openCardOnNoUpdate=true：无更新也打开卡片展示全部配置 + 应用按钮
-                    Qt.callLater(function() { taskUpdateEntryBtn._checking = false })
-                }
+                // 卡片未展开 → 始终主动检测远程配置最新状态后再决定是否弹卡片。
+                // 【修复】不再用 _visiblePendingCount 直接展开旧数据，而是每次点击都重新拉取，
+                // 确保后台评分人随时改、客户端点击铃铛后都能及时同步最新配置。
+                if (_checking) return
+                _checking = true
+                Logic._checkRemoteConfigUpdate(function() {
+                    taskUpdateEntryBtn._checking = false
+                }, true)  // openCardOnNoUpdate=true：无更新也打开卡片展示全部配置 + 应用按钮
+                Qt.callLater(function() { taskUpdateEntryBtn._checking = false })
             }
 
             ToolTip.visible: hovered
