@@ -31,6 +31,13 @@ namespace rb {
 
 class YuvAnalyzer {
 public:
+    // ── 色度插值模式 ──────────────────────────────────────────────────
+    // 控制 sws_scale 对 4:2:0/4:2:2 色度平面上采样到 4:4:4 的算法。
+    //   NearestNeighbor = SWS_POINT，每个色度像素严格复制，适合像素级分析
+    //   Bilinear        = SWS_BILINEAR，双线性插值，适合预览观看
+    //   Bicubic         = SWS_BICUBIC，双三次插值，更平滑但计算更重
+    enum ChromaInterpolation { NearestNeighbor = 0, Bilinear = 1, Bicubic = 2 };
+
     YuvAnalyzer();
     ~YuvAnalyzer();
 
@@ -60,6 +67,12 @@ public:
     QImage getFrameImage();
     // 单平面灰度图（plane: 0=Y, 1=U, 2=V）
     QImage getPlaneImage(int plane);
+
+    // ── 色度插值模式 ──────────────────────────────────────────────────
+    // 设置 sws_scale 的色度上采样算法；改变后需要重建 sws 上下文。
+    // 默认 NearestNeighbor（像素级分析标准）。
+    void setChromaInterpolation(ChromaInterpolation mode);
+    ChromaInterpolation chromaInterpolation() const { return m_chromaInterp; }
 
     // ── 像素级查询 ──────────────────────────────────────────────────────
     // 获取图像坐标 (x, y) 处的 YUV 值，返回 {y, u, v}；越界返回 {-1,-1,-1}
@@ -160,6 +173,9 @@ private:
     int           m_swsW{0};
     int           m_swsH{0};
     AVPixelFormat m_swsFmt;
+
+    // 色度插值模式（默认 NearestNeighbor）；影响 sws_scale 的 flags
+    ChromaInterpolation m_chromaInterp{NearestNeighbor};
 };
 
 } // namespace rb

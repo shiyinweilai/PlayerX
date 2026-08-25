@@ -262,6 +262,18 @@ QImage YuvAnalyzer::getPlaneImage(int plane) {
 
 // ── 内部 ──────────────────────────────────────────────────────────────
 
+void YuvAnalyzer::setChromaInterpolation(ChromaInterpolation mode) {
+    if (m_chromaInterp == mode) return;
+    m_chromaInterp = mode;
+    // 重建 sws 上下文以应用新的插值 flags
+    if (m_swsCtx) {
+        initSwsContext();
+        // initSwsContext 释放了旧 m_srcFrame 并分配新帧，但未填充 data 指针；
+        // 必须重新调用 fillSrcFrame 将 m_frameBuf 数据绑定到新帧，否则 sws_scale 读空指针崩溃
+        fillSrcFrame();
+    }
+}
+
 void YuvAnalyzer::initSwsContext() {
     freeSwsContext();
 
@@ -279,9 +291,17 @@ void YuvAnalyzer::initSwsContext() {
     m_dstFrame->format = AV_PIX_FMT_RGBA;
     av_frame_get_buffer(m_dstFrame, 0);
 
+    // 根据色度插值模式选择 sws_scale flags
+    int swsFlags = SWS_POINT;  // 默认最近邻
+    switch (m_chromaInterp) {
+        case NearestNeighbor: swsFlags = SWS_POINT;     break;
+        case Bilinear:        swsFlags = SWS_BILINEAR;  break;
+        case Bicubic:         swsFlags = SWS_BICUBIC;   break;
+    }
+
     m_swsCtx = sws_getContext(m_width, m_height, m_pixFmt,
                               m_width, m_height, AV_PIX_FMT_RGBA,
-                              SWS_BILINEAR, nullptr, nullptr, nullptr);
+                              swsFlags, nullptr, nullptr, nullptr);
     m_swsW   = m_width;
     m_swsH   = m_height;
     m_swsFmt = m_pixFmt;

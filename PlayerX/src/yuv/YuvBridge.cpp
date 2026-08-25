@@ -41,6 +41,15 @@ YuvBridge::YuvBridge(QObject* parent)
     // 同时主动清掉历史持久化值，确保干净状态。
     yuvSettings().remove("yuv_presets/inlineControlsHidden");
     m_inlineControlsHidden = true;
+
+    // 色度插值模式：从 QSettings 恢复，默认 0 = NearestNeighbor
+    m_chromaInterpolation = yuvSettings().value("yuv_presets/chromaInterpolation", 0).toInt();
+    if (m_chromaInterpolation < 0 || m_chromaInterpolation > 2) m_chromaInterpolation = 0;
+    // 同步到所有 analyzer（此时文件尚未打开，只是设好默认值）
+    for (int i = 0; i < MaxSlots; ++i) {
+        m_analyzers[i]->setChromaInterpolation(
+            static_cast<rb::YuvAnalyzer::ChromaInterpolation>(m_chromaInterpolation));
+    }
 }
 
 YuvBridge::~YuvBridge() = default;
@@ -681,6 +690,25 @@ void YuvBridge::setPixelInfoVisible(bool visible) {
     if (m_pixelInfoVisible == visible) return;
     m_pixelInfoVisible = visible;
     emit pixelInfoVisibleChanged();
+}
+
+void YuvBridge::setChromaInterpolation(int mode) {
+    if (mode < 0 || mode > 2) mode = 0;
+    if (m_chromaInterpolation == mode) return;
+    m_chromaInterpolation = mode;
+    // 持久化到 QSettings
+    yuvSettings().setValue("yuv_presets/chromaInterpolation", mode);
+    yuvSettingsSync();
+    // 同步到所有 analyzer（已打开的会立即重建 sws 上下文，未打开的仅记录值）
+    for (int i = 0; i < MaxSlots; ++i) {
+        m_analyzers[i]->setChromaInterpolation(
+            static_cast<rb::YuvAnalyzer::ChromaInterpolation>(mode));
+    }
+    // 刷新所有已打开 slot 的帧图像以应用新的插值
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_analyzers[i]->isOpen()) refreshFrameImage(i);
+    }
+    emit chromaInterpolationChanged();
 }
 
 // ── 全局缩放比例 ──────────────────────────────────────────────────────

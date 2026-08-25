@@ -581,6 +581,30 @@ MenuBar {
             checked: YuvBridge.pixelInfoVisible
             onTriggered: YuvBridge.pixelInfoVisible = !checked
         }
+
+        // ── 色度插值 ▶ ──（4:2:0/4:2:2 色度上采样算法，3 档互斥单选）
+        // 默认 Nearest Neighbor = 像素级分析标准（展示编码器实际存储的原始色度值）
+        DarkMenu {
+            title: qsTr("色度插值")
+            DarkMenuItem {
+                text: qsTr("Nearest Neighbor")
+                checkable: true
+                checked: YuvBridge.chromaInterpolation === 0
+                onTriggered: YuvBridge.chromaInterpolation = 0
+            }
+            DarkMenuItem {
+                text: qsTr("Bilinear")
+                checkable: true
+                checked: YuvBridge.chromaInterpolation === 1
+                onTriggered: YuvBridge.chromaInterpolation = 1
+            }
+            DarkMenuItem {
+                text: qsTr("Bicubic")
+                checkable: true
+                checked: YuvBridge.chromaInterpolation === 2
+                onTriggered: YuvBridge.chromaInterpolation = 2
+            }
+        }
     }
 
     // ═══ 码流分析（暂未实现，仅留占位提示）══════════════
