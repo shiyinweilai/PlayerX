@@ -13,6 +13,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QStringList>
+#include <cmath>
+#include <QDebug>
 
 // ── QSettings 辅助（与 YuvBridge / RBStreamBridge 同款） ──────────
 static QSettings& imageSettings() {
@@ -247,6 +249,105 @@ QString ImageBridge::fileName(int slot) const {
     return QFileInfo(m_slots[slot].path).fileName();
 }
 
+// ── 像素级统计 ──────────────────────────────────────────────────────
+
+QVariantMap ImageBridge::pixelStats(int slot) const {
+    QVariantMap result;
+    qDebug() << "[pixelStats] called slot=" << slot << "hasFile=" << hasFile(slot);
+    if (!hasFile(slot)) return result;
+
+    const QImage img = m_slots[slot].img;
+    qDebug() << "[pixelStats] img.isNull=" << img.isNull() << "size=" << img.size() << "format=" << img.format();
+    if (img.isNull()) return result;
+
+    // 转为 RGB32（不带 alpha 的计算更简单）
+    const QImage rgb = img.format() == QImage::Format_ARGB32_Premultiplied
+                        ? img.convertToFormat(QImage::Format_RGB32)
+                        : (img.format() == QImage::Format_RGB32 ? img : img.convertToFormat(QImage::Format_RGB32));
+    const bool hasAlpha = img.hasAlphaChannel();
+
+    const int w = rgb.width();
+    const int h = rgb.height();
+    const int totalPixels = w * h;
+    if (totalPixels <= 0) return result;
+
+    // 256 bin 直方图
+    int histR[256] = {}, histG[256] = {}, histB[256] = {}, histLum[256] = {};
+    double sumR = 0, sumG = 0, sumB = 0, sumLum = 0;
+    double sumR2 = 0, sumG2 = 0, sumB2 = 0;
+    int minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
+    int alphaPixels = 0;
+
+    // 大图采样：超过 1M 像素则步长采样，保证 <50ms
+    const int step = totalPixels > 1000000 ? (totalPixels / 1000000 + 1) : 1;
+    int sampledPixels = 0;
+
+    for (int y = 0; y < h; ++y) {
+        const QRgb* line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
+        for (int x = 0; x < w; x += step) {
+            const QRgb px = line[x];
+            const int r = qRed(px);
+            const int g = qGreen(px);
+            const int b = qBlue(px);
+            // BT.601 亮度
+            const int lum = (r * 299 + g * 587 + b * 114) / 1000;
+
+            histR[r]++; histG[g]++; histB[b]++; histLum[lum]++;
+            sumR += r; sumG += g; sumB += b; sumLum += lum;
+            sumR2 += (double)r * r; sumG2 += (double)g * g; sumB2 += (double)b * b;
+            if (r < minR) minR = r; if (r > maxR) maxR = r;
+            if (g < minG) minG = g; if (g > maxG) maxG = g;
+            if (b < minB) minB = b; if (b > maxB) maxB = b;
+            ++sampledPixels;
+        }
+    }
+
+    // Alpha 统计（从原图）
+    if (hasAlpha) {
+        for (int y = 0; y < h; ++y) {
+            const QRgb* line = reinterpret_cast<const QRgb*>(img.constScanLine(y));
+            for (int x = 0; x < w; ++x) {
+                if (qAlpha(line[x]) < 255) ++alphaPixels;
+            }
+        }
+    }
+
+    const double n = sampledPixels;
+    const double meanR = sumR / n, meanG = sumG / n, meanB = sumB / n;
+    const double meanLum = sumLum / n;
+    const double varR = sumR2 / n - meanR * meanR;
+    const double varG = sumG2 / n - meanG * meanG;
+    const double varB = sumB2 / n - meanB * meanB;
+
+    // 转 QVariantList
+    QVariantList vR, vG, vB, vL;
+    for (int i = 0; i < 256; ++i) {
+        vR << histR[i]; vG << histG[i]; vB << histB[i]; vL << histLum[i];
+    }
+
+    result["histR"] = vR;
+    result["histG"] = vG;
+    result["histB"] = vB;
+    result["histLum"] = vL;
+    result["meanR"] = qRound(meanR);
+    result["meanG"] = qRound(meanG);
+    result["meanB"] = qRound(meanB);
+    result["meanLum"] = qRound(meanLum);
+    result["minR"] = minR; result["maxR"] = maxR;
+    result["minG"] = minG; result["maxG"] = maxG;
+    result["minB"] = minB; result["maxB"] = maxB;
+    result["stdR"] = qRound(std::sqrt(qMax(0.0, varR)));
+    result["stdG"] = qRound(std::sqrt(qMax(0.0, varG)));
+    result["stdB"] = qRound(std::sqrt(qMax(0.0, varB)));
+    result["alphaRatio"] = hasAlpha ? (double)alphaPixels / totalPixels : 0.0;
+    result["sampled"] = sampledPixels;
+    result["total"] = totalPixels;
+
+    qDebug() << "[pixelStats] done: meanR=" << result["meanR"] << "meanLum=" << result["meanLum"]
+             << "histR count=" << vR.size() << "sampled=" << sampledPixels;
+    return result;
+}
+
 // ── 图片元信息 ──────────────────────────────────────────────────────
 
 QVariantMap ImageBridge::imageInfo(int slot) const {
@@ -319,30 +420,152 @@ QVariantMap ImageBridge::probePath(const QString& path) const {
         // 色彩空间（ICC profile / sRGB 等）
         // Qt6: QImage::colorSpace() 返回 QColorSpace
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-        if (img.colorSpace().isValid()) {
-            switch (img.colorSpace().colorModel()) {
+        const QColorSpace cs = img.colorSpace();
+        if (cs.isValid()) {
+            switch (cs.colorModel()) {
                 case QColorSpace::ColorModel::Rgb:   m["colorSpace"] = "RGB"; break;
                 case QColorSpace::ColorModel::Cmyk:  m["colorSpace"] = "CMYK"; break;
                 case QColorSpace::ColorModel::Gray:  m["colorSpace"] = "Gray"; break;
                 default:                              m["colorSpace"] = "Unknown"; break;
             }
+
+            // ── ICC Profile 详细信息 ──
+            // 用 primaries + transferFunction 推断命名色彩空间
+            const QColorSpace::Primaries prim = cs.primaries();
+            const QColorSpace::TransferFunction tf = cs.transferFunction();
+            const QByteArray iccData = cs.iccProfile();
+            m["hasICC"] = !iccData.isEmpty();
+
+            QString profileName;
+            if (prim == QColorSpace::Primaries::SRgb && tf == QColorSpace::TransferFunction::SRgb)
+                profileName = "sRGB IEC61966-2.1";
+            else if (prim == QColorSpace::Primaries::SRgb && tf == QColorSpace::TransferFunction::Linear)
+                profileName = "sRGB Linear";
+            else if (prim == QColorSpace::Primaries::AdobeRgb)
+                profileName = "Adobe RGB (1998)";
+            else if (prim == QColorSpace::Primaries::DciP3D65)
+                profileName = "Display P3";
+            else if (prim == QColorSpace::Primaries::ProPhotoRgb)
+                profileName = "ProPhoto RGB";
+            else if (prim == QColorSpace::Primaries::Bt2020)
+                profileName = "BT.2020";
+            else {
+                // 未命名但有效 → 尝试 description，否则标注自定义
+                QString desc = cs.description();
+                profileName = desc.isEmpty() ? "Custom ICC Profile" : desc;
+            }
+            m["iccProfile"] = profileName;
+
+            // ICC 数据大小（字节）
+            if (!iccData.isEmpty())
+                m["iccSize"] = (int)iccData.size();
+
+            // 白点
+            const QPointF whitePt = cs.whitePoint();
+            m["whitePoint"] = QString("x=%1 y=%2")
+                                  .arg(whitePt.x(), 0, 'f', 4)
+                                  .arg(whitePt.y(), 0, 'f', 4);
+
+            // gamma / 传输函数
+            if (tf == QColorSpace::TransferFunction::Gamma) {
+                m["gamma"] = QString::number(cs.gamma(), 'f', 2);
+            } else {
+                QString tfName;
+                switch (tf) {
+                    case QColorSpace::TransferFunction::Linear:      tfName = "Linear"; break;
+                    case QColorSpace::TransferFunction::SRgb:        tfName = "sRGB EOTF"; break;
+                    case QColorSpace::TransferFunction::ProPhotoRgb: tfName = "ProPhoto"; break;
+                    case QColorSpace::TransferFunction::Bt2020:      tfName = "BT.2020"; break;
+                    case QColorSpace::TransferFunction::St2084:      tfName = "ST.2084 (PQ)"; break;
+                    case QColorSpace::TransferFunction::Hlg:         tfName = "HLG"; break;
+                    default:                                         tfName = "Custom"; break;
+                }
+                m["gamma"] = tfName;
+            }
+
+            // 原色信息（Primaries）
+            QString primName;
+            switch (prim) {
+                case QColorSpace::Primaries::SRgb:        primName = "sRGB / BT.709"; break;
+                case QColorSpace::Primaries::AdobeRgb:    primName = "Adobe RGB"; break;
+                case QColorSpace::Primaries::DciP3D65:    primName = "DCI-P3 D65"; break;
+                case QColorSpace::Primaries::ProPhotoRgb: primName = "ProPhoto RGB"; break;
+                case QColorSpace::Primaries::Bt2020:      primName = "BT.2020"; break;
+                default:                                  primName = "Custom"; break;
+            }
+            m["primaries"] = primName;
         } else {
             m["colorSpace"] = "sRGB (default)";
+            m["iccProfile"] = "无 (按 sRGB 惯例)";
+            m["hasICC"] = false;
+            m["whitePoint"] = "—";
+            m["gamma"] = "—";
+            m["primaries"] = "—";
         }
 #else
         m["colorSpace"] = "—";
+        m["iccProfile"] = "—";
+        m["hasICC"] = false;
+        m["whitePoint"] = "—";
+        m["gamma"] = "—";
 #endif
     } else {
         m["bitDepth"] = 0;
         m["hasAlpha"] = false;
         m["colorType"] = "—";
         m["colorSpace"] = "—";
+        m["iccProfile"] = "—";
+        m["hasICC"] = false;
+        m["whitePoint"] = "—";
+        m["gamma"] = "—";
+        m["primaries"] = "—";
         m["dpiX"] = 72;
         m["dpiY"] = 72;
     }
 
     // 动图帧数（GIF / animated WebP）
     m["frameCount"] = reader.imageCount();
+
+    // ── EXIF 方向（手机拍摄图片常带 Orientation tag）──
+    // QImageReader 在 setAutoTransform(true) 时会自动应用方向，
+    // 这里报告原始 EXIF orientation 值（1=正常，3=180°，6=90°CW，8=90°CCW…）
+    // 注意：probePath 未调用 setAutoTransform，所以读出的图是原始方向
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const int exifOrientation = reader.transformation();
+    m["exifOrientation"] = exifOrientation;
+    static const QStringList orientNames = {
+        "正常 (1)",         // 0 → None
+        "镜像水平 (2)",     // 1 → Flip
+        "180° (3)",         // 2 → Rotate180
+        "镜像垂直 (4)",     // 3 → Rotate180 + Flip
+        "镜像水平+270° (5)",// 4 → Transpose
+        "90° CW (6)",       // 5 → Rotate90
+        "镜像水平+90° (7)", // 6 → Transverse
+        "90° CCW (8)"       // 7 → Rotate270
+    };
+    if (exifOrientation >= 0 && exifOrientation < orientNames.size())
+        m["exifOrientationDesc"] = orientNames[exifOrientation];
+    else
+        m["exifOrientationDesc"] = "正常 (1)";
+#else
+    m["exifOrientation"] = 0;
+    m["exifOrientationDesc"] = "—";
+#endif
+
+    // ── 色彩范围（图片场景通常为 Full Range）──
+    // 图片不像视频有 limited/full range 之分，但 ICC 色彩空间转换后
+    // 像素均为 full range。此处提供信息给用户。
+    m["colorRange"] = "Full Range";
+
+    // ── 像素总数量与宽高比 ──
+    const int w = m.value("width").toInt();
+    const int h = m.value("height").toInt();
+    if (w > 0 && h > 0) {
+        m["pixelCount"] = w * h;
+        // 约分宽高比
+        int gcd = [] (int a, int b) -> int { while (b) { int t = a % b; a = b; b = t; } return a; }(w, h);
+        m["aspectRatio"] = QString("%1:%2").arg(w / gcd).arg(h / gcd);
+    }
 
     return m;
 }

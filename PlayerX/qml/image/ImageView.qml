@@ -401,34 +401,143 @@ Item {
                     anchors.fill: parent; anchors.margins: 16; spacing: 0
                     visible: imageView.pendingFiles.length > 0 && imageView.pendingSelectedIndex >= 0 && imageView.pendingSelectedIndex < imageView.pendingFiles.length
 
-                    Text { text: "文件信息"; color: "#e8e8ec"; font.pixelSize: 14; font.bold: true; Layout.bottomMargin: 12 }
-                    Text { text: imageView._probeData.fileName || "—"; color: "#cccccc"; font.pixelSize: 12; font.family: "Monospace"; elide: Text.ElideMiddle; Layout.fillWidth: true; Layout.bottomMargin: 4 }
-                    Text { text: imageView._probeData.filePath || ""; color: "#6a6f76"; font.pixelSize: 10; elide: Text.ElideLeft; Layout.fillWidth: true; Layout.bottomMargin: 16 }
+                    // ── 标题栏 ──
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.bottomMargin: 12; spacing: 8
+                        Rectangle { Layout.preferredWidth: 3; Layout.preferredHeight: 16; radius: 1; color: "#5b8def" }
+                        Text { text: "文件信息"; color: "#e8e8ec"; font.pixelSize: 14; font.bold: true }
+                        Item { Layout.fillWidth: true }
+                        // ICC 徽章
+                        Rectangle {
+                            visible: !!imageView._probeData.hasICC
+                            Layout.preferredWidth: iccBadge.implicitWidth + 12; Layout.preferredHeight: 18; radius: 9
+                            color: "#223a5fc0"; border.color: "#3a5fc0"; border.width: 1
+                            Row {
+                                id: iccBadge; anchors.centerIn: parent; spacing: 3
+                                Text { text: "ICC"; color: "#6fa0ff"; font.pixelSize: 9; font.bold: true }
+                            }
+                        }
+                    }
+                    Text {
+                        text: imageView._probeData.fileName || "—"
+                        color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace"
+                        elide: Text.ElideMiddle; Layout.fillWidth: true; Layout.bottomMargin: 4
+                    }
+                    Text {
+                        text: imageView._probeData.filePath || ""
+                        color: "#5a5f66"; font.pixelSize: 10; elide: Text.ElideLeft; Layout.fillWidth: true; Layout.bottomMargin: 12
+                    }
                     Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#2a2e33"; Layout.bottomMargin: 12 }
 
-                    Repeater {
-                        model: [
-                            { label: "分辨率",   value: (Number(imageView._probeData.width) > 0 && Number(imageView._probeData.height) > 0) ? (imageView._probeData.width + " × " + imageView._probeData.height) : "—" },
-                            { label: "格式",     value: imageView._probeData.formatLong || imageView._probeData.format || "—" },
-                            { label: "位深",     value: Number(imageView._probeData.bitDepth) > 0 ? (imageView._probeData.bitDepth + " bit") : "—" },
-                            { label: "色彩类型", value: imageView._probeData.colorType || "—" },
-                            { label: "色彩空间", value: imageView._probeData.colorSpace || "—" },
-                            { label: "Alpha",   value: imageView._probeData.hasAlpha ? "有" : "无" },
-                            { label: "DPI",     value: Number(imageView._probeData.dpiX) > 0 ? (imageView._probeData.dpiX + " × " + imageView._probeData.dpiY) : "—" },
-                            { label: "帧数",     value: Number(imageView._probeData.frameCount) > 1 ? String(imageView._probeData.frameCount) : "1" },
-                            { label: "文件大小", value: Number(imageView._probeData.fileSize) > 0 ? imageView._formatFileSize(imageView._probeData.fileSize) : "—" },
-                            { label: "修改时间", value: imageView._probeData.fileModified || "—" }
-                        ]
-                        RowLayout {
-                            Layout.fillWidth: true; Layout.preferredHeight: 24; spacing: 8
-                            Text { text: modelData.label; color: "#9aa0a6"; font.pixelSize: 11; Layout.preferredWidth: 70 }
-                            Text { text: modelData.value; color: "#e8e8ec"; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                    // ── 可滚动内容区 ──
+                    Flickable {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        contentHeight: infoContent.height; clip: true; boundsBehavior: Flickable.StopAtBounds
+                        flickableDirection: Flickable.VerticalFlick
+
+                        ColumnLayout {
+                            id: infoContent
+                            width: parent.width; spacing: 0
+
+                            // ════ 基本信息组 ════
+                            Item {
+                                Layout.fillWidth: true; Layout.preferredHeight: sectionBasic.implicitHeight
+                                ColumnLayout {
+                                    id: sectionBasic; anchors.fill: parent; spacing: 0
+                                    RowLayout {
+                                        Layout.fillWidth: true; Layout.bottomMargin: 6; spacing: 6
+                                        Text { text: "基本信息"; color: "#7a8290"; font.pixelSize: 10; font.bold: true; font.capitalization: Font.AllUppercase }
+                                        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#22262b" }
+                                    }
+                                    Repeater {
+                                        model: [
+                                            { label: "分辨率", value: (Number(imageView._probeData.width) > 0 && Number(imageView._probeData.height) > 0) ? (imageView._probeData.width + " × " + imageView._probeData.height) : "—" },
+                                            { label: "像素数", value: Number(imageView._probeData.pixelCount) > 0 ? imageView._probeData.pixelCount.toLocaleString() : "—" },
+                                            { label: "宽高比", value: imageView._probeData.aspectRatio || "—" },
+                                            { label: "格式", value: imageView._probeData.formatLong || imageView._probeData.format || "—" },
+                                            { label: "位深", value: Number(imageView._probeData.bitDepth) > 0 ? (imageView._probeData.bitDepth + " bit") : "—" },
+                                            { label: "帧数", value: Number(imageView._probeData.frameCount) > 1 ? String(imageView._probeData.frameCount) + " (动画)" : "1 (静态)" },
+                                            { label: "文件大小", value: Number(imageView._probeData.fileSize) > 0 ? imageView._formatFileSize(imageView._probeData.fileSize) : "—" },
+                                            { label: "修改时间", value: imageView._probeData.fileModified || "—" }
+                                        ]
+                                        RowLayout {
+                                            Layout.fillWidth: true; Layout.preferredHeight: 22; spacing: 8; Layout.leftMargin: 2
+                                            Text { text: modelData.label; color: "#7a8088"; font.pixelSize: 11; Layout.preferredWidth: 64 }
+                                            Text { text: modelData.value; color: "#c8c8d0"; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ════ 色彩与 ICC 组 ════
+                            Item {
+                                Layout.fillWidth: true; Layout.preferredHeight: sectionColor.implicitHeight; Layout.topMargin: 14
+                                ColumnLayout {
+                                    id: sectionColor; anchors.fill: parent; spacing: 0
+                                    RowLayout {
+                                        Layout.fillWidth: true; Layout.bottomMargin: 6; spacing: 6
+                                        Text { text: "色彩与 ICC"; color: "#7a8290"; font.pixelSize: 10; font.bold: true; font.capitalization: Font.AllUppercase }
+                                        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#22262b" }
+                                    }
+                                    Repeater {
+                                        model: [
+                                            { label: "色彩类型", value: imageView._probeData.colorType || "—" },
+                                            { label: "色彩空间", value: imageView._probeData.colorSpace || "—" },
+                                            { label: "ICC Profile", value: imageView._probeData.iccProfile || "—" },
+                                            { label: "原色", value: imageView._probeData.primaries || "—" },
+                                            { label: "白点", value: imageView._probeData.whitePoint || "—" },
+                                            { label: "传输函数", value: imageView._probeData.gamma || "—" },
+                                            { label: "色彩范围", value: imageView._probeData.colorRange || "—" },
+                                            { label: "Alpha", value: imageView._probeData.hasAlpha ? "有" : "无" }
+                                        ]
+                                        RowLayout {
+                                            Layout.fillWidth: true; Layout.preferredHeight: 22; spacing: 8; Layout.leftMargin: 2
+                                            Text { text: modelData.label; color: "#7a8088"; font.pixelSize: 11; Layout.preferredWidth: 64 }
+                                            Text {
+                                                text: modelData.value; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight
+                                                color: {
+                                                    if (modelData.label === "ICC Profile" && imageView._probeData.hasICC) return "#7eb0ff"
+                                                    if (modelData.label === "色彩范围" && imageView._probeData.colorRange) return "#6fcf97"
+                                                    if (modelData.label === "Alpha") return imageView._probeData.hasAlpha ? "#e8c84a" : "#8a8a8e"
+                                                    if (modelData.label === "原色" && imageView._probeData.primaries && imageView._probeData.primaries !== "—" && imageView._probeData.primaries !== "Custom") return "#7ee0d0"
+                                                    return "#c8c8d0"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ════ 元信息组 ════
+                            Item {
+                                Layout.fillWidth: true; Layout.preferredHeight: sectionMeta.implicitHeight; Layout.topMargin: 14
+                                ColumnLayout {
+                                    id: sectionMeta; anchors.fill: parent; spacing: 0
+                                    RowLayout {
+                                        Layout.fillWidth: true; Layout.bottomMargin: 6; spacing: 6
+                                        Text { text: "元信息"; color: "#7a8290"; font.pixelSize: 10; font.bold: true; font.capitalization: Font.AllUppercase }
+                                        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#22262b" }
+                                    }
+                                    Repeater {
+                                        model: [
+                                            { label: "DPI", value: Number(imageView._probeData.dpiX) > 0 ? (imageView._probeData.dpiX + " × " + imageView._probeData.dpiY) : "—" },
+                                            { label: "EXIF 方向", value: imageView._probeData.exifOrientationDesc || "—" }
+                                        ]
+                                        RowLayout {
+                                            Layout.fillWidth: true; Layout.preferredHeight: 22; spacing: 8; Layout.leftMargin: 2
+                                            Text { text: modelData.label; color: "#7a8088"; font.pixelSize: 11; Layout.preferredWidth: 64 }
+                                            Text { text: modelData.value; color: "#c8c8d0"; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Item { Layout.fillHeight: true; Layout.preferredHeight: 8 }
                         }
                     }
 
-                    Text { visible: imageView._probing; text: "正在解析…"; color: "#6a6f76"; font.pixelSize: 11; Layout.topMargin: 12 }
-                    Item { Layout.fillHeight: true }
-                    Text { text: imageView.pendingStatus; color: "#e05050"; font.pixelSize: 11; visible: imageView.pendingStatus.length > 0; Layout.bottomMargin: 8 }
+                    Text { visible: imageView._probing; text: "正在解析…"; color: "#5a5f66"; font.pixelSize: 11; Layout.topMargin: 8 }
+                    Text { text: imageView.pendingStatus; color: "#e05050"; font.pixelSize: 11; visible: imageView.pendingStatus.length > 0; Layout.topMargin: 4; Layout.bottomMargin: 4 }
                 }
             }
         }
@@ -472,7 +581,6 @@ Item {
                     return ImageBridge.slotCount === 1 ? singleImageComp : gridImageComp
                 }
             }
-
             // ── 滑动对比模式 ──
             Loader {
                 anchors.fill: parent

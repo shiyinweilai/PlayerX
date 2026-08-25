@@ -1908,8 +1908,9 @@ ApplicationWindow {
             // contentItem.bottom（已自动避开 footer TopBar 44px），无需再加 44。
             // · play：videoArea 延伸到 contentItem.bottom（footer 顶部），无内嵌控制条，bottomMargin=0
             // · yuv：YUV 视频区内嵌控制条 36px 高，需避开
-            // · image / stream：与 play 同
+            // · image：图片渲染区底部控制条 36px 高，需避开
             if (root.currentTab === "yuv") return 36
+            if (root.currentTab === "image") return 36
             return 0
         }
         // 宽度策略：固定 320，与参考侧栏（refSidebarUserWidth）保持视觉对齐，

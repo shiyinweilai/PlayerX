@@ -75,6 +75,15 @@ public:
     Q_INVOKABLE QString lastOpenedFolder() const;
     Q_INVOKABLE void    setLastOpenedFolder(const QString& folder);
 
+    // ── 像素级统计（直方图 + 均值/亮度等）─────────────────────────
+    // 返回 QVariantMap：
+    //   { histR[], histG[], histB[], histLum[],
+    //     meanR, meanG, meanB, meanLum,
+    //     minR, maxR, minG, maxG, minB, maxB,
+    //     stdR, stdG, stdB,
+    //     alphaRatio, uniqueColorsEst }
+    Q_INVOKABLE QVariantMap pixelStats(int slot) const;
+
 signals:
     void slotCountChanged();
     void fileOpened(int slot);
