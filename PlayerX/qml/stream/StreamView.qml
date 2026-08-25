@@ -40,6 +40,167 @@ Item {
     property string _sortMode: "default"   // default | name_asc | name_desc | size_desc | size_asc | resolution_desc | resolution_asc | duration_desc | duration_asc
     property bool _dragHovering: false     // 拖拽悬停高亮
 
+    // ── 多选（Ctrl+Click / Shift+Click / 全选） ──
+    property var _selectedFiles: ({})      // { path: true } 选中集合
+    property bool _selectAllChecked: false  // 全选按钮状态
+    property int _anchorIndex: -1           // Shift 范围选的锚点
+
+    // 行点击：根据修饰键决定单选 / Ctrl多选 / Shift范围选
+    function _onFileClicked(idx, modifiers) {
+        if (idx < 0 || idx >= streamView.pendingFiles.length) return
+        const path = streamView.pendingFiles[idx]
+        const ctrl = (modifiers & Qt.ControlModifier) !== 0
+        const shift = (modifiers & Qt.ShiftModifier) !== 0
+
+        if (shift && streamView._anchorIndex >= 0) {
+            // 范围选：从 anchor 到 idx
+            var s = Object.assign({}, streamView._selectedFiles)
+            var lo = Math.min(streamView._anchorIndex, idx)
+            var hi = Math.max(streamView._anchorIndex, idx)
+            for (var i = lo; i <= hi; ++i)
+                s[streamView.pendingFiles[i]] = true
+            streamView._selectedFiles = s
+        } else if (ctrl) {
+            // 切换选中
+            var s2 = Object.assign({}, streamView._selectedFiles)
+            if (s2[path]) delete s2[path]
+            else s2[path] = true
+            streamView._selectedFiles = s2
+            streamView._anchorIndex = idx
+        } else {
+            // 单选：清空其他，只选这个（一次性赋值确保绑定立即更新）
+            var s3 = {}
+            s3[path] = true
+            streamView._selectedFiles = s3
+            streamView._anchorIndex = idx
+        }
+        streamView._selectAllChecked = streamView._isAllSelected()
+
+        // 更新信息面板
+        streamView._onFileSelected(idx)
+    }
+
+    // 切换某文件选中状态（保留给外部调用）
+    function _toggleSelect(path) {
+        var s = Object.assign({}, streamView._selectedFiles)
+        if (s[path]) delete s[path]
+        else s[path] = true
+        streamView._selectedFiles = s
+        streamView._selectAllChecked = streamView._isAllSelected()
+    }
+    // 全选 / 全不选
+    function _toggleSelectAll() {
+        if (streamView._isAllSelected()) {
+            streamView._selectedFiles = ({})
+            streamView._selectAllChecked = false
+        } else {
+            var s = {}
+            for (var i = 0; i < streamView.pendingFiles.length; ++i)
+                s[streamView.pendingFiles[i]] = true
+            streamView._selectedFiles = s
+            streamView._selectAllChecked = true
+        }
+    }
+    // 是否全部选中
+    function _isAllSelected() {
+        if (streamView.pendingFiles.length === 0) return false
+        for (var i = 0; i < streamView.pendingFiles.length; ++i) {
+            if (!streamView._selectedFiles[streamView.pendingFiles[i]]) return false
+        }
+        return true
+    }
+    // 选中数量
+    function _selectedCount() {
+        return Object.keys(streamView._selectedFiles).length
+    }
+    // 获取选中的文件路径列表（保持 pendingFiles 顺序）
+    function _selectedPaths() {
+        var paths = []
+        for (var i = 0; i < streamView.pendingFiles.length; ++i) {
+            var p = streamView.pendingFiles[i]
+            if (streamView._selectedFiles[p]) paths.push(p)
+        }
+        return paths
+    }
+    // 判断文件是否是裸流（根据 probeCache）
+    function _isRawBitstream(path) {
+        var info = streamView._probeCache[path]
+        if (!info) return false
+        var fmt = info.format || ""
+        return fmt === "h264" || fmt === "hevc" || fmt === "annexb"
+    }
+
+    // ── 裸码流导出 ──
+    property string _exportStatus: ""
+    property bool _exporting: false
+    property var _pendingExportPaths: []
+
+    // 导出裸码流（支持单个或批量）
+    // paths: 选中的文件路径数组；不传则用 _selectedPaths()
+    function _exportRawBitstream(paths) {
+        if (streamView._exporting) return
+        var filePaths = paths || streamView._selectedPaths()
+        if (!filePaths || filePaths.length === 0) {
+            streamView._exportStatus = "请先选择文件"
+            return
+        }
+        // 选择输出目录
+        exportFolderDialog.open()
+        // 存储待导出列表供 dialog.onAccepted 使用
+        streamView._pendingExportPaths = filePaths
+    }
+
+    // 实际执行导出
+    function _doExportRawBitstream(outputDir) {
+        var paths = streamView._pendingExportPaths || []
+        if (paths.length === 0) {
+            streamView._exportStatus = "⚠ 没有待导出的文件"
+            exportStatusClearTimer.restart()
+            return
+        }
+        streamView._exporting = true
+        streamView._exportStatus = "正在导出 0/" + paths.length + "…"
+
+        var done = 0
+        var failed = 0
+        var errorMsgs = []
+        for (var i = 0; i < paths.length; ++i) {
+            var srcPath = paths[i]
+            var baseName = streamView._fileBasename(srcPath)
+            // 输出文件名：原名 + .h264 / .265（根据编码）
+            var info = streamView._probeCache[srcPath] || {}
+            var codec = info.codec || "h264"
+            var ext = (codec === "hevc") ? ".265" : ".h264"
+            // 去掉原扩展名再加裸码流扩展名
+            var dotIdx = baseName.lastIndexOf(".")
+            if (dotIdx > 0) baseName = baseName.substring(0, dotIdx)
+            var outPath = outputDir + "/" + baseName + ext
+
+            streamView._exportStatus = "正在导出 (" + (i + 1) + "/" + paths.length + ") " + baseName + "…"
+
+            var result = StreamBridge.demuxToAnnexB(srcPath, outPath)
+            if (result.ok) {
+                ++done
+            } else {
+                ++failed
+                var err = result.error || "未知错误"
+                errorMsgs.push(baseName + ": " + err)
+                console.log("[Export] failed:", srcPath, err)
+            }
+        }
+
+        streamView._exporting = false
+        if (failed === 0) {
+            streamView._exportStatus = "✅ 已导出 " + done + " 个裸码流文件到 " + outputDir
+        } else {
+            streamView._exportStatus = "⚠ 导出完成：成功 " + done + " / 失败 " + failed
+                + (errorMsgs.length > 0 ? "（" + errorMsgs.join("; ") + "）" : "")
+        }
+        // 5 秒后清空状态（有错误时留更久）
+        exportStatusClearTimer.interval = (failed > 0) ? 8000 : 3000
+        exportStatusClearTimer.restart()
+    }
+
     Component.onCompleted: {
         // 从 QSettings 恢复上次的码流文件列表（与 YuvBridge 一致）
         const saved = StreamBridge.streamFileList()
@@ -50,6 +211,11 @@ Item {
             streamView._batchProbe()
             // 选中第一个文件并展示详情
             streamView._onFileSelected(0)
+            // 默认选中第一个文件（用于开始分析/导出）
+            streamView._selectedFiles = ({})
+            streamView._selectedFiles[saved[0]] = true
+            streamView._anchorIndex = 0
+            streamView._selectAllChecked = false
         }
         streamView._pendingLoaded = true
     }
@@ -68,6 +234,20 @@ Item {
             clean.push(p)
         }
         StreamBridge.setStreamFileList(clean)
+        // 同步清理选中集：删除已不在列表中的路径
+        var newSel = {}
+        var changed = false
+        for (var key in streamView._selectedFiles) {
+            if (seen.has(key)) {
+                newSel[key] = true
+            } else {
+                changed = true
+            }
+        }
+        if (changed) {
+            streamView._selectedFiles = newSel
+            streamView._selectAllChecked = streamView._isAllSelected()
+        }
     }
 
     // 点击文件项：切换选中 + 调 probeFile 获取基本信息
@@ -160,6 +340,11 @@ Item {
         streamView.pendingFiles = sortedPaths
         streamView.pendingSelectedIndex = 0
         streamView._onFileSelected(0)
+        // 排序后默认选中第一个
+        streamView._selectedFiles = ({})
+        streamView._selectedFiles[sortedPaths[0]] = true
+        streamView._anchorIndex = 0
+        streamView._selectAllChecked = false
     }
 
     // ── 排序按钮文字 ──
@@ -248,6 +433,11 @@ Item {
         streamView._batchProbe()
         // 选中第一个新加入的文件
         streamView._onFileSelected(streamView.pendingSelectedIndex)
+        // 默认选中第一个新文件（用于开始分析/导出）
+        streamView._selectedFiles = ({})
+        streamView._selectedFiles[merged[streamView.pendingSelectedIndex]] = true
+        streamView._anchorIndex = streamView.pendingSelectedIndex
+        streamView._selectAllChecked = false
     }
 
     // 格式化码率
@@ -362,7 +552,7 @@ Item {
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.leftMargin: 24
-            anchors.topMargin: 20
+            anchors.topMargin: 18
             spacing: 12
             Text {
                 text: "码流分析"
@@ -588,6 +778,9 @@ Item {
                     streamView.pendingFiles = []
                     streamView.pendingSelectedIndex = -1
                     streamView.pendingStatus = ""
+                    streamView._selectedFiles = ({})
+                    streamView._selectAllChecked = false
+                    streamView._anchorIndex = -1
                 }
             }
         }
@@ -599,7 +792,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.topMargin: 70
-            anchors.bottomMargin: 90
+            anchors.bottomMargin: 60
             anchors.leftMargin: 24
             anchors.rightMargin: 24
             spacing: 16
@@ -631,9 +824,9 @@ Item {
                         width: ListView.view.width
                         height: 36
                         radius: 3
-                        color: streamView.pendingSelectedIndex === index
+                        color: streamView._selectedFiles[modelData]
                                ? "#2a3a55" : (rowMa.containsMouse ? "#1e1e24" : "transparent")
-                        border.color: streamView.pendingSelectedIndex === index ? "#3a78c8" : "transparent"
+                        border.color: streamView._selectedFiles[modelData] ? "#3a78c8" : "transparent"
                         border.width: 1
                         RowLayout {
                             z: 1  // 置于 rowMa 之上，使删除按钮可点击
@@ -707,6 +900,13 @@ Item {
                                         // 清除该文件的缓存探测信息（以路径为键）
                                         if (removedPath && streamView._probeCache[removedPath])
                                             delete streamView._probeCache[removedPath]
+                                        // 同步清理选中集合
+                                        if (removedPath && streamView._selectedFiles[removedPath]) {
+                                            var s = Object.assign({}, streamView._selectedFiles)
+                                            delete s[removedPath]
+                                            streamView._selectedFiles = s
+                                            streamView._selectAllChecked = streamView._isAllSelected()
+                                        }
                                         // 删除后自动选中相邻文件
                                         if (streamView.pendingSelectedIndex >= 0)
                                             streamView._onFileSelected(streamView.pendingSelectedIndex)
@@ -718,7 +918,7 @@ Item {
                             id: rowMa
                             anchors.fill: parent
                             hoverEnabled: true
-                            onClicked: streamView._onFileSelected(index)
+                            onClicked: (mouse) => streamView._onFileClicked(index, mouse.modifiers)
                         }
                     }
 
@@ -914,26 +1114,114 @@ Item {
                         Layout.bottomMargin: 8
                     }
 
-                    // 开始分析按钮
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 40
-                        radius: 6
-                        color: startMa.containsMouse ? "#3d7adf" : "#2a5fc0"
-                        Text {
-                            anchors.centerIn: parent
-                            text: streamView.pendingFiles.length > 1
-                                  ? "▶  开始分析（" + streamView.pendingFiles.length + " 个文件）"
-                                  : "▶  开始分析"
-                            color: "#fff"; font.pixelSize: 14; font.bold: true
-                        }
-                        MouseArea {
-                            id: startMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: streamView._startAnalysis()
-                        }
+                    // 导出状态文本
+                    Text {
+                        text: streamView._exportStatus
+                        color: "#6a6f76"; font.pixelSize: 11
+                        visible: streamView._exportStatus.length > 0
+                        Layout.topMargin: 4
+                        Layout.bottomMargin: 4
+                    }
+                }
+            }
+        }
+
+        // ── 底部工具栏（全宽：全选 | 导出码流 + 开始分析） ──
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 52
+            color: "#121215"
+            border.color: "#2a2e33"; border.width: 1
+
+            // 左侧：全选按钮 + 已选计数
+            Row {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 24
+                spacing: 12
+
+                Rectangle {
+                    width: 64; height: 32; radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: selectAllMa.containsMouse ? "#3a3a44" : "#252528"
+                    border.color: "#3a3a44"; border.width: 1
+                    enabled: streamView.pendingFiles.length > 0
+                    opacity: streamView.pendingFiles.length > 0 ? 1.0 : 0.5
+                    Text {
+                        anchors.centerIn: parent
+                        text: streamView._selectAllChecked ? "取消全选" : "全选"
+                        color: "#cccccc"; font.pixelSize: 13
+                    }
+                    MouseArea {
+                        id: selectAllMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: streamView._toggleSelectAll()
+                    }
+                }
+
+                // 已选计数
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: streamView._selectedCount() > 0
+                    text: "已选 " + streamView._selectedCount() + " 个"
+                    color: "#6a6f76"; font.pixelSize: 12
+                }
+            }
+
+            // 右侧：导出码流 + 开始分析
+            Row {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.rightMargin: 24
+                spacing: 12
+
+                // 导出码流按钮
+                Rectangle {
+                    width: 100; height: 32; radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: exportRawBottomMa.containsMouse ? "#3a3a44" : "#252528"
+                    border.color: "#3a3a44"; border.width: 1
+                    enabled: streamView._selectedCount() > 0
+                    opacity: streamView._selectedCount() > 0 ? 1.0 : 0.5
+                    Text {
+                        anchors.centerIn: parent
+                        text: "导出码流"
+                        color: "#cccccc"; font.pixelSize: 13
+                    }
+                    MouseArea {
+                        id: exportRawBottomMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: streamView._exportRawBitstream()
+                    }
+                    ToolTip.visible: exportRawBottomMa.containsMouse
+                    ToolTip.text: streamView._selectedCount() > 0
+                                  ? ("导出裸码流（已选 " + streamView._selectedCount() + " 个）")
+                                  : "请先选择文件"
+                    ToolTip.delay: 200
+                }
+
+                // 开始分析按钮
+                Rectangle {
+                    width: 100; height: 32; radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: startBottomMa.containsMouse ? "#3d7adf" : "#2a5fc0"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "开始分析"
+                        color: "#fff"; font.pixelSize: 13; font.bold: true
+                    }
+                    MouseArea {
+                        id: startBottomMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: streamView._startAnalysis()
                     }
                 }
             }
@@ -1279,6 +1567,11 @@ Item {
             // 批量预 probe，使列表中每行都能显示大小和修改时间
             streamView._batchProbe()
             streamView._onFileSelected(streamView.pendingSelectedIndex)
+            // 默认选中第一个新文件
+            streamView._selectedFiles = ({})
+            streamView._selectedFiles[merged[streamView.pendingSelectedIndex]] = true
+            streamView._anchorIndex = streamView.pendingSelectedIndex
+            streamView._selectAllChecked = false
         }
     }
     FolderDialog {
@@ -1302,7 +1595,33 @@ Item {
             // 批量预 probe
             streamView._batchProbe()
             streamView._onFileSelected(streamView.pendingSelectedIndex)
+            // 默认选中第一个新文件
+            streamView._selectedFiles = ({})
+            streamView._selectedFiles[merged[streamView.pendingSelectedIndex]] = true
+            streamView._anchorIndex = streamView.pendingSelectedIndex
+            streamView._selectAllChecked = false
         }
+    }
+
+    // ── 裸码流导出：选择输出目录 ──
+    FolderDialog {
+        id: exportFolderDialog
+        title: "选择裸码流导出目录"
+        currentFolder: {
+            try { return "file://" + Fs.downloadsDir() } catch (e) { return "" }
+        }
+        onAccepted: {
+            const outDir = streamView._normalizeFilePath(selectedFolder)
+            streamView._doExportRawBitstream(outDir)
+        }
+    }
+
+    // 导出状态自动清除
+    Timer {
+        id: exportStatusClearTimer
+        interval: 3000
+        repeat: false
+        onTriggered: streamView._exportStatus = ""
     }
 
     // ── 工具函数 ──
@@ -1324,10 +1643,12 @@ Item {
     function _openFile() { addFileDialog.open() }
     function _openFolder() { addFolderDialog.open() }
 
-    // 点「开始分析」：把所有 pendingFiles 通过 openFile 打开（最多 3 个 slot）
+    // 点「开始分析」：把选中的文件（或全部）通过 openFile 打开（最多 3 个 slot）
     function _startAnalysis() {
         streamView.pendingStatus = ""
-        const files = streamView.pendingFiles
+        // 优先使用选中的文件，如果没选则用全部
+        var sel = streamView._selectedPaths()
+        const files = (sel.length > 0) ? sel : streamView.pendingFiles
         if (!files || files.length === 0) {
             streamView.pendingStatus = "请先添加码流文件"
             return

@@ -861,6 +861,197 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// 裸码流导出（解封装 AVCC → Annex-B）
+// ═════════════════════════════════════════════════════════════════════════
+
+QVariantMap RBStreamBridge::demuxToAnnexB(const QString& path, const QString& outPath) {
+    QVariantMap result;
+    result["ok"] = false;
+    result["frameCount"] = 0;
+    result["fileSize"] = qint64(0);
+    result["error"] = "";
+
+    if (path.isEmpty() || outPath.isEmpty()) {
+        result["error"] = "路径为空";
+        return result;
+    }
+
+    AVFormatContext* fmt = nullptr;
+    int ret = avformat_open_input(&fmt, path.toUtf8().constData(), nullptr, nullptr);
+    if (ret < 0 || !fmt) {
+        result["error"] = "无法打开文件";
+        return result;
+    }
+    ret = avformat_find_stream_info(fmt, nullptr);
+    if (ret < 0) {
+        avformat_close_input(&fmt);
+        result["error"] = "无法获取流信息";
+        return result;
+    }
+
+    int vIdx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (vIdx < 0) {
+        avformat_close_input(&fmt);
+        result["error"] = "未找到视频流";
+        return result;
+    }
+
+    AVStream* vs = fmt->streams[vIdx];
+    AVCodecParameters* par = vs->codecpar;
+    bool isH264  = (par->codec_id == AV_CODEC_ID_H264);
+    bool isHevc  = (par->codec_id == AV_CODEC_ID_HEVC);
+
+    if (!isH264 && !isHevc) {
+        avformat_close_input(&fmt);
+        result["error"] = "仅支持 H.264 / H.265，当前编码：" +
+                          codecIdToShortName(par->codec_id);
+        return result;
+    }
+
+    // 判断源是否已是裸流
+    bool isAlreadyRaw = (fmt->iformat && (
+        std::strcmp(fmt->iformat->name, "h264") == 0 ||
+        std::strcmp(fmt->iformat->name, "hevc") == 0));
+
+    QFile outFile(outPath);
+    if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        avformat_close_input(&fmt);
+        result["error"] = "无法创建输出文件：" + outPath;
+        return result;
+    }
+
+    int64_t totalSize = fmt->pb ? avio_size(fmt->pb) : 0;
+    int frameCount = 0;
+    int64_t bytesWritten = 0;
+
+    // ── Annex-B 起始码 ──
+    static const uint8_t sc3[] = {0x00, 0x00, 0x01};       // 3-byte start code
+    static const uint8_t sc4[] = {0x00, 0x00, 0x00, 0x01}; // 4-byte start code
+
+    if (isAlreadyRaw) {
+        // 源已是裸流：直接复制
+        avformat_close_input(&fmt);
+        QFile srcFile(path);
+        if (!srcFile.open(QIODevice::ReadOnly)) {
+            result["error"] = "无法读取源文件";
+            return result;
+        }
+        bytesWritten = outFile.write(srcFile.readAll());
+        srcFile.close();
+        outFile.close();
+        result["ok"] = true;
+        result["fileSize"] = qint64(bytesWritten);
+        result["frameCount"] = 0; // 裸流不遍历计数
+        return result;
+    }
+
+    // ── 写入参数集（SPS/PPS for H264, VPS/SPS/PPS for HEVC）──
+    // 封装文件的 extradata 是 AVCC 格式（length-prefixed），需转成 Annex-B
+    if (par->extradata && par->extradata_size > 0) {
+        const uint8_t* ed = par->extradata;
+        int edSize = par->extradata_size;
+
+        if (isH264 && edSize >= 7 && ed[0] == 1) {
+            // AVCC 格式：avcC box
+            int numSPS = ed[5] & 0x1f;
+            int pos = 6;
+            for (int i = 0; i < numSPS && pos + 2 <= edSize; ++i) {
+                int spsLen = (ed[pos] << 8) | ed[pos + 1];
+                pos += 2;
+                if (pos + spsLen > edSize) break;
+                outFile.write(reinterpret_cast<const char*>(sc4), 4);
+                outFile.write(reinterpret_cast<const char*>(ed + pos), spsLen);
+                bytesWritten += 4 + spsLen;
+                pos += spsLen;
+            }
+            int numPPS = (pos < edSize) ? ed[pos] : 0;
+            ++pos;
+            for (int i = 0; i < numPPS && pos + 2 <= edSize; ++i) {
+                int ppsLen = (ed[pos] << 8) | ed[pos + 1];
+                pos += 2;
+                if (pos + ppsLen > edSize) break;
+                outFile.write(reinterpret_cast<const char*>(sc4), 4);
+                outFile.write(reinterpret_cast<const char*>(ed + pos), ppsLen);
+                bytesWritten += 4 + ppsLen;
+                pos += ppsLen;
+            }
+        } else if (isHevc && edSize >= 23 && (ed[0] >> 6) == 1) {
+            // hvcC 格式
+            int numArrays = ed[22];
+            int pos = 23;
+            for (int i = 0; i < numArrays && pos + 3 <= edSize; ++i) {
+                int numNalus = (ed[pos + 1] << 8) | ed[pos + 2];
+                pos += 3;
+                for (int j = 0; j < numNalus && pos + 2 <= edSize; ++j) {
+                    int naluLen = (ed[pos] << 8) | ed[pos + 1];
+                    pos += 2;
+                    if (pos + naluLen > edSize) break;
+                    outFile.write(reinterpret_cast<const char*>(sc4), 4);
+                    outFile.write(reinterpret_cast<const char*>(ed + pos), naluLen);
+                    bytesWritten += 4 + naluLen;
+                    pos += naluLen;
+                }
+            }
+        } else {
+            // 可能已经是 Annex-B 格式的 extradata，直接写入
+            outFile.write(reinterpret_cast<const char*>(ed), edSize);
+            bytesWritten += edSize;
+        }
+    }
+
+    // ── 逐包读取，AVCC → Annex-B 转换 ──
+    AVPacket* pkt = av_packet_alloc();
+    static const uint8_t startCode[] = {0x00, 0x00, 0x00, 0x01};
+
+    while (av_read_frame(fmt, pkt) >= 0) {
+        if (pkt->stream_index == vIdx && pkt->data && pkt->size > 4) {
+            // AVCC 格式：每个 NALU 前 4 字节为大端长度
+            int offset = 0;
+            while (offset + 4 <= pkt->size) {
+                uint32_t naluLen = (uint32_t(pkt->data[offset]) << 24) |
+                                   (uint32_t(pkt->data[offset + 1]) << 16) |
+                                   (uint32_t(pkt->data[offset + 2]) << 8) |
+                                   uint32_t(pkt->data[offset + 3]);
+                offset += 4;
+                if (naluLen == 0 || offset + naluLen > pkt->size) break;
+
+                // 写入 4-byte start code + NALU 数据
+                outFile.write(reinterpret_cast<const char*>(startCode), 4);
+                outFile.write(reinterpret_cast<const char*>(pkt->data + offset),
+                              int(naluLen));
+                bytesWritten += 4 + int64_t(naluLen);
+                offset += int(naluLen);
+            }
+            ++frameCount;
+        }
+        av_packet_unref(pkt);
+
+        // 进度上报
+        if (totalSize > 0 && pkt->pos > 0) {
+            double ratio = double(pkt->pos) / double(totalSize);
+            if (ratio > 1.0) ratio = 1.0;
+            emit demuxProgress(path, ratio);
+        }
+    }
+
+    av_packet_free(&pkt);
+    avformat_close_input(&fmt);
+    outFile.close();
+
+    emit demuxProgress(path, 1.0);
+
+    qInfo() << "[StreamBridge] demuxToAnnexB done:" << path
+            << "frames=" << frameCount
+            << "bytes=" << bytesWritten
+            << "->" << outPath;
+
+    result["ok"] = true;
+    result["frameCount"] = frameCount;
+    result["fileSize"] = qint64(bytesWritten);
+    return result;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 // 文件列表持久化（QSettings）—— 与 YuvBridge.yuvFileList 对齐
 // ═════════════════════════════════════════════════════════════════════════
 

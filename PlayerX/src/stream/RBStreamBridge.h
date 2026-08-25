@@ -147,6 +147,13 @@ public:
     // 用于 setup 阶段点击文件时即时显示基本信息。
     Q_INVOKABLE QVariantMap probeFile(const QString& path) const;
 
+    // ── 裸码流导出（解封装）──────────────────────────────────────
+    // 将封装文件（mp4/mov/mkv/flv/ts 等）中的视频码流提取为 Annex-B 裸码流。
+    // 若源文件已是裸流（.h264/.265/.hevc），直接复制。
+    // path: 输入文件路径  outPath: 输出文件路径（含文件名）
+    // 返回 QVariantMap：{ ok(bool), frameCount(int), fileSize(qint64), error(QString) }
+    Q_INVOKABLE QVariantMap demuxToAnnexB(const QString& path, const QString& outPath);
+
 signals:
     void slotCountChanged();
     void prescanningChanged();
@@ -155,6 +162,7 @@ signals:
     void fileOpened(int slot);
     void fileClosed(int slot);
     void currentFrameChanged(int slot);
+    void demuxProgress(const QString& path, double ratio);  // 裸码流导出进度
 
 private:
     struct Slot {
