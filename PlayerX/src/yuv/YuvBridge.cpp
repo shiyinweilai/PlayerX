@@ -677,6 +677,12 @@ void YuvBridge::setInlineControlsHidden(bool hidden) {
     emit inlineControlsHiddenChanged();
 }
 
+void YuvBridge::setPixelInfoVisible(bool visible) {
+    if (m_pixelInfoVisible == visible) return;
+    m_pixelInfoVisible = visible;
+    emit pixelInfoVisibleChanged();
+}
+
 // ── 全局缩放比例 ──────────────────────────────────────────────────────
 // 档位常量：与 YuvDisplayItem 内部 m_scalePresets / m_scaleValues 严格保持一致。
 //   0: 1/8, 1: 1/4, 2: 1/2, 3: 1X, 4: 2X, 5: 4X, 6: 8X

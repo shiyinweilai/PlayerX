@@ -572,6 +572,15 @@ MenuBar {
             checked: !YuvBridge.inlineControlsHidden
             onTriggered: YuvBridge.inlineControlsHidden = !checked
         }
+
+        // ── YUV 值面板 ──（hover 视频时弹出的像素矩阵浮窗 + avg/min/max 统计）
+        // 默认勾选 = 显示；V 快捷键也可切换。
+        DarkMenuItem {
+            text: qsTr("YUV 值面板")
+            checkable: true
+            checked: YuvBridge.pixelInfoVisible
+            onTriggered: YuvBridge.pixelInfoVisible = !checked
+        }
     }
 
     // ═══ 码流分析（暂未实现，仅留占位提示）══════════════

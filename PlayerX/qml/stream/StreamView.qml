@@ -88,14 +88,6 @@ Item {
         streamView._onFileSelected(idx)
     }
 
-    // 切换某文件选中状态（保留给外部调用）
-    function _toggleSelect(path) {
-        var s = Object.assign({}, streamView._selectedFiles)
-        if (s[path]) delete s[path]
-        else s[path] = true
-        streamView._selectedFiles = s
-        streamView._selectAllChecked = streamView._isAllSelected()
-    }
     // 全选 / 全不选
     function _toggleSelectAll() {
         if (streamView._isAllSelected()) {
@@ -130,14 +122,6 @@ Item {
         }
         return paths
     }
-    // 判断文件是否是裸流（根据 probeCache）
-    function _isRawBitstream(path) {
-        var info = streamView._probeCache[path]
-        if (!info) return false
-        var fmt = info.format || ""
-        return fmt === "h264" || fmt === "hevc" || fmt === "annexb"
-    }
-
     // ── 裸码流导出 ──
     property string _exportStatus: ""
     property bool _exporting: false
@@ -555,219 +539,181 @@ Item {
         anchors.fill: parent
         visible: StreamBridge.slotCount === 0
 
-        // ── 顶部操作按钮已移入文件列表卡片头部，此处仅保留 sortMenu 定义 ──
-        // sortMenu 通过 id 供卡片头部排序按钮引用
-        Item {
-            visible: false
+        // sortMenu 定义（id 供卡片头部排序按钮引用，Menu 本身是 popup 不需要可见父级）
+        Menu {
+            id: sortMenu
+            width: 160
 
-            // 排序按钮 + 下拉菜单
-            StreamFlatButton {
-                text: streamView._sortLabel() + " ▾"
-                enabled: streamView.pendingFiles.length > 0
-                onClicked: sortMenu.open()
+            background: Rectangle {
+                implicitWidth: 160
+                implicitHeight: 32
+                color: "#cc1a1a1f"
+                border.color: "#33ffffff"
+                border.width: 1
+                radius: 6
+            }
+            topPadding: 6; bottomPadding: 6
+            leftPadding: 4; rightPadding: 4
+            spacing: 0
 
-                Menu {
-                    id: sortMenu
-                    width: 160
-                    y: parent.height + 4
-
-                    background: Rectangle {
-                        implicitWidth: 160
-                        implicitHeight: 32
-                        color: "#cc1a1a1f"
-                        border.color: "#33ffffff"
-                        border.width: 1
-                        radius: 6
-                    }
-                    topPadding: 6; bottomPadding: 6
-                    leftPadding: 4; rightPadding: 4
-                    spacing: 0
-
-                    MenuItem {
-                        text: "默认（添加顺序）"
-                        height: 28
-                        onTriggered: streamView._sortFiles("default")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "default" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
-                    MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
-                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
-                        background: Rectangle { color: "transparent" }
-                    }
-                    MenuItem {
-                        text: "名称 ↑ (A→Z)"
-                        height: 28
-                        onTriggered: streamView._sortFiles("name_asc")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "name_asc" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
-                    MenuItem {
-                        text: "名称 ↓ (Z→A)"
-                        height: 28
-                        onTriggered: streamView._sortFiles("name_desc")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "name_desc" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
-                    MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
-                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
-                        background: Rectangle { color: "transparent" }
-                    }
-                    MenuItem {
-                        text: "大小 ↓ (大→小)"
-                        height: 28
-                        onTriggered: streamView._sortFiles("size_desc")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "size_desc" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
-                    MenuItem {
-                        text: "大小 ↑ (小→大)"
-                        height: 28
-                        onTriggered: streamView._sortFiles("size_asc")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "size_asc" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
-                    MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
-                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
-                        background: Rectangle { color: "transparent" }
-                    }
-                    MenuItem {
-                        text: "分辨率 ↓ (高→低)"
-                        height: 28
-                        onTriggered: streamView._sortFiles("resolution_desc")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "resolution_desc" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
-                    MenuItem {
-                        text: "分辨率 ↑ (低→高)"
-                        height: 28
-                        onTriggered: streamView._sortFiles("resolution_asc")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "resolution_asc" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
-                    MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
-                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
-                        background: Rectangle { color: "transparent" }
-                    }
-                    MenuItem {
-                        text: "时长 ↓ (长→短)"
-                        height: 28
-                        onTriggered: streamView._sortFiles("duration_desc")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "duration_desc" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
-                    MenuItem {
-                        text: "时长 ↑ (短→长)"
-                        height: 28
-                        onTriggered: streamView._sortFiles("duration_asc")
-                        contentItem: Text {
-                            text: parent.text
-                            color: streamView._sortMode === "duration_asc" ? "#3d7adf" : "#e8e8ec"
-                            font.pixelSize: 12
-                            leftPadding: 12
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: parent.hovered ? "#803a3a3d" : "transparent"
-                            radius: 4
-                        }
-                    }
+            MenuItem {
+                text: "默认（添加顺序）"
+                height: 28
+                onTriggered: streamView._sortFiles("default")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "default" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
                 }
             }
-            StreamFlatButton {
-                text: "+ 添加"
-                onClicked: streamView._openFile()
+            MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
+                contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                background: Rectangle { color: "transparent" }
             }
-            StreamFlatButton {
-                text: "+ 文件夹"
-                onClicked: streamView._openFolder()
+            MenuItem {
+                text: "名称 ↑ (A→Z)"
+                height: 28
+                onTriggered: streamView._sortFiles("name_asc")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "name_asc" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
+                }
             }
-            StreamFlatButton {
-                text: "清空"
-                bgNormal: "#807a2e2e"
-                bgHover:  "#809c3c3c"
-                bgDown:   "#80b84848"
-                textColor: "#f5c6c6"
-                enabled: streamView.pendingFiles.length > 0
-                onClicked: {
-                    // 清空 = 删除全部文件记录（持久化也会同步更新）
-                    streamView.pendingFiles = []
-                    streamView.pendingSelectedIndex = -1
-                    streamView.pendingStatus = ""
-                    streamView._selectedFiles = ({})
-                    streamView._selectAllChecked = false
-                    streamView._anchorIndex = -1
+            MenuItem {
+                text: "名称 ↓ (Z→A)"
+                height: 28
+                onTriggered: streamView._sortFiles("name_desc")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "name_desc" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
+                }
+            }
+            MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
+                contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                background: Rectangle { color: "transparent" }
+            }
+            MenuItem {
+                text: "大小 ↓ (大→小)"
+                height: 28
+                onTriggered: streamView._sortFiles("size_desc")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "size_desc" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
+                }
+            }
+            MenuItem {
+                text: "大小 ↑ (小→大)"
+                height: 28
+                onTriggered: streamView._sortFiles("size_asc")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "size_asc" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
+                }
+            }
+            MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
+                contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                background: Rectangle { color: "transparent" }
+            }
+            MenuItem {
+                text: "分辨率 ↓ (高→低)"
+                height: 28
+                onTriggered: streamView._sortFiles("resolution_desc")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "resolution_desc" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
+                }
+            }
+            MenuItem {
+                text: "分辨率 ↑ (低→高)"
+                height: 28
+                onTriggered: streamView._sortFiles("resolution_asc")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "resolution_asc" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
+                }
+            }
+            MenuSeparator { height: 1; topPadding: 4; bottomPadding: 4
+                contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                background: Rectangle { color: "transparent" }
+            }
+            MenuItem {
+                text: "时长 ↓ (长→短)"
+                height: 28
+                onTriggered: streamView._sortFiles("duration_desc")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "duration_desc" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
+                }
+            }
+            MenuItem {
+                text: "时长 ↑ (短→长)"
+                height: 28
+                onTriggered: streamView._sortFiles("duration_asc")
+                contentItem: Text {
+                    text: parent.text
+                    color: streamView._sortMode === "duration_asc" ? "#3d7adf" : "#e8e8ec"
+                    font.pixelSize: 12
+                    leftPadding: 12
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? "#803a3a3d" : "transparent"
+                    radius: 4
                 }
             }
         }

@@ -40,10 +40,14 @@ Shortcut {
         Engine.togglePause()
     }
 }
-// V：切换全局显示视频信息。全屏抑制状下会先清抑制再强制显示。
+// V：切换全局显示视频信息。YUV tab 下切换 YUV 值面板（像素矩阵浮窗）。
 Shortcut {
     sequence: "V"; context: Qt.ApplicationShortcut
     onActivated: {
+        if (root.currentTab === "yuv") {
+            YuvBridge.pixelInfoVisible = !YuvBridge.pixelInfoVisible
+            return
+        }
         if (root.fullscreenSuppressInfo) {
             root.fullscreenSuppressInfo = false
             root.globalInfoVisible = true

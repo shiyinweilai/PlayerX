@@ -40,6 +40,12 @@ class YuvBridge : public QObject {
     // 持久化到 QSettings，跨会话保留用户选择。
     Q_PROPERTY(bool inlineControlsHidden READ inlineControlsHidden WRITE setInlineControlsHidden NOTIFY inlineControlsHiddenChanged)
 
+    // ── YUV 值面板（像素矩阵浮窗 + avg/min/max 统计）可见性 ──
+    // true  = 显示（默认；hover 视频时弹出像素统计浮窗）
+    // false = 隐藏（V 快捷键或菜单勾选切换）
+    // 不持久化，每次启动默认为 true。
+    Q_PROPERTY(bool pixelInfoVisible READ pixelInfoVisible WRITE setPixelInfoVisible NOTIFY pixelInfoVisibleChanged)
+
     // ── 全局缩放比例（底部"缩放按钮组"1/8 / 1/4 / 1/2 / 1X / 2X / 4X / 8X）──
     // 默认 1.0（1X），不持久化（每次启动固定为 1X，避免老用户历史设置让首屏
     // 看不到全图）。所有 YuvDisplayItem 都监听此属性变化，多路对比自动同步。
@@ -167,6 +173,10 @@ public:
     bool inlineControlsHidden() const { return m_inlineControlsHidden; }
     void setInlineControlsHidden(bool hidden);
 
+    // ── YUV 值面板可见性 ──
+    bool pixelInfoVisible() const { return m_pixelInfoVisible; }
+    void setPixelInfoVisible(bool visible);
+
     // ── 全局缩放比例（所有 YuvDisplayItem 共享）────────────────────────
     qreal globalScale() const { return m_globalScale; }
     void setGlobalScale(qreal s);
@@ -222,6 +232,7 @@ signals:
     void toggleSliderCompareRequested();
     void toggleSlotInfoRequested();
     void inlineControlsHiddenChanged();
+    void pixelInfoVisibleChanged();
     void globalScaleChanged();
 
 private:
@@ -248,6 +259,9 @@ private:
 
     // 是否隐藏渲染区底部内嵌操作按钮；默认 true（隐藏，让用户专注画面）
     bool m_inlineControlsHidden{true};
+
+    // YUV 值面板可见性；默认 true（显示，hover 视频时弹出像素统计浮窗）
+    bool m_pixelInfoVisible{true};
 
     // 全局缩放比例（底部缩放按钮组驱动）；默认 1.0（1X），不持久化
     qreal m_globalScale{1.0};

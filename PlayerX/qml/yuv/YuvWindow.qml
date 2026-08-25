@@ -885,7 +885,7 @@ Item {
                             Rectangle {
                                 id: pixelGridPopup
                                 readonly property int bs: YuvBridge.blockSize
-                                visible: !yuvView.cmpActive && pixelHoverArea.showPixelGrid && pixelHoverArea.pixelData.length === bs * bs
+                                visible: !yuvView.cmpActive && YuvBridge.pixelInfoVisible && pixelHoverArea.showPixelGrid && pixelHoverArea.pixelData.length === bs * bs
                                 // 弹窗需要覆盖在路径信息条（z:5）和控制条之上
                                 z: 50
                                 // 左对齐（不再水平居中），避免弹窗宽度 > 网格实际宽度时产生大片左侧空白
@@ -1910,7 +1910,7 @@ Item {
     // cmpScrollX/cmpScrollY，故三者始终同步滚动。
     Row {
         id: cmpGroup
-        visible: yuvView.cmpActive && yuvView.cmpShow
+        visible: yuvView.cmpActive && yuvView.cmpShow && YuvBridge.pixelInfoVisible
         spacing: 8
         z: 1000
         x: yuvView.cmpPinned ? yuvView.cmpGroupX : yuvView.cmpComputeGroupX(yuvView.cmpMouseX)
