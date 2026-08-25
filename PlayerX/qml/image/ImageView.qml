@@ -50,6 +50,15 @@ Item {
     //   "pixel"     → 始终最近邻，像素精确，适合逐像素分析
     property string renderMode: "standard"
 
+    // ── 布局模式（顶部菜单切换）──
+    //   "auto"       → 自动：1路单显，多路网格（默认）
+    //   "carousel"   → 轮播：单通道逐张显示，左右键切换
+    //   "horizontal" → 横排：所有图片水平排列，可滚动
+    //   "grid"       → 网格：块状排列，列数可调
+    property string layoutMode: "auto"
+    property int gridColumns: 0      // 0=自动，>0=固定列数
+    property int carouselIndex: 0    // 轮播当前位置
+
     // ── 逐通道变换状态（缩放/旋转/翻转/平移）──
     // 用对象存储，key = slot index，value = { scale, rotation, flipH, flipV, panX, panY }
     property var _transforms: ({})
@@ -442,13 +451,25 @@ Item {
 
             Rectangle { anchors.fill: parent; color: "#0a0a0e" }
 
-            // ── 单路 / 多路网格显示 ──
+            // ── 主显示区（根据布局模式加载不同组件）──
             Loader {
                 anchors.fill: parent
                 active: ImageBridge.slotCount > 0 && !imageView.sliderCompareActive
                 sourceComponent: {
-                    if (ImageBridge.slotCount === 1) return singleImageComp
-                    return gridImageComp
+                    var mode = imageView.layoutMode
+                    // auto: 1路→单显，多路→网格
+                    if (mode === "auto") {
+                        if (ImageBridge.slotCount === 1) return singleImageComp
+                        return gridImageComp
+                    }
+                    // carousel: 单通道轮播
+                    if (mode === "carousel") return singleImageComp
+                    // horizontal: 横排滚动
+                    if (mode === "horizontal") return horizontalScrollComp
+                    // grid: 固定列数网格
+                    if (mode === "grid") return gridImageComp
+                    // fallback
+                    return ImageBridge.slotCount === 1 ? singleImageComp : gridImageComp
                 }
             }
 
@@ -538,7 +559,12 @@ Item {
                         RowLayout {
                             id: singleInfoRow; anchors.centerIn: parent; spacing: 8
                             Rectangle { Layout.preferredWidth: 20; Layout.preferredHeight: 18; radius: 3; color: "#3a6fd8"
-                                Text { anchors.centerIn: parent; text: "1"; color: "#fff"; font.pixelSize: 11; font.bold: true } }
+                                Text { anchors.centerIn: parent
+                                    text: {
+                                        const _ = imageView.globalVer
+                                        return imageView.slotActive ? String(imageView.effectiveSlot + 1) : "1"
+                                    }
+                                    color: "#fff"; font.pixelSize: 11; font.bold: true } }
                             Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 12; color: "#55ffffff" }
                             Text { color: "#c8c8d0"; font.pixelSize: 11; elide: Text.ElideMiddle
                                 Layout.maximumWidth: Math.max(200, singleRoot.width / 2)
@@ -546,6 +572,19 @@ Item {
                                     const _ = imageView.globalVer
                                     return imageView.slotActive ? (ImageBridge.filePath(imageView.effectiveSlot) || "—") : "—"
                                 } }
+                            // 轮播模式：显示当前位置和总数
+                            Rectangle {
+                                visible: imageView.layoutMode === "carousel" && ImageBridge.slotCount > 1
+                                Layout.preferredWidth: 1; Layout.preferredHeight: 12; color: "#55ffffff"
+                            }
+                            Text {
+                                visible: imageView.layoutMode === "carousel" && ImageBridge.slotCount > 1
+                                color: "#a8d8ff"; font.pixelSize: 11
+                                text: {
+                                    const _ = imageView.globalVer
+                                    return (imageView.effectiveSlot + 1) + "/" + ImageBridge.slotCount + "  ←→切换"
+                                }
+                            }
                         }
                     }
 
@@ -621,12 +660,17 @@ Item {
                 }
             }
 
-            // 多路网格显示（2x2 / 3x3 自适应）
+            // 多路网格显示（2x2 / 3x3 自适应，或按 gridColumns 固定列数）
             Component {
                 id: gridImageComp
                 Item {
                     anchors.fill: parent
-                    property int cols: ImageBridge.slotCount <= 1 ? 1 : (ImageBridge.slotCount <= 4 ? 2 : 3)
+                    property int cols: {
+                        if (imageView.gridColumns > 0) return imageView.gridColumns
+                        if (ImageBridge.slotCount <= 1) return 1
+                        if (ImageBridge.slotCount <= 4) return 2
+                        return 3
+                    }
                     property int rows: Math.ceil(ImageBridge.slotCount / cols)
 
                     Repeater {
@@ -782,6 +826,122 @@ Item {
                                     if (pressed) {
                                         imageView._panBy(index, mouse.x - lastX, mouse.y - lastY)
                                         lastX = mouse.x; lastY = mouse.y
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 横排滚动显示（所有图片水平排列，可横向滚动）
+            Component {
+                id: horizontalScrollComp
+                Flickable {
+                    id: hFlickable
+                    anchors.fill: parent
+                    contentWidth: contentRow.width
+                    contentHeight: height
+                    flickableDirection: Flickable.HorizontalFlick
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    Row {
+                        id: contentRow
+                        height: hFlickable.height
+                        spacing: 2
+
+                        Repeater {
+                            model: ImageBridge.slotCount
+                            delegate: Rectangle {
+                                id: hCell
+                                required property int index
+                                width: ImageBridge.slotCount > 0 ? (hFlickable.width - (ImageBridge.slotCount - 1) * 2) / ImageBridge.slotCount : hFlickable.width
+                                height: contentRow.height
+                                color: "#0a0a0e"
+                                border.color: imageView.currentSlot === hCell.index ? "#3a78c8" : "#1a1a20"
+                                border.width: imageView.currentSlot === hCell.index ? 2 : 1
+
+                                property var _t: {
+                                    const _ = imageView._transformVer
+                                    return imageView._getTransform(hCell.index)
+                                }
+
+                                ImageDisplayItem {
+                                    anchors.fill: parent
+                                    image: {
+                                        const _ = imageView.globalVer
+                                        return ImageBridge.image(hCell.index)
+                                    }
+                                    panX: hCell._t ? hCell._t.panX : 0
+                                    panY: hCell._t ? hCell._t.panY : 0
+                                    imgScale: hCell._t ? hCell._t.scale : 1.0
+                                    imgRotation: hCell._t ? hCell._t.rotation : 0
+                                    flipH: hCell._t ? hCell._t.flipH : false
+                                    flipV: hCell._t ? hCell._t.flipV : false
+                                    renderMode: imageView.renderMode
+                                }
+
+                                // 通道标签
+                                Rectangle {
+                                    visible: imageView.imageInfoVisible
+                                    anchors.top: parent.top; anchors.left: parent.left
+                                    anchors.margins: 6
+                                    radius: 3; color: "#aa000000"; z: 5
+                                    implicitWidth: hInfoRow.implicitWidth + 12; implicitHeight: hInfoRow.implicitHeight + 4
+                                    width: implicitWidth; height: implicitHeight
+
+                                    RowLayout {
+                                        id: hInfoRow; anchors.centerIn: parent; spacing: 6
+                                        Rectangle { Layout.preferredWidth: 20; Layout.preferredHeight: 18; radius: 3; color: "#3a6fd8"
+                                            Text { anchors.centerIn: parent; text: String(hCell.index + 1); color: "#fff"; font.pixelSize: 10; font.bold: true } }
+                                        Text { color: "#c8c8d0"; font.pixelSize: 10; elide: Text.ElideMiddle
+                                            Layout.maximumWidth: Math.max(120, hCell.width / 3)
+                                            text: {
+                                                const p = ImageBridge.filePath(hCell.index)
+                                                return p ? p : "—"
+                                            } }
+                                    }
+                                }
+
+                                // 滚轮缩放 + 点击选中
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.LeftButton
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: imageView.currentSlot = hCell.index
+                                    onDoubleClicked: function(mouse) {
+                                        if (mouse.modifiers & Qt.ControlModifier) {
+                                            imageView._zoomReset(hCell.index)
+                                        }
+                                    }
+                                    onWheel: function(wheel) {
+                                        imageView._wheelAccum += wheel.angleDelta.y
+                                        var zoomDir = 0
+                                        if (imageView._wheelAccum >= 120)      { zoomDir = 1;  imageView._wheelAccum -= 120 }
+                                        else if (imageView._wheelAccum <= -120) { zoomDir = -1; imageView._wheelAccum += 120 }
+                                        if (zoomDir !== 0)
+                                            imageView._zoomAtWheel(hCell.index, zoomDir)
+                                        wheel.accepted = true
+                                    }
+                                }
+
+                                // 右键拖拽平移
+                                MouseArea {
+                                    anchors.fill: parent
+                                    acceptedButtons: Qt.RightButton
+                                    property real lastX: 0
+                                    property real lastY: 0
+                                    onPressed: function(mouse) {
+                                        lastX = mouse.x; lastY = mouse.y
+                                        cursorShape = Qt.ClosedHandCursor
+                                    }
+                                    onReleased: { cursorShape = Qt.ArrowCursor }
+                                    onPositionChanged: function(mouse) {
+                                        if (pressed) {
+                                            imageView._panBy(hCell.index, mouse.x - lastX, mouse.y - lastY)
+                                            lastX = mouse.x; lastY = mouse.y
+                                        }
                                     }
                                 }
                             }

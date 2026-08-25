@@ -88,6 +88,11 @@ Shortcut {
             for (let i = 0; i < n; ++i) YuvBridge.prevFrame(i)
             return
         }
+        // 图片分析 tab + 轮播模式：左键 = 上一张
+        if (root.currentTab === "image" && imageView.layoutMode === "carousel") {
+            if (imageView.currentSlot > 0) imageView.currentSlot--
+            return
+        }
         if (Logic._isAtFirstFrameNow()) return
         Engine.seek(Math.max(0, Engine.position - 5))
     }
@@ -100,6 +105,11 @@ Shortcut {
         if (root.currentTab === "yuv") {
             const n = YuvBridge.slotCount
             for (let i = 0; i < n; ++i) YuvBridge.nextFrame(i)
+            return
+        }
+        // 图片分析 tab + 轮播模式：右键 = 下一张
+        if (root.currentTab === "image" && imageView.layoutMode === "carousel") {
+            if (imageView.currentSlot < ImageBridge.slotCount - 1) imageView.currentSlot++
             return
         }
         if (Logic._isAtLastFrameNow()) return

@@ -700,6 +700,66 @@ MenuBar {
                 onTriggered: imageView.renderMode = "pixel"
             }
         }
+
+        // ── 布局方式 ──（多路图片的排列模式）
+        DarkMenu {
+            title: qsTr("布局方式")
+            DarkMenuItem {
+                text: qsTr("自动（1路单显，多路网格，默认）")
+                checkable: true
+                checked: imageView.layoutMode === "auto"
+                onTriggered: imageView.layoutMode = "auto"
+            }
+            DarkMenuItem {
+                text: qsTr("轮播（单通道，左右键切换）")
+                checkable: true
+                checked: imageView.layoutMode === "carousel"
+                onTriggered: imageView.layoutMode = "carousel"
+            }
+            DarkMenuItem {
+                text: qsTr("横排（水平排列，可滚动）")
+                checkable: true
+                checked: imageView.layoutMode === "horizontal"
+                onTriggered: imageView.layoutMode = "horizontal"
+            }
+            DarkMenuItem {
+                text: qsTr("网格（块状排列）")
+                checkable: true
+                checked: imageView.layoutMode === "grid"
+                onTriggered: imageView.layoutMode = "grid"
+            }
+
+            DarkMenuSeparator {}
+
+            // 网格列数设置（仅对网格模式有效，0=自动）
+            DarkMenu {
+                title: qsTr("网格列数")
+                DarkMenuItem {
+                    text: qsTr("自动（≤4两列，>4三列）")
+                    checkable: true
+                    checked: imageView.gridColumns === 0
+                    onTriggered: imageView.gridColumns = 0
+                }
+                DarkMenuItem {
+                    text: qsTr("2 列")
+                    checkable: true
+                    checked: imageView.gridColumns === 2
+                    onTriggered: imageView.gridColumns = 2
+                }
+                DarkMenuItem {
+                    text: qsTr("3 列")
+                    checkable: true
+                    checked: imageView.gridColumns === 3
+                    onTriggered: imageView.gridColumns = 3
+                }
+                DarkMenuItem {
+                    text: qsTr("4 列")
+                    checkable: true
+                    checked: imageView.gridColumns === 4
+                    onTriggered: imageView.gridColumns = 4
+                }
+            }
+        }
     }
 
     // ═══ 码流分析（暂未实现，仅留占位提示）══════════════
