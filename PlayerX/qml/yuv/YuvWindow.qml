@@ -1741,8 +1741,7 @@ Item {
                             id: carPrevMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                if (yuvView.carouselIndex > 0)
-                                    yuvView.carouselIndex--
+                                yuvView.carouselIndex = (yuvView.carouselIndex - 1 + yuvView.openSlotCount) % yuvView.openSlotCount
                             }
                         }
                     }
@@ -1763,8 +1762,7 @@ Item {
                             id: carNextMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                if (yuvView.carouselIndex < yuvView.openSlotCount - 1)
-                                    yuvView.carouselIndex++
+                                yuvView.carouselIndex = (yuvView.carouselIndex + 1) % yuvView.openSlotCount
                             }
                         }
                     }

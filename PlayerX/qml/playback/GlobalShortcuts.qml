@@ -89,9 +89,10 @@ Shortcut {
             for (let i = 0; i < n; ++i) YuvBridge.prevFrame(i)
             return
         }
-        // 图片分析 tab + 轮播模式：左键 = 上一张
+        // 图片分析 tab + 轮播模式：左键 = 上一张（循环）
         if (root.currentTab === "image" && imageView.layoutMode === "carousel") {
-            if (imageView.currentSlot > 0) imageView.currentSlot--
+            const n = ImageBridge.slotCount
+            if (n > 0) imageView.currentSlot = (imageView.currentSlot - 1 + n) % n
             return
         }
         if (Logic._isAtFirstFrameNow()) return
@@ -108,9 +109,10 @@ Shortcut {
             for (let i = 0; i < n; ++i) YuvBridge.nextFrame(i)
             return
         }
-        // 图片分析 tab + 轮播模式：右键 = 下一张
+        // 图片分析 tab + 轮播模式：右键 = 下一张（循环）
         if (root.currentTab === "image" && imageView.layoutMode === "carousel") {
-            if (imageView.currentSlot < ImageBridge.slotCount - 1) imageView.currentSlot++
+            const n = ImageBridge.slotCount
+            if (n > 0) imageView.currentSlot = (imageView.currentSlot + 1) % n
             return
         }
         if (Logic._isAtLastFrameNow()) return
@@ -313,16 +315,14 @@ Shortcut {
     sequence: "Ctrl+Up"; context: Qt.ApplicationShortcut
     enabled: root.currentTab === "yuv" && yuvView.layoutMode === "carousel" && yuvView.openSlotCount > 1
     onActivated: {
-        if (yuvView.carouselIndex > 0)
-            yuvView.carouselIndex--
+        yuvView.carouselIndex = (yuvView.carouselIndex - 1 + yuvView.openSlotCount) % yuvView.openSlotCount
     }
 }
 Shortcut {
     sequence: "Ctrl+Down"; context: Qt.ApplicationShortcut
     enabled: root.currentTab === "yuv" && yuvView.layoutMode === "carousel" && yuvView.openSlotCount > 1
     onActivated: {
-        if (yuvView.carouselIndex < yuvView.openSlotCount - 1)
-            yuvView.carouselIndex++
+        yuvView.carouselIndex = (yuvView.carouselIndex + 1) % yuvView.openSlotCount
     }
 }
 
