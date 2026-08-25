@@ -150,6 +150,51 @@ int ImageBridge::openFiles(const QVariantList& files) {
     return opened;
 }
 
+// 追加文件到已有 slot（不关闭已打开的），返回实际新增数量
+int ImageBridge::addFiles(const QVariantList& files) {
+    int added = 0;
+    int firstNewSlot = -1;
+
+    for (const QVariant& v : files) {
+        if (m_slotCount >= MaxSlots) break;
+
+        QString path = v.toString();
+        if (path.startsWith("file://")) {
+            path = QUrl(path).toLocalFile();
+        }
+        path = path.replace('\\', '/');
+        if (path.isEmpty()) continue;
+
+        // 跳过已打开的重复文件
+        bool dup = false;
+        for (int i = 0; i < m_slotCount; ++i) {
+            if (m_slots[i].path == path) { dup = true; break; }
+        }
+        if (dup) continue;
+
+        QImageReader reader(path);
+        reader.setAutoDetectImageFormat(true);
+        reader.setAutoTransform(true);
+        QImage img = reader.read();
+        if (img.isNull()) continue;
+
+        img = normalizeColorSpace(img);
+
+        int slot = m_slotCount;
+        m_slots[slot].inUse = true;
+        m_slots[slot].path  = path;
+        m_slots[slot].img   = img;
+        m_slots[slot].info  = probePath(path);
+        ++m_slotCount;
+        ++added;
+        if (firstNewSlot < 0) firstNewSlot = slot;
+        emit fileOpened(slot);
+    }
+
+    if (added > 0) emit slotCountChanged();
+    return added;
+}
+
 void ImageBridge::closeSlot(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_slots[slot].inUse) return;

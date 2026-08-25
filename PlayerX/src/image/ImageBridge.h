@@ -39,6 +39,7 @@ public:
 
     // ── 多 slot 容器 ─────────────────────────────────────────────
     Q_INVOKABLE int  openFiles(const QVariantList& files);
+    Q_INVOKABLE int  addFiles(const QVariantList& files);
     Q_INVOKABLE void closeSlot(int slot);
     Q_INVOKABLE void closeAll();
 

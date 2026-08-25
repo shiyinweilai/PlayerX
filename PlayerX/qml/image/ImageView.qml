@@ -72,22 +72,12 @@ Item {
         return 0
     }
     readonly property bool slotActive: ImageBridge.slotCount > 0 && ImageBridge.hasFile(effectiveSlot)
-    readonly property var slotInfo: slotActive ? ImageBridge.imageInfo(effectiveSlot) : ({})
-
-    // 全局版本号
     property int globalVer: 0
     Connections {
         target: ImageBridge
         function onSlotCountChanged() { imageView.globalVer++ }
         function onFileOpened(s)       { imageView.globalVer++ }
         function onFileClosed(s)       { imageView.globalVer++ }
-    }
-
-    // ── 图片文件路径（供 QML Image 组件加载）──
-    // 用 file:// URL 形式，QML Image 能直接加载
-    readonly property string slotImagePath: {
-        const _ = imageView.globalVer
-        return slotActive ? "file://" + ImageBridge.filePath(effectiveSlot) : ""
     }
 
     Rectangle { anchors.fill: parent; color: "#101012" }
@@ -496,10 +486,15 @@ Item {
                         renderMode: imageView.renderMode
                     }
 
-                    // ── 滚轮缩放（参考 YuvWindow：累积 120 才缩放一次）──
+                    // ── 滚轮缩放 + Ctrl+双击重置位置（参考 YuvWindow：累积 120 才缩放一次）──
                     MouseArea {
                         anchors.fill: parent
-                        acceptedButtons: Qt.NoButton  // 不拦截点击，只处理滚轮
+                        acceptedButtons: Qt.LeftButton  // 左键用于 Ctrl+双击；滚轮不受影响
+                        onDoubleClicked: function(mouse) {
+                            if ((mouse.modifiers & Qt.ControlModifier) && imageView.slotActive) {
+                                imageView._zoomReset(imageView.effectiveSlot)
+                            }
+                        }
                         onWheel: function(wheel) {
                             if (!imageView.slotActive) return
                             imageView._wheelAccum += wheel.angleDelta.y
@@ -507,7 +502,7 @@ Item {
                             if (imageView._wheelAccum >= 120)      { zoomDir = 1;  imageView._wheelAccum -= 120 }
                             else if (imageView._wheelAccum <= -120) { zoomDir = -1; imageView._wheelAccum += 120 }
                             if (zoomDir !== 0)
-                                imageView._zoomAtWheel(imageView.effectiveSlot, zoomDir, wheel.x, wheel.y, singleRoot.width, singleRoot.height)
+                                imageView._zoomAtWheel(imageView.effectiveSlot, zoomDir)
                             wheel.accepted = true
                         }
                     }
@@ -529,10 +524,6 @@ Item {
                                 imageView._panBy(imageView.effectiveSlot, mouse.x - lastX, mouse.y - lastY)
                                 lastX = mouse.x; lastY = mouse.y
                             }
-                        }
-                        onDoubleClicked: {
-                            if (imageView.slotActive)
-                                imageView._setTransform(imageView.effectiveSlot, "panX", 0), imageView._setTransform(imageView.effectiveSlot, "panY", 0)
                         }
                     }
 
@@ -753,19 +744,24 @@ Item {
                                 }
                             }
 
-                            // ── 滚轮缩放 + 左键点击选中 ──
+                            // ── 滚轮缩放 + 左键点击选中 + Ctrl+双击重置 ──
                             MouseArea {
                                 anchors.fill: parent
-                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                acceptedButtons: Qt.LeftButton  // 只接受左键，右键交给平移区域
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: imageView.currentSlot = index
+                                onDoubleClicked: function(mouse) {
+                                    if (mouse.modifiers & Qt.ControlModifier) {
+                                        imageView._zoomReset(index)
+                                    }
+                                }
                                 onWheel: function(wheel) {
                                     imageView._wheelAccum += wheel.angleDelta.y
                                     var zoomDir = 0
                                     if (imageView._wheelAccum >= 120)      { zoomDir = 1;  imageView._wheelAccum -= 120 }
                                     else if (imageView._wheelAccum <= -120) { zoomDir = -1; imageView._wheelAccum += 120 }
                                     if (zoomDir !== 0)
-                                        imageView._zoomAtWheel(index, zoomDir, wheel.x, wheel.y, gridCell.width, gridCell.height)
+                                        imageView._zoomAtWheel(index, zoomDir)
                                     wheel.accepted = true
                                 }
                             }
@@ -787,10 +783,6 @@ Item {
                                         imageView._panBy(index, mouse.x - lastX, mouse.y - lastY)
                                         lastX = mouse.x; lastY = mouse.y
                                     }
-                                }
-                                onDoubleClicked: {
-                                    imageView._setTransform(index, "panX", 0)
-                                    imageView._setTransform(index, "panY", 0)
                                 }
                             }
                         }
@@ -818,12 +810,69 @@ Item {
                         }
                         splitRatio: imageView.splitRatio
                         renderMode: imageView.renderMode
+                        // 平移和缩放绑定到 slot 0 的变换（两路共享同一变换）
+                        panX: {
+                            const _ = imageView._transformVer
+                            var t = imageView._getTransform(0)
+                            return t ? t.panX : 0
+                        }
+                        panY: {
+                            const _ = imageView._transformVer
+                            var t = imageView._getTransform(0)
+                            return t ? t.panY : 0
+                        }
+                        imgScale: {
+                            const _ = imageView._transformVer
+                            var t = imageView._getTransform(0)
+                            return t ? t.scale : 1.0
+                        }
                     }
 
-                    // ── hover 跟随 + 拖拽调整分割比例 ──
+                    // ── 滚轮缩放 + Ctrl+双击重置位置 ──
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
+                        onDoubleClicked: function(mouse) {
+                            if (mouse.modifiers & Qt.ControlModifier) {
+                                imageView._zoomReset(0)
+                            }
+                        }
+                        onWheel: function(wheel) {
+                            imageView._wheelAccum += wheel.angleDelta.y
+                            var zoomDir = 0
+                            if (imageView._wheelAccum >= 120)      { zoomDir = 1;  imageView._wheelAccum -= 120 }
+                            else if (imageView._wheelAccum <= -120) { zoomDir = -1; imageView._wheelAccum += 120 }
+                            if (zoomDir !== 0)
+                                imageView._zoomAtWheel(0, zoomDir)
+                            wheel.accepted = true
+                        }
+                    }
+
+                    // ── 右键拖拽平移 ──
+                    MouseArea {
+                        id: sliderPanArea
+                        anchors.fill: parent
+                        acceptedButtons: Qt.RightButton
+                        property real lastX: 0
+                        property real lastY: 0
+                        onPressed: function(mouse) {
+                            lastX = mouse.x; lastY = mouse.y
+                            cursorShape = Qt.ClosedHandCursor
+                        }
+                        onReleased: { cursorShape = Qt.ArrowCursor }
+                        onPositionChanged: function(mouse) {
+                            if (pressed) {
+                                imageView._panBy(0, mouse.x - lastX, mouse.y - lastY)
+                                lastX = mouse.x; lastY = mouse.y
+                            }
+                        }
+                    }
+
+                    // ── hover 跟随 + 左键拖拽调整分割比例 ──
                     MouseArea {
                         id: sliderTracker
                         anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton
                         hoverEnabled: true
                         cursorShape: Qt.SplitHCursor
                         onPositionChanged: function(mouse) {
@@ -1005,6 +1054,16 @@ Item {
                 newPaths.push(imageView._normalizeFilePath(selectedFiles[i]))
             }
             if (newPaths.length === 0) return
+
+            // 已有图片打开时 → 直接追加为新通道
+            if (ImageBridge.slotCount > 0) {
+                ImageBridge.addFiles(newPaths)
+                if (newPaths.length > 0)
+                    ImageBridge.setLastOpenedFolder(imageView._fileDir(newPaths[0]))
+                return
+            }
+
+            // SETUP 阶段 → 加入 pending 列表
             const merged = imageView.pendingFiles.slice()
             for (let i = 0; i < newPaths.length; ++i) {
                 if (merged.indexOf(newPaths[i]) < 0) merged.push(newPaths[i])
@@ -1034,6 +1093,14 @@ Item {
                 imageView.pendingStatus = "未在该文件夹中找到图片文件"
                 return
             }
+
+            // 已有图片打开时 → 直接追加为新通道
+            if (ImageBridge.slotCount > 0) {
+                ImageBridge.addFiles(found)
+                ImageBridge.setLastOpenedFolder(folder)
+                return
+            }
+
             const merged = imageView.pendingFiles.slice()
             for (let i = 0; i < found.length; ++i) {
                 if (merged.indexOf(found[i]) < 0) merged.push(found[i])
@@ -1117,21 +1184,15 @@ Item {
         imageView._setTransform(slot, "panX", t.panX + dx)
         imageView._setTransform(slot, "panY", t.panY + dy)
     }
-    // 滚轮缩放（以鼠标位置为锚点）
-    function _zoomAtWheel(slot, wheelDelta, mouseX, mouseY, viewW, viewH) {
+    // 滚轮缩放（自动居中，不偏移）
+    function _zoomAtWheel(slot, wheelDelta) {
         imageView._ensureTransform(slot)
         var t = imageView._transforms[slot]
         var oldScale = t.scale
         var factor = wheelDelta > 0 ? 1.1 : (1 / 1.1)
         var newScale = Math.max(0.1, Math.min(8.0, oldScale * factor))
         if (Math.abs(oldScale - newScale) < 1e-6) return
-        // 以鼠标为锚点调整 pan，使鼠标下像素基本不漂移
-        var r = oldScale / newScale
-        var newPanX = t.panX + (1 - r) * (mouseX - viewW / 2.0)
-        var newPanY = t.panY + (1 - r) * (mouseY - viewH / 2.0)
         imageView._setTransform(slot, "scale", newScale)
-        imageView._setTransform(slot, "panX", newPanX)
-        imageView._setTransform(slot, "panY", newPanY)
     }
     function _rotateCW(slot)  { imageView._ensureTransform(slot); var t = imageView._transforms[slot]; imageView._setTransform(slot, "rotation", (t.rotation + 90) % 360) }
     function _rotateCCW(slot) { imageView._ensureTransform(slot); var t = imageView._transforms[slot]; imageView._setTransform(slot, "rotation", (t.rotation + 270) % 360) }
