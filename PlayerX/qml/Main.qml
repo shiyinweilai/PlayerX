@@ -1927,6 +1927,30 @@ ApplicationWindow {
         }
     }
 
+    // ─── 右侧栏滚轮事件拦截层 ───
+    // 与 rightSidebarLoader 同区域，z:199 位于侧栏(z:200)下方、ImageView(默认z)上方。
+    // 侧栏 Flickable 优先处理滚轮：能滚动时消费事件；到边界不消费时，
+    // 事件传播到此拦截层被 accept，阻止继续穿透到 ImageView 触发缩放。
+    // acceptedButtons: Qt.NoButton → 不拦截任何点击，仅拦截滚轮。
+    MouseArea {
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: {
+            if (root.currentTab === "yuv") return 36
+            if (root.currentTab === "image") return 36
+            return 0
+        }
+        width: 320
+        z: 199
+        visible: root.rightSidebarOpen
+        acceptedButtons: Qt.NoButton  // 不拦截任何点击，透传给下方
+        onWheel: function(wheel) {
+            // 消费滚轮事件，阻止穿透到 ImageView
+            wheel.accepted = true
+        }
+    }
+
     // ── YUV 统计面板（直方图 + 统计摘要）────────────────────────
     Component {
         id: yuvStatsPanelComp
