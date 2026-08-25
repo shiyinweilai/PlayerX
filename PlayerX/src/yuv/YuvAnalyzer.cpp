@@ -274,6 +274,16 @@ void YuvAnalyzer::setChromaInterpolation(ChromaInterpolation mode) {
     }
 }
 
+void YuvAnalyzer::setColorConversion(ColorConversion mode) {
+    if (m_colorConv == mode) return;
+    m_colorConv = mode;
+    // 重建 sws 上下文以应用新的色彩矩阵与值域范围
+    if (m_swsCtx) {
+        initSwsContext();
+        fillSrcFrame();
+    }
+}
+
 void YuvAnalyzer::initSwsContext() {
     freeSwsContext();
 
@@ -302,6 +312,28 @@ void YuvAnalyzer::initSwsContext() {
     m_swsCtx = sws_getContext(m_width, m_height, m_pixFmt,
                               m_width, m_height, AV_PIX_FMT_RGBA,
                               swsFlags, nullptr, nullptr, nullptr);
+
+    // 根据颜色转换标准设置色彩矩阵与值域范围
+    // FFmpeg 的 coeffs table 索引：0=BT601, 1=BT709, 9=BT2020
+    // srcRange: true=full range(0-255), false=limited range(16-235)
+    if (m_swsCtx) {
+        int coeffsTable[] = { SWS_CS_ITU601, SWS_CS_ITU709, SWS_CS_DEFAULT }; // BT601, BT709, BT2020
+        int coeffsIndex = 0;  // 默认 BT601
+        bool fullRange = false;
+        switch (m_colorConv) {
+            case BT709:           coeffsIndex = 1; fullRange = false; break;
+            case BT709FullRange:  coeffsIndex = 1; fullRange = true;  break;
+            case BT601:           coeffsIndex = 0; fullRange = false; break;
+            case BT601FullRange:  coeffsIndex = 0; fullRange = true;  break;
+            case BT2020:          coeffsIndex = 2; fullRange = false; break;
+            case BT2020FullRange: coeffsIndex = 2; fullRange = true;  break;
+        }
+        const int* coeffs = sws_getCoefficients(coeffsTable[coeffsIndex]);
+        sws_setColorspaceDetails(m_swsCtx, coeffs, fullRange ? 1 : 0,
+                                 coeffs, fullRange ? 1 : 0,
+                                 0, 1 << 16, 1 << 16);
+    }
+
     m_swsW   = m_width;
     m_swsH   = m_height;
     m_swsFmt = m_pixFmt;

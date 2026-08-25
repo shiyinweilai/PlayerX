@@ -53,6 +53,16 @@ class YuvBridge : public QObject {
     // 持久化到 QSettings，跨会话保留用户选择。
     Q_PROPERTY(int chromaInterpolation READ chromaInterpolation WRITE setChromaInterpolation NOTIFY chromaInterpolationChanged)
 
+    // ── 颜色转换标准（控制 YUV→RGB 色彩矩阵与值域范围）──
+    // 0 = ITU-R BT.709 limited range（默认；现代高清标准）
+    // 1 = ITU-R BT.709 full range
+    // 2 = ITU-R BT.601 limited range（标清标准）
+    // 3 = ITU-R BT.601 full range
+    // 4 = ITU-R BT.2020 limited range（超高清标准）
+    // 5 = ITU-R BT.2020 full range
+    // 持久化到 QSettings，跨会话保留用户选择。
+    Q_PROPERTY(int colorConversion READ colorConversion WRITE setColorConversion NOTIFY colorConversionChanged)
+
     // ── 全局缩放比例（底部"缩放按钮组"1/8 / 1/4 / 1/2 / 1X / 2X / 4X / 8X）──
     // 默认 1.0（1X），不持久化（每次启动固定为 1X，避免老用户历史设置让首屏
     // 看不到全图）。所有 YuvDisplayItem 都监听此属性变化，多路对比自动同步。
@@ -188,6 +198,10 @@ public:
     int  chromaInterpolation() const { return m_chromaInterpolation; }
     void setChromaInterpolation(int mode);
 
+    // ── 颜色转换标准 ──
+    int  colorConversion() const { return m_colorConversion; }
+    void setColorConversion(int mode);
+
     // ── 全局缩放比例（所有 YuvDisplayItem 共享）────────────────────────
     qreal globalScale() const { return m_globalScale; }
     void setGlobalScale(qreal s);
@@ -245,6 +259,7 @@ signals:
     void inlineControlsHiddenChanged();
     void pixelInfoVisibleChanged();
     void chromaInterpolationChanged();
+    void colorConversionChanged();
     void globalScaleChanged();
 
 private:
@@ -277,6 +292,9 @@ private:
 
     // 色度插值模式；默认 0 = NearestNeighbor（像素级分析标准）
     int  m_chromaInterpolation{0};
+
+    // 颜色转换标准；默认 0 = BT709 limited range（现代高清标准）
+    int  m_colorConversion{0};
 
     // 全局缩放比例（底部缩放按钮组驱动）；默认 1.0（1X），不持久化
     qreal m_globalScale{1.0};

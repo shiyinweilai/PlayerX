@@ -50,6 +50,14 @@ YuvBridge::YuvBridge(QObject* parent)
         m_analyzers[i]->setChromaInterpolation(
             static_cast<rb::YuvAnalyzer::ChromaInterpolation>(m_chromaInterpolation));
     }
+
+    // 颜色转换标准：从 QSettings 恢复，默认 0 = BT709 limited range（现代高清标准）
+    m_colorConversion = yuvSettings().value("yuv_presets/colorConversion", 0).toInt();
+    if (m_colorConversion < 0 || m_colorConversion > 5) m_colorConversion = 0;
+    for (int i = 0; i < MaxSlots; ++i) {
+        m_analyzers[i]->setColorConversion(
+            static_cast<rb::YuvAnalyzer::ColorConversion>(m_colorConversion));
+    }
 }
 
 YuvBridge::~YuvBridge() = default;
@@ -709,6 +717,25 @@ void YuvBridge::setChromaInterpolation(int mode) {
         if (m_analyzers[i]->isOpen()) refreshFrameImage(i);
     }
     emit chromaInterpolationChanged();
+}
+
+void YuvBridge::setColorConversion(int mode) {
+    if (mode < 0 || mode > 5) mode = 0;
+    if (m_colorConversion == mode) return;
+    m_colorConversion = mode;
+    // 持久化到 QSettings
+    yuvSettings().setValue("yuv_presets/colorConversion", mode);
+    yuvSettingsSync();
+    // 同步到所有 analyzer（已打开的会立即重建 sws 上下文，未打开的仅记录值）
+    for (int i = 0; i < MaxSlots; ++i) {
+        m_analyzers[i]->setColorConversion(
+            static_cast<rb::YuvAnalyzer::ColorConversion>(mode));
+    }
+    // 刷新所有已打开 slot 的帧图像以应用新的颜色转换
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_analyzers[i]->isOpen()) refreshFrameImage(i);
+    }
+    emit colorConversionChanged();
 }
 
 // ── 全局缩放比例 ──────────────────────────────────────────────────────

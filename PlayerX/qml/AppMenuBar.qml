@@ -605,6 +605,48 @@ MenuBar {
                 onTriggered: YuvBridge.chromaInterpolation = 2
             }
         }
+
+        // ── 颜色转换 ▶ ──（YUV→RGB 色彩矩阵与值域范围，6 档互斥单选）
+        // 默认 ITU-R BT.709 limited range = 现代高清标准
+        DarkMenu {
+            title: qsTr("颜色转换")
+            DarkMenuItem {
+                text: qsTr("ITU-R BT.709")
+                checkable: true
+                checked: YuvBridge.colorConversion === 0
+                onTriggered: YuvBridge.colorConversion = 0
+            }
+            DarkMenuItem {
+                text: qsTr("ITU-R BT.709 Full Range")
+                checkable: true
+                checked: YuvBridge.colorConversion === 1
+                onTriggered: YuvBridge.colorConversion = 1
+            }
+            DarkMenuItem {
+                text: qsTr("ITU-R BT.601")
+                checkable: true
+                checked: YuvBridge.colorConversion === 2
+                onTriggered: YuvBridge.colorConversion = 2
+            }
+            DarkMenuItem {
+                text: qsTr("ITU-R BT.601 Full Range")
+                checkable: true
+                checked: YuvBridge.colorConversion === 3
+                onTriggered: YuvBridge.colorConversion = 3
+            }
+            DarkMenuItem {
+                text: qsTr("ITU-R BT.2020")
+                checkable: true
+                checked: YuvBridge.colorConversion === 4
+                onTriggered: YuvBridge.colorConversion = 4
+            }
+            DarkMenuItem {
+                text: qsTr("ITU-R BT.2020 Full Range")
+                checkable: true
+                checked: YuvBridge.colorConversion === 5
+                onTriggered: YuvBridge.colorConversion = 5
+            }
+        }
     }
 
     // ═══ 码流分析（暂未实现，仅留占位提示）══════════════

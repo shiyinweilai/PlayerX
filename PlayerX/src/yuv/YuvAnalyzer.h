@@ -38,6 +38,16 @@ public:
     //   Bicubic         = SWS_BICUBIC，双三次插值，更平滑但计算更重
     enum ChromaInterpolation { NearestNeighbor = 0, Bilinear = 1, Bicubic = 2 };
 
+    // ── 颜色转换标准 ──────────────────────────────────────────────────
+    // 控制 sws_scale 的 YUV→RGB 色彩矩阵与值域范围。
+    //   BT709           = ITU-R BT.709, limited range (16-235)，现代高清标准
+    //   BT709FullRange  = ITU-R BT.709, full range (0-255)
+    //   BT601           = ITU-R BT.601, limited range (16-235)，标清标准
+    //   BT601FullRange  = ITU-R BT.601, full range (0-255)
+    //   BT2020          = ITU-R BT.2020, limited range (16-235)，超高清标准
+    //   BT2020FullRange = ITU-R BT.2020, full range (0-255)
+    enum ColorConversion { BT709 = 0, BT709FullRange = 1, BT601 = 2, BT601FullRange = 3, BT2020 = 4, BT2020FullRange = 5 };
+
     YuvAnalyzer();
     ~YuvAnalyzer();
 
@@ -73,6 +83,12 @@ public:
     // 默认 NearestNeighbor（像素级分析标准）。
     void setChromaInterpolation(ChromaInterpolation mode);
     ChromaInterpolation chromaInterpolation() const { return m_chromaInterp; }
+
+    // ── 颜色转换标准 ──────────────────────────────────────────────────
+    // 设置 YUV→RGB 的色彩矩阵与值域范围；改变后需要重建 sws 上下文。
+    // 默认 BT709（ITU-R BT.709 limited range，现代高清标准）。
+    void setColorConversion(ColorConversion mode);
+    ColorConversion colorConversion() const { return m_colorConv; }
 
     // ── 像素级查询 ──────────────────────────────────────────────────────
     // 获取图像坐标 (x, y) 处的 YUV 值，返回 {y, u, v}；越界返回 {-1,-1,-1}
@@ -176,6 +192,9 @@ private:
 
     // 色度插值模式（默认 NearestNeighbor）；影响 sws_scale 的 flags
     ChromaInterpolation m_chromaInterp{NearestNeighbor};
+
+    // 颜色转换标准（默认 BT709）；影响 sws_scale 的色彩矩阵与值域范围
+    ColorConversion m_colorConv{BT709};
 };
 
 } // namespace rb
