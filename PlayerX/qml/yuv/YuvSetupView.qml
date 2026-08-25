@@ -12,6 +12,22 @@ Item {
     id: yuvView
     z: 100
 
+    // ── 布局属性（暴露给顶部菜单 / 全局快捷键读写）──
+    // 这三个是唯一数据源，通过下方 Binding 单向下推给 Loader 内的 YuvWindow。
+    property string layoutMode: "auto"
+    property int gridColumns: 0
+    property int carouselIndex: 0
+    // 只读：菜单用它判断 enabled / 轮播边界。声明 readonly 避免被命令式赋值
+    // 摧毁绑定（曾因此导致 Repeater model 冻结、画面全黑）。
+    readonly property int openSlotCount: YuvBridge.slotCount
+
+    // 通道数变化（关闭文件 / 新开文件）时钳制轮播索引，避免越界指向
+    // 已不存在的 slot → frameImage() 返回空图 → 画面全黑。
+    onOpenSlotCountChanged: {
+        if (carouselIndex >= openSlotCount)
+            carouselIndex = Math.max(0, openSlotCount - 1)
+    }
+
     // ── 供顶部菜单「YUV 分析 ▸ 打开 YUV 文件/文件夹」调用的入口 ──
     // 仅触发本模块自带的 FileDialog / FolderDialog（见下方 yuvSetupView 内），
     // 与「播放对比」的视频打开入口（addDialog / multiGroupDialog）完全隔离。
@@ -1605,6 +1621,10 @@ Item {
     }
 
     // ── 渲染子界面（render） ────────────────────────────────
+    // 布局属性由外层 yuvView 单向下推（菜单/快捷键只写外层），
+    // 内层 YuvWindow 通过 Binding 声明式接收 —— 不可用 onLoaded 里的
+    // 命令式赋值，那会摧毁内层 openSlotCount → YuvBridge.slotCount 的
+    // 绑定，导致 Repeater model 冻结在 0 → 画面全黑。
     Loader {
         id: yuvViewLoader
         anchors.fill: parent
@@ -1618,5 +1638,28 @@ Item {
                 })
             }
         }
+    }
+
+    // 外层 → 内层：声明式绑定，菜单改外层属性后立即生效，且可重复触发
+    Binding {
+        target: yuvViewLoader.item
+        property: "layoutMode"
+        value: yuvView.layoutMode
+        when: yuvViewLoader.item !== null
+        restoreMode: Binding.RestoreNone
+    }
+    Binding {
+        target: yuvViewLoader.item
+        property: "gridColumns"
+        value: yuvView.gridColumns
+        when: yuvViewLoader.item !== null
+        restoreMode: Binding.RestoreNone
+    }
+    Binding {
+        target: yuvViewLoader.item
+        property: "carouselIndex"
+        value: yuvView.carouselIndex
+        when: yuvViewLoader.item !== null
+        restoreMode: Binding.RestoreNone
     }
 }

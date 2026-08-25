@@ -47,6 +47,26 @@ Item {
         yuvView.slotInfoVisible = !yuvView.slotInfoVisible
     }
 
+    // ── 布局模式（顶部菜单切换）──
+    //   "auto"       → 自动：1路单显，2路1×2，3路1×3，4路2×2，5-6路2×3，7-9路3×3（默认）
+    //   "carousel"   → 轮播：单通道逐张显示，左右键切换
+    //   "horizontal" → 横排：所有窗口水平排列，可横向滚动
+    //   "grid"       → 网格：块状排列，列数可调
+    property string layoutMode: "auto"
+    property int gridColumns: 0      // 0=自动，>0=固定列数
+    property int carouselIndex: 0    // 轮播当前位置（= currentSlot）
+
+    // 自动列数计算：尽量接近正方形布局
+    //   1 → 1列, 2 → 2列, 3 → 3列, 4 → 2列(2×2), 5-6 → 3列, 7-9 → 3列
+    function _autoCols(count) {
+        if (count <= 1) return 1
+        if (count === 2) return 2
+        if (count === 3) return 3
+        if (count === 4) return 2   // 2×2 正方形
+        if (count <= 6) return 3    // 2×3
+        return 3                     // 3×3
+    }
+
     // cmpActive 变为 false（从 2 路变非 2 路）时强制退出滑动对比
     onCmpActiveChanged: {
         // 打开/关闭对比模式（第三路打开或关闭时）复位状态，避免残留数据/滚动位置
@@ -487,7 +507,10 @@ Item {
         spacing: 0
 
         // ── 中间：多窗口画面区域 ─────────────────────────────────────
-        // 使用 GridLayout 自动排列多窗口：1-3个单行，4-6个两行，7-9个三行
+        // GridLayout 负责所有布局模式：
+        //   auto/grid  → 多窗口网格排列
+        //   carousel   → 单窗口（model=1，显示 carouselIndex 对应的 slot）
+        //   horizontal → 单行排列（cols = openSlotCount）
         GridLayout {
             id: slotGrid
             Layout.fillWidth: true
@@ -497,20 +520,27 @@ Item {
             // 滑动对比模式时隐藏多窗口布局，改为下方 Loader 全屏显示滑动对比
             visible: !yuvView.sliderCompareActive
 
-            // 根据窗口数量自动计算列数：≤3 → 1行N列，≤6 → 2行3列，≤9 → 3行3列
-            // rows 不显式设置——GridLayout 会根据 columns 和 Repeater model 数量
-            // 自动推算行数；显式设 rows 会导致单元格不自动拉伸填充（塌缩为 0×0 黑屏）。
-            property int cols: openSlotCount <= 1 ? 1
-                         : openSlotCount <= 3 ? openSlotCount
-                         : openSlotCount <= 6 ? 3
-                         : 3
+            // 列数根据布局模式计算
+            property int cols: {
+                if (yuvView.layoutMode === "carousel") return 1
+                if (yuvView.layoutMode === "horizontal") return yuvView.openSlotCount
+                if (yuvView.layoutMode === "grid") {
+                    return yuvView.gridColumns > 0 ? yuvView.gridColumns : yuvView._autoCols(yuvView.openSlotCount)
+                }
+                // auto
+                return yuvView._autoCols(yuvView.openSlotCount)
+            }
             columns: slotGrid.cols
 
             Repeater {
-                model: yuvView.openSlotCount
+                // carousel 模式只显示 1 个窗口（carouselIndex 对应的 slot）
+                model: yuvView.layoutMode === "carousel" ? 1 : yuvView.openSlotCount
                 delegate: Rectangle {
                     id: slotWin
+                    // carousel 模式下，index 固定映射到 carouselIndex；
+                    // 其他模式正常递增
                     required property int index
+                    property int slotIdx: yuvView.layoutMode === "carousel" ? yuvView.carouselIndex : slotWin.index
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumWidth: 1
@@ -526,8 +556,8 @@ Item {
                     HoverHandler {
                         id: slotWinHover
                         onHoveredChanged: {
-                            if (hovered && yuvView.activeHoverSlot !== slotWin.index)
-                                yuvView.activeHoverSlot = slotWin.index
+                            if (hovered && yuvView.activeHoverSlot !== slotWin.slotIdx)
+                                yuvView.activeHoverSlot = slotWin.slotIdx
                         }
                     }
 
@@ -535,13 +565,13 @@ Item {
                     Connections {
                         target: YuvBridge
                         function onFrameChanged(slot) {
-                            if (slot === slotWin.index) ver++
+                            if (slot === slotWin.slotIdx) ver++
                         }
                         function onPlayStateChanged(slot) {
-                            if (slot === slotWin.index) ver++
+                            if (slot === slotWin.slotIdx) ver++
                         }
                         function onDisplayModeChanged(slot) {
-                            if (slot === slotWin.index) ver++
+                            if (slot === slotWin.slotIdx) ver++
                         }
                     }
 
@@ -576,7 +606,7 @@ Item {
                                 clip: true
                                 image: {
                                     const _ = slotWin.ver
-                                    return YuvBridge.frameImage(slotWin.index)
+                                    return YuvBridge.frameImage(slotWin.slotIdx)
                                 }
                                 // 监听 YuvBridge.globalScaleChanged，把最新的 scale
                                 // 推给 YuvDisplayItem::onGlobalScaleChanged() 触发
@@ -663,10 +693,10 @@ Item {
                                     pixelX = ix
                                     pixelY = iy
                                     showPixelGrid = true
-                                    pixelData = YuvBridge.pixelBlock8x8(slotWin.index, ix, iy)
-                                    pixelStats = YuvBridge.pixelBlockStats8x8(slotWin.index, ix, iy)
+                                    pixelData = YuvBridge.pixelBlock8x8(slotWin.slotIdx, ix, iy)
+                                    pixelStats = YuvBridge.pixelBlockStats8x8(slotWin.slotIdx, ix, iy)
                                     // 上报全局悬浮像素坐标，供右侧栏"块级别"统计实时跟随
-                                    YuvBridge.setHoverPixel(slotWin.index, ix, iy, true)
+                                    YuvBridge.setHoverPixel(slotWin.slotIdx, ix, iy, true)
                                 }
 
                                 // 弹窗智能避让定位（"跟随鼠标"实时计算 与 "固定瞬间"取快照共用）
@@ -697,13 +727,13 @@ Item {
 
                                 onPositionChanged: function(mouse) {
                                     // 标记当前活跃 slot，其他 slot 检测到被取代后自动关闭弹窗
-                                    if (yuvView.activeHoverSlot !== slotWin.index)
-                                        yuvView.activeHoverSlot = slotWin.index
+                                    if (yuvView.activeHoverSlot !== slotWin.slotIdx)
+                                        yuvView.activeHoverSlot = slotWin.slotIdx
                                     // ── 双路对比模式：悬浮任一路视频，联动三窗口浮窗组 ──
                                     if (yuvView.cmpActive) {
                                         if (yuvView.cmpPinned) return
-                                        const imgWc = YuvBridge.width(slotWin.index)
-                                        const imgHc = YuvBridge.height(slotWin.index)
+                                        const imgWc = YuvBridge.width(slotWin.slotIdx)
+                                        const imgHc = YuvBridge.height(slotWin.slotIdx)
                                         if (imgWc <= 0 || imgHc <= 0) return
                                         const dispWc = pixelHoverArea.width
                                         const dispHc = pixelHoverArea.height
@@ -724,8 +754,8 @@ Item {
                                     if (pinned) return   // 已固定：不再跟随鼠标刷新
                                     // 将鼠标坐标映射到图像坐标
                                     // YuvDisplayItem 使用 1:1 原尺寸居中 + panX/panY 偏移
-                                    const imgW = YuvBridge.width(slotWin.index)
-                                    const imgH = YuvBridge.height(slotWin.index)
+                                    const imgW = YuvBridge.width(slotWin.slotIdx)
+                                    const imgH = YuvBridge.height(slotWin.slotIdx)
                                     if (imgW <= 0 || imgH <= 0) return
 
                                     const dispW = pixelHoverArea.width
@@ -742,7 +772,7 @@ Item {
                                         fetchAt(ix, iy)
                                     } else {
                                         showPixelGrid = false
-                                        YuvBridge.setHoverPixel(slotWin.index, 0, 0, false)
+                                        YuvBridge.setHoverPixel(slotWin.slotIdx, 0, 0, false)
                                     }
                                 }
                                 onExited: {
@@ -756,7 +786,7 @@ Item {
                                     // 其余情况（移到渲染窗口外、移到相邻 slot）一律关闭。
                                     if (popupHoverHandler.hovered) return
                                     showPixelGrid = false
-                                    YuvBridge.setHoverPixel(slotWin.index, 0, 0, false)
+                                    YuvBridge.setHoverPixel(slotWin.slotIdx, 0, 0, false)
                                 }
                                 onClicked: function(mouse) {
                                     if (yuvView.cmpActive) {
@@ -794,9 +824,9 @@ Item {
                                 Connections {
                                     target: yuvView
                                     function onActiveHoverSlotChanged() {
-                                        if (yuvView.activeHoverSlot !== slotWin.index && !pinned) {
+                                        if (yuvView.activeHoverSlot !== slotWin.slotIdx && !pinned) {
                                             showPixelGrid = false
-                                            YuvBridge.setHoverPixel(slotWin.index, 0, 0, false)
+                                            YuvBridge.setHoverPixel(slotWin.slotIdx, 0, 0, false)
                                         }
                                     }
                                 }
@@ -861,7 +891,7 @@ Item {
 
                                 // 定位到当前像素所在的块（对齐到块边界）
                                 x: {
-                                    const imgW = YuvBridge.width(slotWin.index)
+                                    const imgW = YuvBridge.width(slotWin.slotIdx)
                                     const dispW = pixelHoverArea.width
                                     const offX = (dispW - imgW) / 2.0 + yuvDisp.panX
                                     const bs = YuvBridge.blockSize
@@ -870,7 +900,7 @@ Item {
                                     return offX + blockX
                                 }
                                 y: {
-                                    const imgH = YuvBridge.height(slotWin.index)
+                                    const imgH = YuvBridge.height(slotWin.slotIdx)
                                     const dispH = pixelHoverArea.height
                                     const offY = (dispH - imgH) / 2.0 + yuvDisp.panY
                                     const bs = YuvBridge.blockSize
@@ -1042,7 +1072,7 @@ Item {
                                         id: channelTabs
                                         spacing: 2
                                         property int channel: {
-                                            const dm = YuvBridge.displayMode(slotWin.index)
+                                            const dm = YuvBridge.displayMode(slotWin.slotIdx)
                                             const _ = slotWin.ver   // 触发 displayMode 变化时刷新
                                             if (dm === 2) return 1  // U
                                             if (dm === 3) return 2  // V
@@ -1073,7 +1103,7 @@ Item {
                                                         //    matrix U → displayMode 2 (U)
                                                         //    matrix V → displayMode 3 (V)
                                                         const dm = (index === 0) ? 1 : (index === 1 ? 2 : 3)
-                                                        YuvBridge.setDisplayMode(slotWin.index, dm)
+                                                        YuvBridge.setDisplayMode(slotWin.slotIdx, dm)
                                                     }
                                                 }
                                             }
@@ -1414,7 +1444,7 @@ Item {
 
                                             property bool isActive: {
                                                 const _ = slotWin.ver
-                                                return YuvBridge.displayMode(slotWin.index) === index
+                                                return YuvBridge.displayMode(slotWin.slotIdx) === index
                                             }
 
                                             width: index === 0 ? 38 : 28
@@ -1451,7 +1481,7 @@ Item {
                                             MouseArea {
                                                 anchors.fill: parent
                                                 cursorShape: Qt.PointingHandCursor
-                                                onClicked: YuvBridge.setDisplayMode(slotWin.index, index)
+                                                onClicked: YuvBridge.setDisplayMode(slotWin.slotIdx, index)
                                             }
                                         }
                                     }
@@ -1463,8 +1493,8 @@ Item {
                                 Text {
                                     text: {
                                         const _ = slotWin.ver
-                                        return (YuvBridge.currentFrame(slotWin.index) + 1) + "/" +
-                                               YuvBridge.totalFrames(slotWin.index)
+                                        return (YuvBridge.currentFrame(slotWin.slotIdx) + 1) + "/" +
+                                               YuvBridge.totalFrames(slotWin.slotIdx)
                                     }
                                     color: "#9aa0a6"; font.pixelSize: 11
                                 }
@@ -1483,7 +1513,7 @@ Item {
                                         MouseArea {
                                             id: navSkipBackMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.skipBackward(slotWin.index, 15)
+                                            onClicked: YuvBridge.skipBackward(slotWin.slotIdx, 15)
                                         }
                                     }
                                     // 帧后退（上一帧）
@@ -1494,7 +1524,7 @@ Item {
                                         MouseArea {
                                             id: navPrevMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.prevFrame(slotWin.index)
+                                            onClicked: YuvBridge.prevFrame(slotWin.slotIdx)
                                         }
                                     }
                                     // 播放/暂停
@@ -1505,14 +1535,14 @@ Item {
                                             anchors.centerIn: parent
                                             text: {
                                                 const _ = slotWin.ver
-                                                return YuvBridge.isPlaying(slotWin.index) ? "⏸" : "▶"
+                                                return YuvBridge.isPlaying(slotWin.slotIdx) ? "⏸" : "▶"
                                             }
                                             color: "#fff"; font.pixelSize: 11
                                         }
                                         MouseArea {
                                             id: navPlayMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.togglePlayPause(slotWin.index)
+                                            onClicked: YuvBridge.togglePlayPause(slotWin.slotIdx)
                                         }
                                     }
                                     // 帧前进（下一帧）
@@ -1523,7 +1553,7 @@ Item {
                                         MouseArea {
                                             id: navNextMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.nextFrame(slotWin.index)
+                                            onClicked: YuvBridge.nextFrame(slotWin.slotIdx)
                                         }
                                     }
                                     // 快进 15 帧
@@ -1534,7 +1564,7 @@ Item {
                                         MouseArea {
                                             id: navSkipFwdMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.skipForward(slotWin.index, 15)
+                                            onClicked: YuvBridge.skipForward(slotWin.slotIdx, 15)
                                         }
                                     }
 
@@ -1548,7 +1578,7 @@ Item {
                                         MouseArea {
                                             id: navResetMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.resetFrame(slotWin.index)
+                                            onClicked: YuvBridge.resetFrame(slotWin.slotIdx)
                                         }
                                     }
                                     // 倒放
@@ -1556,7 +1586,7 @@ Item {
                                         width: 28; height: 22; radius: 3
                                         color: {
                                             const _ = slotWin.ver
-                                            if (YuvBridge.isReversing(slotWin.index)) return "#80b85a5a"
+                                            if (YuvBridge.isReversing(slotWin.slotIdx)) return "#80b85a5a"
                                             return navRevMa.containsMouse ? "#803a3a3d" : "#80252528"
                                         }
                                         Text { anchors.centerIn: parent; text: "◀◀"; color: "#ccc"; font.pixelSize: 9 }
@@ -1564,10 +1594,10 @@ Item {
                                             id: navRevMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                             onClicked: {
-                                                if (YuvBridge.isReversing(slotWin.index))
-                                                    YuvBridge.pause(slotWin.index)
+                                                if (YuvBridge.isReversing(slotWin.slotIdx))
+                                                    YuvBridge.pause(slotWin.slotIdx)
                                                 else
-                                                    YuvBridge.playReverse(slotWin.index)
+                                                    YuvBridge.playReverse(slotWin.slotIdx)
                                             }
                                         }
                                     }
@@ -1618,17 +1648,24 @@ Item {
                                     color: "#3a6fd8"
                                     Text {
                                         anchors.centerIn: parent
-                                        text: (slotWin.index + 1).toString()
+                                        text: (slotWin.slotIdx + 1).toString()
                                         color: "#fff"; font.pixelSize: 11; font.bold: true
                                     }
                                 }
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: YuvBridge.fileName(slotWin.index)
+                                    text: YuvBridge.fileName(slotWin.slotIdx)
                                     color: "#c8c8d0"; font.pixelSize: 11
                                     elide: Text.ElideMiddle
                                     Layout.maximumWidth: slotScreen.width - 80
+                                }
+
+                                // 轮播模式：显示当前位置和总数
+                                Text {
+                                    visible: yuvView.layoutMode === "carousel" && yuvView.openSlotCount > 1
+                                    color: "#a8d8ff"; font.pixelSize: 11
+                                    text: (slotWin.slotIdx + 1) + "/" + yuvView.openSlotCount + "  Ctrl+↑↓切换"
                                 }
 
                                 // 关闭按钮
@@ -1644,7 +1681,7 @@ Item {
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: YuvBridge.closeFile(slotWin.index)
+                                        onClicked: YuvBridge.closeFile(slotWin.slotIdx)
                                     }
                                 }
                             }
@@ -1688,6 +1725,50 @@ Item {
                 // 弹性空白：把所有按钮推到最右侧（与"清空"对齐靠右）。
                 // 注意："总控 · N 路"等纯文字标签已删除（用户反馈：右侧贴边更简洁）。
                 Item { Layout.fillWidth: true }
+
+                // ── 轮播切换（仅轮播模式显示）──
+                // ◀ [2/4] ▶  Ctrl+↑ 上一路，Ctrl+↓ 下一路
+                Row {
+                    visible: yuvView.layoutMode === "carousel" && yuvView.openSlotCount > 1
+                    spacing: 2
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: carPrevMa.containsMouse ? "#803a3a3d" : "#80252528"
+                        Text { anchors.centerIn: parent; text: "◀"; color: "#ccc"; font.pixelSize: 11 }
+                        MouseArea {
+                            id: carPrevMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (yuvView.carouselIndex > 0)
+                                    yuvView.carouselIndex--
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 48; height: 22; radius: 3
+                        color: "#802a5fc0"
+                        Text {
+                            anchors.centerIn: parent
+                            text: (yuvView.carouselIndex + 1) + "/" + yuvView.openSlotCount
+                            color: "#fff"; font.pixelSize: 11; font.bold: true
+                        }
+                    }
+                    Rectangle {
+                        width: 28; height: 22; radius: 3
+                        color: carNextMa.containsMouse ? "#803a3a3d" : "#80252528"
+                        Text { anchors.centerIn: parent; text: "▶"; color: "#ccc"; font.pixelSize: 11 }
+                        MouseArea {
+                            id: carNextMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (yuvView.carouselIndex < yuvView.openSlotCount - 1)
+                                    yuvView.carouselIndex++
+                            }
+                        }
+                    }
+                }
 
                 // 帧数进度（左侧贴边）：仅显示"当前帧 / 总帧数"，不画进度条。
                 // 取 slot 0 作为代表（多路时进度一致）。

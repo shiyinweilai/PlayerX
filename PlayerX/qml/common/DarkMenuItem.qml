@@ -44,7 +44,10 @@ MenuItem {
             text: "✓"
             color: "#e8e8ec"
             font.pixelSize: 12
-            visible: root.checkable && root.checked
+            // checked 为 true 即显示 ✓，不强制要求 checkable。
+            // 这样互斥单选项（checkable:false + checked:绑定）也能正确显示勾选标记，
+            // 且不会因 Qt 自动 toggle checked 而出现多选。
+            visible: root.checked
             renderType: Text.QtRendering
         }
     }

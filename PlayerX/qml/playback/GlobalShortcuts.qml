@@ -11,6 +11,7 @@ Item {
     property var multiGroupDialog: null
     property var ratingToast: null
     property var imageView: null
+    property var yuvView: null
 
     // 【与铃铛同一根因】RatingLogic.js 同样没有 `.pragma library`，本文件
     // `import "RatingLogic.js" as RatingLogic` 拿到的是独立于 Main.qml 的
@@ -82,7 +83,7 @@ Shortcut {
     sequence: "Left"; context: Qt.ApplicationShortcut
     // 首帧守卫（即时判定）：与工具栏 `<<` 按钮语义一致。
     onActivated: {
-        // YUV 分析 tab：左键 = 单帧快退所有 slot
+        // YUV 分析 tab：左键 = 单帧快退所有 slot（轮播切换用 Ctrl+↑↓）
         if (root.currentTab === "yuv") {
             const n = YuvBridge.slotCount
             for (let i = 0; i < n; ++i) YuvBridge.prevFrame(i)
@@ -101,7 +102,7 @@ Shortcut {
     sequence: "Right"; context: Qt.ApplicationShortcut
     // 末帧守卫（即时判定）：与工具栏 `>>` 按钮语义一致。
     onActivated: {
-        // YUV 分析 tab：右键 = 单帧快进所有 slot
+        // YUV 分析 tab：右键 = 单帧快进所有 slot（轮播切换用 Ctrl+↑↓）
         if (root.currentTab === "yuv") {
             const n = YuvBridge.slotCount
             for (let i = 0; i < n; ++i) YuvBridge.nextFrame(i)
@@ -303,6 +304,26 @@ Shortcut {
     sequence: "Ctrl+Down"; context: Qt.ApplicationShortcut
     enabled: multiGroupDialog.active && Engine.fileCount > 0
     onActivated: { if (root.compareSliderActive) root.compareSliderActive = false; multiGroupDialog.nextGroup() }
+}
+
+// ── YUV 轮播专用快捷键：上一路 / 下一路。
+// 仅在 YUV tab 且轮播模式时生效。与多组对比的 Ctrl+↑/↓ 共用序列，
+// 但 enabled 条件互斥（多组对比在播放 tab，轮播在 YUV tab），不会冲突。
+Shortcut {
+    sequence: "Ctrl+Up"; context: Qt.ApplicationShortcut
+    enabled: root.currentTab === "yuv" && yuvView.layoutMode === "carousel" && yuvView.openSlotCount > 1
+    onActivated: {
+        if (yuvView.carouselIndex > 0)
+            yuvView.carouselIndex--
+    }
+}
+Shortcut {
+    sequence: "Ctrl+Down"; context: Qt.ApplicationShortcut
+    enabled: root.currentTab === "yuv" && yuvView.layoutMode === "carousel" && yuvView.openSlotCount > 1
+    onActivated: {
+        if (yuvView.carouselIndex < yuvView.openSlotCount - 1)
+            yuvView.carouselIndex++
+    }
 }
 
 }

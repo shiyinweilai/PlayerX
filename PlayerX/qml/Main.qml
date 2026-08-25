@@ -155,6 +155,7 @@ ApplicationWindow {
         multiGroupDialog: multiGroupDialog
         ratingsDialog: ratingsDialog
         imageView: imageViewComp
+        yuvView: yuvView
     }
 
     // 登录态：评分人已设置（Rating.currentUser 非空）
@@ -1808,6 +1809,7 @@ ApplicationWindow {
         multiGroupDialog: multiGroupDialog
         ratingToast: videoArea.ratingToast
         imageView: imageViewComp
+        yuvView: yuvView
     }
 
     // ─── 参考图侧边栏 ───────────────────────────────────────────────
