@@ -54,6 +54,56 @@ ImageBridge::ImageBridge(QObject* parent)
 
 ImageBridge::~ImageBridge() = default;
 
+// ── 色彩管理：把任意 ICC Profile 的图统一到 sRGB ──────────────────────
+//
+// 为什么必须做：
+//   Qt Quick 的场景图把纹理数据当作**已经是显示色彩空间**的像素直接上屏，
+//   不做任何 ICC 转换。而 macOS 预览 / Quick Look 走 ColorSync，会把图片的
+//   源色彩空间（Display P3、Adobe RGB、ProPhoto…）正确映射到显示器空间。
+//   两者对比就会看到：颜色饱和度/色相偏移（尤其是蓝色、红色大字），
+//   以及文字边缘抗锯齿灰阶被整体偏移导致的"发虚"观感。
+//
+// 处理策略：
+//   1) 有有效 ICC Profile 且不是 sRGB → 转换到 sRGB
+//   2) 无 ICC Profile → 按 Web/行业惯例视为 sRGB，不动
+//   3) 灰度/CMYK 先转成 RGB 再处理
+//   4) 统一输出 Format_ARGB32_Premultiplied，避免后续缩放时反复转格式
+QImage ImageBridge::normalizeColorSpace(const QImage& src) {
+    if (src.isNull()) return src;
+
+    QImage img = src;
+
+    // CMYK / 索引色 / 灰度等先规整到 32 位 RGB，QColorSpace 转换要求 RGB 模型
+    switch (img.format()) {
+        case QImage::Format_ARGB32_Premultiplied:
+        case QImage::Format_ARGB32:
+        case QImage::Format_RGB32:
+        case QImage::Format_RGBX8888:
+        case QImage::Format_RGBA8888:
+        case QImage::Format_RGBA8888_Premultiplied:
+            break;
+        default:
+            img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            break;
+    }
+
+    const QColorSpace cs = img.colorSpace();
+    const QColorSpace srgb = QColorSpace(QColorSpace::SRgb);
+
+    if (cs.isValid() && cs != srgb) {
+        // 关键一步：按源 Profile 正确映射到 sRGB
+        img.convertToColorSpace(srgb);
+    } else if (!cs.isValid()) {
+        // 无 Profile：按行业惯例标记为 sRGB（只打标签，不改像素）
+        img.setColorSpace(srgb);
+    }
+
+    if (img.format() != QImage::Format_ARGB32_Premultiplied)
+        img = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+
+    return img;
+}
+
 // ── 多 slot 容器 ────────────────────────────────────────────────────
 
 int ImageBridge::openFiles(const QVariantList& files) {
@@ -72,8 +122,19 @@ int ImageBridge::openFiles(const QVariantList& files) {
         if (opened >= MaxSlots) break;
 
         QImageReader reader(path);
+        reader.setAutoDetectImageFormat(true);
+        // EXIF 方向自动校正（手机拍摄的图片常带 Orientation tag，
+        // 系统预览会自动应用；不处理会导致显示方向错误）
+        reader.setAutoTransform(true);
         QImage img = reader.read();
         if (img.isNull()) continue;
+
+        // ── 色彩管理（关键）──────────────────────────────────────────
+        // 很多 PNG/JPEG 内嵌 ICC Profile（Display P3、Adobe RGB 等）。
+        // 若不做转换而把原始像素当 sRGB 直接上屏，颜色会明显偏移，
+        // 且文字抗锯齿灰阶被整体偏移后对比度下降、主观锐度变差。
+        // macOS 预览通过 ColorSync 做这一步，这里用 QColorSpace 对齐。
+        img = normalizeColorSpace(img);
 
         m_slots[opened].inUse = true;
         m_slots[opened].path  = path;

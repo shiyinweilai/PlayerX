@@ -14,6 +14,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import PlayerX 1.0
+import PlayerX.ImageTools 1.0
 
 Item {
     id: imageView
@@ -42,6 +43,12 @@ Item {
 
     // ── 内嵌信息条显隐（C 快捷键切换，默认显示）──
     property bool imageInfoVisible: true
+
+    // ── 渲染模式（顶部菜单切换，默认"standard"=Mipmap+Smooth，最通用）──
+    //   "standard"  → 整数倍放大 nearest-neighbor，缩小双三次（默认）
+    //   "smooth"    → 始终双三次插值，放大柔和
+    //   "pixel"     → 始终最近邻，像素精确，适合逐像素分析
+    property string renderMode: "standard"
 
     // ── 逐通道变换状态（缩放/旋转/翻转/平移）──
     // 用对象存储，key = slot index，value = { scale, rotation, flipH, flipV, panX, panY }
@@ -473,25 +480,20 @@ Item {
                         return imageView._getTransform(imageView.effectiveSlot)
                     }
 
-                    Image {
+                    ImageDisplayItem {
                         id: singleImg
-                        anchors.centerIn: parent
-                        source: imageView.slotImagePath
-                        fillMode: Image.PreserveAspectFit
-                        asynchronous: true
-                        transformOrigin: Item.Center
-                        // 限定尺寸，让缩放生效；平移通过 x/y 偏移实现
-                        width: singleRoot.width * (singleRoot._t ? singleRoot._t.scale : 1.0)
-                        height: singleRoot.height * (singleRoot._t ? singleRoot._t.scale : 1.0)
-                        x: (singleRoot._t ? singleRoot._t.panX : 0)
-                        y: (singleRoot._t ? singleRoot._t.panY : 0)
-                        // 缩放、旋转、翻转
-                        rotation: singleRoot._t ? singleRoot._t.rotation : 0
-                        mirror: singleRoot._t ? singleRoot._t.flipH : false
-                        transform: Scale {
-                            origin.x: singleImg.width / 2; origin.y: singleImg.height / 2
-                            yScale: (singleRoot._t && singleRoot._t.flipV) ? -1 : 1
+                        anchors.fill: parent
+                        image: {
+                            const _ = imageView.globalVer
+                            return imageView.slotActive ? ImageBridge.image(imageView.effectiveSlot) : undefined
                         }
+                        panX: singleRoot._t ? singleRoot._t.panX : 0
+                        panY: singleRoot._t ? singleRoot._t.panY : 0
+                        imgScale: singleRoot._t ? singleRoot._t.scale : 1.0
+                        imgRotation: singleRoot._t ? singleRoot._t.rotation : 0
+                        flipH: singleRoot._t ? singleRoot._t.flipH : false
+                        flipV: singleRoot._t ? singleRoot._t.flipV : false
+                        renderMode: imageView.renderMode
                     }
 
                     // ── 滚轮缩放（参考 YuvWindow：累积 120 才缩放一次）──
@@ -654,23 +656,20 @@ Item {
                                 return imageView._getTransform(index)
                             }
 
-                            Image {
+                            ImageDisplayItem {
                                 id: gridImg
-                                anchors.centerIn: parent
-                                source: "file://" + ImageBridge.filePath(index)
-                                fillMode: Image.PreserveAspectFit
-                                asynchronous: true
-                                transformOrigin: Item.Center
-                                width: gridCell.width * (gridCell._t ? gridCell._t.scale : 1.0) * 0.9
-                                height: gridCell.height * (gridCell._t ? gridCell._t.scale : 1.0) * 0.9
-                                x: (gridCell._t ? gridCell._t.panX : 0)
-                                y: (gridCell._t ? gridCell._t.panY : 0)
-                                rotation: gridCell._t ? gridCell._t.rotation : 0
-                                mirror: gridCell._t ? gridCell._t.flipH : false
-                                transform: Scale {
-                                    origin.x: gridImg.width / 2; origin.y: gridImg.height / 2
-                                    yScale: (gridCell._t && gridCell._t.flipV) ? -1 : 1
+                                anchors.fill: parent
+                                image: {
+                                    const _ = imageView.globalVer
+                                    return ImageBridge.image(index)
                                 }
+                                panX: gridCell._t ? gridCell._t.panX : 0
+                                panY: gridCell._t ? gridCell._t.panY : 0
+                                imgScale: gridCell._t ? gridCell._t.scale : 1.0
+                                imgRotation: gridCell._t ? gridCell._t.rotation : 0
+                                flipH: gridCell._t ? gridCell._t.flipH : false
+                                flipV: gridCell._t ? gridCell._t.flipV : false
+                                renderMode: imageView.renderMode
                             }
 
                             // 通道标签 + 绝对路径（C 键切换显隐）
@@ -805,54 +804,20 @@ Item {
                 Item {
                     anchors.fill: parent
 
-                    // ── 左图（裁剪右半，只显示分割线左侧） ──
-                    Item {
+                    // ── 双路滑动对比渲染（物理像素级，分割线两侧严格对齐）──
+                    ImageSliderCompareItem {
+                        id: sliderImg
                         anchors.fill: parent
-                        clip: true
-                        Image {
-                            x: 0; y: 0
-                            width: parent.width
-                            height: parent.height
-                            source: "file://" + ImageBridge.filePath(0)
-                            fillMode: Image.PreserveAspectFit
-                            asynchronous: true
+                        leftImage: {
+                            const _ = imageView.globalVer
+                            return ImageBridge.image(0)
                         }
-                        // 用不透明矩形遮挡分割线右侧（左图在 clip 层下方）
-                        Rectangle {
-                            x: parent.width * imageView.splitRatio
-                            y: 0
-                            width: parent.width * (1 - imageView.splitRatio)
-                            height: parent.height
-                            color: "#0a0a0e"
+                        rightImage: {
+                            const _ = imageView.globalVer
+                            return ImageBridge.image(1)
                         }
-                    }
-
-                    // ── 右图（裁剪左半，只显示分割线右侧） ──
-                    Item {
-                        anchors.fill: parent
-                        clip: true
-                        Item {
-                            x: parent.width * imageView.splitRatio
-                            y: 0
-                            width: parent.width * (1 - imageView.splitRatio)
-                            height: parent.height
-                            clip: true
-                            Image {
-                                x: -parent.parent.width * imageView.splitRatio
-                                width: parent.parent.width
-                                height: parent.height
-                                source: "file://" + ImageBridge.filePath(1)
-                                fillMode: Image.PreserveAspectFit
-                                asynchronous: true
-                            }
-                        }
-                    }
-
-                    // ── 分割线 ──
-                    Rectangle {
-                        x: parent.width * imageView.splitRatio - 1
-                        anchors.top: parent.top; anchors.bottom: parent.bottom
-                        width: 2; color: "#3d7adf"
+                        splitRatio: imageView.splitRatio
+                        renderMode: imageView.renderMode
                     }
 
                     // ── hover 跟随 + 拖拽调整分割比例 ──

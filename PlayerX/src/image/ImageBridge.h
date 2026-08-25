@@ -91,4 +91,8 @@ private:
     int  m_slotCount{0};
 
     QVariantMap probePath(const QString& path) const;
+
+    // 色彩管理：把任意 ICC Profile 的图统一映射到 sRGB，
+    // 对齐 macOS ColorSync 的行为（详见 .cpp 中的说明）。
+    static QImage normalizeColorSpace(const QImage& src);
 };

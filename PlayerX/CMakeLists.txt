@@ -111,6 +111,8 @@ src/yuv/YuvDisplayItem.cpp
 src/yuv/YuvSliderCompareItem.cpp
     # 图片分析工具（独立模块，QImageReader 加载，不依赖播放管线）
 src/image/ImageBridge.cpp
+src/image/ImageDisplayItem.cpp
+src/image/ImageSliderCompareItem.cpp
     # 码流分析工具（独立模块，依赖 RBDemuxer 复用做预扫描；块级深度信息
     # 走"FFmpeg 解码器打补丁导出"路径，本期返回空数组占位）
     src/stream/RBStreamBridge.cpp

@@ -51,6 +51,8 @@
 #include "yuv/YuvSliderCompareItem.h"
 #include "stream/RBStreamBridge.h"
 #include "image/ImageBridge.h"
+#include "image/ImageDisplayItem.h"
+#include "image/ImageSliderCompareItem.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -306,6 +308,12 @@ int main(int argc, char* argv[]) {
 
     // 注册 YuvSliderCompareItem（YUV 双路滑动对比渲染组件）。
     qmlRegisterType<YuvSliderCompareItem>("PlayerX.YuvTools", 1, 0, "YuvSliderCompareItem");
+
+    // 注册 ImageDisplayItem（图片分析渲染组件，物理像素级渲染）。
+    qmlRegisterType<ImageDisplayItem>("PlayerX.ImageTools", 1, 0, "ImageDisplayItem");
+
+    // 注册 ImageSliderCompareItem（图片双路滑动对比渲染组件）。
+    qmlRegisterType<ImageSliderCompareItem>("PlayerX.ImageTools", 1, 0, "ImageSliderCompareItem");
 
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,

@@ -677,6 +677,29 @@ MenuBar {
             checked: imageView.imageInfoVisible
             onTriggered: imageView.imageInfoVisible = !imageView.imageInfoVisible
         }
+
+        // ── 渲染模式 ──（顶部下拉切换，默认 standard = 物理像素级渲染）
+        DarkMenu {
+            title: qsTr("渲染模式")
+            DarkMenuItem {
+                text: qsTr("标准（物理像素级，默认）")
+                checkable: true
+                checked: imageView.renderMode === "standard"
+                onTriggered: imageView.renderMode = "standard"
+            }
+            DarkMenuItem {
+                text: qsTr("平滑（双三次插值）")
+                checkable: true
+                checked: imageView.renderMode === "smooth"
+                onTriggered: imageView.renderMode = "smooth"
+            }
+            DarkMenuItem {
+                text: qsTr("像素级（最近邻，逐像素分析）")
+                checkable: true
+                checked: imageView.renderMode === "pixel"
+                onTriggered: imageView.renderMode = "pixel"
+            }
+        }
     }
 
     // ═══ 码流分析（暂未实现，仅留占位提示）══════════════
