@@ -36,7 +36,8 @@ constexpr const char* kSettingsUserKey      = "rating/user";
 constexpr const char* kSettingsModeKey      = "rating/mode";
 constexpr const char* kSettingsUploadUrlKey = "rating/uploadUrl";
 constexpr const char* kSettingsUploadTokKey = "rating/uploadToken";
-constexpr const char* kSettingsUploadTagKey = "rating/uploadTag";
+constexpr const char* kSettingsUploadTagKey  = "rating/uploadTag";
+constexpr const char* kSettingsUploadGroupKey = "rating/uploadGroup";
 
 // 评分模式表：未来加新模式只要在这里追加一项，
 // QML 会通过 modeList 自动拿到所有字段生成 UI。
@@ -1169,6 +1170,20 @@ void RatingStore::setUploadTag(const QString& tag) {
     emit uploadConfigChanged();
 }
 
+QString RatingStore::uploadGroup() const {
+    QSettings s;
+    return s.value(kSettingsUploadGroupKey).toString().trimmed();
+}
+
+void RatingStore::setUploadGroup(const QString& group) {
+    QSettings s;
+    QString trimmed = group.trimmed();
+    if (s.value(kSettingsUploadGroupKey).toString() == trimmed) return;
+    s.setValue(kSettingsUploadGroupKey, trimmed);
+    s.sync();
+    emit uploadConfigChanged();
+}
+
 void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
     if (m_uploading) {
         // 并发护栏：连点不会发出多起请求。
@@ -1466,13 +1481,17 @@ void RatingStore::postCsvBytesToServer(const QString& modeNow,
 
     auto* multi = new QHttpMultiPart(QHttpMultiPart::FormDataType);
 
-    // file 字段：文件名携带 fileNameTag（mode 或 "<mode>__<batch>"），
-    // 让后端 / 运维一眼识别是主观评分 / 质量比较 / 哪一个归档批次。
+    // file 字段：文件名携带 fileNameTag（mode 或 "<mode>__<batch>"）+ 组别，
+    // 让后端 / 运维一眼识别是主观评分 / 质量比较 / 哪一个归档批次 / 哪个组。
+    // 注意：这只是 multipart 中的 filename（供 HTTP 头展示），后端落盘时会按
+    //       <user>__<tag>__<mode>__<group>.csv 格式重命名，与此处 filename 无关。
     QHttpPart filePart;
+    QString groupVal = uploadGroup().trimmed();
+    if (groupVal.isEmpty()) groupVal = QStringLiteral("gx");
     QString fileName = QStringLiteral("playerx_%1_%2_%3.csv")
                            .arg(rater.isEmpty() ? QStringLiteral("anon") : rater)
                            .arg(fileNameTag)
-                           .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
+                           .arg(groupVal);
     filePart.setHeader(QNetworkRequest::ContentDispositionHeader,
                        QVariant(QString("form-data; name=\"file\"; filename=\"%1\"").arg(fileName)));
     filePart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("text/csv; charset=utf-8"));
@@ -1516,6 +1535,14 @@ void RatingStore::postCsvBytesToServer(const QString& modeNow,
         p.setHeader(QNetworkRequest::ContentDispositionHeader,
                     QVariant("form-data; name=\"mode\""));
         p.setBody(modeNow.toUtf8());
+        multi->append(p);
+    }
+    // group 字段：评分人所属组别（如 g1/g2），后端文件名用此值取代时间戳
+    {
+        QHttpPart p;
+        p.setHeader(QNetworkRequest::ContentDispositionHeader,
+                    QVariant("form-data; name=\"group\""));
+        p.setBody(uploadGroup().trimmed().toUtf8());
         multi->append(p);
     }
     // force 字段：仅在用户“确认覆盖”后重走时为 true

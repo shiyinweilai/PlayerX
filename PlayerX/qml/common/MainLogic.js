@@ -989,6 +989,7 @@ function _startTestSourceAutomation(ts, configName) {
     if (resolved.group.length > 0) {
         _stObj._chosenGroup = resolved.group
         _root._tsLastGroup = resolved.group
+        if (typeof Rating !== "undefined") Rating.uploadGroup = resolved.group
     }
 
     // ── 重复下载检测：同配置 + zip 在 + 解压根在 → 弹「直接开始/重新下载」──
@@ -1207,6 +1208,7 @@ function _tsGateGroup(st, extractTarget) {
         console.log("[TestSource] 评分人「" + _rater + "」命中组别映射 → 自动选择:", _mapped)
         st._chosenGroup = _mapped
         _root._tsLastGroup = _mapped
+        if (typeof Rating !== "undefined") Rating.uploadGroup = _mapped
         _updateToast.text = "已按评分人「" + _rater + "」自动选择组别「" + _mapped + "」"
         _updateToast.open()
         return false
@@ -1228,6 +1230,7 @@ function _tsOnGroupChosen(g) {
     _root._tsGroupCtx = null
     if (!ctx) return
     _root._tsLastGroup = g
+    if (typeof Rating !== "undefined") Rating.uploadGroup = g
     ctx.st._chosenGroup = g
     console.log("[TestSource] 用户选择组别:", g)
     var err = _tsImportAndStart(ctx.st, ctx.extractTarget)

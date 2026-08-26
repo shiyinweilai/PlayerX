@@ -807,6 +807,11 @@ ApplicationWindow {
                     Rating.uploadTag = tagForMode
                 }
             }
+            // 【group 跟随】把最近一次接受任务时识别到的组别同步到 Rating.uploadGroup，
+            // 后端文件名用此值取代旧的时间戳段（未识别到组别时为空，后端兜底为 gx）。
+            if (typeof Rating !== "undefined") {
+                Rating.uploadGroup = root._tsLastGroup || ""
+            }
             var cachedRaw = Logic._dimsForMode(mode)
             // 【关键】QML property var 里的数组读出来可能是 QJSValue/QVariantList，Array.isArray=false。
             // 用 length 做 duck-typing 判断，并转成纯 JS 数组再传给 _forceApplyDimensions，

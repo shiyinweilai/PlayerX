@@ -70,6 +70,9 @@ class RatingStore : public QObject {
     // 备注 tag：用于区分同一评分人多轮提交（如 test1 / 公司终评）。
     // 同 (rater, tag) 重复上传时后端返回 409，由 UI 弹窗确认后再带 force=true 重传。
     Q_PROPERTY(QString uploadTag       READ uploadTag       WRITE setUploadTag       NOTIFY uploadConfigChanged)
+    // 上传时的组别信息（如 g1/g2），客户端接受任务时自动识别并传递给后端。
+    // 后端文件名用此值取代旧的时间戳段。未识别到组别时为空，后端兜底为 gx。
+    Q_PROPERTY(QString uploadGroup     READ uploadGroup     WRITE setUploadGroup     NOTIFY uploadConfigChanged)
     // 上传过程状态：QML 按钮可以用它进行 disable / loading 反馈。
     Q_PROPERTY(bool uploading READ uploading NOTIFY uploadingChanged)
 
@@ -279,6 +282,8 @@ public slots:
     bool    uploadUrlOverridden() const { return m_uploadUrlOverridden; }
     QString uploadTag() const;
     void    setUploadTag(const QString& tag);
+    QString uploadGroup() const;
+    void    setUploadGroup(const QString& group);
     bool    uploading() const { return m_uploading; }
 
     // 上传一份“精简 CSV”到 uploadServerUrl（与 exportToFile 写出的完全一致：
