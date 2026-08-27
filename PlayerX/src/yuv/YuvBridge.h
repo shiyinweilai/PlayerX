@@ -315,6 +315,9 @@ private:
     QTimer* m_playTimers[MaxSlots]{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
     bool    m_playing[MaxSlots]{false, false, false, false, false, false, false, false, false};
     bool    m_reversing[MaxSlots]{false, false, false, false, false, false, false, false, false};
+    // 从头播放标记：play() 时若已在最后一帧，异步 seek 到 0 并置此标志，
+    // 定时器回调看到此标志时跳过末尾检测，等 seek 完成后正常推进。
+    bool    m_replayFromStart[MaxSlots]{false, false, false, false, false, false, false, false, false};
 
     // 全局鼠标悬浮像素坐标（跨 slot 共享，供右侧栏"块级别"统计使用）
     int  m_hoverSlot{0};

@@ -1036,6 +1036,7 @@ void YuvBridge::stopTimer(int slot) {
     }
     m_playing[slot] = false;
     m_reversing[slot] = false;
+    m_replayFromStart[slot] = false;
 }
 
 void YuvBridge::play(int slot) {
@@ -1045,6 +1046,15 @@ void YuvBridge::play(int slot) {
     stopTimer(slot);
     m_playing[slot] = true;
     m_reversing[slot] = false;
+
+    // 如果已在最后一帧，从头播放：异步 seek 到第 0 帧，定时器回调中等待 seek
+    // 完成后正常推进，避免 "play → 检测到末尾 → 立即停止" 的无效空转。
+    const int curAtStart = m_analyzers[slot]->currentFrame();
+    const int totalAtStart = m_analyzers[slot]->totalFrames();
+    if (curAtStart >= totalAtStart - 1) {
+        m_replayFromStart[slot] = true;
+        refreshFrameImageAsyncToFrame(slot, 0);
+    }
 
     const double fpsVal = m_analyzers[slot]->fps();
     const int intervalMs = (fpsVal > 0) ? qMax(1, (int)(1000.0 / fpsVal)) : 33;
@@ -1057,6 +1067,20 @@ void YuvBridge::play(int slot) {
             emit playStateChanged(slot);
             return;
         }
+
+        // 从头播放等待中：seek 到 0 完成前跳过末尾检测
+        if (m_replayFromStart[slot]) {
+            if (m_asyncBusy[slot]) {
+                // seek 仍在进行中，等下一拍
+                return;
+            }
+            // seek 到 0 已完成，清除标记，正常推进到下一帧
+            m_replayFromStart[slot] = false;
+            const int curNow = m_analyzers[slot]->currentFrame();
+            refreshFrameImageAsyncToFrame(slot, curNow + 1);
+            return;
+        }
+
         const int cur = m_analyzers[slot]->currentFrame();
         const int total = m_analyzers[slot]->totalFrames();
         if (cur >= total - 1) {
