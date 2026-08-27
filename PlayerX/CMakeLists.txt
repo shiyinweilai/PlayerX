@@ -136,7 +136,37 @@ src/image/ImageSliderCompareItem.cpp
     $<$<PLATFORM_ID:Darwin>:src/qt/MacAppearance.mm>
     # Windows 标题栏深色化（DWM 沉浸式深色 + Win11 精确配色）
     $<$<PLATFORM_ID:Windows>:src/qt/WinTitleBar.cpp>
+    # ── SIMD 加速层（运行时 dispatch，无 GPU 依赖）──────────────────────────
+    # 基础设施（所有平台恒编译）
+    src/simd/SimdCaps.cpp
+    src/simd/SimdAPI.cpp
+    # common 标量参考实现（兜底 + 正确性基准）
+    src/simd/common/HistKernel_scalar.cpp
+    # x86-64: SSE2 已跳过（直接 AVX2），按用户要求不考虑老旧机器
+    # ARM64: NEON 是 AArch64 强制标配，无需检测
 )
+
+# ─── SIMD ISA 专用变体（按平台单独设置编译选项）──────────────────────────────
+# 注意：交叉编译时 CMAKE_SYSTEM_PROCESSOR 报告的是宿主机架构而非目标架构，
+# 因此用 CMAKE_SYSTEM_NAME 做主判断，CMAKE_SYSTEM_PROCESSOR 仅用于 macOS 原生构建。
+# Windows → 一律 AVX2（用户确认不考虑老旧 x86 机器）
+# macOS arm64 → NEON；macOS x86_64 → AVX2
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR
+   (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64)"))
+    target_sources(PlayerX PRIVATE
+        src/simd/common/HistKernel_avx2.cpp
+    )
+    set_source_files_properties(
+        src/simd/common/HistKernel_avx2.cpp
+        PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
+    target_sources(PlayerX PRIVATE
+        src/simd/common/HistKernel_neon.cpp
+    )
+    # NEON 在 ARM64 上默认开启，无需额外 flag
+endif()
 
 # ─── QML 模块 ─────────────────────────────────────────────────────────────────
 qt_add_qml_module(PlayerX
@@ -226,6 +256,7 @@ target_include_directories(PlayerX PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/yuv
     ${CMAKE_CURRENT_SOURCE_DIR}/src/stream
     ${CMAKE_CURRENT_SOURCE_DIR}/src/image
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/simd
     ${FFMPEG_INSTALL_DIR}/include
 )
 

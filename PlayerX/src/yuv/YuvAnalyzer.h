@@ -66,10 +66,13 @@ public:
 
     // ── 查询 ──────────────────────────────────────────────────────────
     int    totalFrames()  const;
-    int    currentFrame() const { 
+    int    currentFrame() const {
         std::lock_guard<std::mutex> lk(m_dataMutex);
-        return m_currentFrame; 
+        return m_currentFrame;
     }
+    // 仅更新当前帧号（不加锁版本，调用方已持有 m_dataMutex），不读盘。
+    // 同步播放消费缓冲帧时使用：图像已在外部解好，只需同步帧号供 QML 读取。
+    void   setCurrentFrameNoLock(int frameNum) { m_currentFrame = frameNum; }
     int    width()        const { return m_width; }
     int    height()       const { return m_height; }
     double fps()          const { return m_fps; }

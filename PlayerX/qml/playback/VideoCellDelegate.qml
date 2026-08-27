@@ -174,6 +174,49 @@ Rectangle {
         antialiasing: false
     }
 
+    // ─── 底部居中帧号 overlay（多通道同步对比用）──────────────────────────
+    // 右上 channelBar 的 #frame 字号仅 11px、与按钮/时间戳挤在一行，
+    // 多通道并排时很难一眼对比各路帧号是否同步。
+    // 此 overlay 在画面底部居中显示大号帧号，字号 22px + 半透明深色底，
+    // 多通道下一扫即知各路帧差。
+    // 显隐：与 channelBar 共用 effectiveChannelVisible（C 键控制）。
+    Rectangle {
+        id: frameNumOverlay
+        anchors.bottom: videoBox.bottom
+        anchors.horizontalCenter: videoBox.horizontalCenter
+        anchors.bottomMargin: 8
+        radius: 6
+        color: "#88000000"
+        border.width: 0
+        z: 5
+        visible: viewRoot.effectiveChannelVisible
+        width: frameNumOverlayText.implicitWidth + 20
+        height: frameNumOverlayText.implicitHeight + 8
+
+        property var _info: ({})
+        function refreshInfo() {
+            if (visible) _info = Engine.videoInfoAt(cell.playerIdx)
+        }
+        Connections {
+            target: Engine
+            function onPositionChanged() { frameNumOverlay.refreshInfo() }
+        }
+        onVisibleChanged: refreshInfo()
+        Component.onCompleted: refreshInfo()
+
+        Text {
+            id: frameNumOverlayText
+            anchors.centerIn: parent
+            color: "#ffffff"
+            font.pixelSize: 22
+            font.bold: true
+            font.family: "Menlo, Monaco, Courier New, monospace"
+            text: frameNumOverlay._info.frameNum !== undefined
+                  ? "# " + frameNumOverlay._info.frameNum
+                  : "# —"
+        }
+    }
+
     // ─── 滚轮缩放（独立 WheelHandler，挂在 cell 根 Item 上）────────────────
     // 不依赖任何 MouseArea，避免与左/右键 MouseArea 的层级竞争。
     WheelHandler {

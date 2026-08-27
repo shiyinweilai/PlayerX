@@ -621,6 +621,38 @@ MenuBar {
             }
         }
 
+        // ── 多通道同步帧率 ▶ ──（多路同时播放时的统一渲染帧率，互斥单选）
+        // 多路分辨率/帧率不同时，用固定帧率 + 预解码缓冲保证同步推进；
+        // 单通道播放不受影响（按文件自身 fps）。
+        DarkMenu {
+            title: qsTr("多通道同步帧率")
+            DarkMenuItem {
+                text: qsTr("15 fps")
+                checked: YuvBridge.syncFps === 15
+                onTriggered: YuvBridge.syncFps = 15
+            }
+            DarkMenuItem {
+                text: qsTr("24 fps")
+                checked: YuvBridge.syncFps === 24
+                onTriggered: YuvBridge.syncFps = 24
+            }
+            DarkMenuItem {
+                text: qsTr("25 fps")
+                checked: YuvBridge.syncFps === 25
+                onTriggered: YuvBridge.syncFps = 25
+            }
+            DarkMenuItem {
+                text: qsTr("30 fps（默认）")
+                checked: YuvBridge.syncFps === 30
+                onTriggered: YuvBridge.syncFps = 30
+            }
+            DarkMenuItem {
+                text: qsTr("60 fps")
+                checked: YuvBridge.syncFps === 60
+                onTriggered: YuvBridge.syncFps = 60
+            }
+        }
+
         // ── 布局方式 ──（多路 YUV 的排列模式，互斥单选）
         DarkMenu {
             title: qsTr("布局方式")

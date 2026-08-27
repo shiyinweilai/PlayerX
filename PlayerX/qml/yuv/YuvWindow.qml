@@ -469,7 +469,7 @@ Item {
         for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.setDisplayMode(i, mode)
     }
     function globalTogglePlayPause() {
-        for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.togglePlayPause(i)
+        YuvBridge.globalTogglePlayPause()
     }
     function globalPrevFrame() {
         for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.prevFrame(i)
@@ -484,13 +484,11 @@ Item {
         for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.skipForward(i, 15)
     }
     function globalResetFrame() {
+        YuvBridge.globalPause()
         for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.resetFrame(i)
     }
     function globalToggleReverse() {
-        for (let i = 0; i < yuvView.openSlotCount; ++i) {
-            if (YuvBridge.isReversing(i)) YuvBridge.pause(i)
-            else YuvBridge.playReverse(i)
-        }
+        YuvBridge.globalToggleReverse()
     }
     function globalAnyPlaying() {
         for (let i = 0; i < yuvView.openSlotCount; ++i) if (YuvBridge.isPlaying(i)) return true
@@ -1542,7 +1540,7 @@ Item {
                                         MouseArea {
                                             id: navPlayMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.togglePlayPause(slotWin.slotIdx)
+                                            onClicked: yuvView.globalTogglePlayPause()
                                         }
                                     }
                                     // 帧前进（下一帧）
@@ -1682,6 +1680,17 @@ Item {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: YuvBridge.closeFile(slotWin.slotIdx)
+                                    }
+                                }
+
+                                // 帧号（× 右侧，避免帧号宽度变化影响 × 的位置）
+                                Text {
+                                    color: "#7ec8ff"; font.pixelSize: 11; font.bold: true
+                                    text: {
+                                        const _ = slotWin.ver   // 触发帧变化时刷新
+                                        const cur = YuvBridge.currentFrame(slotWin.slotIdx)
+                                        const total = YuvBridge.totalFrames(slotWin.slotIdx)
+                                        return cur >= 0 ? ("#" + (cur + 1) + "/" + total) : ""
                                     }
                                 }
                             }

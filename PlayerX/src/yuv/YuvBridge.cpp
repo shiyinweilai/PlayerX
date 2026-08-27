@@ -60,6 +60,10 @@ YuvBridge::YuvBridge(QObject* parent)
         m_analyzers[i]->setColorConversion(
             static_cast<rb::YuvAnalyzer::ColorConversion>(m_colorConversion));
     }
+
+    // 多通道同步播放帧率：从 QSettings 恢复，默认 30fps
+    m_syncFps = yuvSettings().value("yuv_presets/syncFps", 30).toInt();
+    if (m_syncFps < 1 || m_syncFps > 240) m_syncFps = 30;
 }
 
 YuvBridge::~YuvBridge() = default;
@@ -120,11 +124,16 @@ int YuvBridge::openFiles(const QVariantList& files) {
 }
 
 void YuvBridge::closeAll() {
+    stopSyncPlay();
     for (int i = 0; i < MaxSlots; ++i) {
         stopTimer(i);
         // 等待异步解码完成（如果正在运行），避免 Worker 线程访问已关闭的 analyzer
         if (m_watchers[i] && m_watchers[i]->isRunning()) {
             m_watchers[i]->waitForFinished();
+        }
+        // 等待同步播放解码完成
+        if (m_decodeWatchers[i] && m_decodeWatchers[i]->isRunning()) {
+            m_decodeWatchers[i]->waitForFinished();
         }
         // 等待统计计算完成
         if (m_statsWatchers[i] && m_statsWatchers[i]->isRunning()) {
@@ -154,10 +163,15 @@ int YuvBridge::slotCount() const {
 void YuvBridge::closeFile(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
+    stopSyncPlay();
     stopTimer(slot);
     // 等待异步解码完成
     if (m_watchers[slot] && m_watchers[slot]->isRunning()) {
         m_watchers[slot]->waitForFinished();
+    }
+    // 等待同步播放解码完成
+    if (m_decodeWatchers[slot] && m_decodeWatchers[slot]->isRunning()) {
+        m_decodeWatchers[slot]->waitForFinished();
     }
     // 等待统计计算完成
     if (m_statsWatchers[slot] && m_statsWatchers[slot]->isRunning()) {
@@ -734,6 +748,20 @@ void YuvBridge::setColorConversion(int mode) {
     emit colorConversionChanged();
 }
 
+void YuvBridge::setSyncFps(int fps) {
+    if (fps < 1) fps = 1;
+    if (fps > 240) fps = 240;
+    if (m_syncFps == fps) return;
+    m_syncFps = fps;
+    yuvSettings().setValue("yuv_presets/syncFps", fps);
+    yuvSettingsSync();
+    // 若正在同步播放，实时更新主时钟间隔
+    if (m_syncTimer) {
+        m_syncTimer->setInterval(qMax(1, (int)(1000.0 / m_syncFps)));
+    }
+    emit syncFpsChanged();
+}
+
 // ── 全局缩放比例 ──────────────────────────────────────────────────────
 // 档位常量：与 YuvDisplayItem 内部 m_scalePresets / m_scaleValues 严格保持一致。
 //   0: 1/8, 1: 1/4, 2: 1/2, 3: 1X, 4: 2X, 5: 4X, 6: 8X
@@ -1037,6 +1065,293 @@ void YuvBridge::stopTimer(int slot) {
     m_playing[slot] = false;
     m_reversing[slot] = false;
     m_replayFromStart[slot] = false;
+}
+
+// ── 多通道同步播放 ──────────────────────────────────────────────────────
+
+int YuvBridge::activeSlotCount() const {
+    int n = 0;
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_analyzers[i] && m_analyzers[i]->isOpen()) ++n;
+    }
+    return n;
+}
+
+void YuvBridge::startSyncPlay(bool reverse) {
+    // 停止所有 per-slot timer 和旧的 sync timer
+    for (int i = 0; i < MaxSlots; ++i) stopTimer(i);
+    stopSyncPlay();
+
+    const int n = activeSlotCount();
+    if (n == 0) return;
+
+    m_syncStep = reverse ? -1 : 1;
+
+    // 固定同步帧率（用户可在顶部菜单设置，默认 30fps）
+    const int fps = qMax(1, m_syncFps);
+    const int intervalMs = qMax(1, (int)(1000.0 / fps));
+
+    // ── 统一起始帧：强制所有通道从同一帧号开始，消除固定偏移 ──
+    // 各通道播放前可能因单独快进/快退处于不同帧，若各自为起点推进，
+    // 帧号会始终错开一个固定量。这里取所有通道当前帧的最小值作为
+    // 公共起始帧（保证不超过任一通道的 total-1），并把各通道 seek 到该帧。
+    int startFrame = INT_MAX;
+    int minTotal = INT_MAX;
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (!m_analyzers[i] || !m_analyzers[i]->isOpen()) continue;
+        startFrame = qMin(startFrame, m_analyzers[i]->currentFrame());
+        minTotal = qMin(minTotal, m_analyzers[i]->totalFrames());
+    }
+    if (startFrame == INT_MAX) startFrame = 0;
+    if (minTotal == INT_MAX) minTotal = 1;
+    // 环绕处理：正向若已在（公共）末尾则从 0 重新开始；倒放若在开头则从末尾开始
+    if (!reverse) {
+        if (startFrame >= minTotal - 1) startFrame = -1;  // 下一解码帧 = 0
+    } else {
+        if (startFrame <= 0) startFrame = minTotal;       // 下一解码帧 = minTotal-1
+    }
+
+    // 初始化每通道的缓冲与解码起点（统一起点）
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (!m_analyzers[i] || !m_analyzers[i]->isOpen()) continue;
+        m_playing[i] = true;
+        m_reversing[i] = reverse;
+        m_frameBuffer[i].clear();
+        m_decodeInFlight[i] = false;
+        m_reachedEnd[i] = false;
+        m_decodeTargetFrame[i] = -1;
+        m_visibleFrame[i] = startFrame;
+
+        // 所有通道从同一 startFrame 推进
+        m_nextDecodeFrame[i] = reverse ? (startFrame - 1) : (startFrame + 1);
+    }
+
+    // 主时钟：固定帧率消费缓冲
+    if (!m_syncTimer) {
+        m_syncTimer = new QTimer(this);
+        connect(m_syncTimer, &QTimer::timeout, this, &YuvBridge::onSyncTimerTick);
+    }
+    m_syncTimer->setInterval(intervalMs);
+    m_syncTimer->start();
+
+    // 立即启动各通道的后台解码，预填缓冲
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_analyzers[i] && m_analyzers[i]->isOpen()) scheduleDecode(i);
+    }
+
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_analyzers[i] && m_analyzers[i]->isOpen()) emit playStateChanged(i);
+    }
+}
+
+void YuvBridge::stopSyncPlay() {
+    if (m_syncTimer) {
+        m_syncTimer->stop();
+        delete m_syncTimer;
+        m_syncTimer = nullptr;
+    }
+    // 暂停时把 m_currentFrame 对齐到"最后可见帧"：后台解码可能已把
+    // m_currentFrame 推到更靠前的位置，逐帧导航需从当前可见帧继续。
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (!m_analyzers[i] || !m_analyzers[i]->isOpen()) continue;
+        const int vis = m_visibleFrame[i];
+        if (vis >= 0) {
+            m_analyzers[i]->lockData();
+            m_analyzers[i]->setCurrentFrameNoLock(vis);
+            m_analyzers[i]->unlockData();
+        }
+    }
+    for (int i = 0; i < MaxSlots; ++i) {
+        m_frameBuffer[i].clear();
+        m_decodeInFlight[i] = false;
+        m_reachedEnd[i] = false;
+        m_decodeTargetFrame[i] = -1;
+        m_nextDecodeFrame[i] = 0;
+    }
+}
+
+// 触发某通道后台解码下一帧填缓冲（生产者）
+void YuvBridge::scheduleDecode(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
+    if (!m_syncTimer) return;                    // 已停止同步播放
+    if (m_decodeInFlight[slot]) return;          // 已有解码在途
+    if (m_reachedEnd[slot]) return;              // 已到末尾
+    if ((int)m_frameBuffer[slot].size() >= kBufferCapacity) return; // 缓冲已满
+
+    const int target = m_nextDecodeFrame[slot];
+    const int total = m_analyzers[slot]->totalFrames();
+    if (target < 0 || target >= total) {
+        m_reachedEnd[slot] = true;
+        return;
+    }
+
+    m_decodeInFlight[slot] = true;
+    m_decodeTargetFrame[slot] = target;
+    const int displayMode = m_displayModes[slot];
+    auto* analyzer = m_analyzers[slot].get();
+
+    QFuture<QImage> future = QtConcurrent::run([analyzer, target, displayMode]() -> QImage {
+        analyzer->lockData();
+        analyzer->seekToFrameNoLock(target);
+        QImage img = analyzer->getFrameImageLocked(displayMode);
+        analyzer->unlockData();
+        return img;
+    });
+
+    if (!m_decodeWatchers[slot]) {
+        m_decodeWatchers[slot] = new QFutureWatcher<QImage>(this);
+        connect(m_decodeWatchers[slot], &QFutureWatcher<QImage>::finished, this,
+                [this, slot]() { onDecodeFinished(slot); });
+    }
+    m_decodeWatchers[slot]->setFuture(future);
+}
+
+// 某通道一帧解码完成 → 入队，并继续预填
+void YuvBridge::onDecodeFinished(int slot) {
+    if (slot < 0 || slot >= MaxSlots || !m_decodeWatchers[slot]) return;
+    if (!m_syncTimer) return;                    // 期间已停止
+
+    const QImage img = m_decodeWatchers[slot]->result();
+    const int decoded = m_decodeTargetFrame[slot];
+    m_decodeInFlight[slot] = false;
+
+    if (!img.isNull() && decoded >= 0) {
+        m_frameBuffer[slot].push_back({img, decoded});
+        // 推进下一个待解码帧号
+        m_nextDecodeFrame[slot] = decoded + m_syncStep;
+    }
+
+    // 继续填缓冲（未满则再解一帧）
+    scheduleDecode(slot);
+}
+
+// 主时钟消费者：所有通道都有可取帧时，同时取一帧显示
+void YuvBridge::onSyncTimerTick() {
+    bool anyActive = false;
+
+    // 1) 检查是否所有活跃通道都有可显示帧（或已到末尾）
+    bool allHaveFrame = true;
+    bool anyRunning = false;   // 还有通道没到末尾
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (!m_analyzers[i] || !m_analyzers[i]->isOpen() || !m_playing[i]) continue;
+        anyActive = true;
+
+        if (!m_frameBuffer[i].empty()) {
+            anyRunning = true;
+        } else if (m_reachedEnd[i]) {
+            // 该通道缓冲空且已到末尾 → 视为就绪（本轮不显示新帧）
+        } else {
+            // 缓冲空但还没到末尾 → 解码没跟上，本 tick 等待
+            allHaveFrame = false;
+        }
+    }
+
+    if (!anyActive) { stopSyncPlay(); return; }
+
+    // 所有仍在播放的通道都到末尾且缓冲空 → 播放结束
+    if (!anyRunning) {
+        for (int i = 0; i < MaxSlots; ++i) {
+            if (m_analyzers[i] && m_analyzers[i]->isOpen() && m_playing[i]) {
+                m_playing[i] = false;
+                m_reversing[i] = false;
+                emit playStateChanged(i);
+            }
+        }
+        stopSyncPlay();
+        return;
+    }
+
+    // 解码没跟上（有通道缓冲空但未到末尾）→ 本 tick 不推进，避免失步
+    if (!allHaveFrame) return;
+
+    // 2) 同时从各通道队列取一帧显示（消费者），并触发继续解码
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (!m_analyzers[i] || !m_analyzers[i]->isOpen() || !m_playing[i]) continue;
+        if (m_frameBuffer[i].empty()) continue;  // 已到末尾的通道保持最后一帧
+
+        const DecodedFrame df = m_frameBuffer[i].front();
+        m_frameBuffer[i].pop_front();
+
+        // 更新显示帧号：加锁同步 m_currentFrame（不读盘，图像已在 df.image）。
+        // m_currentFrame 是唯一权威帧号源，与快进/快退共用，杜绝双帧号错位。
+        m_analyzers[i]->lockData();
+        m_analyzers[i]->setCurrentFrameNoLock(df.frameNum);
+        m_analyzers[i]->unlockData();
+        m_visibleFrame[i] = df.frameNum;
+        m_frameImages[i] = df.image;
+        emit frameChanged(i);
+
+        // 右侧栏展开时才异步算统计（避免拖慢）
+        if (m_rightSidebarOpen) {
+            computeStatsAsync(i, df.frameNum);
+        }
+
+        // 消费一帧后缓冲有空位，继续后台解码
+        scheduleDecode(i);
+    }
+}
+
+void YuvBridge::globalPlay() {
+    const int n = activeSlotCount();
+    if (n <= 1) {
+        // 单通道：走 per-slot timer
+        for (int i = 0; i < MaxSlots; ++i) {
+            if (m_analyzers[i] && m_analyzers[i]->isOpen()) play(i);
+        }
+    } else {
+        startSyncPlay(false);
+    }
+}
+
+void YuvBridge::globalPlayReverse() {
+    const int n = activeSlotCount();
+    if (n <= 1) {
+        for (int i = 0; i < MaxSlots; ++i) {
+            if (m_analyzers[i] && m_analyzers[i]->isOpen()) playReverse(i);
+        }
+    } else {
+        startSyncPlay(true);
+    }
+}
+
+void YuvBridge::globalPause() {
+    // 停止同步主时钟
+    stopSyncPlay();
+    // 停止所有 per-slot timer
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_playing[i]) {
+            pause(i);
+        }
+    }
+}
+
+void YuvBridge::globalTogglePlayPause() {
+    // 检查是否任一通道正在播放
+    bool anyPlaying = false;
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_playing[i]) { anyPlaying = true; break; }
+    }
+    if (anyPlaying) {
+        globalPause();
+    } else {
+        globalPlay();
+    }
+}
+
+void YuvBridge::globalToggleReverse() {
+    // 检查是否任一通道正在倒放
+    bool anyReversing = false;
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_reversing[i]) { anyReversing = true; break; }
+    }
+    if (anyReversing) {
+        globalPause();
+        globalPlay();
+    } else {
+        globalPause();
+        globalPlayReverse();
+    }
 }
 
 void YuvBridge::play(int slot) {

@@ -18,6 +18,8 @@
 #include <QTimer>
 #include <QFutureWatcher>
 #include <memory>
+#include <deque>
+#include <mutex>
 
 namespace rb {
 class YuvAnalyzer;
@@ -75,6 +77,12 @@ class YuvBridge : public QObject {
     // 当右侧栏收起时，播放期间跳过统计计算，保证最大渲染帧率。
     Q_PROPERTY(bool rightSidebarOpen READ rightSidebarOpen WRITE setRightSidebarOpen NOTIFY rightSidebarOpenChanged)
 
+    // ── 多通道同步播放帧率（fps）──
+    // 多通道同步播放时的统一渲染帧率，默认 30fps。用户可在顶部菜单调整
+    // （如 15/24/25/30/60）。单通道播放不受此影响（按文件自身 fps）。
+    // 持久化到 QSettings，跨会话保留。
+    Q_PROPERTY(int syncFps READ syncFps WRITE setSyncFps NOTIFY syncFpsChanged)
+
 public:
     static constexpr int MaxSlots = 9;
 
@@ -104,6 +112,13 @@ public:
     Q_INVOKABLE void skipForward(int slot, int frames = 15);  // 快进 N 帧
     Q_INVOKABLE void skipBackward(int slot, int frames = 15); // 快退 N 帧
     Q_INVOKABLE void resetFrame(int slot);      // 重置到首帧
+
+    // ── 全局播放控制（多通道同步 / 单通道独立）──────────────────────
+    Q_INVOKABLE void globalPlay();            // 全局播放
+    Q_INVOKABLE void globalPlayReverse();     // 全局倒放
+    Q_INVOKABLE void globalPause();           // 全局暂停
+    Q_INVOKABLE void globalTogglePlayPause(); // 全局切换播放/暂停
+    Q_INVOKABLE void globalToggleReverse();   // 全局切换正/倒放
 
     // ── 还原视图（缩放 1X + 平移归零）──────────────────────────────────
     // 发出 resetViewChanged() 信号，所有 YuvDisplayItem 监听此信号并把
@@ -216,6 +231,10 @@ public:
     // ── 右侧统计面板是否展开 ──
     bool rightSidebarOpen() const { return m_rightSidebarOpen; }
     void setRightSidebarOpen(bool open);
+
+    // ── 多通道同步播放帧率 ──
+    int  syncFps() const { return m_syncFps; }
+    void setSyncFps(int fps);
     // 缩放档位索引（0..6 → 1/8, 1/4, 1/2, 1X, 2X, 4X, 8X），
     // 供 QML "Repeater" 选中态绑定使用
     Q_INVOKABLE int currentScaleIndex() const;
@@ -273,6 +292,7 @@ signals:
     void colorConversionChanged();
     void globalScaleChanged();
     void rightSidebarOpenChanged();
+    void syncFpsChanged();
     // 帧级统计异步计算完成时发出，QML 监听此信号递增 ver 刷新面板。
     // 播放期间不发此信号（统计跳过），暂停/逐帧时才计算并发出。
     void statsReady(int slot);
@@ -288,7 +308,35 @@ private:
     // 清空指定 slot 的统计缓存
     void invalidateStatsCache(int slot);
 
-    // 异步解码管线：每个 slot 一个 watcher + 预取状态
+    // ── 多通道同步播放（预解码缓冲队列方案）──────────────────────────
+    // 单通道时使用 per-slot QTimer（原有逻辑）。
+    // 多通道时：每个通道后台持续解码填充帧缓冲队列（生产者），
+    // 主时钟以固定 syncFps 从各队列取帧显示（消费者）。
+    // 只有当所有活跃通道队列都有可取帧时，主时钟才推进一帧，
+    // 从而在固定帧率下天然同步 —— 快的通道填满缓冲后闲置，不会超前。
+    int  activeSlotCount() const;             // 当前已打开文件数
+    void startSyncPlay(bool reverse);         // 启动同步播放
+    void stopSyncPlay();                      // 停止同步播放
+    void onSyncTimerTick();                   // 主时钟回调：从各队列取帧显示
+    void scheduleDecode(int slot);            // 触发某通道后台解码下一帧填缓冲
+    void onDecodeFinished(int slot);          // 某通道一帧解码完成回调
+    int  m_syncStep{1};                       // 同步推进步长（正向=1，倒放=-1）
+
+    // 预解码帧缓冲：每通道一个队列，缓存已解码好的帧（图像 + 帧号）
+    struct DecodedFrame {
+        QImage image;
+        int    frameNum = -1;
+    };
+    static constexpr int kBufferCapacity = 6;  // 每通道缓冲容量（帧）
+    std::deque<DecodedFrame> m_frameBuffer[MaxSlots];
+    int  m_nextDecodeFrame[MaxSlots]{0, 0, 0, 0, 0, 0, 0, 0, 0}; // 下一个待解码帧号
+    bool m_decodeInFlight[MaxSlots]{false, false, false, false, false, false, false, false, false}; // 该通道是否有解码任务在途
+    bool m_reachedEnd[MaxSlots]{false, false, false, false, false, false, false, false, false};     // 该通道是否已解码到文件末尾
+    QFutureWatcher<QImage>* m_decodeWatchers[MaxSlots]{}; // 同步播放专用解码 watcher
+    int  m_decodeTargetFrame[MaxSlots]{-1, -1, -1, -1, -1, -1, -1, -1, -1}; // 在途解码的目标帧号
+    int  m_visibleFrame[MaxSlots]{0, 0, 0, 0, 0, 0, 0, 0, 0}; // 每通道当前"已显示"的帧号（同步播放权威帧号）
+
+    // 异步解码管线（单通道逐帧导航用）：每个 slot 一个 watcher + 预取状态
     // refreshFrameImageAsync 在 Worker 线程执行 seek+read+getFrameImageLocked，
     // 完成后在主线程把结果写入 m_frameImages 并发 frameChanged 信号。
     QFutureWatcher<QImage>* m_watchers[MaxSlots]{};
@@ -319,6 +367,11 @@ private:
     // 定时器回调看到此标志时跳过末尾检测，等 seek 完成后正常推进。
     bool    m_replayFromStart[MaxSlots]{false, false, false, false, false, false, false, false, false};
 
+    // ── 多通道同步播放主时钟 ──
+    // 多通道时，所有 slot 由这个 timer 同步驱动，使用最低 FPS 的 interval
+    // 确保最慢的通道也能跟上；单通道时不使用此 timer，走 per-slot 逻辑。
+    QTimer* m_syncTimer{nullptr};
+
     // 全局鼠标悬浮像素坐标（跨 slot 共享，供右侧栏"块级别"统计使用）
     int  m_hoverSlot{0};
     int  m_hoverPixelX{0};
@@ -343,4 +396,5 @@ private:
     // 全局缩放比例（底部缩放按钮组驱动）；默认 1.0（1X），不持久化
     qreal m_globalScale{1.0};
     bool m_rightSidebarOpen{false};
+    int  m_syncFps{30};  // 多通道同步播放帧率，默认 30fps
 };

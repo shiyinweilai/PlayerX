@@ -33,10 +33,11 @@ Item {
 Shortcut {
     sequence: "Space"; context: Qt.ApplicationShortcut
     onActivated: {
-        // YUV 分析 tab：空格 = 播放/暂停所有已打开的 YUV slot（用 YuvBridge，不是 Engine）
+        // YUV 分析 tab：空格 = 播放/暂停所有已打开的 YUV slot
+        // 走全局同步播放（globalTogglePlayPause），保证多路帧同步推进，
+        // 而非逐 slot 独立播放（后者会让不同 fps 的通道各自跑速导致失步）。
         if (root.currentTab === "yuv") {
-            const n = YuvBridge.slotCount
-            for (let i = 0; i < n; ++i) YuvBridge.togglePlayPause(i)
+            YuvBridge.globalTogglePlayPause()
             return
         }
         Engine.togglePause()
