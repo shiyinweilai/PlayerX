@@ -37,4 +37,27 @@ void computeHistogram(const HistInput& in, HistOutput& out) {
     }
 }
 
+// ── GradKernel 前向声明 ──
+void computeGradient_scalar(const GradInput& in, GradOutput& out);
+#if RB_SIMD_X86
+void computeGradient_avx2(const GradInput& in, GradOutput& out);
+#endif
+#if RB_SIMD_ARM
+void computeGradient_neon(const GradInput& in, GradOutput& out);
+#endif
+
+// ── GradKernel 运行时 dispatch ──
+void computeGradient(const GradInput& in, GradOutput& out) {
+    switch (runtimeIsa()) {
+#if RB_SIMD_X86
+    case Isa::AVX2:  computeGradient_avx2(in, out);  return;
+#endif
+#if RB_SIMD_ARM
+    case Isa::NEON:  computeGradient_neon(in, out);  return;
+#endif
+    case Isa::Scalar:
+    default:         computeGradient_scalar(in, out); return;
+    }
+}
+
 } // namespace simd

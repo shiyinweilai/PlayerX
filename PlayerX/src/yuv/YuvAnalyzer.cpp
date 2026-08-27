@@ -7,6 +7,8 @@
 #include <climits>
 #include <algorithm>
 
+#include "simd/SimdAPI.h"
+
 extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
@@ -45,6 +47,8 @@ static AVPixelFormat parsePixelFormat(const QString& name) {
     // default
     return AV_PIX_FMT_YUV420P;
 }
+
+// ── SIMD 加速已迁移到 src/simd/ 目录，通过 simd::computeHistogram / simd::computeGradient 调用 ──
 
 YuvAnalyzer::YuvAnalyzer()
     : m_pixFmt(AV_PIX_FMT_YUV420P), m_fmtName("yuv420p") {}
@@ -450,11 +454,14 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogramLocked(int plane) const
     const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
     const bool isHighDepth = desc && desc->comp[0].depth > 8;
     const int binCount = isHighDepth ? 1024 : 256;
-    result.bins.assign(binCount, 0);
-    result.binCount = binCount;
 
     // 平面有效宽高（与 computeStats 同源处理 chroma_subsampling / NV12 interleaved）
     int pw = m_width, ph = m_height;
+    const uint8_t* planeData = m_srcFrame->data[plane];
+    int stride = m_srcFrame->linesize[plane];
+    bool isInterleavedUV = false;
+    int uvOffset = 0;
+
     if (plane > 0) {
         if (desc) {
             pw = m_width >> desc->log2_chroma_w;
@@ -462,90 +469,34 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogramLocked(int plane) const
         }
         if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
             if (plane >= 1) { pw = m_width; ph = m_height / 2; }
+            isInterleavedUV = true;
+            uvOffset = (plane == 1) ? 0 : 1;
         }
     }
     if (pw <= 0 || ph <= 0) return result;
 
-    // 直接平面指针扫描，不走 getPixelYUV（避免每像素函数调用 + 格式分支开销）
-    auto getPlanePtr = [&](int y) -> const uint8_t* {
-        return (plane == 0) ? m_srcFrame->data[0] + y * m_srcFrame->linesize[0]
-                            : (plane == 1) ? m_srcFrame->data[1] + y * m_srcFrame->linesize[1]
-                                            : m_srcFrame->data[2] + y * m_srcFrame->linesize[2];
-    };
+    // ── 调用 SIMD 加速层 ──
+    simd::HistInput in;
+    in.data = planeData;
+    in.width = pw;
+    in.height = ph;
+    in.stride = stride;
+    in.bytesPerSample = isHighDepth ? 2 : 1;
+    in.binCount = binCount;
+    in.isInterleavedUV = isInterleavedUV;
+    in.uvOffset = uvOffset;
 
-    long long sum = 0, sumSq = 0;
-    int minVal = INT_MAX, maxVal = INT_MIN;
-    long long count = 0;
+    simd::HistOutput out;
+    simd::computeHistogram(in, out);
 
-    if (isHighDepth) {
-        for (int y = 0; y < ph; ++y) {
-            const uint16_t* row = reinterpret_cast<const uint16_t*>(getPlanePtr(y));
-            for (int x = 0; x < pw; ++x) {
-                const int val = row[x];
-                result.bins[val]++;
-                sum += val;
-                sumSq += static_cast<long long>(val) * val;
-                if (val < minVal) minVal = val;
-                if (val > maxVal) maxVal = val;
-                ++count;
-            }
-        }
-    } else if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
-        // NV12/NV21 的 UV 交错：plane 1 存 U/V 交替，需要特殊处理
-        if (plane == 0) {
-            // Y 平面正常扫描
-            for (int y = 0; y < ph; ++y) {
-                const uint8_t* row = getPlanePtr(y);
-                for (int x = 0; x < pw; ++x) {
-                    const int val = row[x];
-                    result.bins[val]++;
-                    sum += val;
-                    sumSq += static_cast<long long>(val) * val;
-                    if (val < minVal) minVal = val;
-                    if (val > maxVal) maxVal = val;
-                    ++count;
-                }
-            }
-        } else {
-            // UV 交错平面：每 2 字节一组 (U,V)，plane==1 取 U，plane==2 取 V
-            const int uvOff = (plane == 1) ? 0 : 1;
-            for (int y = 0; y < ph; ++y) {
-                const uint8_t* row = m_srcFrame->data[1] + y * m_srcFrame->linesize[1];
-                for (int x = 0; x < pw; ++x) {
-                    const int val = row[x * 2 + uvOff];
-                    result.bins[val]++;
-                    sum += val;
-                    sumSq += static_cast<long long>(val) * val;
-                    if (val < minVal) minVal = val;
-                    if (val > maxVal) maxVal = val;
-                    ++count;
-                }
-            }
-        }
-    } else {
-        for (int y = 0; y < ph; ++y) {
-            const uint8_t* row = getPlanePtr(y);
-            for (int x = 0; x < pw; ++x) {
-                const int val = row[x];
-                result.bins[val]++;
-                sum += val;
-                sumSq += static_cast<long long>(val) * val;
-                if (val < minVal) minVal = val;
-                if (val > maxVal) maxVal = val;
-                ++count;
-            }
-        }
-    }
-
-    if (count == 0) { result.bins.clear(); result.binCount = 0; return result; }
-    result.mean = static_cast<double>(sum) / count;
-    const double meanSq = result.mean * result.mean;
-    const double sqMean = static_cast<double>(sumSq) / count;
-    result.stddev = (sqMean > meanSq) ? std::sqrt(sqMean - meanSq) : 0.0;
-    result.variance = result.stddev * result.stddev;
-    result.minVal = minVal;
-    result.maxVal = maxVal;
-    result.range = (count > 0) ? (maxVal - minVal) : 0;
+    result.bins = std::move(out.bins);
+    result.binCount = binCount;
+    result.mean = out.mean;
+    result.stddev = out.stddev;
+    result.variance = out.variance;
+    result.minVal = out.minVal;
+    result.maxVal = out.maxVal;
+    result.range = out.range;
     return result;
 }
 
@@ -852,8 +803,10 @@ YuvAnalyzer::PlaneStats YuvAnalyzer::computeStatsLocked(int plane) const {
     const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
     const bool isHighDepth = desc && desc->comp[0].depth > 8;
 
-    // 选定平面的有效宽高（与 planeSize() 同源处理 chroma_subsampling / NV12 interleaved）
+    // 选定平面的有效宽高
     int pw = m_width, ph = m_height;
+    const uint8_t* planeData = m_srcFrame->data[plane];
+    int stride = m_srcFrame->linesize[plane];
     if (plane > 0) {
         if (desc) {
             pw = m_width >> desc->log2_chroma_w;
@@ -865,100 +818,49 @@ YuvAnalyzer::PlaneStats YuvAnalyzer::computeStatsLocked(int plane) const {
     }
     if (pw < 3 || ph < 3) return r;
 
-    // 取当前平面的 raw 指针（按位深）
-    auto getPlanePtr = [&](int y) -> const uint8_t* {
-        return (plane == 0) ? m_srcFrame->data[0] + y * m_srcFrame->linesize[0]
-                            : (plane == 1) ? m_srcFrame->data[1] + y * m_srcFrame->linesize[1]
-                                            : m_srcFrame->data[2] + y * m_srcFrame->linesize[2];
-    };
-
-    auto read = [&](int x, int y) -> int {
-        const uint8_t* row = getPlanePtr(y);
-        if (isHighDepth) {
-            return reinterpret_cast<const uint16_t*>(row)[x];
-        }
-        return row[x];
-    };
-
-    // ── 第一遍：均值/方差/极差（环形扫描，包含全部有效像素）──
+    // ── 第一遍：均值/方差/极差（复用 HistKernel）──
     {
-        long long sum = 0, sumSq = 0;
-        long long count = 0;
-        int minVal = INT_MAX, maxVal = INT_MIN;
-        for (int y = 0; y < ph; ++y) {
-            for (int x = 0; x < pw; ++x) {
-                const int v = read(x, y);
-                sum += v;
-                sumSq += static_cast<long long>(v) * v;
-                if (v < minVal) minVal = v;
-                if (v > maxVal) maxVal = v;
-                ++count;
-            }
-        }
-        if (count == 0) return r;
-        const double mean = static_cast<double>(sum) / count;
-        const double meanSq = mean * mean;
-        const double sqMean = static_cast<double>(sumSq) / count;
-        const double var = (sqMean > meanSq) ? (sqMean - meanSq) : 0.0;
-        r.mean = mean;
-        r.stddev = std::sqrt(var);
-        r.variance = var;
-        r.minVal = minVal;
-        r.maxVal = maxVal;
-        r.range = (count > 0) ? (maxVal - minVal) : 0;
-        r.sampleCount = count;
+        simd::HistInput in;
+        in.data = planeData;
+        in.width = pw;
+        in.height = ph;
+        in.stride = stride;
+        in.bytesPerSample = isHighDepth ? 2 : 1;
+        in.binCount = isHighDepth ? 1024 : 256;
+
+        simd::HistOutput out;
+        simd::computeHistogram(in, out);
+
+        r.mean = out.mean;
+        r.stddev = out.stddev;
+        r.variance = out.variance;
+        r.minVal = out.minVal;
+        r.maxVal = out.maxVal;
+        r.range = out.range;
+        r.sampleCount = out.count;
     }
 
-    // ── 第二遍：四方向梯度 + Laplacian + Tenengrad（只扫中心 [1..w-2,1..h-2]）──
-    long long nGH = 0, nGV = 0, nG45 = 0, nG135 = 0;
-    double sGH = 0, sGV = 0, sG45 = 0, sG135 = 0;
-    double sLap = 0, sTgd = 0;
-    long long nGrad = 0;
-    for (int y = 1; y < ph - 1; ++y) {
-        for (int x = 1; x < pw - 1; ++x) {
-            const int vC  = read(x,     y);
-            const int vL  = read(x - 1, y);
-            const int vR  = read(x + 1, y);
-            const int vU  = read(x,     y - 1);
-            const int vD  = read(x,     y + 1);
-            const int vTL = read(x - 1, y - 1);
-            const int vTR = read(x + 1, y - 1);
-            const int vBL = read(x - 1, y + 1);
-            const int vBR = read(x + 1, y + 1);
+    if (r.sampleCount == 0) return r;
 
-            // 一阶差分
-            const int gH  = vR - vL;      // 水平：右-左
-            const int gV  = vD - vU;      // 垂直：下-上
-            const int g45 = vBR - vTL;    // 45°  对角（\）
-            const int g135 = vBL - vTR;   // 135° 对角（/）
+    // ── 第二遍：四方向梯度 + Laplacian + Tenengrad ──
+    {
+        simd::GradInput gin;
+        gin.data = planeData;
+        gin.width = pw;
+        gin.height = ph;
+        gin.stride = stride;
+        gin.bytesPerSample = isHighDepth ? 2 : 1;
 
-            // Sobel 近似（更平滑的边缘响应）
-            // Gx = (TR + 2R + BR) - (TL + 2L + BL)
-            // Gy = (BL + 2D + BR) - (TL + 2U + TR)
-            const int sx = (vTR + 2 * vR + vBR) - (vTL + 2 * vL + vBL);
-            const int sy = (vBL + 2 * vD + vBR) - (vTL + 2 * vU + vTR);
+        simd::GradOutput gout;
+        simd::computeGradient(gin, gout);
 
-            // Laplacian（4 邻域）
-            const int lap = (4 * vC) - vL - vR - vU - vD;
-
-            sGH   += std::abs(gH);
-            sGV   += std::abs(gV);
-            sG45  += std::abs(g45);
-            sG135 += std::abs(g135);
-            sLap  += static_cast<double>(lap) * lap;
-            sTgd  += static_cast<double>(sx) * sx + static_cast<double>(sy) * sy;
-            ++nGH; ++nGV; ++nG45; ++nG135; ++nGrad;
-        }
-    }
-
-    if (nGrad > 0) {
-        r.gradHorizMean   = sGH / nGrad;
-        r.gradVertMean    = sGV / nGrad;
-        r.gradDiag45Mean  = sG45 / nGrad;
-        r.gradDiag135Mean = sG135 / nGrad;
-        r.gradMean = (r.gradHorizMean + r.gradVertMean + r.gradDiag45Mean + r.gradDiag135Mean) / 4.0;
-        r.laplacianEnergy = sLap / nGrad;
-        r.tenengrad       = sTgd / nGrad;
+        r.gradHorizMean   = gout.gradHorizMean;
+        r.gradVertMean    = gout.gradVertMean;
+        r.gradDiag45Mean  = gout.gradDiag45Mean;
+        r.gradDiag135Mean = gout.gradDiag135Mean;
+        r.gradMean        = gout.gradMean;
+        r.laplacianEnergy = gout.laplacianEnergy;
+        r.tenengrad       = gout.tenengrad;
     }
     return r;
 }

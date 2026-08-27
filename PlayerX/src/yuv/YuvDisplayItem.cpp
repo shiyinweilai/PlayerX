@@ -14,6 +14,7 @@
 #include <QSGSimpleRectNode>
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 
 YuvDisplayItem::YuvDisplayItem(QQuickItem* parent)
     : QQuickItem(parent)
@@ -47,18 +48,24 @@ QImage YuvDisplayItem::preScale(const QImage& src, qreal scale) const {
     if (isIntUpScale) {
         const int n = static_cast<int>(std::round(scale));
         QImage out(tw, th, src.format());
+        const int bpp = src.bytesPerLine() / src.width();  // bytes per pixel (RGBA=4)
         for (int sy = 0; sy < ih; ++sy) {
             const int dyBase = sy * n;
+            const uint8_t* srcRow = src.constScanLine(sy);
+            uint8_t* dstRow0 = out.scanLine(dyBase);
+            // 水平放大：每个源像素 → n 个目标像素（memcpy 4 字节，避免 pixel() 深拷贝）
             for (int sx = 0; sx < iw; ++sx) {
-                const QRgb p = src.pixel(sx, sy);
                 const int dxBase = sx * n;
-                for (int dy = 0; dy < n; ++dy) {
-                    QRgb* row = reinterpret_cast<QRgb*>(
-                        out.scanLine(dyBase + dy));
-                    for (int dx = 0; dx < n; ++dx) {
-                        row[dxBase + dx] = p;
-                    }
+                const uint8_t* srcPix = srcRow + sx * bpp;
+                uint8_t* dstPix = dstRow0 + dxBase * bpp;
+                for (int dx = 0; dx < n; ++dx) {
+                    std::memcpy(dstPix + dx * bpp, srcPix, static_cast<size_t>(bpp));
                 }
+            }
+            // 垂直复制：将首行 memcpy 到剩余 n-1 行（整行批量复制）
+            const size_t rowBytes = static_cast<size_t>(tw) * bpp;
+            for (int dy = 1; dy < n; ++dy) {
+                std::memcpy(out.scanLine(dyBase + dy), dstRow0, rowBytes);
             }
         }
         return out;

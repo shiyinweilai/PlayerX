@@ -14,8 +14,7 @@
  */
 #include "SimdCaps.h"
 #include "common/HistKernel.h"
-// 未来 kernel（按需取消注释）：
-// #include "common/GradKernel.h"
+#include "common/GradKernel.h"
 // #include "yuv/YuvConvertKernel.h"
 
 namespace simd {

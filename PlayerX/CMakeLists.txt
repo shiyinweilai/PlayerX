@@ -142,6 +142,7 @@ src/image/ImageSliderCompareItem.cpp
     src/simd/SimdAPI.cpp
     # common 标量参考实现（兜底 + 正确性基准）
     src/simd/common/HistKernel_scalar.cpp
+    src/simd/common/GradKernel_scalar.cpp
     # x86-64: SSE2 已跳过（直接 AVX2），按用户要求不考虑老旧机器
     # ARM64: NEON 是 AArch64 强制标配，无需检测
 )
@@ -155,15 +156,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR
    (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64)"))
     target_sources(PlayerX PRIVATE
         src/simd/common/HistKernel_avx2.cpp
+        src/simd/common/GradKernel_avx2.cpp
     )
     set_source_files_properties(
         src/simd/common/HistKernel_avx2.cpp
+        src/simd/common/GradKernel_avx2.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
     target_sources(PlayerX PRIVATE
         src/simd/common/HistKernel_neon.cpp
+        src/simd/common/GradKernel_neon.cpp
     )
     # NEON 在 ARM64 上默认开启，无需额外 flag
 endif()
