@@ -16,6 +16,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QTimer>
+#include <QFutureWatcher>
 #include <memory>
 
 namespace rb {
@@ -67,6 +68,12 @@ class YuvBridge : public QObject {
     // 默认 1.0（1X），不持久化（每次启动固定为 1X，避免老用户历史设置让首屏
     // 看不到全图）。所有 YuvDisplayItem 都监听此属性变化，多路对比自动同步。
     Q_PROPERTY(qreal globalScale READ globalScale WRITE setGlobalScale NOTIFY globalScaleChanged)
+
+    // ── 右侧统计面板是否展开 ──
+    // QML 绑定 Main.qml 的 rightSidebarOpen → YuvBridge.rightSidebarOpen。
+    // 当右侧栏展开时，播放期间也实时计算帧级统计（兼顾实时渲染统计图）；
+    // 当右侧栏收起时，播放期间跳过统计计算，保证最大渲染帧率。
+    Q_PROPERTY(bool rightSidebarOpen READ rightSidebarOpen WRITE setRightSidebarOpen NOTIFY rightSidebarOpenChanged)
 
 public:
     static constexpr int MaxSlots = 9;
@@ -205,6 +212,10 @@ public:
     // ── 全局缩放比例（所有 YuvDisplayItem 共享）────────────────────────
     qreal globalScale() const { return m_globalScale; }
     void setGlobalScale(qreal s);
+
+    // ── 右侧统计面板是否展开 ──
+    bool rightSidebarOpen() const { return m_rightSidebarOpen; }
+    void setRightSidebarOpen(bool open);
     // 缩放档位索引（0..6 → 1/8, 1/4, 1/2, 1X, 2X, 4X, 8X），
     // 供 QML "Repeater" 选中态绑定使用
     Q_INVOKABLE int currentScaleIndex() const;
@@ -261,10 +272,40 @@ signals:
     void chromaInterpolationChanged();
     void colorConversionChanged();
     void globalScaleChanged();
+    void rightSidebarOpenChanged();
+    // 帧级统计异步计算完成时发出，QML 监听此信号递增 ver 刷新面板。
+    // 播放期间不发此信号（统计跳过），暂停/逐帧时才计算并发出。
+    void statsReady(int slot);
 
 private:
     void refreshFrameImage(int slot);
+    void refreshFrameImageAsync(int slot);
+    void refreshFrameImageAsyncToFrame(int slot, int targetFrame);
     void stopTimer(int slot);
+    // 在 Worker 线程异步计算帧级统计（histogram + planeStats × 3 平面），
+    // 完成后缓存到 m_cachedStats 并发 statsReady 信号。
+    void computeStatsAsync(int slot, int frameNum);
+    // 清空指定 slot 的统计缓存
+    void invalidateStatsCache(int slot);
+
+    // 异步解码管线：每个 slot 一个 watcher + 预取状态
+    // refreshFrameImageAsync 在 Worker 线程执行 seek+read+getFrameImageLocked，
+    // 完成后在主线程把结果写入 m_frameImages 并发 frameChanged 信号。
+    QFutureWatcher<QImage>* m_watchers[MaxSlots]{};
+    int  m_pendingFrame[MaxSlots]{-1, -1, -1, -1, -1, -1, -1, -1, -1};  // Worker 正在解码的帧号
+    bool m_asyncBusy[MaxSlots]{false, false, false, false, false, false, false, false, false};
+
+    // ── 帧级统计缓存 ──
+    // 异步计算结果缓存：histogram() / planeStats() 直接返回缓存值，零阻塞。
+    // 缓存由 computeStatsAsync 在 Worker 线程填充，帧变化时触发。
+    struct CachedStats {
+        int frameNum = -1;             // 缓存对应的帧号，-1 = 无缓存
+        QVariantMap hist[3];           // Y/U/V 直方图（bins + mean/stddev/min/max/...）
+        QVariantMap stats[3];          // Y/U/V 平面统计（梯度/纹理/锐利度）
+    };
+    CachedStats m_cachedStats[MaxSlots];
+    QFutureWatcher<void>* m_statsWatchers[MaxSlots]{};
+    int m_statsPendingFrame[MaxSlots]{-1, -1, -1, -1, -1, -1, -1, -1, -1};
 
     std::unique_ptr<rb::YuvAnalyzer> m_analyzers[MaxSlots];
     QImage m_frameImages[MaxSlots];
@@ -298,4 +339,5 @@ private:
 
     // 全局缩放比例（底部缩放按钮组驱动）；默认 1.0（1X），不持久化
     qreal m_globalScale{1.0};
+    bool m_rightSidebarOpen{false};
 };

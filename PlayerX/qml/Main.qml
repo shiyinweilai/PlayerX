@@ -120,6 +120,10 @@ ApplicationWindow {
     // 自动收起，避免露出空白面板。
     onCurrentTabChanged: {
         if (root.currentTab === "home") root.rightSidebarOpen = false
+        // 切到 YUV tab 时同步右侧栏状态到 YuvBridge
+        if (root.currentTab === "yuv") {
+            YuvBridge.rightSidebarOpen = root.rightSidebarOpen
+        }
     }
 
     // ─── 沉浸模式 ───────────────────────────────────────────────────────
@@ -186,6 +190,14 @@ ApplicationWindow {
         root.rightSidebarOpen = !root.rightSidebarOpen
     }
     property bool rightSidebarOpen: false
+    // 右侧栏展开/收起时同步到 YuvBridge，控制播放期间是否实时计算帧级统计。
+    // 右侧栏展开 → 播放时也计算统计（兼顾实时渲染直方图）
+    // 右侧栏收起 → 播放时跳过统计（保证最大帧率）
+    onRightSidebarOpenChanged: {
+        if (root.currentTab === "yuv") {
+            YuvBridge.rightSidebarOpen = root.rightSidebarOpen
+        }
+    }
     // 登录/个人信息对话框开关状态：供 Windows 自绘按钮绑定填色状态。
     property bool loginDialogOpen: loginDialog.visible
 

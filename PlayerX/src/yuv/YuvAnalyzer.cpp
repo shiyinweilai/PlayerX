@@ -119,28 +119,40 @@ void YuvAnalyzer::close() {
 }
 
 bool YuvAnalyzer::seekToFrame(int frameNum) {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
     const int total = totalFrames();
     if (total <= 0 || frameNum < 0 || frameNum >= total) return false;
 
     m_currentFrame = frameNum;
-    return readCurrentFrame();
+    return readCurrentFrameLocked();
+}
+
+bool YuvAnalyzer::seekToFrameNoLock(int frameNum) {
+    // 调用方必须已持有 m_dataMutex
+    const int total = totalFrames();
+    if (total <= 0 || frameNum < 0 || frameNum >= total) return false;
+
+    m_currentFrame = frameNum;
+    return readCurrentFrameLocked();
 }
 
 void YuvAnalyzer::nextFrame() {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
     const int total = totalFrames();
     if (total <= 0) return;
     const int next = m_currentFrame + 1;
     if (next < total) {
         m_currentFrame = next;
-        readCurrentFrame();
+        readCurrentFrameLocked();
     }
 }
 
 void YuvAnalyzer::prevFrame() {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
     const int prev = m_currentFrame - 1;
     if (prev >= 0) {
         m_currentFrame = prev;
-        readCurrentFrame();
+        readCurrentFrameLocked();
     }
 }
 
@@ -150,6 +162,12 @@ int YuvAnalyzer::totalFrames() const {
 }
 
 bool YuvAnalyzer::readCurrentFrame() {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+    return readCurrentFrameLocked();
+}
+
+// 无锁内部实现（调用方必须已持有 m_dataMutex）
+bool YuvAnalyzer::readCurrentFrameLocked() {
     if (!m_file.isOpen() || m_frameSize <= 0) return false;
 
     const qint64 offset = static_cast<qint64>(m_currentFrame) * m_frameSize;
@@ -165,24 +183,54 @@ bool YuvAnalyzer::readCurrentFrame() {
 }
 
 QImage YuvAnalyzer::getFrameImage() {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+    return getFrameImageLocked(0);
+}
+
+QImage YuvAnalyzer::getFrameImageLocked(int displayMode) {
+    // 调用方必须已持有 m_dataMutex（无内部加锁，避免递归死锁）
+    switch (displayMode) {
+        case 0:  return getFrameImageImpl();
+        case 1:  return getPlaneImageImpl(0);
+        case 2:  return getPlaneImageImpl(1);
+        case 3:  return getPlaneImageImpl(2);
+        default: return getFrameImageImpl();
+    }
+}
+
+// 无锁内部实现（调用方必须已持有 m_dataMutex）
+QImage YuvAnalyzer::getFrameImageImpl() {
     if (m_frameBuf.empty() || !m_swsCtx || !m_srcFrame || !m_dstFrame)
         return QImage();
+
+    // 优化：sws_scale 直接写入 QImage 的 pixel buffer，省掉 m_dstFrame 中转和
+    // 逐行 memcpy（4K 一帧省 33MB 二次拷贝）。
+    // QImage::Format_RGBA8888 每行 stride 可能 > width*4（对齐填充），而 sws_scale
+    // 的 dst linesize 必须与 QImage stride 一致，所以先创建 QImage 再取 scanLine
+    // 指针填入 m_dstFrame。
+    QImage img(m_width, m_height, QImage::Format_RGBA8888);
+    if (img.isNull()) return QImage();
+
+    // 设置 dstFrame 的 data[0] 指向 QImage buffer，linesize[0] = QImage bytesPerLine
+    m_dstFrame->data[0]     = img.bits();
+    m_dstFrame->linesize[0] = img.bytesPerLine();
 
     sws_scale(m_swsCtx,
               m_srcFrame->data, m_srcFrame->linesize,
               0, m_height,
               m_dstFrame->data, m_dstFrame->linesize);
 
-    QImage img(m_width, m_height, QImage::Format_RGBA8888);
-    for (int y = 0; y < m_height; ++y) {
-        std::memcpy(img.scanLine(y),
-                    m_dstFrame->data[0] + y * m_dstFrame->linesize[0],
-                    static_cast<size_t>(m_width) * 4);
-    }
+    // sws_scale 已直接写入 img 的 buffer，无需 memcpy
     return img;
 }
 
 QImage YuvAnalyzer::getPlaneImage(int plane) {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+    return getPlaneImageImpl(plane);
+}
+
+// 无锁内部实现（调用方必须已持有 m_dataMutex）
+QImage YuvAnalyzer::getPlaneImageImpl(int plane) {
     if (m_frameBuf.empty() || !m_srcFrame || plane < 0 || plane >= planeCount())
         return QImage();
 
@@ -390,6 +438,11 @@ void YuvAnalyzer::planeSize(int plane, int& pw, int& ph) const {
 }
 
 YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogram(int plane) const {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+    return computeHistogramLocked(plane);
+}
+
+YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogramLocked(int plane) const {
     PlaneHistogram result;
     if (m_frameBuf.empty() || !m_srcFrame) return result;
     if (plane < 0 || plane >= planeCount()) return result;
@@ -400,24 +453,87 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogram(int plane) const {
     result.bins.assign(binCount, 0);
     result.binCount = binCount;
 
-    // 遍历整帧。getPixelYUV 每像素带格式分支，但「当前帧直方图」是点击时
-    // 一次性计算（非实时），200 万像素在 Release 下 <50ms，可接受。
+    // 平面有效宽高（与 computeStats 同源处理 chroma_subsampling / NV12 interleaved）
+    int pw = m_width, ph = m_height;
+    if (plane > 0) {
+        if (desc) {
+            pw = m_width >> desc->log2_chroma_w;
+            ph = m_height >> desc->log2_chroma_h;
+        }
+        if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
+            if (plane >= 1) { pw = m_width; ph = m_height / 2; }
+        }
+    }
+    if (pw <= 0 || ph <= 0) return result;
+
+    // 直接平面指针扫描，不走 getPixelYUV（避免每像素函数调用 + 格式分支开销）
+    auto getPlanePtr = [&](int y) -> const uint8_t* {
+        return (plane == 0) ? m_srcFrame->data[0] + y * m_srcFrame->linesize[0]
+                            : (plane == 1) ? m_srcFrame->data[1] + y * m_srcFrame->linesize[1]
+                                            : m_srcFrame->data[2] + y * m_srcFrame->linesize[2];
+    };
+
     long long sum = 0, sumSq = 0;
     int minVal = INT_MAX, maxVal = INT_MIN;
     long long count = 0;
 
-    for (int y = 0; y < m_height; ++y) {
-        for (int x = 0; x < m_width; ++x) {
-            const YuvPixel p = getPixelYUV(x, y);
-            if (p.y < 0) continue;   // 越界 / 无效像素
-            const int val = (plane == 0) ? p.y : (plane == 1) ? p.u : p.v;
-            if (val < 0 || val >= binCount) continue;
-            result.bins[val]++;
-            sum += val;
-            sumSq += static_cast<long long>(val) * val;
-            if (val < minVal) minVal = val;
-            if (val > maxVal) maxVal = val;
-            ++count;
+    if (isHighDepth) {
+        for (int y = 0; y < ph; ++y) {
+            const uint16_t* row = reinterpret_cast<const uint16_t*>(getPlanePtr(y));
+            for (int x = 0; x < pw; ++x) {
+                const int val = row[x];
+                result.bins[val]++;
+                sum += val;
+                sumSq += static_cast<long long>(val) * val;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+                ++count;
+            }
+        }
+    } else if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
+        // NV12/NV21 的 UV 交错：plane 1 存 U/V 交替，需要特殊处理
+        if (plane == 0) {
+            // Y 平面正常扫描
+            for (int y = 0; y < ph; ++y) {
+                const uint8_t* row = getPlanePtr(y);
+                for (int x = 0; x < pw; ++x) {
+                    const int val = row[x];
+                    result.bins[val]++;
+                    sum += val;
+                    sumSq += static_cast<long long>(val) * val;
+                    if (val < minVal) minVal = val;
+                    if (val > maxVal) maxVal = val;
+                    ++count;
+                }
+            }
+        } else {
+            // UV 交错平面：每 2 字节一组 (U,V)，plane==1 取 U，plane==2 取 V
+            const int uvOff = (plane == 1) ? 0 : 1;
+            for (int y = 0; y < ph; ++y) {
+                const uint8_t* row = m_srcFrame->data[1] + y * m_srcFrame->linesize[1];
+                for (int x = 0; x < pw; ++x) {
+                    const int val = row[x * 2 + uvOff];
+                    result.bins[val]++;
+                    sum += val;
+                    sumSq += static_cast<long long>(val) * val;
+                    if (val < minVal) minVal = val;
+                    if (val > maxVal) maxVal = val;
+                    ++count;
+                }
+            }
+        }
+    } else {
+        for (int y = 0; y < ph; ++y) {
+            const uint8_t* row = getPlanePtr(y);
+            for (int x = 0; x < pw; ++x) {
+                const int val = row[x];
+                result.bins[val]++;
+                sum += val;
+                sumSq += static_cast<long long>(val) * val;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+                ++count;
+            }
         }
     }
 
@@ -426,7 +542,7 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogram(int plane) const {
     const double meanSq = result.mean * result.mean;
     const double sqMean = static_cast<double>(sumSq) / count;
     result.stddev = (sqMean > meanSq) ? std::sqrt(sqMean - meanSq) : 0.0;
-    result.variance = result.stddev * result.stddev;   // 同行计算，零额外遍历
+    result.variance = result.stddev * result.stddev;
     result.minVal = minVal;
     result.maxVal = maxVal;
     result.range = (count > 0) ? (maxVal - minVal) : 0;
@@ -434,6 +550,7 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogram(int plane) const {
 }
 
 YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeBlockHistogram(int plane, int px, int py, int blockSize) const {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
     PlaneHistogram result;
     if (m_frameBuf.empty() || !m_srcFrame) return result;
     if (plane < 0 || plane >= planeCount()) return result;
@@ -445,28 +562,83 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeBlockHistogram(int plane, int px
     result.bins.assign(binCount, 0);
     result.binCount = binCount;
 
-    // 对齐到 blockSize 的倍数（与 pixelBlock8x8 / pixelBlockStats8x8 一致）
-    const int bx = (px / blockSize) * blockSize;
-    const int by = (py / blockSize) * blockSize;
+    // 平面有效宽高与坐标换算（与 computeBlockStats 同源）
+    int pw = m_width, ph = m_height;
+    int sx = px, sy = py;
+    int bs = blockSize;
+    if (plane > 0) {
+        if (desc) {
+            pw = m_width  >> desc->log2_chroma_w;
+            ph = m_height >> desc->log2_chroma_h;
+            sx = px >> desc->log2_chroma_w;
+            sy = py >> desc->log2_chroma_h;
+        }
+        if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
+            if (plane >= 1) { pw = m_width; ph = m_height / 2; sx = px; sy = py / 2; }
+        }
+    }
+    if (pw <= 0 || ph <= 0) return result;
+
+    const int bx = (sx / bs) * bs;
+    const int by = (sy / bs) * bs;
+    const int x0 = std::max(0, bx);
+    const int y0 = std::max(0, by);
+    const int x1 = std::min(pw - 1, bx + bs - 1);
+    const int y1 = std::min(ph - 1, by + bs - 1);
+    if (x1 < x0 || y1 < y0) return result;
+
+    auto getPlanePtr = [&](int y) -> const uint8_t* {
+        return (plane == 0) ? m_srcFrame->data[0] + y * m_srcFrame->linesize[0]
+                            : (plane == 1) ? m_srcFrame->data[1] + y * m_srcFrame->linesize[1]
+                                            : m_srcFrame->data[2] + y * m_srcFrame->linesize[2];
+    };
 
     long long sum = 0, sumSq = 0;
     int minVal = INT_MAX, maxVal = INT_MIN;
     long long count = 0;
 
-    for (int row = 0; row < blockSize; ++row) {
-        for (int col = 0; col < blockSize; ++col) {
-            const int x = bx + col;
-            const int y = by + row;
-            const YuvPixel p = getPixelYUV(x, y);
-            if (p.y < 0) continue;   // 越界/无效像素
-            const int val = (plane == 0) ? p.y : (plane == 1) ? p.u : p.v;
-            if (val < 0 || val >= binCount) continue;
-            result.bins[val]++;
-            sum += val;
-            sumSq += static_cast<long long>(val) * val;
-            if (val < minVal) minVal = val;
-            if (val > maxVal) maxVal = val;
-            ++count;
+    // NV12/NV21 UV 交错平面特殊处理
+    const bool isNV12UV = (plane > 0) && (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21);
+    const int uvOff = (plane == 1) ? 0 : 1;
+
+    if (isHighDepth) {
+        for (int y = y0; y <= y1; ++y) {
+            const uint16_t* row = reinterpret_cast<const uint16_t*>(getPlanePtr(y));
+            for (int x = x0; x <= x1; ++x) {
+                const int val = row[x];
+                result.bins[val]++;
+                sum += val;
+                sumSq += static_cast<long long>(val) * val;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+                ++count;
+            }
+        }
+    } else if (isNV12UV) {
+        for (int y = y0; y <= y1; ++y) {
+            const uint8_t* row = m_srcFrame->data[1] + y * m_srcFrame->linesize[1];
+            for (int x = x0; x <= x1; ++x) {
+                const int val = row[x * 2 + uvOff];
+                result.bins[val]++;
+                sum += val;
+                sumSq += static_cast<long long>(val) * val;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+                ++count;
+            }
+        }
+    } else {
+        for (int y = y0; y <= y1; ++y) {
+            const uint8_t* row = getPlanePtr(y);
+            for (int x = x0; x <= x1; ++x) {
+                const int val = row[x];
+                result.bins[val]++;
+                sum += val;
+                sumSq += static_cast<long long>(val) * val;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+                ++count;
+            }
         }
     }
 
@@ -498,6 +670,7 @@ YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeBlockHistogram(int plane, int px
 //   4. 直接对 m_srcFrame 行指针扫描，与 computeStats 同源，零额外拷贝。
 // ──────────────────────────────────────────────────────────────────────
 YuvAnalyzer::PlaneStats YuvAnalyzer::computeBlockStats(int plane, int px, int py, int blockSize) const {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
     PlaneStats r;
     if (m_frameBuf.empty() || !m_srcFrame) return r;
     if (plane < 0 || plane >= planeCount()) return r;
@@ -666,6 +839,11 @@ YuvAnalyzer::PlaneStats YuvAnalyzer::computeBlockStats(int plane, int px, int py
 //      会按物理分辨率归一化（在分母上用实际采样对数），不会因下采样被低估。
 // ──────────────────────────────────────────────────────────────────────
 YuvAnalyzer::PlaneStats YuvAnalyzer::computeStats(int plane) const {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+    return computeStatsLocked(plane);
+}
+
+YuvAnalyzer::PlaneStats YuvAnalyzer::computeStatsLocked(int plane) const {
     PlaneStats r;
     if (m_frameBuf.empty() || !m_srcFrame) return r;
     if (plane < 0 || plane >= planeCount()) return r;
@@ -786,6 +964,7 @@ YuvAnalyzer::PlaneStats YuvAnalyzer::computeStats(int plane) const {
 }
 
 YuvAnalyzer::YuvPixel YuvAnalyzer::getPixelYUV(int x, int y) const {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
     if (m_frameBuf.empty() || !m_srcFrame) return {-1, -1, -1};
     if (x < 0 || x >= m_width || y < 0 || y >= m_height) return {-1, -1, -1};
 
@@ -868,6 +1047,249 @@ YuvAnalyzer::YuvPixel YuvAnalyzer::getPixelYUV(int x, int y) const {
     }
 
     return {yVal, uVal, vVal};
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//   FrameSnapshot — 帧数据快照（锁内拷贝，锁外计算）
+// ──────────────────────────────────────────────────────────────────────
+
+YuvAnalyzer::FrameSnapshot YuvAnalyzer::snapshotCurrentFrame() const {
+    std::lock_guard<std::mutex> lk(m_dataMutex);
+    return snapshotCurrentFrameLocked();
+}
+
+YuvAnalyzer::FrameSnapshot YuvAnalyzer::snapshotCurrentFrameLocked() const {
+    FrameSnapshot snap;
+    if (m_frameBuf.empty() || !m_srcFrame) return snap;
+
+    snap.width = m_width;
+    snap.height = m_height;
+    snap.pixFmt = m_pixFmt;
+    snap.valid = true;
+
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(m_pixFmt);
+    const bool isHighDepth = desc && desc->comp[0].depth > 8;
+    const int bytesPerSample = isHighDepth ? 2 : 1;
+    snap.planeCount = desc ? desc->nb_components : 3;
+    if (snap.planeCount > 3) snap.planeCount = 3;
+
+    for (int plane = 0; plane < snap.planeCount; ++plane) {
+        int pw = m_width, ph = m_height;
+        if (plane > 0 && desc) {
+            pw = m_width >> desc->log2_chroma_w;
+            ph = m_height >> desc->log2_chroma_h;
+        }
+        // NV12/NV21: plane 1 是 UV 交错，宽=full, 高=half
+        if (m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) {
+            if (plane >= 1) { pw = m_width; ph = m_height / 2; }
+        }
+        if (pw <= 0 || ph <= 0) continue;
+
+        // NV12/NV21 的 plane 1 是 UV 交错，每行字节数 = pw * 2
+        int rowBytes = pw * bytesPerSample;
+        if ((m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) && plane >= 1) {
+            rowBytes = pw * 2;  // UV 交错：每像素 2 字节
+        }
+
+        auto& p = snap.planes[plane];
+        p.pw = pw;
+        p.ph = ph;
+        p.stride = rowBytes;
+        p.data.resize(static_cast<size_t>(rowBytes) * ph);
+
+        // 从 m_srcFrame 拷贝（linesize 可能含 padding，逐行拷贝紧凑数据）
+        const int srcPlaneIdx = (plane == 0) ? 0 : ((m_pixFmt == AV_PIX_FMT_NV12 || m_pixFmt == AV_PIX_FMT_NV21) ? 1 : plane);
+        const uint8_t* src = m_srcFrame->data[srcPlaneIdx];
+        const int srcStride = m_srcFrame->linesize[srcPlaneIdx];
+        if (src && srcStride >= rowBytes) {
+            for (int y = 0; y < ph; ++y) {
+                memcpy(p.data.data() + static_cast<size_t>(y) * rowBytes,
+                       src + static_cast<size_t>(y) * srcStride,
+                       rowBytes);
+            }
+        }
+    }
+    return snap;
+}
+
+YuvAnalyzer::PlaneHistogram YuvAnalyzer::computeHistogramFromSnapshot(const FrameSnapshot& snap, int plane) {
+    PlaneHistogram result;
+    if (!snap.valid || plane < 0 || plane >= snap.planeCount) return result;
+
+    const auto& p = snap.planes[plane];
+    if (p.data.empty() || p.pw <= 0 || p.ph <= 0) return result;
+
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(snap.pixFmt);
+    const bool isHighDepth = desc && desc->comp[0].depth > 8;
+    const int binCount = isHighDepth ? 1024 : 256;
+    result.bins.assign(binCount, 0);
+    result.binCount = binCount;
+
+    long long sum = 0, sumSq = 0;
+    int minVal = INT_MAX, maxVal = INT_MIN;
+    long long count = 0;
+
+    const bool isNV12_21 = (snap.pixFmt == AV_PIX_FMT_NV12 || snap.pixFmt == AV_PIX_FMT_NV21);
+
+    if (isHighDepth) {
+        for (int y = 0; y < p.ph; ++y) {
+            const uint16_t* row = reinterpret_cast<const uint16_t*>(p.data.data() + static_cast<size_t>(y) * p.stride);
+            for (int x = 0; x < p.pw; ++x) {
+                const int val = row[x];
+                result.bins[val]++;
+                sum += val;
+                sumSq += static_cast<long long>(val) * val;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+                ++count;
+            }
+        }
+    } else if (isNV12_21 && plane >= 1) {
+        // UV 交错平面：每 2 字节一组 (U,V)，plane==1 取 U，plane==2 取 V
+        const int uvOff = (plane == 1) ? 0 : 1;
+        for (int y = 0; y < p.ph; ++y) {
+            const uint8_t* row = p.data.data() + static_cast<size_t>(y) * p.stride;
+            for (int x = 0; x < p.pw; ++x) {
+                const int val = row[x * 2 + uvOff];
+                result.bins[val]++;
+                sum += val;
+                sumSq += static_cast<long long>(val) * val;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+                ++count;
+            }
+        }
+    } else {
+        for (int y = 0; y < p.ph; ++y) {
+            const uint8_t* row = p.data.data() + static_cast<size_t>(y) * p.stride;
+            for (int x = 0; x < p.pw; ++x) {
+                const int val = row[x];
+                result.bins[val]++;
+                sum += val;
+                sumSq += static_cast<long long>(val) * val;
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+                ++count;
+            }
+        }
+    }
+
+    if (count > 0) {
+        const double mean = static_cast<double>(sum) / count;
+        const double meanSq = mean * mean;
+        const double sqMean = static_cast<double>(sumSq) / count;
+        const double var = (sqMean > meanSq) ? (sqMean - meanSq) : 0.0;
+        result.mean = mean;
+        result.stddev = std::sqrt(var);
+        result.variance = var;
+        result.minVal = minVal;
+        result.maxVal = maxVal;
+        result.range = maxVal - minVal;
+    }
+    return result;
+}
+
+YuvAnalyzer::PlaneStats YuvAnalyzer::computeStatsFromSnapshot(const FrameSnapshot& snap, int plane) {
+    PlaneStats r;
+    if (!snap.valid || plane < 0 || plane >= snap.planeCount) return r;
+
+    const auto& p = snap.planes[plane];
+    if (p.data.empty() || p.pw < 3 || p.ph < 3) return r;
+
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(snap.pixFmt);
+    const bool isHighDepth = desc && desc->comp[0].depth > 8;
+    const bool isNV12_21 = (snap.pixFmt == AV_PIX_FMT_NV12 || snap.pixFmt == AV_PIX_FMT_NV21);
+
+    // 读取快照中 (x,y) 像素值
+    auto read = [&](int x, int y) -> int {
+        const uint8_t* row = p.data.data() + static_cast<size_t>(y) * p.stride;
+        if (isHighDepth) {
+            return reinterpret_cast<const uint16_t*>(row)[x];
+        }
+        if (isNV12_21 && plane >= 1) {
+            return row[x * 2 + ((plane == 1) ? 0 : 1)];
+        }
+        return row[x];
+    };
+
+    const int pw = p.pw;
+    const int ph = p.ph;
+
+    // ── 第一遍：均值/方差/极值 ──
+    {
+        long long sum = 0, sumSq = 0;
+        long long count = 0;
+        int minVal = INT_MAX, maxVal = INT_MIN;
+        for (int y = 0; y < ph; ++y) {
+            for (int x = 0; x < pw; ++x) {
+                const int v = read(x, y);
+                sum += v;
+                sumSq += static_cast<long long>(v) * v;
+                if (v < minVal) minVal = v;
+                if (v > maxVal) maxVal = v;
+                ++count;
+            }
+        }
+        if (count == 0) return r;
+        const double mean = static_cast<double>(sum) / count;
+        const double meanSq = mean * mean;
+        const double sqMean = static_cast<double>(sumSq) / count;
+        const double var = (sqMean > meanSq) ? (sqMean - meanSq) : 0.0;
+        r.mean = mean;
+        r.stddev = std::sqrt(var);
+        r.variance = var;
+        r.minVal = minVal;
+        r.maxVal = maxVal;
+        r.range = (count > 0) ? (maxVal - minVal) : 0;
+        r.sampleCount = count;
+    }
+
+    // ── 第二遍：四方向梯度 + Laplacian + Tenengrad ──
+    long long nGH = 0, nGV = 0, nG45 = 0, nG135 = 0;
+    double sGH = 0, sGV = 0, sG45 = 0, sG135 = 0;
+    double sLap = 0, sTgd = 0;
+    long long nGrad = 0;
+    for (int y = 1; y < ph - 1; ++y) {
+        for (int x = 1; x < pw - 1; ++x) {
+            const int vC  = read(x,     y);
+            const int vL  = read(x - 1, y);
+            const int vR  = read(x + 1, y);
+            const int vU  = read(x,     y - 1);
+            const int vD  = read(x,     y + 1);
+            const int vTL = read(x - 1, y - 1);
+            const int vTR = read(x + 1, y - 1);
+            const int vBL = read(x - 1, y + 1);
+            const int vBR = read(x + 1, y + 1);
+
+            const int gH  = vR - vL;
+            const int gV  = vD - vU;
+            const int g45 = vBR - vTL;
+            const int g135 = vBL - vTR;
+
+            const int sx = (vTR + 2 * vR + vBR) - (vTL + 2 * vL + vBL);
+            const int sy = (vBL + 2 * vD + vBR) - (vTL + 2 * vU + vTR);
+            const int lap = (4 * vC) - vL - vR - vU - vD;
+
+            sGH   += std::abs(gH);
+            sGV   += std::abs(gV);
+            sG45  += std::abs(g45);
+            sG135 += std::abs(g135);
+            sLap  += static_cast<double>(lap) * lap;
+            sTgd  += static_cast<double>(sx) * sx + static_cast<double>(sy) * sy;
+            ++nGH; ++nGV; ++nG45; ++nG135; ++nGrad;
+        }
+    }
+
+    if (nGrad > 0) {
+        r.gradHorizMean   = sGH / nGrad;
+        r.gradVertMean    = sGV / nGrad;
+        r.gradDiag45Mean  = sG45 / nGrad;
+        r.gradDiag135Mean = sG135 / nGrad;
+        r.gradMean = (r.gradHorizMean + r.gradVertMean + r.gradDiag45Mean + r.gradDiag135Mean) / 4.0;
+        r.laplacianEnergy = sLap / nGrad;
+        r.tenengrad       = sTgd / nGrad;
+    }
+    return r;
 }
 
 } // namespace rb

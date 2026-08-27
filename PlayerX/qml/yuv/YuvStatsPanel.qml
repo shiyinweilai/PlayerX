@@ -63,6 +63,10 @@ Rectangle {
             if (slot === panel.activeSlot) panel.ver++
             if (panel.statsMode === 2 && (slot === 0 || slot === 1)) panel.refreshDiffOverview()
         }
+        function onStatsReady(slot) {
+            // 帧级统计异步计算完成后刷新面板（与 frameChanged 解耦）
+            if (slot === panel.activeSlot) panel.ver++
+        }
         function onFileOpened(slot) { panel.ver++; if (panel.statsMode === 2) panel.refreshDiffOverview() }
         function onSlotCountChanged() {
             panel.ver++

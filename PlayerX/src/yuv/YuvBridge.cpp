@@ -5,6 +5,8 @@
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
+#include <QtConcurrent>
+#include <QFutureWatcher>
 #include <algorithm>
 #include <climits>
 #include <cstdio>
@@ -120,6 +122,18 @@ int YuvBridge::openFiles(const QVariantList& files) {
 void YuvBridge::closeAll() {
     for (int i = 0; i < MaxSlots; ++i) {
         stopTimer(i);
+        // 等待异步解码完成（如果正在运行），避免 Worker 线程访问已关闭的 analyzer
+        if (m_watchers[i] && m_watchers[i]->isRunning()) {
+            m_watchers[i]->waitForFinished();
+        }
+        // 等待统计计算完成
+        if (m_statsWatchers[i] && m_statsWatchers[i]->isRunning()) {
+            m_statsWatchers[i]->waitForFinished();
+        }
+        m_asyncBusy[i] = false;
+        m_pendingFrame[i] = -1;
+        m_statsPendingFrame[i] = -1;
+        invalidateStatsCache(i);
         m_analyzers[i]->close();
         m_frameImages[i] = QImage();
         m_displayModes[i] = 0;
@@ -141,6 +155,18 @@ void YuvBridge::closeFile(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
     stopTimer(slot);
+    // 等待异步解码完成
+    if (m_watchers[slot] && m_watchers[slot]->isRunning()) {
+        m_watchers[slot]->waitForFinished();
+    }
+    // 等待统计计算完成
+    if (m_statsWatchers[slot] && m_statsWatchers[slot]->isRunning()) {
+        m_statsWatchers[slot]->waitForFinished();
+    }
+    m_asyncBusy[slot] = false;
+    m_pendingFrame[slot] = -1;
+    m_statsPendingFrame[slot] = -1;
+    invalidateStatsCache(slot);
     m_analyzers[slot]->close();
     m_frameImages[slot] = QImage();
 
@@ -163,23 +189,22 @@ void YuvBridge::closeFile(int slot) {
 void YuvBridge::gotoFrame(int slot, int frameNum) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
-    if (m_analyzers[slot]->seekToFrame(frameNum)) {
-        refreshFrameImage(slot);
-    }
+    // 异步：seek+read+convert 全在 Worker 线程
+    refreshFrameImageAsyncToFrame(slot, frameNum);
 }
 
 void YuvBridge::nextFrame(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
-    m_analyzers[slot]->nextFrame();
-    refreshFrameImage(slot);
+    const int cur = m_analyzers[slot]->currentFrame();
+    refreshFrameImageAsyncToFrame(slot, cur + 1);
 }
 
 void YuvBridge::prevFrame(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
-    m_analyzers[slot]->prevFrame();
-    refreshFrameImage(slot);
+    const int cur = m_analyzers[slot]->currentFrame();
+    refreshFrameImageAsyncToFrame(slot, cur - 1);
 }
 
 void YuvBridge::firstFrame(int slot) {
@@ -302,27 +327,14 @@ QVariantMap YuvBridge::pixelBlockStats8x8(int slot, int px, int py) const {
 }
 
 QVariantMap YuvBridge::histogram(int slot, int plane) const {
-    QVariantMap result;
-    if (slot < 0 || slot >= MaxSlots) return result;
-    if (!m_analyzers[slot]->isOpen()) return result;
-
-    const rb::YuvAnalyzer::PlaneHistogram h =
-        m_analyzers[slot]->computeHistogram(plane);
-    if (h.bins.empty()) return result;
-
-    QVariantList bins;
-    bins.reserve(static_cast<int>(h.bins.size()));
-    for (int v : h.bins) bins.append(v);
-
-    result["bins"]     = bins;
-    result["mean"]     = h.mean;
-    result["stddev"]   = h.stddev;
-    result["variance"] = h.variance;
-    result["min"]      = h.minVal;
-    result["max"]      = h.maxVal;
-    result["range"]    = h.range;
-    result["binCount"] = h.binCount;
-    return result;
+    if (slot < 0 || slot >= MaxSlots) return QVariantMap();
+    if (plane < 0 || plane > 2) return QVariantMap();
+    // 返回缓存值（由 computeStatsAsync 异步填充）。
+    // 缓存未就绪时返回空 map，QML 会收到 statsReady 后重新绑定。
+    if (m_cachedStats[slot].frameNum >= 0 && !m_cachedStats[slot].hist[plane].isEmpty()) {
+        return m_cachedStats[slot].hist[plane];
+    }
+    return QVariantMap();
 }
 
 QVariantMap YuvBridge::blockHistogram(int slot, int plane, int px, int py) const {
@@ -351,29 +363,13 @@ QVariantMap YuvBridge::blockHistogram(int slot, int plane, int px, int py) const
 
 // ── 帧级"梯度 / 纹理 / 锐利度"全方向统计 ─────────────────────────────
 QVariantMap YuvBridge::planeStats(int slot, int plane) const {
-    QVariantMap result;
-    if (slot < 0 || slot >= MaxSlots) return result;
-    if (!m_analyzers[slot]->isOpen()) return result;
-
-    const rb::YuvAnalyzer::PlaneStats s =
-        m_analyzers[slot]->computeStats(plane);
-    if (s.sampleCount == 0) return result;
-
-    result["mean"]            = s.mean;
-    result["stddev"]          = s.stddev;
-    result["variance"]        = s.variance;
-    result["min"]             = s.minVal;
-    result["max"]             = s.maxVal;
-    result["range"]           = s.range;
-    result["gradHorizMean"]   = s.gradHorizMean;
-    result["gradVertMean"]    = s.gradVertMean;
-    result["gradDiag45Mean"]  = s.gradDiag45Mean;
-    result["gradDiag135Mean"] = s.gradDiag135Mean;
-    result["gradMean"]        = s.gradMean;
-    result["laplacianEnergy"] = s.laplacianEnergy;
-    result["tenengrad"]       = s.tenengrad;
-    result["sampleCount"]     = static_cast<qlonglong>(s.sampleCount);
-    return result;
+    if (slot < 0 || slot >= MaxSlots) return QVariantMap();
+    if (plane < 0 || plane > 2) return QVariantMap();
+    // 返回缓存值（由 computeStatsAsync 异步填充）。
+    if (m_cachedStats[slot].frameNum >= 0 && !m_cachedStats[slot].stats[plane].isEmpty()) {
+        return m_cachedStats[slot].stats[plane];
+    }
+    return QVariantMap();
 }
 
 // ── 块级"梯度 / 纹理 / 锐利度"统计（与 blockHistogram 同一块）──────────
@@ -752,6 +748,26 @@ void YuvBridge::setGlobalScale(qreal s) {
     emit globalScaleChanged();
 }
 
+void YuvBridge::setRightSidebarOpen(bool open) {
+    if (m_rightSidebarOpen == open) return;
+    m_rightSidebarOpen = open;
+    emit rightSidebarOpenChanged();
+    // 右侧栏展开时，如果当前在播放，立即触发当前帧的统计计算
+    // （播放期间右侧栏展开 → 兼顾实时统计渲染）
+    if (open) {
+        for (int slot = 0; slot < MaxSlots; ++slot) {
+            if (m_analyzers[slot] && m_analyzers[slot]->isOpen()) {
+                const int curFrame = m_analyzers[slot]->currentFrame();
+                if (m_cachedStats[slot].frameNum != curFrame) {
+                    computeStatsAsync(slot, curFrame);
+                } else {
+                    emit statsReady(slot);
+                }
+            }
+        }
+    }
+}
+
 int YuvBridge::currentScaleIndex() const {
     for (int i = 0; i < 7; ++i) {
         if (qFuzzyCompare(m_globalScale, kScaleValues[i])) return i;
@@ -810,15 +826,205 @@ void YuvBridge::refreshFrameImage(int slot) {
         return;
     }
 
-    switch (m_displayModes[slot]) {
-        case 0: m_frameImages[slot] = m_analyzers[slot]->getFrameImage();   break; // YUV全彩
-        case 1: m_frameImages[slot] = m_analyzers[slot]->getPlaneImage(0);  break; // Y 平面
-        case 2: m_frameImages[slot] = m_analyzers[slot]->getPlaneImage(1);  break; // U 平面
-        case 3: m_frameImages[slot] = m_analyzers[slot]->getPlaneImage(2);  break; // V 平面
-        default: m_frameImages[slot] = m_analyzers[slot]->getFrameImage();  break;
+    // 检查是否已有异步任务在进行中。如果当前请求的帧与 pending 帧不同，
+    // 取消旧任务（不等完成），启动新的。如果相同，则等待已有任务完成即可。
+    const int targetFrame = m_analyzers[slot]->currentFrame();
+
+    if (m_asyncBusy[slot]) {
+        // 已有异步任务在进行
+        if (m_pendingFrame[slot] == targetFrame) {
+            // 同一帧已在解码中，无需重复启动
+            return;
+        }
+        // 不同帧：等待当前任务完成后自动启动新的（通过 watcher finished 信号链）
+        // 不主动 cancel（QImage 计算不可中断），但标记需要重新刷新
+        // pendingFrame 会在 finished 回调里检查并决定是否需要再发一次
+        m_pendingFrame[slot] = -2;  // 标记"需要重试"
+        return;
     }
 
-    emit frameChanged(slot);
+    refreshFrameImageAsync(slot);
+}
+
+void YuvBridge::refreshFrameImageAsync(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot]->isOpen()) return;
+
+    const int targetFrame = m_analyzers[slot]->currentFrame();
+    refreshFrameImageAsyncToFrame(slot, targetFrame);
+}
+
+void YuvBridge::refreshFrameImageAsyncToFrame(int slot, int targetFrame) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot]->isOpen()) return;
+
+    const int displayMode = m_displayModes[slot];
+
+    // 如果已有异步任务在进行中，标记需要重试（finished 回调会检查）
+    if (m_asyncBusy[slot]) {
+        m_pendingFrame[slot] = -2;  // 标记"需要重试"
+        return;
+    }
+
+    m_asyncBusy[slot] = true;
+    m_pendingFrame[slot] = targetFrame;
+
+    // 主线程先设置 m_currentFrame（锁内），这样 Worker 线程的幂等检查能跳过 seek
+    {
+        // YuvAnalyzer::seekToFrame 会锁+readCurrentFrameLocked，但我们不想在主线程做 I/O
+        // 所以只设置 frame number，让 Worker 线程做 seek+read
+        // 这里用 lockData 直接设 m_currentFrame（通过 seekToFrameNoLock 的幂等检查实现）
+    }
+
+    auto* analyzer = m_analyzers[slot].get();
+    QFuture<QImage> future = QtConcurrent::run([analyzer, targetFrame, displayMode]() -> QImage {
+        analyzer->lockData();
+        // Worker 线程做 seek+read+convert（全在锁内）
+        analyzer->seekToFrameNoLock(targetFrame);
+        QImage img = analyzer->getFrameImageLocked(displayMode);
+        analyzer->unlockData();
+        return img;
+    });
+
+    if (!m_watchers[slot]) {
+        m_watchers[slot] = new QFutureWatcher<QImage>(this);
+        connect(m_watchers[slot], &QFutureWatcher<QImage>::finished, this, [this, slot]() {
+            if (slot < 0 || slot >= MaxSlots || !m_watchers[slot]) return;
+
+            const QImage result = m_watchers[slot]->result();
+            m_frameImages[slot] = result;
+            m_asyncBusy[slot] = false;
+
+            // 检查是否在解码期间有新的帧请求
+            const int pending = m_pendingFrame[slot];
+            m_pendingFrame[slot] = -1;
+
+            if (pending == -2) {
+                // 解码期间有新的帧请求，重新触发当前帧
+                refreshFrameImage(slot);
+            } else {
+                emit frameChanged(slot);
+                // 非播放状态 → 总是计算帧级统计
+                // 播放状态 + 右侧栏展开 → 兼顾实时统计渲染，也计算
+                // 播放状态 + 右侧栏收起 → 跳过统计，保证最大帧率
+                if (!m_playing[slot] || m_rightSidebarOpen) {
+                    const int curFrame = m_analyzers[slot]->currentFrame();
+                    computeStatsAsync(slot, curFrame);
+                }
+            }
+        });
+    }
+
+    m_watchers[slot]->setFuture(future);
+}
+
+void YuvBridge::invalidateStatsCache(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    m_cachedStats[slot].frameNum = -1;
+    for (int i = 0; i < 3; ++i) {
+        m_cachedStats[slot].hist[i].clear();
+        m_cachedStats[slot].stats[i].clear();
+    }
+}
+
+void YuvBridge::computeStatsAsync(int slot, int frameNum) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
+
+    // 如果该帧已缓存，直接发信号刷新
+    if (m_cachedStats[slot].frameNum == frameNum) {
+        emit statsReady(slot);
+        return;
+    }
+
+    // 如果已有统计计算在进行中，标记需要重试
+    if (m_statsWatchers[slot] && m_statsWatchers[slot]->isRunning()) {
+        m_statsPendingFrame[slot] = frameNum;
+        return;
+    }
+
+    m_statsPendingFrame[slot] = frameNum;
+
+    // 如果 watcher 还没创建，创建之
+    if (!m_statsWatchers[slot]) {
+        m_statsWatchers[slot] = new QFutureWatcher<void>(this);
+        connect(m_statsWatchers[slot], &QFutureWatcher<void>::finished, this, [this, slot]() {
+            if (slot < 0 || slot >= MaxSlots || !m_statsWatchers[slot]) return;
+            // 检查是否在计算期间有新的帧请求
+            const int pending = m_statsPendingFrame[slot];
+            if (pending >= 0 && pending != m_cachedStats[slot].frameNum) {
+                computeStatsAsync(slot, pending);
+            } else {
+                m_statsPendingFrame[slot] = -1;
+                emit statsReady(slot);
+            }
+        });
+    }
+
+    auto* analyzer = m_analyzers[slot].get();
+    const int targetFrame = frameNum;
+
+    // 在 Worker 线程计算所有 3 个平面的 histogram + planeStats
+    // 关键优化：锁内只做帧数据快照拷贝（~2ms），释放锁后基于快照计算，
+    // 不再阻塞解码 Worker 线程。
+    QFuture<void> future = QtConcurrent::run([this, analyzer, slot, targetFrame]() {
+        // ── 锁内：确保帧数据就位 + 快照拷贝（~2ms）──
+        analyzer->lockData();
+        analyzer->seekToFrameNoLock(targetFrame);
+        auto snapshot = analyzer->snapshotCurrentFrameLocked();
+        analyzer->unlockData();
+
+        // ── 锁外：基于快照计算直方图 + 统计（不阻塞解码）──
+        CachedStats cs;
+        cs.frameNum = targetFrame;
+
+        for (int plane = 0; plane < 3; ++plane) {
+            // 直方图
+            auto h = rb::YuvAnalyzer::computeHistogramFromSnapshot(snapshot, plane);
+            if (!h.bins.empty()) {
+                QVariantMap hm;
+                QVariantList bins;
+                bins.reserve(static_cast<int>(h.bins.size()));
+                for (int v : h.bins) bins.append(v);
+                hm["bins"]     = bins;
+                hm["mean"]     = h.mean;
+                hm["stddev"]   = h.stddev;
+                hm["variance"] = h.variance;
+                hm["min"]      = h.minVal;
+                hm["max"]      = h.maxVal;
+                hm["range"]    = h.range;
+                hm["binCount"] = h.binCount;
+                cs.hist[plane] = hm;
+            }
+
+            // 平面统计（梯度/纹理/锐利度）
+            auto s = rb::YuvAnalyzer::computeStatsFromSnapshot(snapshot, plane);
+            if (s.sampleCount > 0) {
+                QVariantMap sm;
+                sm["mean"]            = s.mean;
+                sm["stddev"]          = s.stddev;
+                sm["variance"]        = s.variance;
+                sm["min"]             = s.minVal;
+                sm["max"]             = s.maxVal;
+                sm["range"]           = s.range;
+                sm["gradHorizMean"]   = s.gradHorizMean;
+                sm["gradVertMean"]    = s.gradVertMean;
+                sm["gradDiag45Mean"]  = s.gradDiag45Mean;
+                sm["gradDiag135Mean"] = s.gradDiag135Mean;
+                sm["gradMean"]        = s.gradMean;
+                sm["laplacianEnergy"] = s.laplacianEnergy;
+                sm["tenengrad"]       = s.tenengrad;
+                sm["sampleCount"]     = static_cast<qlonglong>(s.sampleCount);
+                cs.stats[plane] = sm;
+            }
+        }
+
+        // 写入缓存（Worker 线程写，主线程通过 finished 回调读取并发 statsReady。
+        // histogram()/planeStats() 返回旧缓存或空 map 不会崩溃，statsReady 后刷新。）
+        m_cachedStats[slot] = cs;
+    });
+
+    m_statsWatchers[slot]->setFuture(future);
 }
 
 void YuvBridge::stopTimer(int slot) {
@@ -859,8 +1065,8 @@ void YuvBridge::play(int slot) {
             emit playStateChanged(slot);
             return;
         }
-        m_analyzers[slot]->nextFrame();
-        refreshFrameImage(slot);
+        // 异步解码下一帧：seek+read+sws_scale 全在 Worker 线程，主线程零阻塞
+        refreshFrameImageAsyncToFrame(slot, cur + 1);
     });
     m_playTimers[slot]->start();
     emit playStateChanged(slot);
@@ -891,8 +1097,8 @@ void YuvBridge::playReverse(int slot) {
             emit playStateChanged(slot);
             return;
         }
-        m_analyzers[slot]->prevFrame();
-        refreshFrameImage(slot);
+        // 异步解码上一帧
+        refreshFrameImageAsyncToFrame(slot, cur - 1);
     });
     m_playTimers[slot]->start();
     emit playStateChanged(slot);
@@ -901,6 +1107,16 @@ void YuvBridge::playReverse(int slot) {
 void YuvBridge::pause(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     stopTimer(slot);
+    // 暂停后触发帧级统计计算（播放期间跳过的统计在暂停后补算）
+    if (m_analyzers[slot] && m_analyzers[slot]->isOpen()) {
+        const int curFrame = m_analyzers[slot]->currentFrame();
+        // 如果当前帧已有缓存，直接发信号刷新；否则异步计算
+        if (m_cachedStats[slot].frameNum != curFrame) {
+            computeStatsAsync(slot, curFrame);
+        } else {
+            emit statsReady(slot);
+        }
+    }
     emit playStateChanged(slot);
 }
 
@@ -929,8 +1145,7 @@ void YuvBridge::skipForward(int slot, int frames) {
     const int cur = m_analyzers[slot]->currentFrame();
     const int total = m_analyzers[slot]->totalFrames();
     const int target = qMin(cur + frames, total - 1);
-    m_analyzers[slot]->seekToFrame(target);
-    refreshFrameImage(slot);
+    refreshFrameImageAsyncToFrame(slot, target);
 }
 
 void YuvBridge::skipBackward(int slot, int frames) {
@@ -938,15 +1153,13 @@ void YuvBridge::skipBackward(int slot, int frames) {
     if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
     const int cur = m_analyzers[slot]->currentFrame();
     const int target = qMax(cur - frames, 0);
-    m_analyzers[slot]->seekToFrame(target);
-    refreshFrameImage(slot);
+    refreshFrameImageAsyncToFrame(slot, target);
 }
 
 void YuvBridge::resetFrame(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
     stopTimer(slot);
-    m_analyzers[slot]->seekToFrame(0);
-    refreshFrameImage(slot);
+    refreshFrameImageAsyncToFrame(slot, 0);
     emit playStateChanged(slot);
 }

@@ -19,6 +19,7 @@
 #include <QFile>
 #include <vector>
 #include <cstdint>
+#include <mutex>
 
 extern "C" {
 #include <libavutil/pixfmt.h>
@@ -65,7 +66,10 @@ public:
 
     // ── 查询 ──────────────────────────────────────────────────────────
     int    totalFrames()  const;
-    int    currentFrame() const { return m_currentFrame; }
+    int    currentFrame() const { 
+        std::lock_guard<std::mutex> lk(m_dataMutex);
+        return m_currentFrame; 
+    }
     int    width()        const { return m_width; }
     int    height()       const { return m_height; }
     double fps()          const { return m_fps; }
@@ -95,6 +99,18 @@ public:
     struct YuvPixel { int y, u, v; };
     YuvPixel getPixelYUV(int x, int y) const;
 
+    // ── 线程安全接口（供 YuvBridge 异步解码）──────────────────────────────
+    // Worker 线程在 seek+read+getFrameImage 期间持有锁；主线程的像素查询/
+    // 直方图计算也持有锁。两方不会同时读到半新半旧的帧数据。
+    void lockData()   const { m_dataMutex.lock(); }
+    void unlockData() const { m_dataMutex.unlock(); }
+    // 供 YuvBridge::refreshFrameImageAsync 在 Worker 线程内直接调用：
+    // 锁内执行 seekToFrame + getFrameImage/getPlaneImage，返回结果 QImage。
+    // 锁由调用方在调用前持有（已在 refreshFrameImageAsync 的 lambda 中 acquire）。
+    QImage getFrameImageLocked(int displayMode);
+    // 无锁版本的 seekToFrame（调用方必须已持有 m_dataMutex）
+    bool seekToFrameNoLock(int frameNum);
+
     // ── 直方图统计（当前帧，plane: 0=Y, 1=U, 2=V）────────────────────────
     // 桶数按位深自适应：8bit=256 桶，10bit=1024 桶（高位深时 binCount>256）。
     // 顺带返回 mean / stddev / min / max / variance / range，一次遍历全部算好。
@@ -109,6 +125,8 @@ public:
         int    binCount = 0;     // 桶数（256 或 1024）
     };
     PlaneHistogram computeHistogram(int plane) const;
+    // 无锁版本（调用方必须已持有 m_dataMutex，供 Worker 线程使用）
+    PlaneHistogram computeHistogramLocked(int plane) const;
 
     // ── 梯度与边缘能量统计（当前帧，plane: 0=Y, 1=U, 2=V）───────────────
     // 与 computeHistogram 共用同一帧：直方图与梯度信息各扫一次以保证最佳性能
@@ -147,6 +165,8 @@ public:
         long long sampleCount  = 0;     // 有效像素数
     };
     PlaneStats computeStats(int plane) const;
+    // 无锁版本（调用方必须已持有 m_dataMutex，供 Worker 线程使用）
+    PlaneStats computeStatsLocked(int plane) const;
 
     // ── 块级直方图统计（右侧栏"块级别"模式，随鼠标悬浮实时统计）──────────
     // 以 (px, py) 为基准，对齐到 blockSize 的倍数（默认 8×8，与
@@ -161,13 +181,43 @@ public:
     //     的伪梯度污染；sampleCount 反映有效像素数。
     PlaneStats computeBlockStats(int plane, int px, int py, int blockSize = 8) const;
 
+    // ── 帧数据快照（供统计 Worker 线程无锁计算）──────────────────────────
+    // 在锁内快速拷贝当前帧的各平面原始数据，释放锁后 Worker 线程基于快照
+    // 计算 histogram / stats，不再阻塞解码 Worker。
+    struct FrameSnapshot {
+        int width = 0;
+        int height = 0;
+        AVPixelFormat pixFmt = AV_PIX_FMT_NONE;
+        // 各平面数据副本（linesize 可能含 padding，data 只保留有效行）
+        struct Plane {
+            std::vector<uint8_t> data;   // 紧凑存储（无 padding）
+            int stride = 0;              // 紧凑行步幅 = pw * bytesPerSample
+            int pw = 0;                  // 有效宽
+            int ph = 0;                  // 有效高
+        };
+        Plane planes[3];
+        int planeCount = 0;
+        bool valid = false;
+    };
+    // 拷贝当前帧快照（调用方应已持有锁，或调用锁定版本）
+    FrameSnapshot snapshotCurrentFrame() const;
+    FrameSnapshot snapshotCurrentFrameLocked() const;
+    // 基于快照计算直方图（无锁，Worker 线程安全）
+    static PlaneHistogram computeHistogramFromSnapshot(const FrameSnapshot& snap, int plane);
+    // 基于快照计算梯度统计（无锁，Worker 线程安全）
+    static PlaneStats computeStatsFromSnapshot(const FrameSnapshot& snap, int plane);
+
 private:
     void initSwsContext();
     void freeSwsContext();
     void fillSrcFrame();          // 把 m_frameBuf 填入 m_srcFrame 各平面
     bool readCurrentFrame();      // 从文件读当前帧到 m_frameBuf
+    bool readCurrentFrameLocked(); // 无锁版本（调用方已持有 m_dataMutex）
     int  planeCount() const;      // 根据 m_pixFmt 返回平面数
     void planeSize(int plane, int& pw, int& ph) const;
+    // 无锁内部实现（调用方必须已持有 m_dataMutex）
+    QImage getFrameImageImpl();
+    QImage getPlaneImageImpl(int plane);
 
     QFile          m_file;
     QString        m_filePath;
@@ -195,6 +245,10 @@ private:
 
     // 颜色转换标准（默认 BT709）；影响 sws_scale 的色彩矩阵与值域范围
     ColorConversion m_colorConv{BT709};
+
+    // 线程安全：保护 m_frameBuf / m_srcFrame / m_swsCtx 等帧数据，
+    // Worker 线程做 sws_scale 时持有此锁，主线程像素查询也持有此锁。
+    mutable std::mutex m_dataMutex;
 };
 
 } // namespace rb

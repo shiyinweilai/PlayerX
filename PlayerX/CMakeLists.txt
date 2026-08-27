@@ -44,7 +44,7 @@ endforeach()
 # macOS 用 NSOpenPanel（FsUtils_mac.mm），完全不依赖 QtWidgets。
 # Windows / Linux 等平台依赖 Qt 自绘 QFileDialog 作为多选目录对话框的实现，
 # 需要链入 Qt6::Widgets。
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Concurrent)
 if(NOT APPLE)
     find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
 endif()
@@ -263,8 +263,9 @@ target_link_libraries(PlayerX PRIVATE
     Qt6::Gui
     Qt6::Qml
     Qt6::Quick
-    Qt6::QuickControls2
-    Qt6::Network
+Qt6::QuickControls2
+Qt6::Network
+Qt6::Concurrent
     # FFmpeg 静态库
     avformat avcodec avfilter avutil swscale swresample
 )
