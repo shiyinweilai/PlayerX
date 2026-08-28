@@ -83,6 +83,9 @@ class YuvBridge : public QObject {
     // 持久化到 QSettings，跨会话保留。
     Q_PROPERTY(int syncFps READ syncFps WRITE setSyncFps NOTIFY syncFpsChanged)
 
+    // ── 差异检测：两路 YUV 播放时，检测到帧差异则暂停并弹窗 ──
+    Q_PROPERTY(bool diffDetectEnabled READ diffDetectEnabled WRITE setDiffDetectEnabled NOTIFY diffDetectEnabledChanged)
+
 public:
     static constexpr int MaxSlots = 9;
 
@@ -235,6 +238,16 @@ public:
     // ── 多通道同步播放帧率 ──
     int  syncFps() const { return m_syncFps; }
     void setSyncFps(int fps);
+
+    // ── 差异检测开关 ──
+    bool diffDetectEnabled() const { return m_diffDetectEnabled; }
+    void setDiffDetectEnabled(bool enabled);
+
+    // ── 差异暂停后恢复播放 ──
+    // resumeAfterDiff: 继续比较差异（恢复播放，下帧仍检测）
+    // ignoreDiffContinue: 忽略此差异继续播放（恢复播放，本次会话不再检测）
+    Q_INVOKABLE void resumeAfterDiff();
+    Q_INVOKABLE void ignoreDiffContinue();
     // 缩放档位索引（0..6 → 1/8, 1/4, 1/2, 1X, 2X, 4X, 8X），
     // 供 QML "Repeater" 选中态绑定使用
     Q_INVOKABLE int currentScaleIndex() const;
@@ -293,6 +306,10 @@ signals:
     void globalScaleChanged();
     void rightSidebarOpenChanged();
     void syncFpsChanged();
+    // 两路 YUV 播放中检测到差异时发出，QML 监听弹窗。
+    // frameNum = 当前帧号, maxAbsDiff = Y 通道最大绝对差
+    void diffDetected(int frameNum, int maxAbsDiff);
+    void diffDetectEnabledChanged();
     // 帧级统计异步计算完成时发出，QML 监听此信号递增 ver 刷新面板。
     // 播放期间不发此信号（统计跳过），暂停/逐帧时才计算并发出。
     void statsReady(int slot);
@@ -320,6 +337,7 @@ private:
     void onSyncTimerTick();                   // 主时钟回调：从各队列取帧显示
     void scheduleDecode(int slot);            // 触发某通道后台解码下一帧填缓冲
     void onDecodeFinished(int slot);          // 某通道一帧解码完成回调
+    void checkDiffDetect();                   // 差异检测（两路 YUV 帧显示后调用）
     int  m_syncStep{1};                       // 同步推进步长（正向=1，倒放=-1）
 
     // 预解码帧缓冲：每通道一个队列，缓存已解码好的帧（图像 + 帧号）
@@ -397,4 +415,11 @@ private:
     qreal m_globalScale{1.0};
     bool m_rightSidebarOpen{false};
     int  m_syncFps{30};  // 多通道同步播放帧率，默认 30fps
+
+    // ── 差异检测（仅两路 YUV 播放）──
+    bool m_diffDetectEnabled{false};  // 差异检测开关
+    bool m_diffPaused{false};         // 因差异暂停中（避免重复触发）
+    // 用户选择"忽略差异继续播放"时置 true，下次播放不再检测差异，
+    // 直到重新打开文件或切换 diffDetectEnabled。
+    bool m_diffIgnoreOnce{false};
 };

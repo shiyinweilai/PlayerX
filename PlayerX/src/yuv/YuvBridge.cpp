@@ -762,6 +762,31 @@ void YuvBridge::setSyncFps(int fps) {
     emit syncFpsChanged();
 }
 
+void YuvBridge::setDiffDetectEnabled(bool enabled) {
+    if (m_diffDetectEnabled == enabled) return;
+    m_diffDetectEnabled = enabled;
+    // 开启时重置忽略标志
+    m_diffIgnoreOnce = false;
+    emit diffDetectEnabledChanged();
+    // 开启时立即检测一次（帧已加载的情况）
+    if (enabled) {
+        checkDiffDetect();
+    }
+}
+
+void YuvBridge::resumeAfterDiff() {
+    // 继续比较：仅作 QML 侧关闭 Toast 的 C++ 对应，不做任何操作
+    // 播放已停止在当前帧，用户用底部控制推进，每帧继续检测差异
+}
+
+void YuvBridge::ignoreDiffContinue() {
+    // 忽略后续差异：置忽略标志，恢复播放
+    m_diffIgnoreOnce = true;
+    if (activeSlotCount() >= 2) {
+        startSyncPlay(false);
+    }
+}
+
 // ── 全局缩放比例 ──────────────────────────────────────────────────────
 // 档位常量：与 YuvDisplayItem 内部 m_scalePresets / m_scaleValues 严格保持一致。
 //   0: 1/8, 1: 1/4, 2: 1/2, 3: 1X, 4: 2X, 5: 4X, 6: 8X
@@ -938,6 +963,10 @@ void YuvBridge::refreshFrameImageAsyncToFrame(int slot, int targetFrame) {
                 if (!m_playing[slot] || m_rightSidebarOpen) {
                     const int curFrame = m_analyzers[slot]->currentFrame();
                     computeStatsAsync(slot, curFrame);
+                }
+                // ── 差异检测：非播放状态帧加载完成时也检查 ──
+                if (!m_playing[slot]) {
+                    checkDiffDetect();
                 }
             }
         });
@@ -1289,6 +1318,46 @@ void YuvBridge::onSyncTimerTick() {
 
         // 消费一帧后缓冲有空位，继续后台解码
         scheduleDecode(i);
+    }
+
+    // ── 差异检测 ──
+    checkDiffDetect();
+}
+
+void YuvBridge::checkDiffDetect() {
+    // 仅两路 + 开关开启 + 非忽略模式
+    if (!m_diffDetectEnabled || m_diffIgnoreOnce ||
+        activeSlotCount() != 2 ||
+        m_frameImages[0].isNull() || m_frameImages[1].isNull()) {
+        return;
+    }
+
+    const QImage& a = m_frameImages[0];
+    const QImage& b = m_frameImages[1];
+    const int w = std::min(a.width(), b.width());
+    const int h = std::min(a.height(), b.height());
+    if (w <= 0 || h <= 0) return;
+
+    // 采样比较：每隔 4 像素取一点（快），统计 Y 通道最大绝对差
+    int maxAbsDiff = 0;
+    const int step = 4;
+    for (int y = 0; y < h; y += step) {
+        for (int x = 0; x < w; x += step) {
+            const QRgb pa = a.pixel(x, y);
+            const QRgb pb = b.pixel(x, y);
+            const int ya = (qRed(pa) + qGreen(pa) + qBlue(pa)) / 3;
+            const int yb = (qRed(pb) + qGreen(pb) + qBlue(pb)) / 3;
+            const int d = std::abs(ya - yb);
+            if (d > maxAbsDiff) maxAbsDiff = d;
+        }
+    }
+    // 阈值：最大绝对差 > 3（过滤量化噪声）
+    if (maxAbsDiff > 3) {
+        // 立即停止播放（暂停在当前帧），再通知 QML 显示 Toast
+        if (m_syncTimer) m_syncTimer->stop();
+        for (int i = 0; i < MaxSlots; ++i) m_playing[i] = false;
+        const int curFrame = m_visibleFrame[0];
+        emit diffDetected(curFrame, maxAbsDiff);
     }
 }
 

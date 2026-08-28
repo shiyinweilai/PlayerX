@@ -1973,6 +1973,27 @@ Item {
                     }
                 }
 
+                // ── 差异检测开关（仅 2 路时显示）──
+                Rectangle {
+                    visible: yuvView.cmpActive
+                    width: 80; height: 22; radius: 3
+                    color: YuvBridge.diffDetectEnabled
+                        ? "#80d4a017"   // 开启：琥珀色
+                        : (gDiffDetectMa.containsMouse ? "#803a3a3d" : "#80252528")
+                    border.color: YuvBridge.diffDetectEnabled ? "#d4a017" : "transparent"
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: YuvBridge.diffDetectEnabled ? "差异检测 ●" : "差异检测"
+                        color: "#fff"; font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: gDiffDetectMa; anchors.fill: parent
+                        hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: YuvBridge.diffDetectEnabled = !YuvBridge.diffDetectEnabled
+                    }
+                }
+
                 // 清空全部 YUV（破坏性按钮，红色突出）—— 放在最右侧
                 // （左侧已有的 Item { Layout.fillWidth: true } 已把所有按钮右对齐）
                 // 命名采用"清空"而非"关闭"，避免与 tab 导航混淆（用户反馈）。
@@ -2007,5 +2028,95 @@ Item {
         CompareMatrixPanel { title: "YUV-A · slot " + yuvView.cmpSlotA; mode: "a" }
         CompareMatrixPanel { title: "YUV-B · slot " + yuvView.cmpSlotB; mode: "b" }
         CompareMatrixPanel { title: "差异 Δ = A − B"; mode: "diff" }
+    }
+
+    // ── 差异检测 Toast：底部非遮挡提示条，不覆盖画面 ──────────────────────
+    // 出现时播放已停止在当前帧，用户可直接观察画面差异
+    // 点任意按钮均关闭 Toast，底部控制正常使用继续推进
+    Rectangle {
+        id: diffToast
+        visible: false
+        z: 900
+
+        // 吸附在底部控制栏上方
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 48   // 控制栏高度约 40px，留 8px 间隔
+        anchors.horizontalCenter: parent.horizontalCenter
+
+        width: toastRow.implicitWidth + 32
+        height: 40
+        radius: 6
+        color: "#e8a000"           // 琥珀色，醒目但不误读为错误
+
+        property int _frameNum: -1
+        property int _maxDiff: 0
+
+        Row {
+            id: toastRow
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.leftMargin: 16
+            spacing: 16
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "⚠ 当前帧差异（Δ=" + diffToast._maxDiff + "）"
+                color: "#1a1a1a"
+                font.pixelSize: 13
+                font.bold: true
+            }
+
+            // 继续比较：关闭 Toast，保持暂停，用户手动推进
+            Rectangle {
+                width: 72; height: 26; radius: 4
+                color: contMa.containsMouse ? "#cc8800" : "#b07800"
+                anchors.verticalCenter: parent.verticalCenter
+                Text {
+                    anchors.centerIn: parent
+                    text: "继续比较"
+                    color: "#fff"; font.pixelSize: 12; font.bold: true
+                }
+                MouseArea {
+                    id: contMa; anchors.fill: parent
+                    hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        diffToast.visible = false
+                        YuvBridge.resumeAfterDiff()
+                    }
+                }
+            }
+
+            // 忽略后续：关闭 Toast，恢复全速播放，不再检测
+            Rectangle {
+                width: 72; height: 26; radius: 4
+                color: ignoreMa.containsMouse ? "#3a3a3d" : "#2a2a30"
+                border.color: "#555"
+                border.width: 1
+                anchors.verticalCenter: parent.verticalCenter
+                Text {
+                    anchors.centerIn: parent
+                    text: "忽略后续"
+                    color: "#ccc"; font.pixelSize: 12
+                }
+                MouseArea {
+                    id: ignoreMa; anchors.fill: parent
+                    hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        diffToast.visible = false
+                        YuvBridge.ignoreDiffContinue()
+                    }
+                }
+            }
+        }
+    }
+
+    // 连接 diffDetected 信号
+    Connections {
+        target: YuvBridge
+        function onDiffDetected(frameNum, maxAbsDiff) {
+            diffToast._frameNum = frameNum
+            diffToast._maxDiff = maxAbsDiff
+            diffToast.visible = true
+        }
     }
 }
