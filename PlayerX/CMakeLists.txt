@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 # 应用版本号：单点维护处。会通过 APP_VERSION_STR 注入到 C++（Updater 用作
 # currentVersion）和 QML（关于对话框 / 更新弹窗显示）。
 # 发新版本时只改这一行，不要在源码里另写硬编码版本。
-project(PlayerX VERSION 3.1.9 LANGUAGES CXX C)
+project(PlayerX VERSION 3.1.10 LANGUAGES CXX C)
 
 # 在 macOS 上启用 Objective-C++（用于 ScreenProbe 直接调用 NSScreen / 注册
 # NSApplicationDidChangeScreenParametersNotification —— 绕开 Qt screen 子系统

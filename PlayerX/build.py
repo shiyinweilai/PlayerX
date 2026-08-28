@@ -1397,37 +1397,6 @@ def package_windows(version: str) -> dict:
     return out
 
 
-def _read_remote_url_template() -> str:
-    """读取 release/remote-url.json 的 `url` 字段，返回带 `*` 占位的 URL 模板。
-
-    设计动机：自动更新通道走真实 CDN 地址，但 CDN 域名/路径前缀和具体文件名
-    解耦——base 由外部 JSON 配置（一次性维护，跟随 CDN 变更），文件名由打包
-    流程动态生成。这样换 CDN 只改一处 JSON，不用动 build.py。
-
-    文件格式（PlayerX/release/remote-url.json）：
-        { "url": "https://example.com/path/*" }
-
-    其中 `*` 会被替换成实际产物文件名（例如 PlayerX-3.0.7-arm64-mac.zip）。
-    若 url 不含 `*`，回退到末尾拼 `/<fname>`。
-
-    返回：
-      - 模板字符串（成功）
-      - "" （文件缺失 / 字段缺失 / 解析失败 —— 调用方回退到占位 URL）
-    """
-    import json
-    cfg = os.path.join(_ensure_release_dir(), "remote-url.json")
-    if not os.path.isfile(cfg):
-        return ""
-    try:
-        with open(cfg, "r", encoding="utf-8") as f:
-            obj = json.load(f) or {}
-        u = (obj.get("url") or "").strip()
-        return u
-    except Exception as e:
-        warn(f"读取 {cfg} 失败，将回退到占位 URL: {e}")
-        return ""
-
-
 def _resolve_download_url(template: str, fname: str) -> str:
     """按模板生成单个产物的下载 URL。
 
@@ -1502,7 +1471,7 @@ def write_latest_json(version: str, downloads: dict):
     # 单一真相源，重复维护两份地址只会带来不一致。
     # 模板缺失（文件不存在/字段空）才退回到旧逻辑："保留用户改过的真实 url，
     # 占位符按需重建"。
-    url_tpl = _read_remote_url_template()
+    url_tpl = "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang"
     if url_tpl:
         info(f"使用 CDN URL 模板: {url_tpl}")
 

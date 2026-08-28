@@ -1,34 +1,28 @@
-// YuvSliderCompareItem.cpp — YUV 双路滑动比较渲染组件（QQuickItem + Scene Graph）
+// YuvSliderCompareItem.cpp — YUV 双路滑动比较渲染组件（QQuickPaintedItem + QPainter）
 //
-// 与 YuvDisplayItem 同样的 GPU/CPU 双路径策略：
-//   - GPU 路径：两个 QSGGeometryNode + 纹理，GPU 硬件缩放。
-//   - CPU 路径（软件后端）：preScale + 纹理上传。
+// 与播放对比的 SliderCompareItem 采用相同的 QPainter 裁剪策略：
+//   - 左路只画 [0, splitX] 区域，右路只画 [splitX, width] 区域
+//   - 中间 1 物理像素白色分割线
+//   - CPU preScale 保证画质（与 YuvDisplayItem 一致）
 
 #include "YuvSliderCompareItem.h"
+#include <QPainter>
 #include <QQuickWindow>
-#include <QSGGeometry>
+#include <QPaintDevice>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 
 YuvSliderCompareItem::YuvSliderCompareItem(QQuickItem* parent)
-    : QQuickItem(parent)
+    : QQuickPaintedItem(parent)
 {
-    setFlag(QQuickItem::ItemHasContents, true);
+    setRenderTarget(QQuickPaintedItem::FramebufferObject);
+    setFillColor(Qt::black);
 }
 
-bool YuvSliderCompareItem::isSoftwareBackend() const {
-    if (!m_softwareBackendCache.has_value()) {
-        if (window()) {
-            QSGRendererInterface* ri = window()->rendererInterface();
-            m_softwareBackendCache = (ri &&
-                ri->graphicsApi() == QSGRendererInterface::Software);
-        } else {
-            m_softwareBackendCache = false;
-        }
-    }
-    return *m_softwareBackendCache;
-}
-
+// CPU preScale：与 YuvDisplayItem 完全一致
+//   - 放大（整数倍）→ nearest-neighbor 逐像素复制
+//   - 缩小 / 非整数放大 → Qt::SmoothTransformation
 QImage YuvSliderCompareItem::preScale(const QImage& src, qreal scale) const {
     if (src.isNull() || qFuzzyCompare(scale, 1.0)) return src;
     const int iw = src.width();
@@ -42,18 +36,24 @@ QImage YuvSliderCompareItem::preScale(const QImage& src, qreal scale) const {
     if (isIntUpScale) {
         const int n = static_cast<int>(std::round(scale));
         QImage out(tw, th, src.format());
+        const int bpp = src.bytesPerLine() / src.width();  // bytes per pixel (RGBA=4)
         for (int sy = 0; sy < ih; ++sy) {
             const int dyBase = sy * n;
+            const uint8_t* srcRow = src.constScanLine(sy);
+            uint8_t* dstRow0 = out.scanLine(dyBase);
+            // 水平放大：每个源像素 → n 个目标像素（memcpy bpp 字节，格式无关）
             for (int sx = 0; sx < iw; ++sx) {
-                const QRgb p = src.pixel(sx, sy);
                 const int dxBase = sx * n;
-                for (int dy = 0; dy < n; ++dy) {
-                    QRgb* row = reinterpret_cast<QRgb*>(
-                        out.scanLine(dyBase + dy));
-                    for (int dx = 0; dx < n; ++dx) {
-                        row[dxBase + dx] = p;
-                    }
+                const uint8_t* srcPix = srcRow + sx * bpp;
+                uint8_t* dstPix = dstRow0 + dxBase * bpp;
+                for (int dx = 0; dx < n; ++dx) {
+                    std::memcpy(dstPix + dx * bpp, srcPix, static_cast<size_t>(bpp));
                 }
+            }
+            // 垂直复制：将首行 memcpy 到剩余 n-1 行（整行批量复制）
+            const size_t rowBytes = static_cast<size_t>(tw) * bpp;
+            for (int dy = 1; dy < n; ++dy) {
+                std::memcpy(out.scanLine(dyBase + dy), dstRow0, rowBytes);
             }
         }
         return out;
@@ -63,20 +63,14 @@ QImage YuvSliderCompareItem::preScale(const QImage& src, qreal scale) const {
 
 void YuvSliderCompareItem::setLeftImage(const QImage& img) {
     m_leftImage = img;
-    m_leftDirty = true;
-    m_geomDirty = true;
-    if (isSoftwareBackend() && !m_leftImage.isNull())
-        m_leftScaled = preScale(m_leftImage, m_scale);
+    m_needRescale = true;
     update();
     emit leftImageChanged();
 }
 
 void YuvSliderCompareItem::setRightImage(const QImage& img) {
     m_rightImage = img;
-    m_rightDirty = true;
-    m_geomDirty = true;
-    if (isSoftwareBackend() && !m_rightImage.isNull())
-        m_rightScaled = preScale(m_rightImage, m_scale);
+    m_needRescale = true;
     update();
     emit rightImageChanged();
 }
@@ -84,7 +78,6 @@ void YuvSliderCompareItem::setRightImage(const QImage& img) {
 void YuvSliderCompareItem::setPanX(qreal v) {
     if (qFuzzyCompare(m_panX, v)) return;
     m_panX = v;
-    m_geomDirty = true;
     update();
     emit panChanged();
 }
@@ -92,7 +85,6 @@ void YuvSliderCompareItem::setPanX(qreal v) {
 void YuvSliderCompareItem::setPanY(qreal v) {
     if (qFuzzyCompare(m_panY, v)) return;
     m_panY = v;
-    m_geomDirty = true;
     update();
     emit panChanged();
 }
@@ -100,17 +92,7 @@ void YuvSliderCompareItem::setPanY(qreal v) {
 void YuvSliderCompareItem::onGlobalScaleChanged(qreal newScale) {
     if (qFuzzyCompare(m_scale, newScale)) return;
     m_scale = newScale;
-    m_geomDirty = true;
-    if (isSoftwareBackend()) {
-        if (!m_leftImage.isNull()) {
-            m_leftScaled = preScale(m_leftImage, m_scale);
-            m_leftDirty = true;
-        }
-        if (!m_rightImage.isNull()) {
-            m_rightScaled = preScale(m_rightImage, m_scale);
-            m_rightDirty = true;
-        }
-    }
+    m_needRescale = true;
     update();
     emit scaleChanged();
 }
@@ -120,200 +102,97 @@ void YuvSliderCompareItem::setSplitRatio(double r) {
     if (r > 1.0) r = 1.0;
     if (qFuzzyCompare(r + 1.0, m_splitRatio + 1.0)) return;
     m_splitRatio = r;
-    m_geomDirty = true;
     emit splitRatioChanged();
     update();
 }
 
-// 辅助：为一路图像创建/更新 geometry node + texture
-static void updateOneSide(QSGGeometryNode*& node, QSGTexture*& tex,
-                          const QImage& src, const QImage& scaled,
-                          bool software, qreal scale,
-                          const QRectF& drawRect,
-                          QQuickWindow* win,
-                          bool& imgDirty, bool& geomDirty)
-{
-    const QImage& texSource = software
-        ? (scaled.isNull() ? src : scaled)
-        : src;
-    if (texSource.isNull()) {
-        if (node) {
-            delete node;
-            node = nullptr;
-        }
-        return;
+void YuvSliderCompareItem::paint(QPainter* painter) {
+    const QRectF rect = boundingRect();
+    if (rect.width() <= 0 || rect.height() <= 0) return;
+
+    const qreal dpr = (window() ? window()->devicePixelRatio()
+                                : painter->device()->devicePixelRatioF());
+    const int areaW = std::max(1, int(std::round(rect.width() * dpr)));
+    const int areaH = std::max(1, int(std::round(rect.height() * dpr)));
+
+    // ── preScale 因子 = m_scale × dpr（与 YuvDisplayItem GPU 路径等价） ──
+    // YuvDisplayItem GPU 路径：drawW = iw * m_scale（逻辑像素），GPU 按 dpr 放大到
+    // iw * m_scale * dpr 物理像素。本组件用 QPainter 物理像素坐标系，preScale 到
+    // iw * m_scale * dpr 物理像素后 1:1 绘制，再 physToLogical 除以 dpr 还原逻辑坐标。
+    // scale=1.0 → 原始分辨率 1:1（与 YuvDisplayItem 完全一致）。
+    const double totalScale = m_scale * dpr;
+
+    // ── 按需 preScale（缩放因子或 widget 尺寸变化时重算） ──
+    if (m_needRescale ||
+        !qFuzzyCompare(m_cachedTotalScaleL, qreal(totalScale)) ||
+        m_cachedAreaW != areaW || m_cachedAreaH != areaH) {
+        if (!m_leftImage.isNull())
+            m_leftScaled = preScale(m_leftImage, totalScale);
+        else
+            m_leftScaled = QImage();
+        if (!m_rightImage.isNull())
+            m_rightScaled = preScale(m_rightImage, totalScale);
+        else
+            m_rightScaled = QImage();
+        m_cachedTotalScaleL = qreal(totalScale);
+        m_cachedTotalScaleR = qreal(totalScale);
+        m_cachedAreaW = areaW;
+        m_cachedAreaH = areaH;
+        m_needRescale = false;
     }
 
-    if (!node) {
-        node = new QSGGeometryNode;
-auto* geom = new QSGGeometry(QSGGeometry::defaultAttributes_TexturedPoint2D(), 4);
-        geom->setDrawingMode(QSGGeometry::DrawTriangleStrip);
-        node->setGeometry(geom);
-        node->setFlag(QSGNode::OwnsGeometry);
-        auto* mat = new QSGTextureMaterial;
-        node->setMaterial(mat);
-        node->setFlag(QSGNode::OwnsMaterial);
-        imgDirty = true;
-        geomDirty = true;
+    // 分割位置（widget 物理像素）
+    int splitX = std::clamp(int(std::round(areaW * m_splitRatio)), 0, areaW);
+
+    // 关闭 Qt 二次插值
+    painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
+    painter->setRenderHint(QPainter::Antialiasing, false);
+
+    // 物理像素 → 逻辑像素转换
+    auto physToLogical = [dpr, &rect](double x, double y, double w, double h) {
+        return QRectF(rect.x() + x / dpr,
+                      rect.y() + y / dpr,
+                      w / dpr,
+                      h / dpr);
+    };
+
+    // 辅助：在 widget 物理像素子区间 [physL, physR] 上绘制一路图像
+    // 图像已 preScale 到目标物理像素尺寸，1:1 居中绘制（与 SliderCompareItem 一致）
+    auto drawSide = [&](const QImage& img, int physL, int physR) {
+        if (img.isNull() || physR <= physL) return;
+
+        const int iw = img.width();
+        const int ih = img.height();
+        // preScale 后的图像直接居中 1:1 绘制
+        const int drawW = iw;
+        const int drawH = ih;
+        const int offX = (areaW - drawW) / 2 + int(m_panX * dpr);
+        const int offY = (areaH - drawH) / 2 + int(m_panY * dpr);
+
+        // 裁剪到 [physL, physR]
+        const int imgL = offX;
+        const int imgR = offX + drawW;
+        const int clipL = std::max(physL, imgL);
+        const int clipR = std::min(physR, imgR);
+        if (clipR <= clipL) return;
+
+        const int srcX = clipL - imgL;
+        const int srcW = clipR - clipL;
+        const QRectF srcRect(srcX, 0, srcW, ih);
+        const QRectF dstRect = physToLogical(clipL, offY, srcW, drawH);
+        painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
+        painter->drawImage(dstRect, img, srcRect);
+    };
+
+    // ─── 画左半 [0, splitX] ──────────────────
+    drawSide(m_leftScaled, 0, splitX);
+
+    // ─── 画右半 [splitX, areaW] ───────────────
+    drawSide(m_rightScaled, splitX, areaW);
+
+    // ─── 中间分割线（1 物理像素白色） ──────────────────────────
+    if (splitX >= 0 && splitX <= areaW) {
+        const QRectF lineRect = physToLogical(splitX, 0, 1, areaH);
+        painter->fillRect(lineRect, QColor(255, 255, 255, 220));
     }
-
-    auto* material = static_cast<QSGTextureMaterial*>(node->material());
-
-    if (imgDirty || !tex) {
-        if (tex) { delete tex; tex = nullptr; }
-        tex = win->createTextureFromImage(texSource);
-        if (tex) {
-            if (software)
-                tex->setFiltering(QSGTexture::Nearest);
-            else
-                tex->setFiltering((scale >= 1.0) ? QSGTexture::Nearest
-                                                 : QSGTexture::Linear);
-            material->setTexture(tex);
-        }
-        imgDirty = false;
-    }
-
-    if (geomDirty) {
-        const int iw = texSource.width();
-        const int ih = texSource.height();
-        if (iw <= 0 || ih <= 0) return;
-        const qreal drawW = software ? iw : (iw * scale);
-        const qreal drawH = software ? ih : (ih * scale);
-        auto* v = node->geometry()->vertexDataAsTexturedPoint2D();
-        v[0].set(drawRect.x(),                 drawRect.y(),                  0.0f, 0.0f);
-        v[1].set(drawRect.x(),                 drawRect.y() + drawRect.height(), 0.0f, 1.0f);
-        v[2].set(drawRect.x() + drawRect.width(), drawRect.y(),               1.0f, 0.0f);
-        v[3].set(drawRect.x() + drawRect.width(), drawRect.y() + drawRect.height(), 1.0f, 1.0f);
-        node->markDirty(QSGNode::DirtyGeometry);
-    }
-}
-
-QSGNode* YuvSliderCompareItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*) {
-    const bool software = isSoftwareBackend();
-    const QRectF r = boundingRect();
-    if (r.width() <= 0 || r.height() <= 0) {
-        delete oldNode;
-        return nullptr;
-    }
-
-    // 使用一个根 node 管理左右两个子 node
-    QSGNode* root = oldNode;
-    if (!root) {
-        root = new QSGNode;  // 普通 container node
-    }
-
-    // ── 左半区域 ──
-    const qreal splitX = r.x() + r.width() * m_splitRatio;
-    const QRectF leftRect(r.x(), r.y(), splitX - r.x(), r.height());
-    {
-        // 安全获取/创建左子节点
-        QSGGeometryNode* leftNodePtr = static_cast<QSGGeometryNode*>(root->childAtIndex(0));
-        if (!leftNodePtr) {
-            leftNodePtr = new QSGGeometryNode;
-            root->appendChildNode(leftNodePtr);
-        }
-
-        const QImage& texSource = software
-            ? (m_leftScaled.isNull() ? m_leftImage : m_leftScaled)
-            : m_leftImage;
-
-        if (texSource.isNull()) {
-            // 隐藏左侧
-            leftNodePtr->markDirty(QSGNode::DirtyForceUpdate);
-        } else {
-            // 更新纹理
-            auto* mat = static_cast<QSGTextureMaterial*>(leftNodePtr->material());
-            if (!mat) {
-                mat = new QSGTextureMaterial;
-                leftNodePtr->setMaterial(mat);
-                leftNodePtr->setFlag(QSGNode::OwnsMaterial);
-            }
-            if (!leftNodePtr->geometry()) {
-auto* geom = new QSGGeometry(QSGGeometry::defaultAttributes_TexturedPoint2D(), 4);
-                geom->setDrawingMode(QSGGeometry::DrawTriangleStrip);
-                leftNodePtr->setGeometry(geom);
-                leftNodePtr->setFlag(QSGNode::OwnsGeometry);
-            }
-            if (m_leftDirty || !m_leftTex) {
-                if (m_leftTex) { delete m_leftTex; m_leftTex = nullptr; }
-                m_leftTex = window()->createTextureFromImage(texSource);
-                if (m_leftTex) {
-                    m_leftTex->setFiltering(software ? QSGTexture::Nearest
-                        : ((m_scale >= 1.0) ? QSGTexture::Nearest : QSGTexture::Linear));
-                    mat->setTexture(m_leftTex);
-                }
-                m_leftDirty = false;
-            }
-            // 几何
-            if (m_geomDirty) {
-                const int iw = texSource.width();
-                const int ih = texSource.height();
-                const qreal drawW = software ? iw : (iw * m_scale);
-                const qreal drawH = software ? ih : (ih * m_scale);
-                const double dx = r.x() + (r.width() - drawW) / 2.0 + m_panX;
-                const double dy = r.y() + (r.height() - drawH) / 2.0 + m_panY;
-                auto* v = leftNodePtr->geometry()->vertexDataAsTexturedPoint2D();
-                v[0].set(dx,            dy,            0.0f, 0.0f);
-                v[1].set(dx,            dy + drawH,    0.0f, 1.0f);
-                v[2].set(dx + drawW,    dy,            1.0f, 0.0f);
-                v[3].set(dx + drawW,    dy + drawH,    1.0f, 1.0f);
-                leftNodePtr->markDirty(QSGNode::DirtyGeometry);
-            }
-        }
-    }
-
-    // ── 右半区域 ──
-    {
-        QSGGeometryNode* rightNodePtr = static_cast<QSGGeometryNode*>(root->childAtIndex(1));
-        if (!rightNodePtr) {
-            rightNodePtr = new QSGGeometryNode;
-            root->appendChildNode(rightNodePtr);
-        }
-
-        const QImage& texSource = software
-            ? (m_rightScaled.isNull() ? m_rightImage : m_rightScaled)
-            : m_rightImage;
-
-        if (!texSource.isNull()) {
-            auto* mat = static_cast<QSGTextureMaterial*>(rightNodePtr->material());
-            if (!mat) {
-                mat = new QSGTextureMaterial;
-                rightNodePtr->setMaterial(mat);
-                rightNodePtr->setFlag(QSGNode::OwnsMaterial);
-            }
-            if (!rightNodePtr->geometry()) {
-auto* geom = new QSGGeometry(QSGGeometry::defaultAttributes_TexturedPoint2D(), 4);
-                geom->setDrawingMode(QSGGeometry::DrawTriangleStrip);
-                rightNodePtr->setGeometry(geom);
-                rightNodePtr->setFlag(QSGNode::OwnsGeometry);
-            }
-            if (m_rightDirty || !m_rightTex) {
-                if (m_rightTex) { delete m_rightTex; m_rightTex = nullptr; }
-                m_rightTex = window()->createTextureFromImage(texSource);
-                if (m_rightTex) {
-                    m_rightTex->setFiltering(software ? QSGTexture::Nearest
-                        : ((m_scale >= 1.0) ? QSGTexture::Nearest : QSGTexture::Linear));
-                    mat->setTexture(m_rightTex);
-                }
-                m_rightDirty = false;
-            }
-            if (m_geomDirty) {
-                const int iw = texSource.width();
-                const int ih = texSource.height();
-                const qreal drawW = software ? iw : (iw * m_scale);
-                const qreal drawH = software ? ih : (ih * m_scale);
-                const double dx = r.x() + (r.width() - drawW) / 2.0 + m_panX;
-                const double dy = r.y() + (r.height() - drawH) / 2.0 + m_panY;
-                auto* v = rightNodePtr->geometry()->vertexDataAsTexturedPoint2D();
-                v[0].set(dx,            dy,            0.0f, 0.0f);
-                v[1].set(dx,            dy + drawH,    0.0f, 1.0f);
-                v[2].set(dx + drawW,    dy,            1.0f, 0.0f);
-                v[3].set(dx + drawW,    dy + drawH,    1.0f, 1.0f);
-                rightNodePtr->markDirty(QSGNode::DirtyGeometry);
-            }
-        }
-    }
-
-    m_geomDirty = false;
-    return root;
 }

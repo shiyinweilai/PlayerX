@@ -1,23 +1,21 @@
 #pragma once
 /**
- * YuvSliderCompareItem.h — YUV 双路滑动比较渲染组件（QQuickItem + Scene Graph）
+ * YuvSliderCompareItem.h — YUV 双路滑动比较渲染组件（QQuickPaintedItem + QPainter）
  *
- * Phase 2 优化：从 QQuickPaintedItem 改为 QQuickItem + QSGGeometryNode。
- * 与 YuvDisplayItem 同样的 GPU/CPU 双路径策略。
+ * 与播放对比的 SliderCompareItem 采用相同渲染策略：
+ *   - QQuickPaintedItem + FramebufferObject 渲染目标
+ *   - QPainter drawImage(srcRect, dstRect) 精确裁剪左右两路
+ *   - 中间 1 物理像素白色分割线
+ *   - CPU preScale 保证画质（与 YuvDisplayItem 一致）：
+ *     放大 → nearest-neighbor，缩小 → SmoothTransformation
  *
- * paint 逻辑：按 splitRatio 把画面切成左右两半，各画一路图像。
- *   - GPU 路径：两个 QSGGeometryNode（各一个纹理），各自裁剪。
- *   - CPU 路径（软件后端）：preScale + 纹理上传，与原实现等价。
+ * 替代原 QQuickItem + Scene Graph 方案（纹理坐标裁剪不可靠且无分割线）。
  */
 
-#include <QQuickItem>
+#include <QQuickPaintedItem>
 #include <QImage>
-#include <QSGGeometryNode>
-#include <QSGTextureMaterial>
-#include <QSGTexture>
-#include <optional>
 
-class YuvSliderCompareItem : public QQuickItem {
+class YuvSliderCompareItem : public QQuickPaintedItem {
     Q_OBJECT
     Q_PROPERTY(QImage leftImage READ leftImage WRITE setLeftImage NOTIFY leftImageChanged)
     Q_PROPERTY(QImage rightImage READ rightImage WRITE setRightImage NOTIFY rightImageChanged)
@@ -53,25 +51,24 @@ signals:
     void splitRatioChanged();
 
 protected:
-    QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
+    void paint(QPainter* painter) override;
 
 private:
     QImage preScale(const QImage& src, qreal scale) const;
-    bool isSoftwareBackend() const;
 
     QImage m_leftImage;
     QImage m_rightImage;
-    QImage m_leftScaled;    // CPU 路径
-    QImage m_rightScaled;   // CPU 路径
+    QImage m_leftScaled;    // preScale(总缩放=fit-to-view×m_scale) 后的左路图
+    QImage m_rightScaled;   // preScale 后的右路图
     qreal  m_panX = 0;
     qreal  m_panY = 0;
     qreal  m_scale = 1.0;
     double m_splitRatio = 0.5;
 
-    QSGTexture* m_leftTex = nullptr;
-    QSGTexture* m_rightTex = nullptr;
-    bool m_leftDirty = true;
-    bool m_rightDirty = true;
-    bool m_geomDirty = true;
-    mutable std::optional<bool> m_softwareBackendCache;
+    // paint 缓存：避免每帧重做 preScale
+    qreal m_cachedTotalScaleL = -1.0;
+    qreal m_cachedTotalScaleR = -1.0;
+    int   m_cachedAreaW = 0;
+    int   m_cachedAreaH = 0;
+    bool  m_needRescale = true;
 };
