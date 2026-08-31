@@ -417,7 +417,7 @@ private:
     int  m_syncFps{30};  // 多通道同步播放帧率，默认 30fps
 
     // ── 差异检测（仅两路 YUV 播放）──
-    bool m_diffDetectEnabled{false};  // 差异检测开关
+    bool m_diffDetectEnabled{true};   // 差异检测开关（默认开启）
     bool m_diffPaused{false};         // 因差异暂停中（避免重复触发）
     // 用户选择"忽略差异继续播放"时置 true，下次播放不再检测差异，
     // 直到重新打开文件或切换 diffDetectEnabled。

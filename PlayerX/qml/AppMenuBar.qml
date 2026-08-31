@@ -564,6 +564,14 @@ MenuBar {
             onTriggered: YuvBridge.pixelInfoVisible = YuvBridge.pixelInfoVisible ? false : true
         }
 
+        // ── 差异检测 ──（仅两路时生效；检测到差异自动暂停并在底部栏提示）
+        // 默认勾选 = 开启；仅两路 YUV 对比时有意义。
+        DarkMenuItem {
+            text: qsTr("差异检测")
+            checked: YuvBridge.diffDetectEnabled
+            onTriggered: YuvBridge.diffDetectEnabled = !YuvBridge.diffDetectEnabled
+        }
+
         // ── 色度插值 ▶ ──（4:2:0/4:2:2 色度上采样算法，3 档互斥单选）
         // 默认 Nearest Neighbor = 像素级分析标准（展示编码器实际存储的原始色度值）
         DarkMenu {
