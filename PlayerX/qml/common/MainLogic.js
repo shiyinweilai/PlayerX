@@ -1416,11 +1416,19 @@ function _applyRemoteConfigItem(item, onDone) {
                 }
                 _root._remoteTag = obj.tag || ""
             } else {
-                // 已打开对比：不切换、不动 UI，只更新缓存（避免打断评分）
-                console.log("[ConfigCheck] 已更新维度缓存（非当前模式且已在对比中，不切换、不重建UI）",
-                    "被应用 mode:", mode, "当前 mode:", currentMode,
-                    "fileCount:", (typeof Engine !== "undefined") ? Engine.fileCount : "?",
-                    "维度：", _dims.map(function(d){return d.key + "(" + d.starCount + "星)"}).join(", "))
+                // 已打开对比：UI 维度暂不重建（避免打断评分），但必须同步 currentMode 和 uploadTag，
+                // 否则上传时仍读到旧 mode，导致归类错误。
+                // 【修复】用户点"接受"是主动行为，即便在对比中也应切到新 mode。
+                console.log("[ConfigCheck] 已在对比中，切换 currentMode:", currentMode, "→", mode,
+                    "（维度缓存已更新，UI 将在下次对比或 onCurrentModeChanged 时热重载）",
+                    "fileCount:", (typeof Engine !== "undefined") ? Engine.fileCount : "?")
+                if (typeof Rating !== "undefined") {
+                    Rating.currentMode = mode
+                }
+                if (obj.tag && typeof Rating !== "undefined") {
+                    Rating.uploadTag = obj.tag
+                }
+                _root._remoteTag = obj.tag || ""
             }
 
             // 从待更新列表中移除该条
