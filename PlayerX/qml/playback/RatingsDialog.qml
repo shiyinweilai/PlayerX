@@ -3822,10 +3822,13 @@ Window {
                     root.quickUploadNetError(cleanErr)
                     return
                 }
-                // 上传成功 → 自动归档（必须在 return 前做，否则此出口会跳过归档）
+                // 上传成功 → 自动归档（仅当数据来自"当前 Tab"时才归档；
+                // 数据来自归档批次时跳过，数据已在归档里无需重复归档）
                 // 外部一键上传（Main.qml 的 📤「上传数据」/「评分数据」）走这里。
                 if (ok) {
-                    var _qBatch = root._autoArchiveAfterUpload()
+                    var _qBatch = (root._lastUploadKind !== "archive")
+                                  ? root._autoArchiveAfterUpload()
+                                  : root._lastUploadArchiveBatch
                     // 批次名回传给主窗结果对话框，让它能显示"已自动归档"一行
                     root.quickUploadFinished(true, (message || ""), _qBatch)
                 } else {

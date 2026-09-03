@@ -286,10 +286,8 @@ Dialog {
             Layout.fillWidth: true
             Layout.topMargin: 10
             visible: footNoteText.text.length > 0
-            color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
-                   ? "#0d2140" : "#0d2140"
-            border.color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
-                          ? "#1976d2" : "#1976d2"
+            color: "#0d2140"
+            border.color: "#1976d2"
             border.width: 1
             radius: 6
             implicitHeight: footNoteText.implicitHeight + 16
@@ -299,24 +297,22 @@ Dialog {
                 anchors.margins: 10
                 spacing: 8
                 Text {
-                    text: quickUploadConfirmDialog._fromArchiveBatch.length > 0 ? "📦" : "ℹ"
+                    text: "📂"
                     font.pixelSize: 13
-                    color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
-                           ? "#4fc3f7" : "#4fc3f7"
-                    verticalAlignment: Text.AlignTop
+                    color: "#4fc3f7"
+                    verticalAlignment: Text.AlignVCenter
                 }
                 Text {
                     id: footNoteText
                     Layout.fillWidth: true
                     text: quickUploadConfirmDialog._fromArchiveBatch.length > 0
-                          ? qsTr("当前 Tab 已归档清空，将上传 tag「%1」对应的归档文件（%2 条）。数据已在归档中，上传后不会重复归档。")
+                          ? qsTr("已归档在 归档/%1 目录，上传后不会重复归档。")
                             .arg(quickUploadConfirmDialog._tag)
-                            .arg(quickUploadConfirmDialog._recordCount)
                           : (quickUploadConfirmDialog._canUpload
-                             ? qsTr("上传完成后，这些评分记录会自动归档，「当前」Tab 将不再显示。")
+                             ? qsTr("上传成功后自动归档到 归档/%1 目录。")
+                               .arg(quickUploadConfirmDialog._tag)
                              : "")
-                    color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
-                           ? "#90caf9" : "#90caf9"
+                    color: "#90caf9"
                     font.pixelSize: 12
                     wrapMode: Text.WordWrap
                     lineHeight: 1.4
