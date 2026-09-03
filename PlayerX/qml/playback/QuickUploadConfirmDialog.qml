@@ -13,30 +13,24 @@ Dialog {
     anchors.centerIn: parent
     standardButtons: Dialog.NoButton
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    implicitWidth: 520
+    implicitWidth: 620
 
-    Overlay.modal: Rectangle { color: "#aa000000" }
+    Overlay.modal: Rectangle { color: "#cc000000" }
 
     // ── 预览数据（openWithPreview 填充；关闭后不清空，方便调试）──
     property string _mode: ""
     property string _modeLabel: ""
     property string _rater: ""
     property string _tag: ""
-    property var    _folders: []         // [{name, path, ratedCount, totalVideos, ckMissing, totalItems}]
+    property var    _folders: []
     property int    _recordCount: 0
     property bool   _canUpload: false
     property string _blockReason: ""
-    // 非空 → 本次上传的数据取自该归档批次（当前 Tab 已无记录）
     property string _fromArchiveBatch: ""
-    // 数据源显示文案（如"当前评分数据（12 条）"或"归档批次 test_xxx（85 条）"）
     property string _sourceLabel: ""
 
-    // 打开前从 RatingsDialog 拉取预览信息，填充后再 open()
-    // 关键：任何 preview 内部异常都不能阻止 open()，否则用户会感觉按钮"点了没反应"。
-    // 因此这里用 try-catch 包裹 preview 调用，失败时退化为"信息为空，用户去修改"。
     function openWithPreview() {
         console.log("[QuickUpload] openWithPreview() start")
-        // 先重置成空态，避免上一次残留信息误导
         _mode = ""; _modeLabel = ""; _rater = ""; _tag = ""
         _folders = []; _recordCount = 0
         _canUpload = false; _blockReason = ""
@@ -73,220 +67,304 @@ Dialog {
         open()
     }
 
+    // ── 背景 ───────────────────────────────────────────────────
     background: Rectangle {
-        color: "#1e1e22"
-        border.color: "#3a3a42"
+        color: "#1a1a1f"
+        border.color: "#44444e"
         border.width: 1
-        radius: 6
-        Rectangle {
-            z: -1; anchors.fill: parent; anchors.margins: -8
-            radius: parent.radius + 4
-            color: "transparent"; border.color: "#80000000"; border.width: 1
-            opacity: 0.45
-        }
-        Rectangle {
-            z: -1; anchors.fill: parent; anchors.margins: -4
-            radius: parent.radius + 2
-            color: "transparent"; border.color: "#a0000000"; border.width: 1
-            opacity: 0.55
-        }
+        radius: 8
     }
 
+    // ── 标题栏 ─────────────────────────────────────────────────
     header: Rectangle {
-        color: "transparent"
-        implicitHeight: 42
-        Text {
-            anchors.left: parent.left; anchors.leftMargin: 16
-            anchors.verticalCenter: parent.verticalCenter
-            text: qsTr("上传评分数据到云端？")
-            color: "#e8e8ec"
-            font.pixelSize: 15
-            font.bold: true
+        color: "#22222a"
+        implicitHeight: 52
+        radius: 8
+        // 只上圆角
+        Rectangle {
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: parent.radius; color: parent.color
+        }
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 18; anchors.rightMargin: 18
+            spacing: 10
+            Text {
+                text: "☁"
+                font.pixelSize: 18
+                color: "#4fc3f7"
+            }
+            Text {
+                text: qsTr("上传评分数据到云端")
+                color: "#f0f0f4"
+                font.pixelSize: 15
+                font.bold: true
+                Layout.fillWidth: true
+            }
         }
         Rectangle {
             anchors.left: parent.left; anchors.right: parent.right
             anchors.bottom: parent.bottom
-            height: 1; color: "#2a2a32"
+            height: 1; color: "#33333c"
         }
     }
 
+    // ── 内容区 ─────────────────────────────────────────────────
     contentItem: ColumnLayout {
-        spacing: 12
+        spacing: 0
 
-        // ── 摘要块（模式 / 评分人 / tag / 条数）────────────────
-        GridLayout {
+        // ── 摘要信息块（2×2 网格：评分模式/评分人/备注tag/评分记录）──
+        // 用 Item+anchors 实现，规避 AOT 下 Layout.preferredWidth 兼容问题
+        Item {
+            id: summaryBlock
             Layout.fillWidth: true
-            columns: 2
-            columnSpacing: 12
-            rowSpacing: 6
+            Layout.topMargin: 4
+            implicitHeight: gridBg.implicitHeight
 
-            Text {
-                text: qsTr("评分模式：")
-                color: "#9aa0a6"; font.pixelSize: 12
-            }
-            Text {
-                Layout.fillWidth: true
-                text: quickUploadConfirmDialog._modeLabel || "—"
-                color: "#e8e8ec"; font.pixelSize: 13
-                elide: Text.ElideRight
-            }
-            Text {
-                text: qsTr("评分人：")
-                color: "#9aa0a6"; font.pixelSize: 12
-            }
-            Text {
-                Layout.fillWidth: true
-                text: quickUploadConfirmDialog._rater.length > 0
-                      ? quickUploadConfirmDialog._rater
-                      : qsTr("（未填写）")
-                color: quickUploadConfirmDialog._rater.length > 0 ? "#e8e8ec" : "#e07070"
-                font.pixelSize: 13
-                elide: Text.ElideRight
-            }
-            Text {
-                text: qsTr("备注 tag：")
-                color: "#9aa0a6"; font.pixelSize: 12
-            }
-            Text {
-                Layout.fillWidth: true
-                text: quickUploadConfirmDialog._tag.length > 0
-                      ? quickUploadConfirmDialog._tag
-                      : qsTr("（未填写）")
-                color: quickUploadConfirmDialog._tag.length > 0 ? "#e8e8ec" : "#e07070"
-                font.pixelSize: 13
-                elide: Text.ElideRight
-            }
-            // ── 数据源（只读）：当前评分数据 / 由 tag 唯一定位的归档批次 ──
-            // 归档 csv 命名固定为 playerx_<rater>_<mode>__<batch>_<group>.csv，
-            // group 即 tag，因此给定 tag 时归档文件唯一，无需用户下拉选择。
-            Text {
-                text: qsTr("数据源：")
-                color: "#9aa0a6"; font.pixelSize: 12
-            }
-            Text {
-                Layout.fillWidth: true
-                text: quickUploadConfirmDialog._sourceLabel
-                color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
-                      ? "#7ec8ff" : "#e8e8ec"
-                font.pixelSize: 13
-                elide: Text.ElideRight
-            }
-            Text {
-                text: qsTr("评分记录：")
-                color: "#9aa0a6"; font.pixelSize: 12
-            }
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("%1 个文件夹 · %2 条评分")
-                        .arg(quickUploadConfirmDialog._folders.length)
-                        .arg(quickUploadConfirmDialog._recordCount)
-                color: "#e8e8ec"; font.pixelSize: 13
-            }
-        }
-
-        // ── 文件夹列表（最多显示 6 行；超过用"…还有 N 个"折叠）──
-        Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: Math.min(
-                quickUploadConfirmDialog._folders.length * 22 + 16, 168)
-            color: "#141418"
-            border.color: "#2a2a32"; border.width: 1
-            radius: 4
-            visible: quickUploadConfirmDialog._folders.length > 0
-
-            ListView {
+            Rectangle {
+                id: gridBg
                 anchors.fill: parent
-                anchors.margins: 8
-                clip: true
-                interactive: contentHeight > height
-                model: quickUploadConfirmDialog._folders
-                delegate: Row {
-                    width: ListView.view.width
-                    height: 22
-                    spacing: 8
+                color: "#1f1f26"
+                radius: 6
+                implicitHeight: Math.max(cellTL.implicitHeight, cellTR.implicitHeight)
+                              + Math.max(cellBL.implicitHeight, cellBR.implicitHeight)
+                              + 52   // 上下边距 + 行间距
+            }
+
+            // 竖分隔线
+            Rectangle {
+                id: vDivider
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.topMargin: 12; anchors.bottomMargin: 12
+                width: 1; color: "#2a2a34"
+            }
+            // 横分隔线
+            Rectangle {
+                id: hDivider
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.topMargin: parent.implicitHeight / 2
+                anchors.leftMargin: 16; anchors.rightMargin: 16
+                height: 1; color: "#2a2a34"
+            }
+
+            // 左上：评分模式
+            Column {
+                id: cellTL
+                anchors.left: parent.left
+                anchors.right: vDivider.left
+                anchors.top: parent.top
+                anchors.leftMargin: 18; anchors.rightMargin: 14
+                anchors.topMargin: 18
+                spacing: 5
+                Text {
+                    text: qsTr("评分模式")
+                    color: "#585e68"; font.pixelSize: 11
+                }
                     Text {
-                        // 完成度小标
-                        width: 48
-                        text: (modelData.ratedCount === modelData.totalVideos
-                               && modelData.ckMissing === 0)
-                              ? "✓ " + modelData.ratedCount + "/" + modelData.totalVideos
-                              : "⚠ " + modelData.ratedCount + "/" + modelData.totalVideos
-                        color: (modelData.ratedCount === modelData.totalVideos
-                                && modelData.ckMissing === 0) ? "#5fd17a" : "#ffb05c"
-                        font.pixelSize: 12
+                        width: parent.width
+                        text: quickUploadConfirmDialog._modeLabel || "—"
+                        color: "#ffd27a"
+                        font.pixelSize: 17
+                        elide: Text.ElideRight
                     }
-                    Text {
-                        width: parent.width - 48 - 8
-                        text: modelData.name || "—"
-                        color: "#cfcfd4"
-                        font.pixelSize: 12
-                        elide: Text.ElideMiddle
-                    }
+            }
+
+            // 右上：评分人
+            Column {
+                id: cellTR
+                anchors.left: vDivider.right
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.leftMargin: 14; anchors.rightMargin: 18
+                anchors.topMargin: 18
+                spacing: 5
+                Text {
+                    text: qsTr("评分人")
+                    color: "#585e68"; font.pixelSize: 11
+                }
+                Text {
+                    width: parent.width
+                    text: quickUploadConfirmDialog._rater.length > 0
+                          ? quickUploadConfirmDialog._rater
+                          : qsTr("（未填写）")
+                    color: quickUploadConfirmDialog._rater.length > 0 ? "#ffd27a" : "#e07070"
+                    font.pixelSize: 20
+                    font.bold: true
+                    elide: Text.ElideRight
+                }
+            }
+
+            // 左下：备注 tag
+            Column {
+                id: cellBL
+                anchors.left: parent.left
+                anchors.right: vDivider.left
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 18; anchors.rightMargin: 14
+                anchors.bottomMargin: 18
+                spacing: 5
+                Text {
+                    text: qsTr("备注 tag")
+                    color: "#585e68"; font.pixelSize: 11
+                }
+                Text {
+                    width: parent.width
+                    text: quickUploadConfirmDialog._tag.length > 0
+                          ? quickUploadConfirmDialog._tag
+                          : qsTr("（未填写）")
+                    color: quickUploadConfirmDialog._tag.length > 0 ? "#ffd27a" : "#e07070"
+                    font.pixelSize: 20
+                    font.bold: true
+                    elide: Text.ElideRight
+                }
+            }
+
+            // 右下：评分记录
+            Column {
+                id: cellBR
+                anchors.left: vDivider.right
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 14; anchors.rightMargin: 18
+                anchors.bottomMargin: 18
+                spacing: 5
+                Text {
+                    text: qsTr("评分记录")
+                    color: "#585e68"; font.pixelSize: 11
+                }
+                Text {
+                    width: parent.width
+                    text: quickUploadConfirmDialog._folders.length + qsTr(" 个文件夹  ·  ") +
+                          quickUploadConfirmDialog._recordCount + qsTr(" 条评分")
+                    color: "#ffd27a"
+                    font.pixelSize: 20
+                    font.bold: true
+                    elide: Text.ElideRight
                 }
             }
         }
 
-        // ── 未通过校验时的原因提示（红色 banner）────────────────
+        // ── 校验失败 banner ─────────────────────────────────────
         Rectangle {
             Layout.fillWidth: true
+            Layout.topMargin: 10
             visible: !quickUploadConfirmDialog._canUpload
                      && quickUploadConfirmDialog._blockReason.length > 0
-            color: "#3a1f22"
-            border.color: "#7a3a3a"; border.width: 1
-            radius: 4
-            implicitHeight: blockText.implicitHeight + 16
-            Text {
-                id: blockText
+            color: "#2e1a1a"
+            border.color: "#6a3030"; border.width: 1
+            radius: 6
+            implicitHeight: blockText.implicitHeight + 18
+            RowLayout {
                 anchors.fill: parent
-                anchors.margins: 8
-                text: "⚠ " + quickUploadConfirmDialog._blockReason
-                color: "#ffb0b0"
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
+                anchors.margins: 10
+                spacing: 8
+                Text {
+                    text: "⚠"
+                    color: "#ff8080"
+                    font.pixelSize: 14
+                    verticalAlignment: Text.AlignTop
+                }
+                Text {
+                    id: blockText
+                    Layout.fillWidth: true
+                    text: quickUploadConfirmDialog._blockReason
+                    color: "#f0a0a0"
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                    lineHeight: 1.4
+                }
             }
         }
 
-        // ── 说明脚注 ──────────────────────────────────────────
-        Text {
+        // ── 脚注说明 ────────────────────────────────────────────
+        Rectangle {
             Layout.fillWidth: true
-            text: quickUploadConfirmDialog._fromArchiveBatch.length > 0
-                  ? qsTr("当前 Tab 已归档清空，将上传 tag「%1」对应的归档文件（%2 条）。数据已在归档中，上传后不会重复归档。")
-                    .arg(quickUploadConfirmDialog._tag)
-                    .arg(quickUploadConfirmDialog._recordCount)
-                  : (quickUploadConfirmDialog._canUpload
-                     ? qsTr("上传完成后，这些评分记录会自动归档，「当前」Tab 将不再显示。")
-                     : qsTr("请点「去修改」在评分数据面板里补齐后再上传。"))
-            font.pixelSize: 11
-            wrapMode: Text.WordWrap
-            lineHeight: 1.3
+            Layout.topMargin: 10
+            visible: footNoteText.text.length > 0
+            color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
+                   ? "#0d2140" : "#0d2140"
+            border.color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
+                          ? "#1976d2" : "#1976d2"
+            border.width: 1
+            radius: 6
+            implicitHeight: footNoteText.implicitHeight + 16
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
+                Text {
+                    text: quickUploadConfirmDialog._fromArchiveBatch.length > 0 ? "📦" : "ℹ"
+                    font.pixelSize: 13
+                    color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
+                           ? "#4fc3f7" : "#4fc3f7"
+                    verticalAlignment: Text.AlignTop
+                }
+                Text {
+                    id: footNoteText
+                    Layout.fillWidth: true
+                    text: quickUploadConfirmDialog._fromArchiveBatch.length > 0
+                          ? qsTr("当前 Tab 已归档清空，将上传 tag「%1」对应的归档文件（%2 条）。数据已在归档中，上传后不会重复归档。")
+                            .arg(quickUploadConfirmDialog._tag)
+                            .arg(quickUploadConfirmDialog._recordCount)
+                          : (quickUploadConfirmDialog._canUpload
+                             ? qsTr("上传完成后，这些评分记录会自动归档，「当前」Tab 将不再显示。")
+                             : "")
+                    color: quickUploadConfirmDialog._fromArchiveBatch.length > 0
+                           ? "#90caf9" : "#90caf9"
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                    lineHeight: 1.4
+                }
+            }
         }
+
+        Item { implicitHeight: 4 }
     }
 
+    // ── 底部按钮 ───────────────────────────────────────────────
     footer: Rectangle {
-        color: "transparent"
-        implicitHeight: 56
+        color: "#1e1e26"
+        implicitHeight: 58
+        radius: 8
+        // 只下圆角
         Rectangle {
             anchors.left: parent.left; anchors.right: parent.right
             anchors.top: parent.top
-            height: 1; color: "#2a2a32"
+            height: parent.radius; color: parent.color
+        }
+        Rectangle {
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.top: parent.top
+            height: 1; color: "#33333c"
         }
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 14; anchors.rightMargin: 14
+            anchors.leftMargin: 16; anchors.rightMargin: 16
             anchors.topMargin: 12; anchors.bottomMargin: 12
             spacing: 8
+
             Item { Layout.fillWidth: true }
+
+            // 取消
             FlatButton {
-                implicitWidth: 88
-                implicitHeight: 30
+                implicitWidth: 80
+                implicitHeight: 32
                 text: qsTr("取消")
                 onClicked: quickUploadConfirmDialog.close()
             }
+
+            // 去修改
             FlatButton {
-                implicitWidth: 110
-                implicitHeight: 30
+                implicitWidth: 108
+                implicitHeight: 32
                 text: qsTr("✏️ 去修改")
-                textColor: "#e8e8ec"
+                textColor: "#d0d4dc"
                 ToolTip.visible: hovered
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("打开评分数据面板，人工核对/修改后再上传")
@@ -295,26 +373,57 @@ Dialog {
                     ratingsDialog.open()
                 }
             }
-            FlatButton {
+
+            // 确认上传
+            Rectangle {
                 implicitWidth: 120
-                implicitHeight: 30
-                text: qsTr("☁ 确认上传")
-                textColor: enabled ? "#4fc3f7" : "#5a5a60"
-                // 校验未通过时禁用上传按钮，强制走"去修改"。
-                // 额外规则：选了"当前评分数据"但它是 0 条 → 也禁用
-                // （此时应改选归档批次或去面板补齐），避免上传空数据。
-                enabled: quickUploadConfirmDialog._canUpload
-                ToolTip.visible: hovered && !enabled
-                ToolTip.delay: 400
-                ToolTip.text: quickUploadConfirmDialog._blockReason
-                onClicked: {
-                    quickUploadConfirmDialog.close()
-                    // 数据源已由 previewCurrentUpload() 按 tag 唯一定位好
-                    // （当前 Tab 有记录就用当前，否则自动用该 tag 对应的归档文件），
-                    // 这里直接触发即可。
-                    if (typeof ratingsDialog !== "undefined"
-                            && typeof ratingsDialog.triggerQuickUploadForCurrentTab === "function") {
-                        ratingsDialog.triggerQuickUploadForCurrentTab()
+                implicitHeight: 32
+                radius: 5
+                color: quickUploadConfirmDialog._canUpload
+                       ? (confirmUploadBtn.pressed ? "#1565a8" : confirmUploadBtn.hovered ? "#1a7acc" : "#1976d2")
+                       : "#2a2a32"
+                border.color: quickUploadConfirmDialog._canUpload ? "transparent" : "#3a3a44"
+                border.width: 1
+
+                Behavior on color { ColorAnimation { duration: 120 } }
+
+                MouseArea {
+                    id: confirmUploadBtn
+                    anchors.fill: parent
+                    enabled: quickUploadConfirmDialog._canUpload
+                    hoverEnabled: true
+                    property bool hovered: false
+                    property bool pressed: false
+                    onEntered: hovered = true
+                    onExited:  hovered = false
+                    onPressed: pressed = true
+                    onReleased: pressed = false
+                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        quickUploadConfirmDialog.close()
+                        if (typeof ratingsDialog !== "undefined"
+                                && typeof ratingsDialog.triggerQuickUploadForCurrentTab === "function") {
+                            ratingsDialog.triggerQuickUploadForCurrentTab()
+                        }
+                    }
+
+                    ToolTip.visible: hovered && !quickUploadConfirmDialog._canUpload
+                    ToolTip.delay: 400
+                    ToolTip.text: quickUploadConfirmDialog._blockReason
+                }
+                RowLayout {
+                    anchors.centerIn: parent
+                    spacing: 5
+                    Text {
+                        text: "☁"
+                        font.pixelSize: 14
+                        color: quickUploadConfirmDialog._canUpload ? "#ffffff" : "#50505a"
+                    }
+                    Text {
+                        text: qsTr("确认上传")
+                        font.pixelSize: 13
+                        font.bold: true
+                        color: quickUploadConfirmDialog._canUpload ? "#ffffff" : "#50505a"
                     }
                 }
             }
