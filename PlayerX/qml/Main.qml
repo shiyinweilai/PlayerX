@@ -749,7 +749,20 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             var dims = root._pendingDimsToApply
-            if (!dims || !Array.isArray(dims)) return
+            // 【QML 陷阱修复】不能用 !Array.isArray(dims) 早退：
+            // property var 里存的数组读回来常被包装成 QVariantList/QJSValue，
+            // Array.isArray() 返回 false，导致这里静默 return —— 维度永远不恢复，
+            // 于是 hasDims=false，星级全空（而 checklist 不依赖维度，故仍正常显示），
+            // 表现为"重启后 checklist 还在、星星却空了"。
+            // 改用 length duck-typing 判定，并转成纯 JS 数组。
+            if (!dims || typeof dims.length !== "number" || dims.length <= 0) {
+                console.warn("[DimReload] ⚠️ 待应用维度无效，放弃重建。reason=Timer")
+                root._applyingConfig = false
+                return
+            }
+            var _pure = []
+            for (var _k = 0; _k < dims.length; ++_k) _pure.push(dims[_k])
+            dims = _pure
             root.reviewDimensions = dims
             root.reviewDimensionsVersion = root.reviewDimensionsVersion + 1
             if (root._pendingTagToApply && typeof Rating !== "undefined") {
@@ -767,6 +780,13 @@ ApplicationWindow {
             //   到这里 reviewDimensions 已经重建完毕，重跑一次幂等回填即可修正 UI。
             if (typeof Engine !== "undefined" && Engine.fileCount > 0) {
                 Logic._rebuildCellRatingsFromCsv("dimReload")
+                // 【二次保险】维度刚赋值的这一帧，Repeater 未必已重建完 delegate。
+                // 再排一帧重跑一次回填，确保星级从"兜底值"刷新为按 slide_type
+                // 精确匹配的真实值（幂等，无副作用）。
+                Qt.callLater(function() {
+                    if (typeof Engine !== "undefined" && Engine.fileCount > 0)
+                        Logic._rebuildCellRatingsFromCsv("dimReload-post")
+                })
             }
         }
     }
@@ -2269,9 +2289,10 @@ Component {
         //   评分数据面板是独立 Window，其内部 Popup 需要 Window 可见才能显示，
         //   所以 RatingsDialog 把三种上传结果通过 signal 抛出来，由主窗顶层
         //   对话框接手展示。
-        onQuickUploadFinished: function(ok, message) {
+        onQuickUploadFinished: function(ok, message, archivedBatch) {
             if (ok) {
-                quickUploadResultDialog.showSuccess(message)
+                // archivedBatch 非空 → 上传成功后已自动归档，一并告知用户
+                quickUploadResultDialog.showSuccess(message, archivedBatch)
             } else {
                 // 一般性失败（服务端 400/500 等）：也用同一个"结果对话框"展示
                 quickUploadResultDialog.showFailure(message)

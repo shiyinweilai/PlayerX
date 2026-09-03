@@ -68,6 +68,8 @@ ApplicationWindow {
         target: (typeof Rating !== "undefined") ? Rating : null
         ignoreUnknownSignals: true
         function onCurrentModeChanged() {
+            // 【归档进度缓存失效】mode 变了，之前扫的归档进度不再适用，清空以免串档
+            _archiveRatingCache = ({})
             // 防御：还原期间不要再触发 _restoreLanes（_restoring 在内部已判，
             // 但模式切换通常发生在用户已交互后，此处一般 _restoring=false）
             if (_restoring) return
@@ -1721,6 +1723,45 @@ ApplicationWindow {
     //              但用户实质已有进度；用 ratingFor 查一下就能识别。
     //              并把 idx 提升为"最后一个已评分项的下一个"，做最贴近用户预期的"继续评分"。
     //   · items：每路一条，仅含"勾选+有效"的路；用于弹窗罗列展示
+
+    // 【归档感知·辅助】扫描当前评分模式下的全部归档批次，
+    // 返回 { 文件绝对路径: 星级 } 映射，供进度检测在"主 CSV 已清空"
+    // （评分被归档移走）时回落查询，避免历史进度被判为"无"。
+    // 结果按批次做进程内缓存，key 为 mode，mode 切换时自动失效。
+    property var _archiveRatingCache: ({})
+    function _loadArchiveRatingRows() {
+        if (typeof Rating === "undefined" || !Rating) return {}
+        var mode = Rating.currentMode || ""
+        if (mode.length === 0 || mode === "off") return {}
+        if (_archiveRatingCache[mode] !== undefined) return _archiveRatingCache[mode]
+
+        var map = {}
+        try {
+            var batches = Rating.listAllArchiveBatches ? Rating.listAllArchiveBatches()
+                        : (Rating.listArchiveBatches ? Rating.listArchiveBatches(mode) : [])
+            for (var b = 0; b < batches.length; ++b) {
+                var bm = String((batches[b] || {})["mode"] || mode)
+                var bn = String((batches[b] || {})["name"] || "")
+                if (bn.length === 0) continue
+                var rows = []
+                try { rows = Rating.loadArchiveBatch(bm, bn) || [] } catch (e) { rows = [] }
+                for (var r = 0; r < rows.length; ++r) {
+                    var fp = String((rows[r] || {})["file_path"] || "")
+                    if (fp.length === 0) continue
+                    var st = (rows[r] || {})["stars"]
+                    map[fp] = (typeof st === "number") ? st : 0
+                }
+            }
+        } catch (e) {
+            console.warn("[Resume] 归档进度扫描失败:", e)
+        }
+        var cache = {}
+        cache[mode] = map
+        _archiveRatingCache = cache
+        console.log("[Resume] 归档进度扫描完成 mode=", mode, " 条数=", Object.keys(map).length)
+        return map
+    }
+
     function _collectResumeInfo() {
         var items = []
         var hasProgress = false
@@ -1743,9 +1784,19 @@ ApplicationWindow {
             if (canQueryRating) {
                 var rt = _laneRuntime[i]
                 var vis = (rt && rt.visibleFiles) ? rt.visibleFiles : []
+                // 【归档感知】只查主 CSV 会导致"已归档"的文件夹进度丢失：
+                //   评分 → 上传 → 自动归档（记录从主 CSV 移入归档快照）→ 主 CSV 空
+                //   → 下次启动检测不到进度 → 不弹"继续评分"，星星也空白。
+                // 改为：先查主 CSV；未命中的文件再回落到该 mode 的归档批次里查。
+                // 这样"评过并归档"与"评过未归档"的进度都能被识别。
+                var _archRows = null   // 懒加载：仅当主 CSV 漏判时才去扫归档
                 for (var v = 0; v < vis.length; ++v) {
                     var got = -1
                     try { got = Rating.ratingFor(vis[v]) } catch (e) { got = -1 }
+                    if (got < 0) {
+                        if (_archRows === null) _archRows = _loadArchiveRatingRows()
+                        if (_archRows && _archRows[vis[v]] !== undefined) got = 1
+                    }
                     if (got >= 0) lastRated = v
                 }
             }
@@ -3037,7 +3088,7 @@ ApplicationWindow {
                 }
                 Label {
                     text: "勾选 1 路 = 单视频浏览（用上一组/下一组在该文件夹内循环切换）；勾选 ≥2 路 = 多组对比"
-                    color: "#888"
+                    color: "#c2c2cc"
                     font.pixelSize: 11
                     Layout.fillWidth: true
                     elide: Text.ElideRight
@@ -3386,7 +3437,7 @@ ApplicationWindow {
             }
 
             Label {
-                color: "#9a9aa8"
+                color: "#d6d6e0"
                 font.pixelSize: 11
                 text: {
                     // 腾位置提示优先显示（几秒后由 _evictNoticeTimer 自动清空恢复）
@@ -3771,7 +3822,7 @@ ApplicationWindow {
                         return "在下方直接点星号完成评分；⚠️ 检查项未勾选的通道请回到主界面点星星右侧展开 checklist 勾选。"
                     return "在下方直接点星号完成评分（也可在主界面使用 Shift+1~5 快捷键）。"
                 }
-                color: "#9a9aa8"
+                color: "#d6d6e0"
                 font.pixelSize: 11
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
@@ -3871,7 +3922,7 @@ ApplicationWindow {
                                             property int dimHover: -1
                                             Text {
                                                 text: dimKey
-                                                color: "#9a9aa8"
+                                                color: "#c8c8d4"
                                                 font.pixelSize: 10
                                                 width: 28
                                                 horizontalAlignment: Text.AlignRight

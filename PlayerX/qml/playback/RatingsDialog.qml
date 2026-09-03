@@ -77,6 +77,15 @@ Window {
     property string _selectedMode: (typeof Rating !== "undefined") ? Rating.currentMode : "subjective"
     // 归档 Tab 当前选中的批次名（首次打开自动取最新一批）
     property string _archiveBatch: ""
+    // 选中批次所属的「评分模式」（如 test / multi_dim）。
+    // 归档列表现在是跨 mode 聚合的（不再按当前模式过滤），因此
+    // loadArchiveBatch / 上传 / 删除 / 打开文件夹 都必须用这个 mode，
+    // 而不是 root._selectedMode，否则会操作到错误的模式目录。
+    property string _archiveBatchMode: ""
+    // 最近一次归档成功的「模式 + 批次名」缓存：供归档成功 toast 上的"打开所在文件夹"
+    // 按钮安全取值（QML 的 JS 闭包对 var 局部变量捕获不可靠，故用属性承载）
+    property string _lastArchivedMode: ""
+    property string _lastArchivedBatch: ""
     // 归档 Tab 缓存的批次列表（[{name, count, latest, raters, modifiedAt, path}]）
     property var _archiveBatches: []
     // 便捷判断
@@ -123,7 +132,9 @@ Window {
     property bool _quickUploadInProgress: false
 
     // 外部一键上传的结果信号：Main.qml 会连上这些信号，用自己的对话框展示。
-    signal quickUploadFinished(bool ok, string message)
+    // archivedBatch：上传成功后自动归档产生的批次名；为空表示未自动归档。
+    // 一键上传（📤 上传数据）也走这个信号，主窗结果对话框据此显示"已自动归档"。
+    signal quickUploadFinished(bool ok, string message, string archivedBatch)
     signal quickUploadConflict(string message)
     signal quickUploadNetError(string message)
 
@@ -137,6 +148,9 @@ Window {
     property string _lastUploadKind: "current"
     // 归档来源专属：上次上传所选的批次名；current 来源时无意义。
     property string _lastUploadArchiveBatch: ""
+    // 归档来源上传时，该批次所属的 mode（跨 mode 聚合后必须记录，
+    // 否则 uploadArchiveBatchToCloud 会按当前模式去找、找错目录）
+    property string _lastUploadArchiveMode: ""
     // 远程激活配置的 tag（由 Main.qml 注入），用于上传前校验
     property string remoteTag: ""
     // 开发者模式（由 Main.qml 注入）：勾选时模式切换 Tab 显示「测试模式」
@@ -605,30 +619,140 @@ Window {
         var picked = _collectCheckedFolderPaths()
         var incomplete = _collectCheckedIncomplete()
 
+        // ══════════════════════════════════════════════════════════════
+        // 归档回退：当前 Tab 已无记录（数据已被自动归档走）时，
+        // 自动改用「最近一次归档批次」的数据来上传。
+        //
+        // 场景：上次上传成功后自动归档 → 当前 Tab 被清空 → 用户再次点
+        // 「📤 上传数据」时本来会显示"0 条评分，无法上传"，现在改为直接
+        // 从归档批次取记录上传，等价于"在归档 Tab 里选中该批次再上传"。
+        //
+        // 关键：把 _lastUploadKind 置为 "archive" 并记下批次名，
+        // _performUpload() 会据此走 uploadArchiveBatchToCloud 通路；
+        // 且 _autoArchiveAfterUpload() 会跳过归档（数据本就在归档里），
+        // 因此【不会重复归档】，持久化跟踪流程不受影响。
+        // ══════════════════════════════════════════════════════════════
+        var fromArchive = ""
+        var archiveRowCount = 0
+        if (picked.length === 0) {
+            try {
+                // 归档 csv 命名：playerx_<rater>_<mode>__<batch>_<group>.csv
+                // group 即上传 tag，因此【给定 tag 时归档文件唯一】，
+                // 直接按 "_<tag>.csv" 后缀定位，无需用户选择批次。
+                var tagKey = (typeof Rating !== "undefined" && Rating.uploadGroup)
+                             ? String(Rating.uploadGroup).trim() : ""
+                var batches = (typeof Rating !== "undefined")
+                              ? (Rating.listArchiveBatches(root._selectedMode) || []) : []
+                var hit = null
+                if (tagKey.length > 0) {
+                    // ① 优先：批次目录名 == tag（统一命名后的正规形态，唯一且确定）
+                    for (var ti = 0; ti < batches.length; ++ti) {
+                        var bt = batches[ti] || {}
+                        if (String(bt["name"] || "") === tagKey) { hit = bt; break }
+                    }
+                    // ② 回退：按 csv 文件名后缀 _<tag>.csv 匹配（旧时间戳命名残留时）
+                    if (!hit) {
+                        for (var tj = 0; tj < batches.length; ++tj) {
+                            var bj = batches[tj] || {}
+                            if (String(bj["path"] || "").endsWith("_" + tagKey + ".csv")) {
+                                hit = bj; break
+                            }
+                        }
+                    }
+                }
+                // ③ 最后退回最近批次
+                if (!hit && batches.length > 0) hit = batches[0]
+
+                if (hit) {
+                    var bName = String(hit["name"] || "")
+                    // 跨 mode 聚合后，命中批次自带 mode，必须用它读取/上传，
+                    // 不能用当前 _selectedMode（归档可能属于别的模式）
+                    var bMode = String(hit["mode"] || "") || root._selectedMode
+                    if (bName.length > 0) {
+                        var rows = Rating.loadArchiveBatch(bMode, bName) || []
+                        archiveRowCount = rows.length
+                        // 从归档记录的 file_path 反推所属文件夹，去重
+                        var dirSet = {}, dirList = []
+                        for (var ai = 0; ai < rows.length; ++ai) {
+                            var r = rows[ai] || {}
+                            var afp = r["file_path"] || ""
+                            if (!afp) continue
+                            var adir = afp.substring(0, afp.lastIndexOf("/"))
+                            if (adir.length === 0 || dirSet[adir]) continue
+                            dirSet[adir] = true
+                            dirList.push(adir)
+                        }
+                        if (dirList.length > 0) {
+                            picked = dirList
+                            fromArchive = bName
+                            // 归档数据视为"已评完"，无需 incomplete 拦截
+                            incomplete = []
+                            root._lastUploadKind = "archive"
+                            root._lastUploadArchiveBatch = bName
+                            root._lastUploadArchiveMode = bMode
+                            root._lastUploadFolders = picked
+                            console.log("[QuickUpload] 当前 Tab 无记录 → 按 tag「",
+                                        tagKey, "」定位归档批次:", bName,
+                                        "文件夹数:", picked.length)
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn("[QuickUpload] 归档回退失败：", e)
+                fromArchive = ""
+            }
+        } else {
+            // 当前 Tab 有记录：恢复正常路径
+            root._lastUploadKind = "current"
+            root._lastUploadArchiveBatch = ""
+            root._lastUploadArchiveMode = ""
+        }
+
         // 累计评分条数：仅统计本次勾选文件夹里的评分记录数之和
+        // 归档回退模式下 _folders 是"当前 Tab"的空表，改用归档 CSV 的实际行数
         var recordCount = 0
-        for (var i = 0; i < _folders.length; ++i) {
-            var d = _folders[i]
-            if (!d || !_isFolderChecked(d.key)) continue
-            if (typeof d.totalItems === "number") recordCount += d.totalItems
+        if (fromArchive.length > 0) {
+            recordCount = archiveRowCount
+        } else {
+            for (var i = 0; i < _folders.length; ++i) {
+                var d = _folders[i]
+                if (!d || !_isFolderChecked(d.key)) continue
+                if (typeof d.totalItems === "number") recordCount += d.totalItems
+            }
         }
 
         // 组装 folders 明细（仅本次勾选的文件夹，用 name / path / 完整度）
+        // 归档回退模式下按归档目录逐项列（rated==total，视为已评完）
         var foldersOut = []
-        for (var j = 0; j < _folders.length; ++j) {
-            var fd = _folders[j]
-            if (!fd || !fd.path || fd.path.length === 0) continue
-            if (!_isFolderChecked(fd.key)) continue
-            var rated = (fd.ratedCount === undefined ? fd.files.length : fd.ratedCount)
-            var total = (fd.totalVideos === undefined ? rated : fd.totalVideos)
-            foldersOut.push({
-                name: fd.name,
-                path: fd.path,
-                ratedCount: rated,
-                totalVideos: total,
-                ckMissing: fd.ckMissing || 0,
-                totalItems: fd.totalItems || 0
-            })
+        if (fromArchive.length > 0) {
+            for (var aj = 0; aj < picked.length; ++aj) {
+                var ap = picked[aj] || ""
+                if (ap.length === 0) continue
+                foldersOut.push({
+                    name: ap.substring(ap.lastIndexOf("/") + 1),
+                    path: ap,
+                    ratedCount: 1,
+                    totalVideos: 1,
+                    ckMissing: 0,
+                    totalItems: 0
+                })
+            }
+        } else {
+            for (var j = 0; j < _folders.length; ++j) {
+                var fd = _folders[j]
+                if (!fd || !fd.path || fd.path.length === 0) continue
+                if (!_isFolderChecked(fd.key)) continue
+                var rated = (fd.ratedCount === undefined ? fd.files.length : fd.ratedCount)
+                var total = (fd.totalVideos === undefined ? rated : fd.totalVideos)
+                foldersOut.push({
+                    name: fd.name,
+                    path: fd.path,
+                    ratedCount: rated,
+                    totalVideos: total,
+                    ckMissing: fd.ckMissing || 0,
+                    totalItems: fd.totalItems || 0
+                })
+            }
         }
 
         // 从 modeList 找 label
@@ -661,6 +785,12 @@ Window {
             blockReason = qsTr("有 %1 个文件夹尚未评完，无法上传。").arg(incomplete.length)
         }
 
+        // 数据源显示文案：用于确认弹窗的只读"数据源"行。
+        // 归档回退时展示批次名 + 条数（蓝色），否则展示"当前评分数据 + 条数"。
+        var sourceLabel = (fromArchive.length > 0)
+            ? qsTr("归档批次 %1（%2 条）").arg(fromArchive).arg(recordCount)
+            : qsTr("当前评分数据（%1 条）").arg(recordCount)
+
         return {
             mode: root._selectedMode,
             modeLabel: modeLabel,
@@ -670,7 +800,11 @@ Window {
             recordCount: recordCount,
             incomplete: incomplete,
             canUpload: canUpload,
-            blockReason: blockReason
+            blockReason: blockReason,
+            // 非空 → 本次上传取自归档批次（当前 Tab 已无数据）
+            fromArchiveBatch: fromArchive,
+            // 只读文案，如"当前评分数据（12 条）"/"归档批次 test_xxx（85 条）"
+            sourceLabel: sourceLabel
         }
     }
 
@@ -695,9 +829,166 @@ Window {
         _performUpload()
     }
 
+
     // 上传主流程：与 uploadBtn.onClicked 完全等价，抽出来是为了让
     // "外部一键上传入口（Main.qml 的📤按钮）"和"评分数据面板内的上传按钮"
     // 共用同一段校验/派发逻辑；任何一处扩展新校验都对两个入口自动生效。
+    // ══════════════════════════════════════════════════════════════════
+    // 归档核心逻辑（可复用）：把 picked 这些文件夹的评分记录归档到
+    //   archive/<mode>/<batchName>/ 目录，并把 checklist 一并写入 checklist.json。
+    //
+    // 抽成函数是为了让两处共用：
+    //   1) 手动点「归档」按钮（confirmArchiveDialog.onAccepted）
+    //   2) 上传到云端成功后自动归档（onUploadFinished 的 ok 分支）
+    // 返回归档后的批次名；失败返回 ""（不抛异常，由调用方决定提示方式）。
+    //
+    // 注意：archiveByFolders 会把主 CSV 里这些记录移走（主 CSV 瘦身），
+    //       所以 checklist 必须在调用【之前】收集，否则数据已随记录迁走。
+    // ══════════════════════════════════════════════════════════════════
+    // overwrite=true 时覆盖写同名批次（用于重复上传同一 tag：刷新归档快照），
+    // 不追加 _N 序号；false 时保持原"同名加序号"防覆盖行为（手动归档用）。
+    function _archiveFolders(picked, batchName, overwrite) {
+        if (typeof Rating === "undefined") return ""
+        if (!picked || picked.length === 0) return ""
+
+        // ── 归档前：先收集这些文件夹下所有文件的 checklist 数据 ──
+        var checklistSnapshot = {}
+        try {
+            var allRows = ((typeof Rating.getAllRatingsForMode === "function")
+                            ? Rating.getAllRatingsForMode(root._selectedMode)
+                            : Rating.getAllRatings()) || []
+            var pickedSet = {}
+            for (var pi = 0; pi < picked.length; ++pi) {
+                var pf = picked[pi].replace(/\/+$/, "")   // 规整路径（去末尾斜杠）
+                pickedSet[pf] = true
+            }
+            for (var ri = 0; ri < allRows.length; ++ri) {
+                var row = allRows[ri] || {}
+                var fp = row["file_path"] || ""
+                if (!fp) continue
+                var dir = fp.substring(0, fp.lastIndexOf("/"))
+                if (!pickedSet[dir]) continue
+                var ckRaw = Rating.loadString("checklist:" + fp, "")
+                if (ckRaw && ckRaw.length > 0) {
+                    try { checklistSnapshot[fp] = JSON.parse(ckRaw) } catch(e) {}
+                }
+            }
+        } catch(e) { checklistSnapshot = {} }
+
+        // 显式传入弹窗当前查看的 mode（方案 C 下弹窗内切模式不回写全局
+        // Rating.currentMode，不传就会按全局 off 被拒绝）
+        var ok = Rating.archiveByFolders(picked, batchName, root._selectedMode,
+                                        overwrite === true)
+        if (!ok) return ""
+
+        var batch = ""
+        try {
+            var batchList = Rating.listArchiveBatches(root._selectedMode) || []
+            // listArchiveBatches 按修改时间倒序，第一个就是刚归档的
+            if (batchList.length > 0) batch = batchList[0]["name"] || ""
+        } catch(e) {}
+
+        root._checkedFolders = ({})   // 归档后清勾选，避免误操作再删一次
+
+        // ── 归档后：把 checklist 写入批次目录下的 checklist.json ──
+        try {
+            if (Object.keys(checklistSnapshot).length > 0
+                    && typeof Fs !== "undefined"
+                    && typeof Fs.writeTextFile === "function"
+                    && batch.length > 0) {
+                var dfp = ((typeof Rating.dataFilePathForMode === "function")
+                            ? Rating.dataFilePathForMode(root._selectedMode)
+                            : (Rating.dataFilePath || "")) || ""
+                var baseDir = dfp.substring(0, dfp.lastIndexOf("/"))
+                var mode = root._selectedMode || ""
+                if (baseDir && mode) {
+                    var ckPath = baseDir + "/archive/" + mode + "/" + batch + "/checklist.json"
+                    Fs.writeTextFile(ckPath, JSON.stringify(checklistSnapshot, null, 2))
+                    console.log("[Archive] checklist.json 已写入:", ckPath)
+                }
+            }
+        } catch(e) {
+            console.warn("[Archive] 写入 checklist.json 失败：", e)
+        }
+        return batch
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 上传成功后自动归档（对所有上传入口统一生效）
+    //
+    // 抽成独立函数的原因：上传结果有【两条出口】，都要归档：
+    //   1) 面板内上传  → onUploadFinished 里 ok 分支（走 uploadSuccessDialog）
+    //   2) 外部一键上传 → onUploadFinished 里 _quickUploadInProgress 分支
+    //      （Main.qml 的 📤「上传数据」/「评分数据」按钮），
+    //      该分支会【提前 return】交由主窗对话框展示，若不单独调用就会被跳过。
+    // 所以两个出口都调本函数，保证"只要上传成功就归档"这一语义不因入口而异。
+    //
+    // 返回归档批次名；未归档（无需归档/归档失败/无勾选）返回 ""。
+    // ══════════════════════════════════════════════════════════════════
+    // 取得当前上传 tag（归档 csv 的 group 段即 tag，用同一真数据源保证一致）
+    function _currentUploadTag() {
+        var t = ""
+        try {
+            if (typeof tagField !== "undefined" && tagField.text)
+                t = String(tagField.text).trim()
+            if (t.length === 0 && typeof Rating !== "undefined" && Rating.uploadGroup)
+                t = String(Rating.uploadGroup).trim()
+        } catch (e) {}
+        return t
+    }
+
+    function _autoArchiveAfterUpload() {
+        // 无论数据来源是"当前 Tab"还是"归档批次"，上传成功都触发归档。
+        //
+        // 归档来源也归档的原因：重复上传前用户可能改过内容（重新评过分），
+        // 需要把最新内容刷新回归档快照，而不是让归档停留在旧版本。
+        //
+        // 批次名固定 = tag（不再用时间戳），配合 overwrite=true 覆盖写，
+        // 因此同一 tag 永远只有一个归档目录，重复上传只刷新它、不堆新目录。
+        var tagName = root._currentUploadTag()
+        if (tagName.length === 0) {
+            console.warn("[Upload] tag 为空 → 跳过自动归档（无法唯一定位归档文件）")
+            return ""
+        }
+
+        var picked = root._lastUploadFolders
+        if (!picked || picked.length === 0) {
+            console.warn("[Upload] 上传成功，但无勾选文件夹 → 跳过自动归档")
+            return ""
+        }
+        // 批次名 = tag，overwrite=true → 覆盖写该 tag 对应的唯一归档快照
+        var batch = root._archiveFolders(picked, tagName, true)
+
+        // 幂等兜底：纯重复上传（数据来自归档、主 CSV 里这批已被移走）时，
+        // archiveByFolders 从主 CSV 捞不到记录会返回 ""。此时该 tag 的归档
+        // 快照内容就是刚上传的内容，已是最新，无需重写，直接沿用即可。
+        if ((!batch || batch.length === 0) && root._lastUploadKind === "archive") {
+            try {
+                var bl = Rating.listArchiveBatches(root._selectedMode) || []
+                for (var i = 0; i < bl.length; ++i) {
+                    if (String((bl[i] || {})["name"] || "") === tagName) {
+                        console.log("[Upload] 归档已是最新快照，跳过重写:", tagName)
+                        batch = tagName
+                        break
+                    }
+                }
+            } catch (e) {}
+        }
+
+        if (batch && batch.length > 0) {
+            root._lastArchivedMode  = root._selectedMode
+            root._lastArchivedBatch = batch
+            root._refreshArchiveList(false)
+            // 归档移走了主 CSV 记录，当前表格必须重刷，
+            // 否则关掉弹窗后仍看到已被归档走的旧数据
+            root._refresh()
+            console.log("[Upload] 上传成功 → 已自动归档批次:", batch)
+        } else {
+            console.warn("[Upload] 上传成功，但自动归档失败（数据仍在当前列表）")
+        }
+        return batch || ""
+    }
+
     function _performUpload() {
         console.log("[QuickUpload] _performUpload() start")
         if (typeof Rating === "undefined") { console.log("[QuickUpload] Rating undefined, abort"); root._quickUploadInProgress = false; return }
@@ -753,10 +1044,29 @@ Window {
 
         // ── 必须至少勾选一个文件夹再上传
         var picked = _collectCheckedFolderPaths()
+
+        // 归档回退 / 显式选归档批次：
+        //   · 归档回退  → 用 previewCurrentUpload() 准备好的文件夹列表
+        //   · 显式选中  → _lastUploadFolders 为空，表示"全量上传该批次"，
+        //                 此时保持 picked 为空，交由 C++ 全量处理，不能拦截。
+        // 判定条件：_lastUploadKind=="archive" 且批次名非空（两种情形都满足）。
+        var _archiveMode = (root._lastUploadKind === "archive"
+                            && root._lastUploadArchiveBatch.length > 0)
+        if (picked.length === 0 && _archiveMode) {
+            if (root._lastUploadFolders.length > 0) {
+                picked = root._lastUploadFolders
+                console.log("[QuickUpload] 归档回退：使用批次",
+                            root._lastUploadArchiveBatch, "文件夹数:", picked.length)
+            } else {
+                console.log("[QuickUpload] 归档批次全量上传：",
+                            root._lastUploadArchiveBatch, "（不限文件夹）")
+            }
+        }
+
         console.log("[QuickUpload] picked.length=", picked.length,
                     "_folders.length=", _folders.length,
                     "checkedCount=", _checkedFolderCount())
-        if (picked.length === 0) {
+        if (picked.length === 0 && !_archiveMode) {
             console.log("[QuickUpload] picked empty → reject")
             _fallbackToPanel()
             rejectDialog.openWith(
@@ -766,7 +1076,9 @@ Window {
         }
 
         // ── 未评完拦截：归档 Tab 与当前 Tab 一致都走
-        var incomplete = _collectCheckedIncomplete()
+        // 归档回退模式下数据是归档快照（已评完），无需再查 incomplete
+        var incomplete = (root._lastUploadKind === "archive")
+                         ? [] : _collectCheckedIncomplete()
         if (incomplete.length > 0) {
             console.log("[QuickUpload] incomplete → openWith incompleteUploadDialog")
             _fallbackToPanel()
@@ -784,9 +1096,15 @@ Window {
             return
         }
         // 缓存本次勾选 + 上传来源
+        // 归档回退态（_lastUploadKind=="archive" 且已有批次名）保持不变，
+        // 不要被 _isArchiveView（面板是否停在归档 Tab）覆盖。
+        var _isArchiveFallback = (root._lastUploadKind === "archive"
+                                  && root._lastUploadArchiveBatch.length > 0)
         root._lastUploadFolders = picked
-        root._lastUploadKind = root._isArchiveView ? "archive" : "current"
-        root._lastUploadArchiveBatch = root._isArchiveView ? root._archiveBatch : ""
+        if (!_isArchiveFallback) {
+            root._lastUploadKind = root._isArchiveView ? "archive" : "current"
+            root._lastUploadArchiveBatch = root._isArchiveView ? root._archiveBatch : ""
+        }
 
         // ── tag 与远程激活配置校验 ──
         if (root.remoteTag.length > 0 && tagText !== root.remoteTag) {
@@ -800,11 +1118,21 @@ Window {
             console.log("[QuickUpload] uploadServerUrl empty → open uploadConfigDialog")
             _fallbackToPanel()
             uploadConfigDialog.open()
-        } else if (root._isArchiveView) {
-            console.log("[QuickUpload] → uploadArchiveBatchToCloud")
+        } else if (root._isArchiveView || _isArchiveFallback) {
+            // 归档回退：批次名取缓存值（面板可能仍在"当前"Tab，
+            // root._archiveBatch 此时不可靠）
+            var _batchToUpload = _isArchiveFallback
+                ? root._lastUploadArchiveBatch
+                : root._archiveBatch
+            // 用批次自身的 mode（跨 mode 聚合后，归档不一定属于当前模式）
+            var _modeToUpload = _isArchiveFallback
+                ? (root._lastUploadArchiveMode || root._selectedMode)
+                : (root._archiveBatchMode     || root._selectedMode)
+            console.log("[QuickUpload] → uploadArchiveBatchToCloud, mode=", _modeToUpload,
+                        "batch=", _batchToUpload)
             Rating.uploadArchiveBatchToCloud(
-                root._selectedMode,
-                root._archiveBatch,
+                _modeToUpload,
+                _batchToUpload,
                 false, picked)
         } else {
             console.log("[QuickUpload] → Rating.uploadToCloud(false, picked)")
@@ -815,13 +1143,18 @@ Window {
     function _refresh() {
         var raw
         if (root._viewMode === "archive") {
-            // 先确保批次列表是最新的
-            _refreshArchiveList(false)
+            // 先确保批次列表是最新的。
+            //
+            // 必须 keepSelection=true：本函数会在"切换批次 / 切 Tab / 删行"之后被
+            // 立刻调用，若传 false 会把用户刚选中的 _archiveBatch 强行打回
+            // list[0]（最新一批），表现为"归档批次下拉点了切不动、永远停在第一个"。
+            // 选中项失效（被删掉）的兜底由 _refreshArchiveList 内部处理。
+            _refreshArchiveList(true)
             // 没批次：清空表格；有批次：读当前选中批次
             if (!root._archiveBatch || root._archiveBatches.length === 0) {
                 raw = []
             } else if (typeof Rating !== "undefined") {
-                raw = Rating.loadArchiveBatch(root._selectedMode, root._archiveBatch)
+                raw = Rating.loadArchiveBatch(root._archiveBatchMode, root._archiveBatch)
             } else {
                 raw = []
             }
@@ -854,20 +1187,40 @@ Window {
     // 重新拉取归档批次列表；keepSelection=true 表示沿用 _archiveBatch（前提是它仍存在），
     // false 时若当前选中失效则自动落到第一项。
     function _refreshArchiveList(keepSelection) {
-        if (typeof Rating === "undefined") { root._archiveBatches = []; root._archiveBatch = ""; return }
-        var list = Rating.listArchiveBatches(root._selectedMode) || []
+        if (typeof Rating === "undefined") {
+            root._archiveBatches = []; root._archiveBatch = ""; root._archiveBatchMode = ""; return
+        }
+        // 跨 mode 聚合：任何评分模式下打开面板都能看到全部归档
+        // （原先只读 archive/<当前mode>/，切个模式归档就"消失"了）
+        var list = (typeof Rating.listAllArchiveBatches === "function")
+                   ? (Rating.listAllArchiveBatches() || [])
+                   : (Rating.listArchiveBatches(root._selectedMode) || [])
         root._archiveBatches = list
-        // 校验当前选中是否还在
+        // 选中项是否仍在列表中
         var stillThere = false
         for (var i = 0; i < list.length; ++i) {
             if (list[i].name === root._archiveBatch) { stillThere = true; break }
         }
         if (!stillThere) {
+            // 选中项已失效（批次被删 / 首次进入 / 手动指定了空值）→ 落到最新一批
             root._archiveBatch = (list.length > 0) ? list[0].name : ""
+            root._archiveBatchMode = (list.length > 0) ? (list[0].mode || root._selectedMode) : ""
         } else if (!keepSelection && list.length > 0) {
-            // 不保留选择 → 默认落到最新一批
+            // 仅"显式要求重选"（如首次切到归档 Tab、刚归档完）才落到最新一批
             root._archiveBatch = list[0].name
+            root._archiveBatchMode = list[0].mode || root._selectedMode
         }
+        // 兜底：选中项有效但 mode 为空（老数据）时补上，避免后续操作传空 mode
+        if (root._archiveBatch.length > 0 && root._archiveBatchMode.length === 0) {
+            for (var k = 0; k < list.length; ++k) {
+                if (list[k].name === root._archiveBatch) {
+                    root._archiveBatchMode = list[k].mode || root._selectedMode
+                    break
+                }
+            }
+            if (root._archiveBatchMode.length === 0) root._archiveBatchMode = root._selectedMode
+        }
+        // keepSelection=true 且选中项仍有效 → 原样保留，不动用户的切换结果
     }
     // 切换视图模式（current ↔ archive）；切换时清掉勾选、上传白名单缓存，避免跨 Tab 残留
     function _switchView(mode) {
@@ -891,6 +1244,11 @@ Window {
             // 打开时从全局同步一次查看模式；之后弹窗内切胶囊
             // 完全不会回写 Rating.currentMode（方案 C：严格只读）。
             if (typeof Rating !== "undefined") _selectedMode = Rating.currentMode
+            // 归档列表跨 mode 且与当前视图无关，打开时【无条件预刷一次】：
+            // 原先只有 _viewMode==="archive" 时 _refresh() 才会刷归档列表，
+            // 而刚启动默认停在"当前"Tab，导致归档 Tab 计数/下拉显示为
+            // "（无归档批次）"，必须切一次 Tab 或评一次分才刷出来。
+            _refreshArchiveList(true)
             _refresh()
         }
     }
@@ -1057,6 +1415,13 @@ Window {
                 currentIndex: {
                     var list = root._archiveBatches
                     var name  = root._archiveBatch
+                    var mode  = root._archiveBatchMode
+                    // 先按 (mode, name) 精确匹配（跨 mode 同名 tag 时才能选对）
+                    if (mode.length > 0) {
+                        for (var j = 0; j < list.length; ++j) {
+                            if (list[j].name === name && (list[j].mode || "") === mode) return j
+                        }
+                    }
                     for (var i = 0; i < list.length; ++i) {
                         if (list[i].name === name) return i
                     }
@@ -1064,9 +1429,12 @@ Window {
                 }
                 onActivated: function(idx) {
                     if (idx >= 0 && idx < root._archiveBatches.length) {
-                        var picked = root._archiveBatches[idx].name
-                        if (picked !== root._archiveBatch) {
-                            root._archiveBatch = picked
+                        var b = root._archiveBatches[idx]
+                        var picked = b.name
+                        var pmode  = b.mode || root._selectedMode
+                        if (picked !== root._archiveBatch || pmode !== root._archiveBatchMode) {
+                            root._archiveBatch     = picked
+                            root._archiveBatchMode = pmode
                             root._checkedFolders = ({})
                             root._refresh()
                         }
@@ -1075,14 +1443,21 @@ Window {
                 delegate: ItemDelegate {
                     id: batchItemDel
                     width: archiveBatchSelector.width
-                    height: 38
+                    // 52 = 8(上内边距) + 15(标题行高) + 3(spacing) + 14(副标题行高) + 8(下内边距) + 余量。
+                    // 原先 38 装不下「标题 + 副标题」两行，文字被压后互相重叠遮挡。
+                    height: 52
+                    // 上下各留 4px 空隙，避免相邻项的文字/高亮块贴死成一团
+                    topPadding: 4
+                    bottomPadding: 4
                     // 标记当前选中项，便于 contentItem/background 高亮
                     readonly property bool _isCurrent:
                         archiveBatchSelector.currentIndex === index
                     contentItem: Column {
-                        spacing: 2
+                        spacing: 3
                         leftPadding: 10
                         rightPadding: 10
+                        topPadding: 6
+                        bottomPadding: 6
                         Text {
                             text: modelData.name
                             color: batchItemDel._isCurrent ? "#9ab8ff" : "#e8e8ec"
@@ -1092,8 +1467,14 @@ Window {
                             width: archiveBatchSelector.width - 20
                         }
                         Text {
-                            text: qsTr("%1 条 · %2").arg(modelData.count || 0)
-                                                    .arg((modelData.modifiedAt || "").replace("T", " ").substring(0, 19))
+                            // 跨 mode 聚合后标注所属模式，避免不同模式下同名 tag 混淆
+                            text: {
+                                var md = modelData.mode || ""
+                                var dt = (modelData.modifiedAt || "").replace("T", " ").substring(0, 19)
+                                return (md.length > 0 ? "[" + md + "] " : "")
+                                       + qsTr("%1 条").arg(modelData.count || 0)
+                                       + (dt.length > 0 ? " · " + dt : "")
+                            }
                             color: "#9aa0a6"
                             font.pixelSize: 11
                             elide: Text.ElideRight
@@ -1158,8 +1539,10 @@ Window {
                 popup: Popup {
                     y: archiveBatchSelector.height + 2
                     width: archiveBatchSelector.width
-                    implicitHeight: Math.min(contentItem.implicitHeight + 8, 320)
-                    padding: 4
+                    // 上限提高到 420：按 52/行可完整显示约 8 个批次再滚动；
+                    // 原来 320 在批次变多时会过早出现滚动条。
+                    implicitHeight: Math.min(contentItem.implicitHeight + 12, 420)
+                    padding: 6
                     contentItem: ListView {
                         clip: true
                         implicitHeight: contentHeight
@@ -1172,6 +1555,34 @@ Window {
                         border.color: "#3a3a42"
                         border.width: 1
                         radius: 6
+                    }
+                }
+            }
+            // 归档 Tab：「打开所在文件夹」——在 Finder / 资源管理器中定位本批次的归档目录
+            // （archive/<mode>/<batchName>/，内含 ratings.csv）
+            Rectangle {
+                visible: root._isArchiveView && root._archiveBatch.length > 0
+                radius: 14
+                height: 26
+                implicitWidth: openBatchDirLabel.implicitWidth + 22
+                color: openBatchDirMA.containsMouse ? "#1f2f3a" : "#1d262a"
+                border.color: "#3a6a7a"
+                border.width: 1
+                Text {
+                    id: openBatchDirLabel
+                    anchors.centerIn: parent
+                    text: qsTr("📂 打开所在文件夹")
+                    color: "#8ad4ff"
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: openBatchDirMA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (typeof Rating !== "undefined" && typeof Rating.revealArchiveBatch === "function")
+                            Rating.revealArchiveBatch(root._archiveBatchMode, root._archiveBatch)
                     }
                 }
             }
@@ -2132,7 +2543,14 @@ Window {
                 onClicked: {
                     // 给输入框填默认批次名（<mode>_yyyyMMdd_HHmmss）
                     if (typeof Rating !== "undefined") {
-                        confirmArchiveDialog._batchName = Rating.defaultArchiveBatchName(root._selectedMode)
+                        // 默认批次名统一 = 当前 tag（与"上传后自动归档"一致）。
+                        // 这样同一 tag 只有一个归档目录，重复归档时覆盖刷新，
+                        // 不再每次生成一个 <mode>_时间戳 的新目录。
+                        // 用户仍可在输入框里改成自定义名（此时走防覆盖逻辑）。
+                        var _t = root._currentUploadTag()
+                        confirmArchiveDialog._batchName =
+                            (_t.length > 0) ? _t
+                                            : Rating.defaultArchiveBatchName(root._selectedMode)
                     } else {
                         confirmArchiveDialog._batchName = ""
                     }
@@ -2476,7 +2894,7 @@ Window {
                         if (g.path && g.path.length > 0) fpList.push(g.path)
                     }
                 }
-                var ok = Rating.removeArchiveRows(root._selectedMode, root._archiveBatch, fpList)
+                var ok = Rating.removeArchiveRows(root._archiveBatchMode, root._archiveBatch, fpList)
                 if (ok) {
                     actionToast.show(true, qsTr("已从归档批次中删除 %1 个文件夹的记录").arg(picked.length))
                     root._checkedFolders = ({})
@@ -2487,7 +2905,7 @@ Window {
                 }
                 return
             }
-            var ok = Rating.removeByFolders(picked)
+            var ok = Rating.removeByFolders(picked, root._selectedMode)
             if (ok) {
                 actionToast.show(true, qsTr("已删除 %1 个文件夹的评分").arg(picked.length))
             } else {
@@ -2599,17 +3017,51 @@ Window {
                     }
                     onTextChanged: confirmArchiveDialog._batchName = text
                 }
-                Text {
-                    text: qsTr("将存放在：%1/archive/%2/<批次名>/ratings.csv")
-                          .arg((((typeof Rating !== "undefined") && (typeof Rating.dataFilePathForMode === "function"))
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Text {
+                        id: archivePathText
+                        // 路径中的 <批次名> 跟随输入框实时变化；未填写时回退为默认批次名
+                        readonly property string _batchPart: {
+                            var t = (archiveBatchField.text || "").trim()
+                            return t.length > 0 ? t : (confirmArchiveDialog._batchName || "")
+                        }
+                        readonly property string _baseDir: (((typeof Rating !== "undefined") && (typeof Rating.dataFilePathForMode === "function"))
                                     ? Rating.dataFilePathForMode(root._selectedMode)
                                     : ((typeof Rating !== "undefined") ? Rating.dataFilePath : ""))
-                               .replace(/\/[^\/]*$/, ""))
-                          .arg(root._selectedMode)
-                    color: "#6a6a72"
-                    font.pixelSize: 10
-                    wrapMode: Text.Wrap
-                    Layout.fillWidth: true
+                                   .replace(/\/[^\/]*$/, "")
+                        // 完整纯路径（供"复制"按钮用，不含"将存放在："前缀）
+                        readonly property string _fullPath: _baseDir + "/archive/" + root._selectedMode + "/" + _batchPart + "/ratings.csv"
+                        text: qsTr("将存放在：%1").arg(_fullPath)
+                        color: "#6a6a72"
+                        font.pixelSize: 10
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                    PillBtn {
+                        id: copyPathBtn
+                        text: qsTr("复制")
+                        implicitHeight: 24
+                        Layout.preferredWidth: 56
+                        onClicked: {
+                            copyHelper.text = archivePathText._fullPath
+                            copyHelper.selectAll()
+                            copyHelper.copy()
+                            copyPathBtn.flash = true
+                            copyFlashTimer.restart()
+                        }
+                        Timer {
+                            id: copyFlashTimer
+                            interval: 1200
+                            onTriggered: copyPathBtn.flash = false
+                        }
+                    }
+                }
+                // 隐藏的复制辅助元素
+                TextEdit {
+                    id: copyHelper
+                    visible: false
                 }
             }
             Item { Layout.preferredHeight: 4 }
@@ -2651,73 +3103,45 @@ Window {
                 rejectDialog.openWith(qsTr("无法归档"), qsTr("请先勾选至少 1 个文件夹"))
                 return
             }
-            var batch = (confirmArchiveDialog._batchName || "").trim()
+            var batchInput = (confirmArchiveDialog._batchName || "").trim()
 
-            // ── 归档前：先收集这些文件夹下所有文件的 checklist 数据 ──
-            // archiveByFolders 会把主 CSV 里的记录移走，所以必须在调用前收集
-            var checklistSnapshot = {}
-            try {
-                var allRows = ((typeof Rating.getAllRatingsForMode === "function")
-                                ? Rating.getAllRatingsForMode(root._selectedMode)
-                                : Rating.getAllRatings()) || []
-                var pickedSet = {}
-                for (var pi = 0; pi < picked.length; ++pi) {
-                    // 规整路径（去掉末尾斜杠）
-                    var pf = picked[pi].replace(/\/+$/, "")
-                    pickedSet[pf] = true
-                }
-                for (var ri = 0; ri < allRows.length; ++ri) {
-                    var row = allRows[ri] || {}
-                    var fp = row["file_path"] || ""
-                    if (!fp) continue
-                    // 判断是否属于被归档的文件夹
-                    var dir = fp.substring(0, fp.lastIndexOf("/"))
-                    if (!pickedSet[dir]) continue
-                    // 读取该文件的 checklist
-                    var ckRaw = Rating.loadString("checklist:" + fp, "")
-                    if (ckRaw && ckRaw.length > 0) {
-                        try {
-                            checklistSnapshot[fp] = JSON.parse(ckRaw)
-                        } catch(e) {}
-                    }
-                }
-            } catch(e) { checklistSnapshot = {} }
-
-            var ok = Rating.archiveByFolders(picked, batch)
-            if (ok) {
+            // 复用统一归档函数（与"上传成功后自动归档"同一套逻辑：
+            // 收集 checklist → 调 archiveByFolders → 写 checklist.json）
+            var batch = root._archiveFolders(picked, batchInput)
+            if (batch.length > 0) {
                 actionToast.show(true, qsTr("已归档 %1 个文件夹的评分").arg(picked.length))
-                root._checkedFolders = ({})        // 归档后清掉勾选，避免误操作再删一次
 
-                // ── 归档后：把 checklist 数据写入批次目录下的 checklist.json ──
-                try {
-                    if (Object.keys(checklistSnapshot).length > 0
-                            && typeof Fs !== "undefined"
-                            && typeof Fs.writeTextFile === "function") {
-                        // 从 dataFilePath 推导 baseDir：<baseDir>/ratings_<mode>.csv
-                        // 一律使用 _selectedMode 对应的路径，与当前弹窗查看模式保持一致。
-                        var dfp = ((typeof Rating.dataFilePathForMode === "function")
-                                    ? Rating.dataFilePathForMode(root._selectedMode)
-                                    : (Rating.dataFilePath || "")) || ""
-                        var baseDir = dfp.substring(0, dfp.lastIndexOf("/"))
-                        var mode = root._selectedMode || ""
-                        // 拿最新批次名（listArchiveBatches 按时间倒序，第一个就是刚归档的）
-                        var batches = Rating.listArchiveBatches(mode) || []
-                        var batchName = (batches.length > 0) ? (batches[0]["name"] || "") : ""
-                        if (baseDir && mode && batchName) {
-                            var ckPath = baseDir + "/archive/" + mode + "/" + batchName + "/checklist.json"
-                            Fs.writeTextFile(ckPath, JSON.stringify(checklistSnapshot, null, 2))
-                            console.log("[Archive] checklist.json 已写入:", ckPath,
-                                "条数:", Object.keys(checklistSnapshot).length)
-                        }
-                    }
-                } catch(e) {
-                    console.warn("[Archive] 写入 checklist.json 失败：", e)
-                }
-
-                // 让用户能立刻在"归档"Tab 看到这一批
+                // 让用户能立刻在"归档"Tab 看到这一批：
+                // 1) 刷新批次列表（listArchiveBatches 按时间倒序，[0] 就是刚归档的）
+                // 2) 自动切到"归档"Tab，否则用户停留在"当前"Tab 会误以为归档没生效
                 root._refreshArchiveList(false)
+                var fresh = Rating.listArchiveBatches(root._selectedMode) || []
+                if (fresh.length > 0) {
+                    root._archiveBatch = fresh[0]["name"] || ""
+                    root._switchView("archive")
+                    // 缓存到属性，供下方 toast 动作按钮回调安全读取
+                    root._lastArchivedMode  = root._selectedMode
+                    root._lastArchivedBatch = root._archiveBatch
+                    actionToast.showWithAction(
+                        true,
+                        qsTr("已归档 %1 个文件夹 → 批次「%2」").arg(picked.length).arg(root._archiveBatch),
+                        qsTr("📂 打开所在文件夹"),
+                        function() {
+                            if (typeof Rating !== "undefined"
+                                    && typeof Rating.revealArchiveBatch === "function"
+                                    && root._lastArchivedBatch.length > 0)
+                                Rating.revealArchiveBatch(root._lastArchivedMode, root._lastArchivedBatch)
+                        })
+                } else {
+                    actionToast.show(true, qsTr("已归档 %1 个文件夹的评分").arg(picked.length))
+                }
             } else {
-                actionToast.show(false, qsTr("归档失败：未命中任何记录或写盘失败"))
+                // 失败要显式弹窗（toast 一闪而过容易漏看），并给出可能原因提示
+                var modeNow = (typeof Rating !== "undefined") ? (Rating.currentMode || "") : ""
+                var reason = (modeNow === "" || modeNow === "off")
+                        ? qsTr("当前评分模式为「关闭(off)」，无法归档。请先在菜单里启用对应的评分模式。")
+                        : qsTr("未命中任何记录或写盘失败。请确认勾选的文件夹下确实有评分数据。")
+                rejectDialog.openWith(qsTr("归档失败"), reason)
             }
         }
     }
@@ -2806,7 +3230,7 @@ Window {
         onAccepted: {
             if (typeof Rating === "undefined" || !root._archiveBatch) return
             var name = root._archiveBatch
-            var ok = Rating.deleteArchiveBatch(root._selectedMode, name)
+            var ok = Rating.deleteArchiveBatch(root._archiveBatchMode, name)
             if (ok) {
                 actionToast.show(true, qsTr("已删除归档批次「%1」").arg(name))
                 root._archiveBatch = ""
@@ -3042,11 +3466,28 @@ Window {
 
         property bool _ok: true
         property string _msg: ""
+        // 可选动作按钮（例如归档后"打开所在文件夹"）：_actionLabel 为空则不显示
+        property string _actionLabel: ""
+        property var    _actionCb: null
 
         function show(ok, msg) {
+            actionToast._actionLabel = ""
+            actionToast._actionCb = null
             _ok = ok
             _msg = msg
             // 重点击时重启动画与计时
+            fadeOut.stop()
+            slideIn.restart()
+            fadeIn.restart()
+            hideTimer.restart()
+        }
+
+        // 带动作按钮的提示：actionLabel 为按钮文案，actionCb 为点击回调
+        function showWithAction(ok, msg, actionLabel, actionCb) {
+            _ok = ok
+            _msg = msg
+            _actionLabel = actionLabel || ""
+            _actionCb = (typeof actionCb === "function") ? actionCb : null
             fadeOut.stop()
             slideIn.restart()
             fadeIn.restart()
@@ -3059,9 +3500,9 @@ Window {
             color: "#1e1e22"
             border.color: actionToast._ok ? "#52c41a" : "#f5222d"
             border.width: 1
-            implicitWidth: Math.min(420, Math.max(220, toastLabel.implicitWidth + 32))
+            implicitWidth: Math.min(420, Math.max(220, toastColumn.implicitWidth + 32))
             width: implicitWidth
-            height: toastLabel.implicitHeight + 22
+            height: toastColumn.implicitHeight + 22
             // 轻微阴影，提高在深色背景上的漂浮感
             Rectangle {
                 anchors.fill: parent
@@ -3071,15 +3512,47 @@ Window {
                 color: "#80000000"
                 opacity: 0.45
             }
-            Text {
-                id: toastLabel
+            Column {
+                id: toastColumn
                 anchors.fill: parent
                 anchors.margins: 12
-                text: (actionToast._ok ? "✅ " : "❌ ") + actionToast._msg
-                color: "#e8e8ec"
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
-                verticalAlignment: Text.AlignVCenter
+                spacing: 8
+                Text {
+                    width: parent.width
+                    text: (actionToast._ok ? "✅ " : "❌ ") + actionToast._msg
+                    color: "#e8e8ec"
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                    verticalAlignment: Text.AlignVCenter
+                }
+                // 可选动作按钮（如归档后"📂 打开所在文件夹"）
+                Rectangle {
+                    visible: actionToast._actionLabel.length > 0 && actionToast._actionCb !== null
+                    width: actionBtnLabel.implicitWidth + 20
+                    height: 26
+                    radius: 13
+                    color: actionBtnMA.containsMouse ? "#1f2f3a" : "#26262a"
+                    border.color: "#3a6a7a"
+                    border.width: 1
+                    Text {
+                        id: actionBtnLabel
+                        anchors.centerIn: parent
+                        text: actionToast._actionLabel
+                        color: "#8ad4ff"
+                        font.pixelSize: 12
+                    }
+                    MouseArea {
+                        id: actionBtnMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            hideTimer.stop()
+                            fadeOut.restart()
+                            if (actionToast._actionCb) actionToast._actionCb()
+                        }
+                    }
+                }
             }
         }
 
@@ -3127,7 +3600,15 @@ Window {
                     root.quickUploadNetError(cleanErr)
                     return
                 }
-                root.quickUploadFinished(ok, message || "")
+                // 上传成功 → 自动归档（必须在 return 前做，否则此出口会跳过归档）
+                // 外部一键上传（Main.qml 的 📤「上传数据」/「评分数据」）走这里。
+                if (ok) {
+                    var _qBatch = root._autoArchiveAfterUpload()
+                    // 批次名回传给主窗结果对话框，让它能显示"已自动归档"一行
+                    root.quickUploadFinished(true, (message || ""), _qBatch)
+                } else {
+                    root.quickUploadFinished(false, message || "", "")
+                }
                 return
             }
             // 鉴权类硬错（HTTP 401/403 由 C++ 端在文案前置 "[AUTH]"）单独弹模态提醒，
@@ -3177,6 +3658,11 @@ Window {
                     if (_ml[_mi].id === root._selectedMode) { _mLabel = _ml[_mi].label; break }
                 }
                 uploadSuccessDialog._modeName = _mLabel
+
+                // ── 上传成功后自动归档（统一入口，与一键上传共用同一套逻辑）──
+                // 仅「当前 Tab」上传才归档；归档 Tab 数据本就在归档中，跳过。
+                // 失败不影响上传结果（上传已成功），仅 console 警告，不打断用户。
+                uploadSuccessDialog._archivedBatch = root._autoArchiveAfterUpload()
                 uploadSuccessDialog.open()
                 uploadBtn.flash = true
                 uploadFlashTimer.restart()
@@ -3527,6 +4013,8 @@ Window {
         property string _tag: ""
         property string _modeName: ""
         property var    _folderPaths: []   // 上传的文件夹绝对路径列表
+        // 上传成功后自动归档产生的批次名；为空表示本次没有（或无需）自动归档
+        property string _archivedBatch: ""
 
         Overlay.modal: Rectangle { color: "#80000000" }
 
@@ -3632,7 +4120,26 @@ Window {
                     elide: Text.ElideRight
                 }
 
-                // 行 4：上传文件夹（相对路径列表）
+                // 行 4：自动归档结果（仅上传成功后自动归档成功时显示）
+                Text {
+                    visible: uploadSuccessDialog._archivedBatch.length > 0
+                    text: qsTr("已自动归档")
+                    color: "#7a9a7a"
+                    font.pixelSize: 12
+                }
+                Text {
+                    visible: uploadSuccessDialog._archivedBatch.length > 0
+                    text: (uploadSuccessDialog._archivedBatch.length > 0)
+                          ? ("✅ " + uploadSuccessDialog._archivedBatch
+                             + qsTr("（数据已从当前列表移入归档）"))
+                          : "—"
+                    color: "#8ad4ff"
+                    font.pixelSize: 13
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+
+                // 行 5：上传文件夹（相对路径列表）
                 Text {
                     text: qsTr("文件夹")
                     color: "#7a9a7a"

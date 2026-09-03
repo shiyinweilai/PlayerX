@@ -770,7 +770,93 @@ int RatingStore::ratingFor(const QString& filePath) const {
             return v;
         }
     }
+    // 【归档感知】主 CSV 无命中 → 回落归档快照（记录可能已被上传归档移走）
+    {
+        const QList<QVariantMap> arch = archiveRecordsFor(filePath, rater);
+        if (!arch.isEmpty()) {
+            int best = -1;
+            for (const auto& r : arch) {
+                int v = r.value(QStringLiteral("stars")).toInt();
+                if (v < 0) v = 0;
+                const bool isMultiDim = r.value(QStringLiteral("slide_type")).toString()
+                                            .startsWith(QStringLiteral("multi_"));
+                if (!isMultiDim && cap > 0 && v > cap) v = cap;
+                if (v > best) best = v;
+            }
+            if (best >= 0) return best;
+        }
+    }
     return -1;
+}
+
+// 返回某个文件的【全部】评分记录（含 stars / slide_type / checklist），
+// 按 updated_at 倒序。供 QML 在维度配置尚未到达时从 CSV 兜底还原多维星级：
+// 只要记录里存在 "multi_<维度名>" 形式的 slide_type，就能重建 {维度名: 星级}。
+// 【归档感知·辅助】在主 CSV 查不到记录时，扫描当前 mode 的全部归档批次，
+// 找出该文件 + 该评分人的历史记录。解决"评分→上传→自动归档移走主 CSV 记录"
+// 后，下次启动星星回填全空的问题（checklist 走独立缓存故不受影响）。
+// 返回结构与 readAll() 的行一致（含 stars/slide_type/checklist/updated_at）。
+QList<QVariantMap> RatingStore::archiveRecordsFor(const QString& filePath,
+                                                  const QString& rater) const {
+    QList<QVariantMap> hits;
+    if (filePath.trimmed().isEmpty()) return hits;
+    const QString m = currentMode();
+    if (m.isEmpty() || m == QStringLiteral("off")) return hits;
+
+    const QVariantList batches = listArchiveBatches(m);
+    for (const QVariant& bv : batches) {
+        const QVariantMap bm = bv.toMap();
+        const QString bn = bm.value(QStringLiteral("name")).toString();
+        if (bn.isEmpty()) continue;
+        const QVariantList rows = loadArchiveBatch(m, bn);
+        for (const QVariant& rv : rows) {
+            const QVariantMap r = rv.toMap();
+            if (r.value(QStringLiteral("file_path")).toString() != filePath) continue;
+            const QString rr = r.value(QStringLiteral("rater")).toString();
+            // 归档里 rater 可能为空（老数据），此时放宽匹配
+            if (!rr.isEmpty() && !rater.isEmpty() && rr != rater) continue;
+            hits.push_back(r);
+        }
+    }
+    return hits;
+}
+
+QVariantList RatingStore::recordsFor(const QString& filePath) const {
+    QVariantList out;
+    if (filePath.trimmed().isEmpty()) return out;
+    if (currentMode() == QStringLiteral("off")) return out;
+    QString rater = currentUser();
+    if (rater.isEmpty()) rater = systemUserName();
+
+    const QList<QVariantMap> rows = readAll();
+    QList<QVariantMap> hits;
+    for (const auto& r : rows) {
+        if (r.value("file_path").toString() == filePath &&
+            r.value("rater").toString() == rater) {
+            hits.push_back(r);
+        }
+    }
+    // 【归档感知】主 CSV 无命中 → 回落到本 mode 的归档快照。
+    //   评分 → 上传 → 自动归档会把记录从主 CSV 移走，导致下次启动
+    //   星星回填全空（checklist 走独立缓存故仍在）。这里补上归档查询，
+    //   保证"评过并归档"的历史星级照常显示。
+    if (hits.isEmpty()) {
+        const QList<QVariantMap> arch = archiveRecordsFor(filePath, rater);
+        hits = arch;
+    }
+    // 按 updated_at 倒序（新的在前）
+    std::sort(hits.begin(), hits.end(), [](const QVariantMap& a, const QVariantMap& b) {
+        return a.value("updated_at").toString() > b.value("updated_at").toString();
+    });
+    for (const QVariantMap& r : hits) {
+        QVariantMap e;
+        e[QStringLiteral("stars")]      = r.value(QStringLiteral("stars")).toInt();
+        e[QStringLiteral("slide_type")] = r.value(QStringLiteral("slide_type")).toString();
+        e[QStringLiteral("checklist")]  = r.value(QStringLiteral("checklist")).toString();
+        e[QStringLiteral("updated_at")] = r.value(QStringLiteral("updated_at")).toString();
+        out.push_back(e);
+    }
+    return out;
 }
 
 int RatingStore::ratingFor(const QString& filePath, const QString& slideType) const {
@@ -790,6 +876,24 @@ int RatingStore::ratingFor(const QString& filePath, const QString& slideType) co
             const bool isMultiDim = slideType.startsWith(QStringLiteral("multi_"));
             if (!isMultiDim && cap > 0 && v > cap) v = cap;
             return v;
+        }
+    }
+    // 【归档感知】主 CSV 无命中 → 回落归档快照。
+    //   多维星级回填（slide_type = "multi_<维度名>"）走的就是这个重载，
+    //   评分被上传归档移走主 CSV 后，这里必须能查到，否则星星全空。
+    {
+        const QList<QVariantMap> arch = archiveRecordsFor(filePath, rater);
+        if (!arch.isEmpty()) {
+            const bool isMultiDim = slideType.startsWith(QStringLiteral("multi_"));
+            int best = -1;
+            for (const auto& r : arch) {
+                if (r.value(QStringLiteral("slide_type")).toString() != slideType) continue;
+                int v = r.value(QStringLiteral("stars")).toInt();
+                if (v < 0) v = 0;
+                if (!isMultiDim && cap > 0 && v > cap) v = cap;
+                if (v > best) best = v;
+            }
+            if (best >= 0) return best;
         }
     }
     return -1;
@@ -936,7 +1040,8 @@ QByteArray RatingStore::buildExportCsvBytes(const QStringList& folderPaths) cons
 // 把某归档批次的 CSV 转成与 buildExportCsvBytes 完全一致的// 用于上传归档批次时复用 postCsvBytesToServer 的 multipart / 表单链路。
 //
 // 与 buildExportCsvBytes 的差异仅在于：
-//   · 数据源：archive/<mode>/<batchName>/ratings.csv（而非主 CSV readAll）。
+//   · 数据源：archive/<mode>/<batchName>/playerx_<rater>_<mode>__<batch>_<group>.csv
+//     （历史批次为 ratings.csv，两者均可正确读取；而非主 CSV readAll）。
 //   · rater 列：归档落盘时的 rater 是“写入瞬间”的值——这里仍按照
 //     “导出/上传时统一身份”的语义改用 currentUser（与当前 Tab 一致），
 //     避免用户改名后云端列出错乱身份。
@@ -952,13 +1057,19 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
     if (!findMode(mode)) return buf;
     if (batchName.isEmpty()) return buf;
 
-    // 归档批次的物理 CSV 路径（与 archiveBatchCsvIn 完全等价，但避免依赖
-    // 后文匿名命名空间里的 helper —— 那些 helper 定义在本函数下方，
-    // 这里就近内联拼路径，让前后函数体内的小工具相互独立、维护更简单）。
-    const QString csvPath = QDir(QDir(QDir(m_baseDir).filePath(QStringLiteral("archive")))
-                                     .filePath(mode))
-                                .filePath(batchName)
-                            + QStringLiteral("/ratings.csv");
+    // 归档批次的物理 CSV 路径：优先按新命名
+    // (playerx_<rater>_<mode>__<batch>_<group>.csv)，历史批次回退 ratings.csv。
+    // 用 QDir 就近拼装（与 archiveBatchCsvIn 等价，避免依赖下方匿名命名空间的 helper），
+    // 让新旧命名都能被正确读出，保证历史归档数据不丢。
+    const QString batchDirPath = QDir(QDir(QDir(m_baseDir).filePath(QStringLiteral("archive")))
+                                          .filePath(mode))
+                                     .filePath(batchName);
+    const QDir batchDir(batchDirPath);
+    const QFileInfoList newNamed = batchDir.entryInfoList({QStringLiteral("playerx_*.csv")},
+                                                          QDir::Files);
+    const QString csvPath = newNamed.isEmpty()
+            ? batchDirPath + QStringLiteral("/ratings.csv")
+            : newNamed.first().absoluteFilePath();
 
     // 读批次 CSV：表头格式与主 CSV 一致（updated_at,rater,file_name,
     // file_path,file_size,quick_hash,stars），逐行解析。
@@ -1669,7 +1780,15 @@ bool RatingStore::clearAll() {
 // 用 file_path 的"绝对父目录"匹配 folderPaths 经 QFileInfo 规整化后的集合）
 // ════════════════════════════════════════════════════════════════════════
 
-bool RatingStore::removeByFolders(const QStringList& folderPaths) {
+// 前向声明：readBatchCsv / writeBatchCsv 实际定义在文件更下方（归档批次读写区），
+// 但 removeByFolders / archiveByFolders（按指定 mode 操作主 CSV）需要在其之前调用。
+namespace {
+    QList<QVariantMap> readBatchCsv(const QString& csvPath);
+    bool writeBatchCsv(const QString& csvPath, const QList<QVariantMap>& rows);
+}
+
+bool RatingStore::removeByFolders(const QStringList& folderPaths,
+                                  const QString& mode) {
     // 空白名单视为非法（避免被误用为"全删"——那种语义请走 clearAll）
     QSet<QString> allow;
     for (const QString& p : folderPaths) {
@@ -1679,7 +1798,14 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths) {
     }
     if (allow.isEmpty()) return false;
 
-    const QList<QVariantMap> rows = readAll();
+    // mode 留空 → 沿用 currentMode()；显式传入 → 按该模式的主 CSV 操作
+    // （评分弹窗"方案 C"下弹窗内切模式不回写全局，必须显式传 mode）
+    const QString modeNow = mode.isEmpty() ? currentMode() : mode.trimmed();
+    if (modeNow.isEmpty() || modeNow == QStringLiteral("off")) return false;
+    const QString mainCsv = ensureFileForMode(modeNow);
+    if (mainCsv.isEmpty()) return false;
+
+    const QList<QVariantMap> rows = readBatchCsv(mainCsv);
     QList<QVariantMap> kept;
     kept.reserve(rows.size());
     int removed = 0;
@@ -1694,7 +1820,7 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths) {
 
     if (removed == 0) return false;            // 没有命中任何行：不写盘、也不发信号
 
-    if (!writeAll(kept)) return false;
+    if (!writeBatchCsv(mainCsv, kept)) return false;
     emit changed();
     return true;
 }
@@ -1734,12 +1860,29 @@ inline QString archiveBatchDirIn(const QString& baseDir,
                                  const QString& batchName) {
     return QDir(archiveModeDirIn(baseDir, mode)).filePath(batchName);
 }
-// 归档某批次的 CSV 路径
+// 归档某批次的 CSV 路径（自动识别新/旧命名，优先新命名）
 inline QString archiveBatchCsvIn(const QString& baseDir,
                                  const QString& mode,
                                  const QString& batchName) {
-    return QDir(archiveBatchDirIn(baseDir, mode, batchName))
-                .filePath(QStringLiteral("ratings.csv"));
+    const QDir dir(archiveBatchDirIn(baseDir, mode, batchName));
+    // 新命名优先（与上传一致）：playerx_<rater>_<mode>__<batch>_<group>.csv
+    const QFileInfoList csvs = dir.entryInfoList({QStringLiteral("playerx_*.csv")},
+                                                 QDir::Files);
+    if (!csvs.isEmpty()) return csvs.first().absoluteFilePath();
+    // 兼容历史批次：ratings.csv（旧格式，仍可正常读取）
+    return dir.filePath(QStringLiteral("ratings.csv"));
+}
+// 归档批次 CSV 的文件名 —— 与「上传到云端」时的 multipart filename 保持完全一致：
+//        playerx_<rater>_<mode>__<batch>_<group>.csv
+// 这样本地归档目录里的文件名，和上传到云端落盘后的文件名一一对应，
+// 运维/后端按文件名即可回溯是哪个人、哪个模式、哪个批次、哪个组的数据。
+inline QString archiveCsvFileNameFor(const QString& rater,
+                                     const QString& mode,
+                                     const QString& batchName,
+                                     const QString& group) {
+    const QString r = rater.trimmed().isEmpty() ? QStringLiteral("anon") : rater.trimmed();
+    const QString g = group.trimmed().isEmpty() ? QStringLiteral("gx") : group.trimmed();
+    return QStringLiteral("playerx_%1_%2__%3_%4.csv").arg(r, mode, batchName, g);
 }
 // 把用户输入的批次名清洗成跨平台合法的目录名
 //   - 去掉首尾空白
@@ -1807,7 +1950,7 @@ bool writeBatchCsv(const QString& csvPath, const QList<QVariantMap>& rows) {
     }
     return true;
 }
-// 递归删除批次目录（连同 ratings.csv 与可能的附属文件）
+// 递归删除批次目录（连同归档 CSV 与可能的附属文件）
 bool removeBatchDir(const QString& baseDir, const QString& mode, const QString& batchName) {
     const QString dir = archiveBatchDirIn(baseDir, mode, batchName);
     QDir d(dir);
@@ -1817,13 +1960,16 @@ bool removeBatchDir(const QString& baseDir, const QString& mode, const QString& 
 }  // namespace
 
 // ════════════════════════════════════════════════════════════════════════
-// 按文件夹批量归档（v2 — 写到 archive/<mode>/<batchName>/ratings.csv）
+// 按文件夹批量归档（v2 — 写到 archive/<mode>/<batchName>/
+//   playerx_<rater>_<mode>__<batch>_<group>.csv，命名与云端上传一致）
 //
 // 时序保证：先写好归档文件，再回写主 CSV。任一步失败都不会破坏主 CSV。
 // ════════════════════════════════════════════════════════════════════════
 
 bool RatingStore::archiveByFolders(const QStringList& folderPaths,
-                                   const QString& batchName) {
+                                   const QString& batchName,
+                                   const QString& mode,
+                                   bool overwrite) {
     // 与 removeByFolders 同样的入参校验
     QSet<QString> allow;
     for (const QString& p : folderPaths) {
@@ -1833,11 +1979,17 @@ bool RatingStore::archiveByFolders(const QStringList& folderPaths,
     }
     if (allow.isEmpty()) return false;
 
-    const QString modeNow = currentMode();
+    // mode 留空 → 沿用 currentMode()；显式传入 → 按该模式归档（评分弹窗"方案 C"
+    // 下弹窗内切模式不回写全局，必须显式传 mode，否则会按全局 off 被拒绝）。
+    const QString modeNow = mode.isEmpty() ? currentMode() : mode.trimmed();
     if (modeNow.isEmpty() || modeNow == QStringLiteral("off")) return false;
 
+    // 主 CSV 按 modeNow 定位（不再硬绑定 currentMode 的 currentDataFile）
+    const QString mainCsv = ensureFileForMode(modeNow);
+    if (mainCsv.isEmpty()) return false;
+
     // 命中筛选
-    const QList<QVariantMap> rows = readAll();
+    const QList<QVariantMap> rows = readBatchCsv(mainCsv);
     QList<QVariantMap> kept;
     QList<QVariantMap> picked;
     kept.reserve(rows.size());
@@ -1858,29 +2010,108 @@ bool RatingStore::archiveByFolders(const QStringList& folderPaths,
     {
         const QString modeDir = archiveModeDirIn(m_baseDir, modeNow);
         if (!QDir().mkpath(modeDir)) return false;
-        QString candidate = batch;
-        int suffix = 2;
-        while (QFileInfo::exists(QDir(modeDir).filePath(candidate))) {
-            candidate = QStringLiteral("%1_%2").arg(batch).arg(suffix++);
+        if (overwrite) {
+            // 覆盖模式：批次目录名固定为 batchName（不追加 _N 序号）。
+            // 用于"重复上传同一 tag 的评分 → 刷新同一个归档快照"，
+            // 避免每次上传都堆出一个 test_20260903_180000 之类的新目录。
+            // 先清掉该目录下旧的归档 CSV，保证同名快照唯一、不残留旧数据。
+            const QString oldDir = QDir(modeDir).filePath(batch);
+            if (QFileInfo::exists(oldDir)) {
+                QDir od(oldDir);
+                const QStringList oldCsv =
+                    od.entryList({QStringLiteral("playerx_*.csv"),
+                                  QStringLiteral("ratings.csv")}, QDir::Files);
+                for (const QString& f : oldCsv) od.remove(f);
+            }
+        } else {
+            QString candidate = batch;
+            int suffix = 2;
+            while (QFileInfo::exists(QDir(modeDir).filePath(candidate))) {
+                candidate = QStringLiteral("%1_%2").arg(batch).arg(suffix++);
+            }
+            batch = candidate;
         }
-        batch = candidate;
     }
 
     const QString batchDir = archiveBatchDirIn(m_baseDir, modeNow, batch);
     if (!QDir().mkpath(batchDir)) return false;
-    const QString archivePath = archiveBatchCsvIn(m_baseDir, modeNow, batch);
+    // 归档 CSV 命名与「上传到云端」保持完全一致：
+    //     playerx_<rater>_<mode>__<batch>_<group>.csv
+    // rater / group 均取自上传同源接口（currentUser / uploadGroup），
+    // 保证本地归档文件名与后续上传落盘的文件名一一对应、可互相回溯。
+    const QString archivePath = QDir(batchDir).filePath(
+        archiveCsvFileNameFor(currentUser(), modeNow, batch, uploadGroup()));
 
     // 先写归档（先成功，后再删主 CSV，保证失败不破坏数据）
     if (!writeBatchCsv(archivePath, picked)) return false;
 
-    // 回写主 CSV：失败时尝试删除已生成的归档文件，避免出现“数据双份在两个文件”的歧义
-    if (!writeAll(kept)) {
+    // 回写主 CSV（按 modeNow 对应的文件）：失败时尝试删除已生成的归档文件，
+    // 避免出现"数据双份在两个文件"的歧义
+    if (!writeBatchCsv(mainCsv, kept)) {
         QFile::remove(archivePath);
         QDir(batchDir).removeRecursively();
         return false;
     }
     emit changed();
     return true;
+}
+
+// 跨模式聚合：返回【所有 mode】下的归档批次，每项额外带 "mode" 字段。
+//
+// 用途：归档 Tab 不再受"当前评分模式"过滤——原先 listArchiveBatches(mode) 只读
+// archive/<当前mode>/，导致用 test 模式评出来的归档，切到 multi_dim 模式打开
+// 面板时看不到（显示"无归档批次"）。现在无论当前处在哪个模式，都能看到全部归档。
+//
+// 排序：按 modifiedAt 倒序（新→旧），跨 mode 混排。
+// 每项：{ mode, name, path, count, latest, raters[], modifiedAt }
+// 只扫 kModeTable 里的合法 mode，因此 archive/ 下的备份目录（如
+// _legacy_backup_xxx）不会被误当成批次列出来。
+QVariantList RatingStore::listAllArchiveBatches() const {
+    struct Item {
+        QString mode; QString name; QString path; int count = 0;
+        QString latest; QStringList raters; QString modifiedAt;
+    };
+    QList<Item> items;
+
+    for (int i = 0; i < kModeCount; ++i) {
+        const QString m = QString::fromLatin1(kModeTable[i].id);
+        const QVariantList one = listArchiveBatches(m);
+        for (const QVariant& v : one) {
+            const QVariantMap e = v.toMap();
+            Item it;
+            it.mode       = m;
+            it.name       = e.value(QStringLiteral("name")).toString();
+            it.path       = e.value(QStringLiteral("path")).toString();
+            it.count      = e.value(QStringLiteral("count")).toInt();
+            it.latest     = e.value(QStringLiteral("latest")).toString();
+            it.raters     = e.value(QStringLiteral("raters")).toStringList();
+            it.modifiedAt = e.value(QStringLiteral("modifiedAt")).toString();
+            if (it.name.isEmpty()) continue;
+            items.push_back(it);
+        }
+    }
+
+    // modifiedAt 倒序；同值时用 mode+name 兜底保证稳定
+    std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+        if (a.modifiedAt != b.modifiedAt) return a.modifiedAt > b.modifiedAt;
+        if (a.mode != b.mode) return a.mode < b.mode;
+        return a.name < b.name;
+    });
+
+    QVariantList out;
+    out.reserve(items.size());
+    for (const Item& it : items) {
+        QVariantMap e;
+        e[QStringLiteral("mode")]       = it.mode;
+        e[QStringLiteral("name")]       = it.name;
+        e[QStringLiteral("path")]       = it.path;
+        e[QStringLiteral("count")]      = it.count;
+        e[QStringLiteral("latest")]     = it.latest;
+        e[QStringLiteral("raters")]     = it.raters;
+        e[QStringLiteral("modifiedAt")] = it.modifiedAt;
+        out.push_back(e);
+    }
+    return out;
 }
 
 // 推荐的默认批次名：<mode>_yyyyMMdd_HHmmss
@@ -1908,7 +2139,7 @@ QVariantList RatingStore::listArchiveBatches(const QString& mode) const {
     for (const QFileInfo& sub : subs) {
         const QString name = sub.fileName();
         const QString csv  = archiveBatchCsvIn(m_baseDir, m, name);
-        if (!QFileInfo::exists(csv)) continue;       // 没有 ratings.csv 的目录跳过
+        if (!QFileInfo::exists(csv)) continue;       // 没有归档 CSV 的目录跳过
 
         const QList<QVariantMap> rows = readBatchCsv(csv);
         QString latest;
@@ -2072,6 +2303,27 @@ void RatingStore::revealArchiveFolder(const QString& mode) const {
         QDir().mkpath(sub);
         target = sub;
     }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(target));
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 打开某个归档批次的目录 <archive>/<mode>/<batchName>/
+// 归档完成后供 QML 一键跳转；批次目录不存在时回退到 <mode> 目录。
+// ════════════════════════════════════════════════════════════════════════
+
+void RatingStore::revealArchiveBatch(const QString& mode,
+                                     const QString& batchName) const {
+    const QString m = mode.trimmed();
+    const QString b = batchName.trimmed();
+    if (m.isEmpty() || m == QStringLiteral("off") || b.isEmpty()) {
+        revealArchiveFolder(m);      // 信息不全 → 退回到模式目录（不静默失败）
+        return;
+    }
+    const QString modeDir = archiveModeDirIn(m_baseDir, m);
+    QDir().mkpath(modeDir);
+    const QString batchDir = archiveBatchDirIn(m_baseDir, m, b);
+    // 批次目录不存在（批次名非法/被外部删除）→ 回退到模式目录，仍让用户看到归档位置
+    const QString target = QFileInfo::exists(batchDir) ? batchDir : modeDir;
     QDesktopServices::openUrl(QUrl::fromLocalFile(target));
 }
 

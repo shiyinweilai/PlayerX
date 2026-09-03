@@ -306,11 +306,35 @@ function _rebuildCellRatingsFromCsv(reason) {
             }
             arr.push(obj)
         } else {
-            var v = -1
-            if (typeof Rating !== "undefined" && fp && fp.length > 0) {
-                v = Rating.ratingFor(fp)
+            // 【维度缺失兜底】远程维度还没拉到（启动空窗期）时，dims 为空，
+            // 原先这里一律填标量 → 星星全空。
+            // 改为：若 CSV 里存在 "multi_xxx" 形式的记录，说明本 mode 是多维评分，
+            // 直接按 CSV 里的 slide_type 动态还原成 {维度名: 星级} 对象，
+            // 让已有评分照常显示，不受维度配置到达时机影响。
+            var multiObj = null
+            if (typeof Rating !== "undefined" && typeof Rating.recordsFor === "function"
+                && fp && fp.length > 0) {
+                var recs = Rating.recordsFor(fp) || []
+                for (var m = 0; m < recs.length; ++m) {
+                    var st = String((recs[m] && recs[m]["slide_type"]) || "")
+                    if (st.indexOf("multi_") === 0) {
+                        var dk = st.substring(6)
+                        if (dk.length === 0) continue
+                        if (!multiObj) multiObj = {}
+                        var sv = recs[m]["stars"]
+                        multiObj[dk] = (typeof sv === "number" && sv >= 1 && sv <= 5) ? sv : 0
+                    }
+                }
             }
-            arr.push((typeof v === "number" && v >= 1 && v <= 5) ? v : 0)
+            if (multiObj) {
+                arr.push(multiObj)
+            } else {
+                var v = -1
+                if (typeof Rating !== "undefined" && fp && fp.length > 0) {
+                    v = Rating.ratingFor(fp)
+                }
+                arr.push((typeof v === "number" && v >= 1 && v <= 5) ? v : 0)
+            }
         }
     }
     _root.cellRatings = arr

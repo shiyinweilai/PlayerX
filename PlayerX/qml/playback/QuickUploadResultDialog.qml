@@ -18,6 +18,8 @@ Dialog {
     property bool _ok: true
     property string _msg: ""
     property string _viewUrl: ""
+    // 上传成功后自动归档产生的批次名；为空表示本次未自动归档
+    property string _archivedBatch: ""
     // 展示上下文（成功时用）
     property string _modeLabel: ""
     property string _rater: ""
@@ -42,9 +44,10 @@ Dialog {
         }
         _folderPaths = raw
     }
-    function showSuccess(message) {
+    function showSuccess(message, archivedBatch) {
         _ok = true
         _msg = message || qsTr("上传成功")
+        _archivedBatch = (archivedBatch === undefined) ? "" : (archivedBatch || "")
         var srvBase = (typeof Rating !== "undefined" && Rating.uploadServerUrl)
                       ? Rating.uploadServerUrl.trim() : ""
         var m = srvBase.match(/^(https?:\/\/[^/]+)/)
@@ -58,6 +61,7 @@ Dialog {
         _ok = false
         _msg = message || qsTr("上传失败")
         _viewUrl = ""
+        _archivedBatch = ""
         _fillContextFromConfirm()
         // 失败弹窗不自动关闭，等用户看清错误信息
         _autoCloseTimer.stop()
@@ -137,6 +141,21 @@ Dialog {
                 Layout.fillWidth: true
                 text: quickUploadResultDialog._rater || "—"
                 color: "#e8e8ec"; font.pixelSize: 13; elide: Text.ElideRight
+            }
+            // 上传成功后自动归档的批次（仅自动归档成功时显示）
+            Text {
+                visible: quickUploadResultDialog._archivedBatch.length > 0
+                text: qsTr("已自动归档：")
+                color: "#9aa0a6"; font.pixelSize: 12
+            }
+            Text {
+                visible: quickUploadResultDialog._archivedBatch.length > 0
+                Layout.fillWidth: true
+                text: (quickUploadResultDialog._archivedBatch.length > 0)
+                      ? ("✅ " + quickUploadResultDialog._archivedBatch
+                         + qsTr("（已从当前列表移入归档）"))
+                      : "—"
+                color: "#8ad4ff"; font.pixelSize: 13; elide: Text.ElideRight
             }
             Text {
                 text: qsTr("文件夹：")

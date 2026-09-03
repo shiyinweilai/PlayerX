@@ -142,6 +142,15 @@ public slots:
     //       避免上一组的 cellRatings[idx] 残留串到下一组。
     Q_INVOKABLE int ratingFor(const QString& filePath) const;
 
+    // 返回某文件的全部评分记录（stars/slide_type/checklist），按 updated_at 倒序。
+    // 供 QML 在维度配置未就绪时从 CSV 兜底还原多维星级。
+    Q_INVOKABLE QVariantList recordsFor(const QString& filePath) const;
+
+    // 【归档感知·辅助】主 CSV 无命中时，扫描当前 mode 的归档批次找该文件历史记录。
+    // 供 recordsFor / ratingFor 回落使用，解决"评分被上传归档移走后星星回填全空"。
+    QList<QVariantMap> archiveRecordsFor(const QString& filePath,
+                                         const QString& rater) const;
+
     // 多维评分专用重载：按 file_path + slide_type 精确查找。
     // slideType 传 "multi_动作" / "multi_物理" 等；未命中返回 -1。
     Q_INVOKABLE int ratingFor(const QString& filePath, const QString& slideType) const;
@@ -175,7 +184,10 @@ public slots:
     // 按文件夹批量删除：删除当前模式下所有 file_path 所在目录命中 folderPaths 白名单的行。
     // folderPaths 为空时不做任何修改并返回 false（避免被误用为"全删"，那种语义请直接走 clearAll）。
     // 删除成功后会发 changed() 信号；UI 据此刷新表格。
-    Q_INVOKABLE bool removeByFolders(const QStringList& folderPaths);
+    // mode 留空 → 沿用 currentMode()；显式传入 → 按该模式的主 CSV 删除
+    // （评分弹窗"方案 C"下弹窗内切模式不回写全局，必须显式传 mode，否则按 off 失效）
+    Q_INVOKABLE bool removeByFolders(const QStringList& folderPaths,
+                                     const QString& mode = {});
 
     // 按文件夹批量归档：与 removeByFolders 命中规则完全一致，但行会先被**搬出**到
     //   <AppData>/PlayerX/archive/<mode>/<batchName>/ratings.csv
@@ -189,8 +201,16 @@ public slots:
     //
     // 成功返回 true，并发 changed() 信号；同时通过返回值之外的副作用（CSV 文件）保留数据。
     // 与 removeByFolders 一样：folderPaths 为空 / off 模式 / 没命中任何行 → 返回 false。
+    //
+    // mode：显式指定按哪个评分模式归档（对应 archive/<mode>/ 子目录、<mode> 对应的主 CSV）。
+    //   留空时沿用 currentMode()。
+    //   ★ 评分数据弹窗采用"方案 C"：弹窗内切换模式胶囊只改本地 _selectedMode，不回写全局
+    //     Rating.currentMode。因此弹窗里归档必须显式传入查看中的模式，否则会按全局 off
+    //     模式被拒绝（表现为"看得到数据却归不了档"）。
     Q_INVOKABLE bool archiveByFolders(const QStringList& folderPaths,
-                                      const QString& batchName = {});
+                                      const QString& batchName = {},
+                                      const QString& mode = {},
+                                      bool overwrite = false);
 
     // 推荐的默认批次名：<mode>_yyyyMMdd_HHmmss。
     // 用法：QML 弹"确认归档"对话框前，先用它填充输入框默认值。
@@ -206,6 +226,11 @@ public slots:
     //   · modifiedAt  : 该 CSV 文件的最后修改时间（ISO8601 字符串）
     // mode 为空 → 使用 currentMode()；off / 不存在的 mode → 返回空列表。
     Q_INVOKABLE QVariantList listArchiveBatches(const QString& mode = {}) const;
+
+    // 跨模式聚合：返回所有 mode 下的归档批次（每项额外含 "mode" 字段），
+    // 按 modifiedAt 倒序。用于归档 Tab 不受当前评分模式过滤，
+    // 保证任何时候打开面板都能看到全部归档。
+    Q_INVOKABLE QVariantList listAllArchiveBatches() const;
 
     // 读取某批次 CSV 全部行；返回结构与 getAllRatings 一致（列名相同），
     // updated_at 倒序。批次不存在 / 读不到 → 返回空列表。
@@ -238,6 +263,14 @@ public slots:
     //   - mode 非空 → 打开 <AppData>/PlayerX/archive/<mode>/
     // 目录不存在时会自动建立，便于用户即使一次都没归档过也能"看一眼归档目录在哪"。
     Q_INVOKABLE void revealArchiveFolder(const QString& mode = {}) const;
+
+    // 在系统文件管理器中打开**某个归档批次**的目录：
+    //   <AppData>/PlayerX/archive/<mode>/<batchName>/
+    // 用于归档完成后让用户一键跳转到刚才生成的那个批次文件夹（内含 ratings.csv）。
+    // 与 revealArchiveFolder 的区别：后者只到 <mode> 层，本函数精确到批次目录。
+    // 批次不存在时回退到 <mode> 目录，绝不静默失败。
+    Q_INVOKABLE void revealArchiveBatch(const QString& mode,
+                                        const QString& batchName) const;
 
     // 平台用户名兑底（当 currentUser 为空时使用）
     // Q_INVOKABLE：QML 端测试源组别自动分配（groupMap）也用同一份兜底身份。
