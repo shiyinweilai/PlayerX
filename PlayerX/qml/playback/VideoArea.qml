@@ -9,6 +9,8 @@ Item {
     id: videoArea
     property alias ratingToast: ratingToast
     property var root: null
+    // 滑动对比评分回调，由 Main.qml 传入 Logic.setSlideRating，避免 VideoArea 内引用不到 Logic
+    property var setSlideRatingFn: null
     property var shortcutsAboutDialogs: null
     property var addDialog: null
     property Item refSidebar: null
@@ -625,7 +627,7 @@ Item {
         slideRatingR: root.slideRatingR
         slideMaxStars: root.slideMaxStars
         slideDimLabel: root.slideDimLabel
-        setSlideRatingFn: function(side, score) { Logic.setSlideRating(side, score) }
+        setSlideRatingFn: videoArea.setSlideRatingFn
     }
 
     // ─── 评分提示 Toast（屏幕中央浮层）───────────────────

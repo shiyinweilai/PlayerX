@@ -10,6 +10,7 @@ ToolBar {
     id: topBar
     property var root: null
     property var updateDialog: null
+    property var toggleCompareSliderFn: null   // 由 Main.qml 传入 RatingLogic._toggleCompareSlider
     property var multiGroupDialog: null
     property var quickUploadConfirmDialog: null
     property var updateToast: null
@@ -1405,7 +1406,7 @@ ToolBar {
             visible: root.isQualitySlideMode && root.compareSliderAvailable
             Layout.preferredWidth: visible ? implicitWidth : 0
             enabled: visible
-            onClicked: RatingLogic._toggleCompareSlider()
+            onClicked: { if (typeof toggleCompareSliderFn === "function") toggleCompareSliderFn() }
             ToolTip.visible: hovered
             ToolTip.delay: 400
             ToolTip.text: root.compareSliderActive ? qsTr("退出滑动对比，回到普通模式（B）") : qsTr("进入滑动对比模式（B）")

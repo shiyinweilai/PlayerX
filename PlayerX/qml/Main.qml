@@ -1873,6 +1873,7 @@ ApplicationWindow {
         dimReloadTimer: _dimReloadTimer
         ratingsDialog: ratingsDialog
         ratingToast: videoArea.ratingToast
+        toggleCompareSliderFn: function() { RatingLogic._toggleCompareSlider() }
     }
 
     GlobalShortcuts {
@@ -1961,6 +1962,7 @@ ApplicationWindow {
         multiGroupDialog: multiGroupDialog
         ratingsDialog: ratingsDialog
         leftNavBar: leftNavBar
+        setSlideRatingFn: function(side, score) { Logic.setSlideRating(side, score) }
     }
 
     // ─── 右侧栏（标题栏按钮控制，按 currentTab 路由内容） ─────────

@@ -61,15 +61,18 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
+        // 允许点击事件向子 Item（如评分条星星）继续传播，否则会拦截星星的左键点击
+        propagateComposedEvents: true
         // hover 移动 → 同步 splitRatio
         onPositionChanged: {
             if (view.width <= 0) return
             view.splitRatio = Math.max(0, Math.min(1, mouseX / view.width))
         }
         // 鼠标按下也同步一次（点中即移动到该处）
-        onPressed: {
+        onPressed: function(mouse) {
             if (view.width <= 0) return
             view.splitRatio = Math.max(0, Math.min(1, mouseX / view.width))
+            mouse.accepted = false   // 透传，让评分条星星能接收到点击
         }
         // 鼠标离开时保持上一次位置（不强制回中），符合 video-compare 习惯
     }
