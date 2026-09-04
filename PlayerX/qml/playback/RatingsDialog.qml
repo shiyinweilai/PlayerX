@@ -114,6 +114,8 @@ Window {
     // 归档 Tab 的 tag 树结构：[{ key:"tag:<batchName>", name, mode, count, latest, folders:[...] }]
     // 每个 tag 节点下是正常的文件夹→文件→记录三层树
     property var _archiveTagFolders: []
+    // 当前 Tab 的虚拟 tag 树（与归档结构相同，供 _rebuildVisibleRows 统一渲染 tag → folder 两级树）
+    property var _curTagFolders: []
     property var _expanded: ({})
     property var _visibleRows: []
 
@@ -458,6 +460,48 @@ Window {
             _folders      = normalFolders
             _slideFolders = slideFolders
 
+            // ── 自动补充当前 Tab 的虚拟 tag（用于与归档界面对齐的两级树展示）──
+            // 优先用 tagField 已填写的值；若为空则自动生成「用户名+时间戳」并回填 tagField。
+            var curTagName = (typeof tagField !== "undefined") ? tagField.text.trim() : ""
+            if (curTagName.length === 0) {
+                var raterName = (typeof userField !== "undefined" && userField.text.trim().length > 0)
+                    ? userField.text.trim()
+                    : ((typeof Rating !== "undefined" && Rating.currentUser)
+                        ? String(Rating.currentUser).trim() : "anon")
+                var now = new Date()
+                var yyyy = now.getFullYear()
+                var mm   = ("0" + (now.getMonth() + 1)).slice(-2)
+                var dd   = ("0" + now.getDate()).slice(-2)
+                var hh   = ("0" + now.getHours()).slice(-2)
+                var mi   = ("0" + now.getMinutes()).slice(-2)
+                curTagName = raterName + yyyy + mm + dd + hh + mi
+                if (typeof tagField !== "undefined") tagField.text = curTagName
+                if (typeof Rating   !== "undefined") Rating.uploadTag = curTagName
+            }
+            // 把所有普通打分 folder 归到同一个虚拟 tag 节点
+            var totalItems = 0
+            var latestTs = ""
+            for (var cti = 0; cti < normalFolders.length; ++cti) {
+                totalItems += normalFolders[cti].totalItems || 0
+                if ((normalFolders[cti].latest || "") > latestTs) latestTs = normalFolders[cti].latest || ""
+            }
+            _curTagFolders = (normalFolders.length > 0) ? [{
+                key: "tag:" + curTagName,
+                name: curTagName,
+                mode: root._selectedMode,
+                count: normalFolders.length,
+                latest: latestTs,
+                totalItems: totalItems,
+                folders: normalFolders
+            }] : []
+            // tag 节点默认展开
+            if (_curTagFolders.length > 0) {
+                var exCopy = {}
+                for (var ek in _expanded) exCopy[ek] = _expanded[ek]
+                exCopy[_curTagFolders[0].key] = true
+                _expanded = exCopy
+            }
+
             // ── 同步 _checkedFolders（仅针对普通打分文件夹）
             var nextChecked = {}
             for (var ci = 0; ci < normalFolders.length; ++ci) {
@@ -526,20 +570,25 @@ Window {
                 }
             }
         } else {
-            // 普通打分分组
-            if (isQS && (_folders.length > 0 || _slideFolders.length > 0)) {
+            // 普通打分分组：以虚拟 tag 节点为一级，folder 为二级（与归档 Tab 结构对齐）
+            if (isQS && (_curTagFolders.length > 0 || _slideFolders.length > 0)) {
                 out.push({ kind: "section", label: "📋 普通打分", icon: "" })
             }
-            for (var i = 0; i < _folders.length; ++i) {
-                var d = _folders[i]
-                out.push({ kind: "folder", d: d })
-                if (!_expanded[d.key]) continue
-                for (var j = 0; j < d.files.length; ++j) {
-                    var g = d.files[j]
-                    out.push({ kind: "file", d: d, g: g })
-                    if (!_expanded[g.key]) continue
-                    for (var k = 0; k < g.items.length; ++k) {
-                        out.push({ kind: "item", d: d, g: g, r: g.items[k] })
+            for (var ti2 = 0; ti2 < _curTagFolders.length; ++ti2) {
+                var ctag = _curTagFolders[ti2]
+                out.push({ kind: "tag", d: ctag })
+                if (!_expanded[ctag.key]) continue
+                for (var cfi = 0; cfi < ctag.folders.length; ++cfi) {
+                    var cfd = ctag.folders[cfi]
+                    out.push({ kind: "folder", d: cfd, tag: ctag })
+                    if (!_expanded[cfd.key]) continue
+                    for (var cfj = 0; cfj < cfd.files.length; ++cfj) {
+                        var cfg = cfd.files[cfj]
+                        out.push({ kind: "file", d: cfd, g: cfg, tag: ctag })
+                        if (!_expanded[cfg.key]) continue
+                        for (var cfk = 0; cfk < cfg.items.length; ++cfk) {
+                            out.push({ kind: "item", d: cfd, g: cfg, r: cfg.items[cfk], tag: ctag })
+                        }
                     }
                 }
             }
@@ -588,6 +637,11 @@ Window {
                 }
             }
         } else {
+            // 先展开/折叠 tag 节点
+            for (var ei = 0; ei < _curTagFolders.length; ++ei) {
+                var et = _curTagFolders[ei]
+                ex[et.key] = !!flag
+            }
             for (var i = 0; i < _folders.length; ++i) {
                 var d = _folders[i]
                 ex[d.key] = !!flag
@@ -745,6 +799,26 @@ Window {
         }
         return out
     }
+    // 删除已勾选文件夹的所有评分数据（当前 Tab，不可恢复）
+    function _deleteCheckedFolders() {
+        if (typeof Rating === "undefined") return
+        var paths = []
+        for (var i = 0; i < _folders.length; ++i) {
+            var d = _folders[i]
+            if (_isFolderChecked(d.key) && d.path && d.path.length > 0)
+                paths.push(d.path)
+        }
+        // quality_slide 模式下也删滑动打分数据
+        for (var si = 0; si < _slideFolders.length; ++si) {
+            var sd = _slideFolders[si]
+            if (_isFolderChecked(sd.key) && sd.path && sd.path.length > 0)
+                paths.push(sd.path)
+        }
+        if (paths.length === 0) return
+        Rating.removeByFolders(paths, root._selectedMode)
+        _refresh()
+    }
+
     // 收集已勾选、但还未评完的文件夹（用于上传前拦截）。
     // 返回元素：{ name, path, ratedCount, totalVideos }
     // 设计原则：不评完不让上传 → 避免云端出现"半成品"打分集合污染统计。
@@ -1742,6 +1816,27 @@ Window {
                         if (root._isArchiveView && tagField.activeFocus) {
                             root._tagAutoSync = false
                         }
+                        // 当前 Tab：实时更新虚拟 tag 树的名称（使树标题跟随输入）
+                        if (!root._isArchiveView && root._curTagFolders.length > 0) {
+                            var newName = text.trim()
+                            if (newName.length > 0 && root._curTagFolders[0].name !== newName) {
+                                var updated = []
+                                for (var xi = 0; xi < root._curTagFolders.length; ++xi) {
+                                    var xt = root._curTagFolders[xi]
+                                    updated.push({
+                                        key: "tag:" + newName,
+                                        name: newName,
+                                        mode: xt.mode,
+                                        count: xt.count,
+                                        latest: xt.latest,
+                                        totalItems: xt.totalItems,
+                                        folders: xt.folders
+                                    })
+                                }
+                                root._curTagFolders = updated
+                                root._rebuildVisibleRows()
+                            }
+                        }
                     }
                     // 远程配置热更新后，Rating.uploadTag 会被外部改写，
                     // 但 TextField.text 的 QML 绑定在用户首次输入后已断开（binding break），
@@ -1802,41 +1897,6 @@ Window {
         RowLayout {
             Layout.fillWidth: true
             spacing: 12
-            // ── 归档 Tab：删除勾选 ──
-            Rectangle {
-                visible: root._isArchiveView && root._archiveTagFolders.length > 0
-                radius: 14
-                height: 26
-                implicitWidth: delCheckedLabel.implicitWidth + 22
-                color: delCheckedMA.containsMouse ? "#3a1f22" : "#2a1d20"
-                border.color: "#7a3a3a"
-                border.width: 1
-                Text {
-                    id: delCheckedLabel
-                    anchors.centerIn: parent
-                    text: {
-                        var _dep = root._checkedFolders
-                        var n = root._checkedFolderCount()
-                        return n > 0
-                            ? qsTr("🗑 删除勾选（%1）").arg(n)
-                            : qsTr("🗑 删除勾选")
-                    }
-                    color: "#ff8a8a"
-                    font.pixelSize: 12
-                }
-                MouseArea {
-                    id: delCheckedMA
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    enabled: {
-                        var _dep1 = root._checkedFolders
-                        var _dep2 = root._archiveTagFolders
-                        return root._checkedFolderCount() > 0
-                    }
-                    onClicked: confirmClearDialog.open()
-                }
-            }
             Item { Layout.fillWidth: true }
         }
 
@@ -2721,6 +2781,20 @@ Window {
                     var n = root._checkedFolderCount()
                     if (n > 0) root._deleteCheckedFolders()
                 }
+            }
+
+            // ── 归档 Tab：删除勾选（上传勾选左侧）──
+            PillBtn {
+                visible: root._isArchiveView
+                danger: root._checkedFolderCount() > 0
+                enabled: (root._checkedFolders, root._archiveTagFolders, root._checkedFolderCount() > 0)
+                text: {
+                    var _dep1 = root._checkedFolders
+                    var _dep2 = root._archiveTagFolders
+                    var n = root._checkedFolderCount()
+                    return n > 0 ? qsTr("🗑 删除勾选（%1）").arg(n) : qsTr("🗑 删除勾选")
+                }
+                onClicked: confirmClearDialog.open()
             }
 
             PillBtn {
