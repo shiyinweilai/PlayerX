@@ -132,7 +132,10 @@ Dialog {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: {
                     var su = ""
-                    try { if (typeof Rating !== "undefined") su = String(Rating.systemUserName() || "") } catch (e) {}
+                    try { if (typeof Rating !== "undefined") su = String(Rating.currentUser || "") } catch (e) {}
+                    if (su.length === 0) {
+                        try { if (typeof Rating !== "undefined") su = String(Rating.systemUserName() || "") } catch (e) {}
+                    }
                     return "系统用户：" + (su.length > 0 ? su : "未知")
                 }
                 color: "#9a9aa8"
