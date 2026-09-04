@@ -1519,9 +1519,7 @@ Window {
         anchors.margins: 14
         spacing: 10
 
-        // ── 标题 + 模式切换 ────
-        // 设计动机：评分数据按"主观评分 / 质量比较"独立存储，应该让用户一眼看到当前正在看哪一份。
-        // 这里用“胶囊 Tab”式切换器：默认从 Rating.modeList 动态生成，未来加新模式不需动 QML。
+        // ── 标题行（标题 + 关闭按钮）────
         RowLayout {
             Layout.fillWidth: true
             spacing: 12
@@ -1532,63 +1530,29 @@ Window {
                 font.bold: true
             }
             Item { Layout.fillWidth: true }
-            // 模式切换器：Repeater 生成一组互斥胶囊开关
-            //（用过滤后的可见列表：开发者模式关闭时不含「测试模式」）
-            Row {
-                spacing: 6
-                Repeater {
-                    model: root._visibleModeList
-                    delegate: Rectangle {
-                        property var modeData: modelData
-                        property bool selected: root._selectedMode === modeData.id
-                        radius: 14
-                        height: 26
-                        // 实际宽度由内容决定（使用 implicit）
-                        implicitWidth: modeLabel.implicitWidth + 22
-                        color: selected ? "#0fa085"
-                              : modeMA.containsMouse ? "#2c2c34"
-                                                     : "#222226"
-                        border.color: selected ? "#0fa085" : "#3a3a42"
-                        border.width: 1
-                        Row {
-                            anchors.centerIn: parent
-                            spacing: 6
-                            Text {
-                                id: modeLabel
-                                text: {
-                                    var t = modeData.label || ""
-                                    var p = t.indexOf("（")
-                                    if (p >= 0) t = t.substring(0, p)
-                                    return t.trim()
-                                }
-                                color: selected ? "#ffffff" : "#cfcfd4"
-                                font.pixelSize: 12
-                                font.bold: selected
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-                        MouseArea {
-                            id: modeMA
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (root._selectedMode !== modeData.id) {
-                                    // 方案 C：切胶囊只改弹窗内本地 _selectedMode，
-                                    // 绝不写 Rating.currentMode，背景视频星条/cellRatings 不受影响。
-                                    // 数据层面改变由 _refresh 重新拉 getAllRatingsForMode。
-                                    root._selectedMode = modeData.id
-                                    if (root._viewMode === "archive") root._refreshArchiveList(false)
-                                    root._refresh()
-                                }
-                            }
-                        }
-                    }
+            // 右上角关闭按钮
+            Rectangle {
+                width: 26; height: 26
+                radius: 13
+                color: closeTitleMA.containsMouse ? "#3a3a44" : "transparent"
+                border.color: closeTitleMA.containsMouse ? "#5a5a66" : "transparent"
+                Text {
+                    anchors.centerIn: parent
+                    text: "✕"
+                    color: closeTitleMA.containsMouse ? "#ffffff" : "#9aa0a6"
+                    font.pixelSize: 13
+                }
+                MouseArea {
+                    id: closeTitleMA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.close()
                 }
             }
         }
 
-        // ── 次级 Tab：当前 / 归档 ─────────────────────────────────────────
+        // ── 次级 Tab：当前 / 归档 + 模式切换器 ─────────────────────────────────────────
         // 设计动机：归档批次承载"打分快照"，与当前评分账本逻辑分离。
         // 同一文件夹可被归档多次（重新打分前先归档），归档区按"批次文件夹"分桶展示。
         // 当前 Tab：可读写，可勾选/上传/归档/删除（保持原行为）
@@ -1643,6 +1607,54 @@ Window {
                 }
             }
 
+            // 模式切换器：紧接当前/归档按钮右侧
+            Row {
+                spacing: 6
+                leftPadding: 4
+                Repeater {
+                    model: root._visibleModeList
+                    delegate: Rectangle {
+                        property var modeData: modelData
+                        property bool selected: root._selectedMode === modeData.id
+                        radius: 14
+                        height: 26
+                        implicitWidth: modeLbl.implicitWidth + 22
+                        color: selected ? "#0fa085"
+                              : modeSwitchMA.containsMouse ? "#2c2c34"
+                                                           : "#222226"
+                        border.color: selected ? "#0fa085" : "#3a3a42"
+                        border.width: 1
+                        Text {
+                            id: modeLbl
+                            anchors.centerIn: parent
+                            text: {
+                                var t = modeData.label || ""
+                                var p = t.indexOf("（")
+                                if (p >= 0) t = t.substring(0, p)
+                                return t.trim()
+                            }
+                            color: selected ? "#ffffff" : "#cfcfd4"
+                            font.pixelSize: 12
+                            font.bold: selected
+                        }
+                        MouseArea {
+                            id: modeSwitchMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (root._selectedMode !== modeData.id) {
+                                    root._selectedMode = modeData.id
+                                    if (root._viewMode === "archive") root._refreshArchiveList(false)
+                                    root._refresh()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { Layout.fillWidth: true }
 
         }
 
@@ -1790,89 +1802,6 @@ Window {
         RowLayout {
             Layout.fillWidth: true
             spacing: 12
-            // 全选勾选框：与下方文件夹行样式一致，点击切换全选/全不选
-            Item {
-                id: selectAllCheck
-                anchors.verticalCenter: parent.verticalCenter
-                width: 18; height: 18
-                property bool allChecked: root._checkedFolderCount() > 0
-                property bool hasFolders: (root._isArchiveView
-                    ? root._archiveTagFolders.reduce(function(acc, t) { return acc + t.folders.length }, 0)
-                    : root._folders.length) > 0
-                Rectangle {
-                    anchors.fill: parent
-                    radius: 4
-                    color: selectAllCheck.allChecked ? "#3a7afe"
-                                                      : (selectAllCheckMA.containsMouse ? "#3a3a44" : "#2a2a32")
-                    border.width: 1
-                    border.color: selectAllCheck.allChecked ? "#3a7afe"
-                                                             : (selectAllCheckMA.containsMouse ? "#5a5a66" : "#4a4a54")
-                    Behavior on color       { ColorAnimation { duration: 100 } }
-                    Behavior on border.color { ColorAnimation { duration: 100 } }
-                    Text {
-                        anchors.centerIn: parent
-                        text: "✓"
-                        color: "#ffffff"
-                        font.pixelSize: 13
-                        font.bold: true
-                        visible: selectAllCheck.allChecked
-                    }
-                }
-                MouseArea {
-                    id: selectAllCheckMA
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    acceptedButtons: Qt.LeftButton
-                    propagateComposedEvents: false
-                    enabled: selectAllCheck.hasFolders
-                    onPressed: function(mouse) { mouse.accepted = true }
-                    onClicked: function(mouse) {
-                        mouse.accepted = true
-                        root._setAllFoldersChecked(selectAllCheck.allChecked ? false : true)
-                    }
-                    ToolTip.visible: containsMouse
-                    ToolTip.delay: 600
-                    ToolTip.text: selectAllCheck.allChecked ? qsTr("全不选")
-                                                             : qsTr("全选")
-                }
-            }
-            PillBtn {
-                // 点击在"展开勾选"和"折叠勾选"之间切换
-                property bool _allExpanded: false
-                text: _allExpanded ? qsTr("折叠勾选") : qsTr("展开勾选")
-                onClicked: {
-                    _allExpanded = !_allExpanded
-                    root._expandAll(_allExpanded)
-                }
-            }
-            PillBtn {
-                id: exportBtn
-                text: {
-                    var n = root._checkedFolderCount()
-                    return n > 0
-                            ? qsTr("📤 导出勾选（%1）").arg(n)
-                            : qsTr("📤 导出勾选")
-                }
-                emphasized: true
-                enabled: {
-                    var _dep1 = root._checkedFolders
-                    var _dep2 = root._archiveTagFolders
-                    return root._checkedFolderCount() > 0
-                }
-                onClicked: {
-                    if (root._isArchiveView) {
-                        exportArchiveDialog.open()
-                    } else {
-                        exportDialog.open()
-                    }
-                }
-                // 闪烁复位：flash=true 后 1.6s 自动关闭
-                Timer {
-                    id: exportFlashTimer
-                    interval: 1600
-                    onTriggered: exportBtn.flash = false
-                }
-            }
             // ── 归档 Tab：删除勾选 ──
             Rectangle {
                 visible: root._isArchiveView && root._archiveTagFolders.length > 0
@@ -1928,6 +1857,7 @@ Window {
                 anchors.top: parent.top
                 anchors.margins: 1
                 height: 28
+                visible: root._isArchiveView
                 spacing: 0
                 // 文件列（占主要宽度，不含右侧两个固定列）
                 Rectangle {
@@ -1993,7 +1923,7 @@ Window {
                 id: listView
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.top: header.bottom
+                anchors.top: header.visible ? header.bottom : parent.top
                 anchors.bottom: parent.bottom
                 anchors.margins: 1
                 clip: true
@@ -2314,69 +2244,106 @@ Window {
                         font.pixelSize: 12
                         elide: Text.ElideRight
                     }
-                    // 汇总：已评 X/Y · N 条 · 平均 4.2★
-                    // 设计：把"已评分视频数 / 该文件夹视频总数"放在最前面（用户最关心进度），
-                    //       未评完时用橙红色 + ⚠ 强提醒；评满后用绿色 ✓。
-                    Text {
+                    // 汇总（右侧操作区，仅文字）
+                    Row {
                         anchors.verticalCenter: parent.verticalCenter
-                        x: parent.width - 90 + 8
-                        width: 90 - 16
-                        text: {
-                            if (!folderRoot.d) return ""
-                            var d = folderRoot.d
-                            var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
-                            var total = (d.totalVideos === undefined ? rated : d.totalVideos)
-                            var ckMiss = d.ckMissing || 0
-                            var head = (d.fullyRated ? "✓ " : "⚠ ") + rated + "/" + total
-                            var tail = " · " + d.totalItems + "条"
-                                + (d.avg > 0 ? " · " + d.avg + "★" : "")
-                            if (ckMiss > 0) tail += " · ☐" + ckMiss  // checklist 未勾选文件数
-                            return head + tail
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        spacing: 6
+
+                        // 汇总文字
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 90
+                            text: {
+                                if (!folderRoot.d) return ""
+                                var d = folderRoot.d
+                                var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
+                                var total = (d.totalVideos === undefined ? rated : d.totalVideos)
+                                var ckMiss = d.ckMissing || 0
+                                var head = (d.fullyRated ? "✓ " : "⚠ ") + rated + "/" + total
+                                var tail = " · " + d.totalItems + "条"
+                                    + (d.avg > 0 ? " · " + d.avg + "★" : "")
+                                if (ckMiss > 0) tail += " · ☐" + ckMiss
+                                return head + tail
+                            }
+                            color: folderRoot.d
+                                    ? (folderRoot.d.fullyRated ? "#5fd17a" : "#ffb05c")
+                                    : "#cfcfd4"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                            ToolTip.visible: _sumMA.containsMouse && folderRoot.d !== null
+                            ToolTip.delay: 600
+                            ToolTip.timeout: 8000
+                            ToolTip.text: {
+                                var d = folderRoot.d
+                                if (!d) return ""
+                                var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
+                                var total = (d.totalVideos === undefined ? d.files.length : d.totalVideos)
+                                var ckMiss = d.ckMissing || 0
+                                var base = qsTr("已评分视频：%1 / %2\n评分记录：%3 条\n平均：%4")
+                                    .arg(rated).arg(total).arg(d.totalItems)
+                                    .arg(d.avg > 0 ? d.avg + " ★" : "—")
+                                if (d.fullyRated) return base
+                                var missing = []
+                                var starLeft = total - rated
+                                if (starLeft > 0)
+                                    missing.push(qsTr("• 还有 %1 个视频未评分").arg(starLeft))
+                                if (ckMiss > 0)
+                                    missing.push(qsTr("• 还有 %1 个视频未勾选检查项").arg(ckMiss))
+                                if (missing.length === 0) return base
+                                return base + "\n\n" + qsTr("⚠ 未完成，无法上传：")
+                                        + "\n" + missing.join("\n")
+                            }
+                            MouseArea {
+                                id: _sumMA
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: { if (folderRoot.d) root._toggleKey(folderRoot.d.key) }
+                            }
                         }
-                        // 【颜色规则】fullyRated=true（可上传）统一显示绿色，
-                        // 让"可上传状态"一眼可辨；未完成用橙红提醒。
-                        color: folderRoot.d
-                                ? (folderRoot.d.fullyRated ? "#5fd17a" : "#ffb05c")
-                                : "#cfcfd4"
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
-                        // 鼠标悬浮看完整解释（按列宽收窄时被 elide 截断）；
-                        // 不完整时额外列出缺项（未评分文件数 / 未勾选 checklist 文件数），
-                        // 让用户直接从悬浮提示里知道差在哪里。
-                        ToolTip.visible: _sumMA.containsMouse && folderRoot.d !== null
-                        ToolTip.delay: 600
-                        ToolTip.timeout: 8000
-                        ToolTip.text: {
-                            var d = folderRoot.d
-                            if (!d) return ""
-                            var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
-                            var total = (d.totalVideos === undefined ? d.files.length : d.totalVideos)
-                            var ckMiss = d.ckMissing || 0
-                            var base = qsTr("已评分视频：%1 / %2\n评分记录：%3 条\n平均：%4")
-                                .arg(rated).arg(total).arg(d.totalItems)
-                                .arg(d.avg > 0 ? d.avg + " ★" : "—")
-                            if (d.fullyRated) return base
-                            // ── 不完整：追加缺项明细 ──
-                            var missing = []
-                            var starLeft = total - rated
-                            if (starLeft > 0)
-                                missing.push(qsTr("• 还有 %1 个视频未评分").arg(starLeft))
-                            if (ckMiss > 0)
-                                missing.push(qsTr("• 还有 %1 个视频未勾选检查项").arg(ckMiss))
-                            if (missing.length === 0) return base
-                            return base + "\n\n" + qsTr("⚠ 未完成，无法上传：")
-                                    + "\n" + missing.join("\n")
-                        }
-                        // 汇总列自己接管本区域的 hover + click，避免和整行的 folderMA
-                        // 的"文件夹路径 ToolTip"抢占：整行的 folderMA 已把汇总列宽度
-                        // 让出（anchors.rightMargin: 90），本 MouseArea 覆盖汇总列区域，
-                        // 悬浮显示"评分/checklist 完成度"tooltip；点击则同样展开/收起。
-                        MouseArea {
-                            id: _sumMA
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: { if (folderRoot.d) root._toggleKey(folderRoot.d.key) }
+
+                        // 单独勾选框
+                        Item {
+                            id: folderCheck
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 18; height: 18
+                            property bool checked: folderRoot.d ? root._isFolderChecked(folderRoot.d.key) : false
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 4
+                                color: folderCheck.checked ? "#3a7afe"
+                                                           : (folderCheckMA.containsMouse ? "#3a3a44" : "#2a2a32")
+                                border.width: 1
+                                border.color: folderCheck.checked ? "#3a7afe"
+                                                                  : (folderCheckMA.containsMouse ? "#5a5a66" : "#4a4a54")
+                                Behavior on color        { ColorAnimation { duration: 100 } }
+                                Behavior on border.color { ColorAnimation { duration: 100 } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "✓"
+                                    color: "#ffffff"
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                    visible: folderCheck.checked
+                                }
+                            }
+                            MouseArea {
+                                id: folderCheckMA
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton
+                                propagateComposedEvents: false
+                                onPressed: function(mouse) { mouse.accepted = true }
+                                onClicked: function(mouse) {
+                                    mouse.accepted = true
+                                    if (folderRoot.d) root._toggleFolderChecked(folderRoot.d.key)
+                                }
+                                ToolTip.visible: containsMouse
+                                ToolTip.delay: 600
+                                ToolTip.text: folderCheck.checked ? qsTr("取消勾选") : qsTr("勾选此文件夹")
+                            }
                         }
                     }
 
@@ -2396,10 +2363,8 @@ Window {
                         anchors.left: parent.left
                         anchors.leftMargin: 32
                         anchors.right: parent.right
-                        // 让出右侧"汇总列"（宽 90），避免本 MouseArea 的"文件夹路径 ToolTip"
-                        // 抢占汇总列的"完成度 ToolTip"。汇总列区域由内层 _sumMA 独立处理
-                        // hover + click（点击同样展开/收起，行为一致）。
-                        anchors.rightMargin: 90
+                        // 让出右侧操作区：汇总文字(90) + 间距(6) + 勾选框(18) + 右边距(8) ≈ 122
+                        anchors.rightMargin: 122
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
                         z: 0
@@ -2632,6 +2597,132 @@ Window {
             Layout.fillWidth: true
             spacing: 8
 
+            // 推右：所有按钮靠右对齐
+            Item { Layout.fillWidth: true }
+
+            // 全选按钮（仅当前Tab显示）
+            Item {
+                id: selectAllCheck
+                visible: !root._isArchiveView
+                anchors.verticalCenter: parent.verticalCenter
+                width: 18; height: 18
+                property bool allChecked: root._checkedFolderCount() > 0
+                property bool hasFolders: root._folders.length > 0
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 4
+                    color: selectAllCheck.allChecked ? "#3a7afe"
+                                                      : (selectAllCheckMA.containsMouse ? "#3a3a44" : "#2a2a32")
+                    border.width: 1
+                    border.color: selectAllCheck.allChecked ? "#3a7afe"
+                                                             : (selectAllCheckMA.containsMouse ? "#5a5a66" : "#4a4a54")
+                    Behavior on color        { ColorAnimation { duration: 100 } }
+                    Behavior on border.color { ColorAnimation { duration: 100 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "✓"
+                        color: "#ffffff"
+                        font.pixelSize: 13
+                        font.bold: true
+                        visible: selectAllCheck.allChecked
+                    }
+                }
+                MouseArea {
+                    id: selectAllCheckMA
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton
+                    propagateComposedEvents: false
+                    enabled: selectAllCheck.hasFolders
+                    onPressed: function(mouse) { mouse.accepted = true }
+                    onClicked: function(mouse) {
+                        mouse.accepted = true
+                        root._setAllFoldersChecked(selectAllCheck.allChecked ? false : true)
+                    }
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 600
+                    ToolTip.text: selectAllCheck.allChecked ? qsTr("全不选") : qsTr("全选")
+                }
+            }
+            PillBtn {
+                id: exportBtn
+                text: {
+                    var _dep1 = root._checkedFolders
+                    var _dep2 = root._archiveTagFolders
+                    var n = root._checkedFolderCount()
+                    return n > 0
+                            ? qsTr("📤 导出勾选（%1）").arg(n)
+                            : qsTr("📤 导出勾选")
+                }
+                emphasized: true
+                enabled: {
+                    var _dep1 = root._checkedFolders
+                    var _dep2 = root._archiveTagFolders
+                    return root._checkedFolderCount() > 0
+                }
+                onClicked: {
+                    if (root._isArchiveView) {
+                        exportArchiveDialog.open()
+                    } else {
+                        exportDialog.open()
+                    }
+                }
+                Timer {
+                    id: exportFlashTimer
+                    interval: 1600
+                    onTriggered: exportBtn.flash = false
+                }
+            }
+            PillBtn {
+                // 与"删除勾选"互补：把已勾选文件夹的评分搬到 archive/<mode>/<batchName>/ 子目录下，
+                // 主表里不再显示，但归档 Tab 可查。
+                // 改造点：归档前会先弹"批次名输入"对话框，让用户给本次归档命名。
+                // 不是 danger 风格，避免和"删除"按钮视觉撞车。
+                id: archiveSelectedBtn
+                visible: !root._isArchiveView
+                text: {
+                    var _dep = root._checkedFolders
+                    var _dep2 = root._folders
+                    var n = root._checkedFolderCount()
+                    return n > 0
+                            ? qsTr("📦 归档勾选（%1）").arg(n)
+                            : qsTr("📦 归档勾选")
+                }
+                enabled: (root._checkedFolders, root._folders, root._archiveTagFolders, root._checkedFolderCount() > 0)
+                onClicked: {
+                    // 给输入框填默认批次名（<mode>_yyyyMMdd_HHmmss）
+                    if (typeof Rating !== "undefined") {
+                        // 默认批次名统一 = 当前 tag（与"上传后自动归档"一致）。
+                        // 这样同一 tag 只有一个归档目录，重复归档时覆盖刷新，
+                        // 不再每次生成一个 <mode>_时间戳 的新目录。
+                        // 用户仍可在输入框里改成自定义名（此时走防覆盖逻辑）。
+                        var _t = root._currentUploadTag()
+                        confirmArchiveDialog._batchName =
+                            (_t.length > 0) ? _t
+                                            : Rating.defaultArchiveBatchName(root._selectedMode)
+                    } else {
+                        confirmArchiveDialog._batchName = ""
+                    }
+                    confirmArchiveDialog.open()
+                }
+            }
+
+            // ── 当前 Tab：删除勾选 ──
+            PillBtn {
+                visible: !root._isArchiveView
+                danger: root._checkedFolderCount() > 0
+                enabled: (root._checkedFolders, root._checkedFolderCount() > 0)
+                text: {
+                    var _dep = root._checkedFolders
+                    var n = root._checkedFolderCount()
+                    return n > 0 ? qsTr("🗑 删除勾选（%1）").arg(n) : qsTr("🗑 删除勾选")
+                }
+                onClicked: {
+                    var n = root._checkedFolderCount()
+                    if (n > 0) root._deleteCheckedFolders()
+                }
+            }
+
             PillBtn {
                 // 当前 Tab 与归档 Tab 都支持云端上传：
                 //   ・ 当前 Tab：上传当前主 CSV（与历史行为一致）
@@ -2650,7 +2741,7 @@ Window {
                 // 1) 真·硬约束（绑定层就置灰，本地直接卡住）：
                 //    - 至少勾选 1 个文件夹（picked > 0）
                 //    - 勾选的文件夹全部已评完（incomplete == 0；归档批次跳过该约束，
-                //      因为归档本身就是“某次评分快照”，业务上视作完整结果）
+                //      因为归档本身就是"某次评分快照"，业务上视作完整结果）
                 //    - 归档 Tab 还要求当前选中了一个有效批次（_archiveBatch 非空）
                 // 2) 软约束（点击层兜底拦截）：评分人/备注 tag 必填、网络上传中等
                 //    保留 onClicked 中的 _collectCheckedIncomplete() 兜底，避免 binding
@@ -2665,7 +2756,7 @@ Window {
                     if (root._rows.length === 0) return false
                     if (root._checkedFolderCount() === 0) return false
                     // 未评完拦截：归档 Tab 与当前 Tab 一视同仁——
-                    // 归档批次也是基于“文件夹完整评分”做云端汇总，半成品上传同样不可信。
+                    // 归档批次也是基于"文件夹完整评分"做云端汇总，半成品上传同样不可信。
                     if (root._collectCheckedIncomplete().length > 0) return false
                     return true
                 }
@@ -2734,51 +2825,11 @@ Window {
                 }
             }
             PillBtn {
-                // “⚙ 设置”：独立入口，避免“双击上传按钮”这种隐藏交互被错过
+                // "⚙ 设置"：独立入口，避免"双击上传按钮"这种隐藏交互被错过
                 // 归档 Tab 同样可见——归档与当前 Tab 共用同一份服务器配置
                 visible: true
                 text: qsTr("⚙ 上传设置")
                 onClicked: uploadConfigDialog.open()
-            }
-            PillBtn {
-                // 与"删除勾选"互补：把已勾选文件夹的评分搬到 archive/<mode>/<batchName>/ 子目录下，
-                // 主表里不再显示，但归档 Tab 可查。
-                // 改造点：归档前会先弹"批次名输入"对话框，让用户给本次归档命名。
-                // 不是 danger 风格，避免和"删除"按钮视觉撞车。
-                id: archiveSelectedBtn
-                visible: !root._isArchiveView
-                text: {
-                    var _dep = root._checkedFolders
-                    var _dep2 = root._folders
-                    var n = root._checkedFolderCount()
-                    return n > 0
-                            ? qsTr("📦 归档勾选（%1）").arg(n)
-                            : qsTr("📦 归档勾选")
-                }
-                enabled: (root._checkedFolders, root._folders, root._archiveTagFolders, root._checkedFolderCount() > 0)
-                onClicked: {
-                    // 给输入框填默认批次名（<mode>_yyyyMMdd_HHmmss）
-                    if (typeof Rating !== "undefined") {
-                        // 默认批次名统一 = 当前 tag（与"上传后自动归档"一致）。
-                        // 这样同一 tag 只有一个归档目录，重复归档时覆盖刷新，
-                        // 不再每次生成一个 <mode>_时间戳 的新目录。
-                        // 用户仍可在输入框里改成自定义名（此时走防覆盖逻辑）。
-                        var _t = root._currentUploadTag()
-                        confirmArchiveDialog._batchName =
-                            (_t.length > 0) ? _t
-                                            : Rating.defaultArchiveBatchName(root._selectedMode)
-                    } else {
-                        confirmArchiveDialog._batchName = ""
-                    }
-                    confirmArchiveDialog.open()
-                }
-            }
-
-
-            Item { Layout.fillWidth: true }
-            PillBtn {
-                text: qsTr("关闭")
-                onClicked: root.close()
             }
         }
     }
