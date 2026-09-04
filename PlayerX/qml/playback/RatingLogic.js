@@ -12,12 +12,30 @@ function _initRating(ctx) {
     _multiGroupDialog = ctx.multiGroupDialog
     _ratingsDialog = ctx.ratingsDialog
     _ratingToast = ctx.ratingToast
+    // 【关键】.import 进来的 ML 是 MainLogic.js 的独立作用域副本，
+    // 它的 _root 与 Main.qml 中 Logic._root 是两个不同变量，Main.qml 的
+    // Logic._init() 初始化不到这一份。若不在此显式注入，_boot() 里调用的
+    // ML._applyModeConfigToUI / ML._forceApplyDimensions 会把维度写进空对象 {}，
+    // 真正的 Main.reviewDimensions 始终为 []，表现为「手动打开对比没有星星」。
+    try {
+        ML._init({
+            root: ctx.root,
+            multiGroupDialog: ctx.multiGroupDialog,
+            ratingsDialog: ctx.ratingsDialog,
+            ratingToast: ctx.ratingToast,
+            dimReloadTimer: ctx.dimReloadTimer || null
+        })
+        console.log("[Init] RatingLogic 内 ML(MainLogic) 副本已注入真 root")
+    } catch (e) {
+        console.warn("[Init] ML 副本注入失败：", e)
+    }
 }
 
 function _boot() {
     _root._bootT0 = Date.now()
     // 初始化手机模式校准系数（按当前 Screen.width 查表，跟随系统显示档位变化）
-    ML._applyAutoPhoneScale()
+    // 【注意】ML 副本的作用域中 Screen 可能不可见，加 try-catch 防止崩溃中断后续启动流程
+    try { ML._applyAutoPhoneScale() } catch (e) { console.warn("[Boot] _applyAutoPhoneScale 跳过：", e) }
 
     // 启动时立即同步一次 checklist 白名单到 C++（保证在任何配置加载完成前，
     // 导出/上传就已经处于"过滤为空"状态，避免残留旧勾选被写入 CSV）。
@@ -35,6 +53,10 @@ function _boot() {
         console.log("[DevMode] 开发者模式未开启，当前模式为 test → 强制回退为 off")
         Rating.currentMode = "off"
     }
+
+    // 【默认配置 flag】_useRemoteConfig 为纯内存变量，默认 false（Main.qml property 初始值）。
+    // 重启后永远从内置 default_configs 出发；本次运行中用户点击"接受"则置为 true，
+    // 立即切换到远程覆盖层路径，无需持久化。
 
     // 加载多维度评分配置
     // 新策略：内置默认配置（Resources/default_configs/<mode>.json，跟随软件发布）为底，
@@ -101,7 +123,11 @@ function _boot() {
     //   同步失败（文件不存在/JSON 错误）时回退到异步 XHR 保底路径，
     //   不影响原有的 dimensions.json fallback 逻辑；也完全不动远程配置更新流程。
     var syncLoaded = false
-    if (typeof Fs !== "undefined" && typeof Fs.readTextFile === "function") {
+    // 【默认配置路径】未接受过远程配置时，跳过 dimsByMode.json 覆盖层，直接用内置配置。
+    if (!_root._useRemoteConfig) {
+        syncLoaded = true  // 内置配置已在上方 _loadBuiltinDefaultConfigs() 中就绪
+        console.log("[DefaultCfg] _useRemoteConfig=false，跳过覆盖层，使用内置 default_configs")
+    } else if (typeof Fs !== "undefined" && typeof Fs.readTextFile === "function") {
         try {
             var text = Fs.readTextFile(dimsByModeLocalPath) || ""
             if (text.length > 0) {

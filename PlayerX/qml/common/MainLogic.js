@@ -70,6 +70,7 @@ function _syncChecklistWhitelist() {
 }
 
 function _loadBuiltinDefaultConfigs() {
+    _ensureRoot()
     var modes = ["subjective", "quality", "quality_slide", "multi_dim", "test"]
     var bd = {}, bc = {}, bt = {}
     if (typeof Fs === "undefined" || typeof Fs.readTextFile !== "function") return
@@ -97,21 +98,44 @@ function _loadBuiltinDefaultConfigs() {
         " checklist=", Object.keys(bc).join(","), " tag=", Object.keys(bt).join(","))
 }
 
+// 【root 自愈】供配置读取函数使用：_root 可能是未 _init 的空对象，
+// 此时 _builtinDimsByMode 等全部读不到，配置静默为空。统一取回真 Main。
+function _ensureRoot() {
+    if (_root && typeof _root.reviewDimensionsVersion === "number") return true
+    try {
+        if (typeof Qt !== "undefined" && Qt._playerXRoot) {
+            _root = Qt._playerXRoot
+            _initialized = true
+            return true
+        }
+    } catch (e) {}
+    return false
+}
+
 function _dimsForMode(mode) {
-    var ov = (_root._dimsByMode && mode) ? _root._dimsByMode[mode] : null
-    if (ov && typeof ov.length === "number" && ov.length > 0) return ov
+    _ensureRoot()
+    if (_root._useRemoteConfig) {
+        var ov = (_root._dimsByMode && mode) ? _root._dimsByMode[mode] : null
+        if (ov && typeof ov.length === "number" && ov.length > 0) return ov
+    }
     return _root._builtinDimsByMode[mode] || null
 }
 
 function _checklistForMode(mode) {
-    var ov = (_root._checklistByMode && mode) ? _root._checklistByMode[mode] : null
-    if (ov && ov.items && typeof ov.items.length === "number" && ov.items.length > 0) return ov
+    _ensureRoot()
+    if (_root._useRemoteConfig) {
+        var ov = (_root._checklistByMode && mode) ? _root._checklistByMode[mode] : null
+        if (ov && ov.items && typeof ov.items.length === "number" && ov.items.length > 0) return ov
+    }
     return _root._builtinChecklistByMode[mode] || null
 }
 
 function _tagForMode(mode) {
-    if (_root._tagByMode && typeof _root._tagByMode[mode] === "string" && _root._tagByMode[mode].length > 0)
-        return _root._tagByMode[mode]
+    _ensureRoot()
+    if (_root._useRemoteConfig) {
+        if (_root._tagByMode && typeof _root._tagByMode[mode] === "string" && _root._tagByMode[mode].length > 0)
+            return _root._tagByMode[mode]
+    }
     return _root._builtinTagByMode[mode] || ""
 }
 
@@ -287,6 +311,9 @@ function _rebuildCellRatingsFromCsv(reason) {
     if (n <= 0) return
     var arr = []
     var dims = _root.reviewDimensions
+    console.log("[DiagDims] _rebuildCellRatingsFromCsv reason=", reason || "-",
+        " _root=", _root, " _root.reviewDimensions=", _root.reviewDimensions,
+        " len=", (_root.reviewDimensions ? _root.reviewDimensions.length : "nil"))
     // quality_slide 模式下只取第一个维度用于普通打分，第二个维度留给滑动对比
     if (_root.isQualitySlideMode && dims && dims.length >= 2)
         dims = [dims[0]]
@@ -363,6 +390,15 @@ function _forceApplyDimensions(dims, tag, forMode, reason) {
     var pureDims = []
     for (var _i = 0; _i < dims.length; _i++) pureDims.push(dims[_i])
     dims = pureDims
+    // 【root 自愈】某些模块副本（如 RatingLogic.js 内 import 的这一份）从未调用过 _init，
+    // _root 仍是文件顶部的空 JS 对象 {}。此时维度会被写进假对象，永远到不了 UI
+    // （表现为：日志显示赋值成功 len=1，但 Main 上 reviewDimensions 始终是 []，星星不出现）。
+    // 这里统一从 Qt._playerXRoot 取回真正的 Main 对象。
+    // 兜底自愈（主路径已由 RatingLogic._initRating 显式注入真 root）：
+    // 仅在 _root 明显无效时尝试补救，且绝不 return 阻断后续流程。
+    if (!_ensureRoot()) {
+        console.warn("[ForceApply] ⚠️ _root 疑似未注入且无法自愈，继续尝试原路径")
+    }
     var curMode = (typeof Rating !== "undefined" && Rating.currentMode) ? Rating.currentMode : ""
     // 【二重防线】只要传入了 forMode 且与当前 mode 不一致，直接拦截，避免污染当前 UI
     if (forMode && curMode && forMode !== curMode) {
@@ -381,7 +417,21 @@ function _forceApplyDimensions(dims, tag, forMode, reason) {
     _root.reviewDimensions = []
     _root.reviewDimensionsVersion = _root.reviewDimensionsVersion + 1
     // 阶段2：稍后重建（Timer 触发时赋新值）
-    _dimReloadTimer.restart()
+    // 【null 保护】_dimReloadTimer 在某些模块副本（如 RatingLogic.js 内部调用）中
+    // 未被注入而为 null，此时直接同步赋值，跳过两阶段刷新，避免崩溃且确保维度到达 UI。
+    if (_dimReloadTimer) {
+        _dimReloadTimer.restart()
+    } else {
+        _root.reviewDimensions = dims
+        _root.reviewDimensionsVersion = _root.reviewDimensionsVersion + 1
+        if (tag && typeof Rating !== "undefined") Rating.uploadTag = tag
+        _root._remoteTag = tag || ""
+        _root._applyingConfig = false
+        console.log("[ForceApply] Timer=null，同步直接赋值，dims=",
+            dims.map(function(d){return d.key+"("+(d.starCount||(d.levels&&d.levels.length)||5)+"星)"}).join(","))
+        console.log("[DiagDims] ForceApply 同步赋值后 _root=", _root,
+            " _root.reviewDimensions.len=", (_root.reviewDimensions ? _root.reviewDimensions.length : "nil"))
+    }
 }
 
 function _configFingerprint(obj) {
@@ -1352,6 +1402,11 @@ function _applyRemoteConfigItem(item, onDone) {
             if (item.bindingsFp) fp2["__bindings__"] = item.bindingsFp
             // 用户点了应用 = 明确接受该配置，清掉可能残留的忽略快照
             delete fp2["__ignored__:" + _fpKey]
+            // 【接受远程配置 flag】用户主动点击接受 = 本次运行切换到远程覆盖层路径（纯内存，重启归零）。
+            if (!_root._useRemoteConfig) {
+                _root._useRemoteConfig = true
+                console.log("[DefaultCfg] 用户接受远程配置，_useRemoteConfig → true")
+            }
             // 记录"用户实际应用的配置"：服务器 active 绑定（__bindings__）可能与用户
             // 手动选择的配置不同（如同一模式多张卡片），tooltip 的规则配置名应以
             // 实际应用为准，__bindings__ 仅作变更检测基线，不能当显示源
@@ -2126,3 +2181,6 @@ function _isAtLastFrameNow() {
     if (d <= 0) return false
     return (d - Engine.position) <= _fdNow() * 0.5
 }
+
+
+function _diagRootRef() { return _root }

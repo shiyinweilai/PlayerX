@@ -80,7 +80,8 @@ ApplicationWindow {
             root: root,
             multiGroupDialog: multiGroupDialog,
             ratingsDialog: ratingsDialog,
-            ratingToast: videoArea.ratingToast
+            ratingToast: videoArea.ratingToast,
+            dimReloadTimer: _dimReloadTimer
         })
         try {
             var tip = ToolTip.toolTip
@@ -736,6 +737,11 @@ ApplicationWindow {
     // 标志位：_applyRemoteConfigItem 正在处理维度，onCurrentModeChanged 应跳过，避免两处竞争
     property bool _applyingConfig: false
 
+    // 【默认配置 flag】纯内存变量，重启后始终重置为 false。
+    // false = 使用内置 default_configs（手动打开文件夹场景，默认行为）；
+    // true  = 本次运行内用户点击过"接受"，切换为远程配置覆盖层，直到下次重启。
+    property bool _useRemoteConfig: false
+
     // 【强制维度刷新】暂存待生效的维度数组，Timer 触发时赋值
     property var _pendingDimsToApply: null
     property string _pendingTagToApply: ""
@@ -1275,6 +1281,10 @@ ApplicationWindow {
         //   全部清零，不读 CSV。结果是：用户打开文件夹后，只要 reviewDimensions 又
         //   被赋值一次（例如"无更新"轮询里的静默同步），历史评分就会被清零，
         //   造成"重启后星星全空、跳过再切回来才修好"的体感 bug。
+        var _wn = (reviewDimensions && typeof reviewDimensions.length === "number") ? reviewDimensions.length : -1
+        var _wstk = ""
+        try { _wstk = (new Error()).stack || "" } catch(e) { _wstk = "nostack" }
+        console.log("[DiagDims][WATCH] reviewDimensions 变化 -> len=", _wn, " stack=", _wstk)
         Logic._rebuildCellRatingsFromCsv("reviewDimensionsChanged")
     }
     //   · 实时写入 ratings_quality_slide_slide.csv（与普通打分文件完全隔离）
@@ -1783,6 +1793,31 @@ ApplicationWindow {
         // 避免上一组的评分残留到下一组（同一 idx 但 path 已变）。
         // 具体回填逻辑抽到 Logic._rebuildCellRatingsFromCsv（供 _dimReloadTimer 复用）。
         function onFilesChanged() {
+            // 【内置配置兜底】手动打开文件夹时，若 reviewDimensions 仍为空，
+            // 直接同步读内置维度赋值，不走 _applyModeConfigToUI（其内部先清空再 60ms 后重建，
+            // 会导致紧接着的 _rebuildCellRatingsFromCsv 在维度到达前就跑，hasDims=false）。
+            var _curMode = (typeof Rating !== "undefined") ? Rating.currentMode : ""
+            console.log("[DiagDims] onFilesChanged 入口 mode=", _curMode,
+                "root.reviewDimensions=", root.reviewDimensions,
+                "len=", (root.reviewDimensions ? root.reviewDimensions.length : "nil"),
+                "Logic._rootIsSame=", (Logic._diagRootRef ? Logic._diagRootRef() === root : "nofn"))
+            if (_curMode && _curMode !== "off"
+                    && (!root.reviewDimensions || root.reviewDimensions.length === 0)) {
+                var _builtinDimsRaw = Logic._dimsForMode(_curMode)
+                if (_builtinDimsRaw && typeof _builtinDimsRaw.length === "number" && _builtinDimsRaw.length > 0) {
+                    var _builtinDims = []
+                    for (var _bi = 0; _bi < _builtinDimsRaw.length; _bi++) {
+                        var _d = _builtinDimsRaw[_bi]
+                        var _sc = (_d && _d.levels && typeof _d.levels.length === "number" && _d.levels.length > 0)
+                                  ? _d.levels.length : 5
+                        _builtinDims.push(Object.assign({}, _d, { starCount: _sc }))
+                    }
+                    root.reviewDimensions = _builtinDims
+                    root.reviewDimensionsVersion++
+                    console.log("[DefaultCfg] onFilesChanged 同步注入内置维度，mode=", _curMode,
+                        "dims=", _builtinDims.map(function(d){return d.key+"("+d.starCount+"星)"}).join(","))
+                }
+            }
             Logic._rebuildCellRatingsFromCsv("filesChanged")
             // 切换文件 / 翻组 / 改宫格后，主动复位 selectedIdx，避免上一组的
             // 选中（蓝边）残留误导。用户若需要再选中，单击或 [ / ] 即可。
