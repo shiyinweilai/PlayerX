@@ -1471,7 +1471,7 @@ def write_latest_json(version: str, downloads: dict):
     # 单一真相源，重复维护两份地址只会带来不一致。
     # 模板缺失（文件不存在/字段空）才退回到旧逻辑："保留用户改过的真实 url，
     # 占位符按需重建"。
-    url_tpl = "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang"
+    url_tpl = "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX"
     if url_tpl:
         info(f"使用 CDN URL 模板: {url_tpl}")
 
