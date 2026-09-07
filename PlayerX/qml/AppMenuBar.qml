@@ -308,6 +308,14 @@ MenuBar {
         property real offset: 0
         property bool dirRight: false
         property bool paused: false
+        // ─── 呼吸相位：与 mac 端同一套算法，保证两端观感一致 ───
+        // 2.6 秒一个明暗循环；由 breathTimer 推进，文字颜色随之插值。
+        property real phase: 0
+        readonly property real breathK: (Math.sin(phase) + 1) * 0.5   // 0…1
+        // 亮黄 ⇄ 琥珀橙插值（同 mac：r .72→1.0, g .45→.835, b .10→.29）
+        readonly property color breathColor: Qt.rgba(0.72 + 0.28 * breathK,
+                                                     0.45 + 0.385 * breathK,
+                                                     0.10 + 0.19 * breathK, 1)
         // 静止时让文字自身居中：offset = (容器宽 - 文字宽)/2。
         // 【上一版 bug】静止时 offset 置 0 → 文字贴容器左边缘，看着像"没居中"。
         readonly property real restOffset: Math.max(0, (width - textW) / 2)
@@ -331,8 +339,25 @@ MenuBar {
             text: titleNotice.text
             font.pixelSize: 13
             font.weight: Font.Medium
-            color: "#ffd54a"
+            // 呼吸色：随 phase 在亮黄与琥珀橙之间往复（同 mac 端）
+            color: titleNotice.breathColor
+            // 极轻投影：暗相位下不糊进深色标题栏，仅作可读性保底
+            style: Text.Raised
+            styleColor: Qt.rgba(0, 0, 0, 0.35)
             elide: Text.ElideNone
+        }
+
+        // 呼吸驱动：20fps 推进相位（与 mac 端 tick 同频）。
+        // 只在可见且处于播放对比 tab 时运行，切走即停，不空耗 CPU。
+        Timer {
+            interval: 50
+            running: titleNotice.visible
+            repeat: true
+            onTriggered: {
+                titleNotice.phase += (1.0 / 20.0) / 2.6 * 2.0 * Math.PI
+                if (titleNotice.phase > 2.0 * Math.PI)
+                    titleNotice.phase -= 2.0 * Math.PI
+            }
         }
 
         Timer {

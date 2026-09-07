@@ -308,6 +308,7 @@ static NSFont* PXNoticeFont(void) {
 @property (nonatomic, assign) CGFloat pauseLeft;   // 剩余停顿（秒）
 @property (nonatomic, assign) CGFloat textW;       // 文字自然宽度
 @property (nonatomic, assign) CGFloat boxW;        // 可用宽度
+@property (nonatomic, assign) CGFloat phase;       // 呼吸相位（0→2π 循环）
 @end
 
 @implementation PXNoticeTextView
@@ -316,6 +317,7 @@ static NSFont* PXNoticeFont(void) {
     if ((self = [super initWithFrame:f])) {
         _noticeText = [t copy];
         _offset = 0;
+        _phase = 0;
         _dir = 1;
         _pauseLeft = 1.2;
         [self recomputeMetrics];
@@ -353,7 +355,17 @@ static NSFont* PXNoticeFont(void) {
 
 - (BOOL)needsScroll { return _textW > _boxW; }
 
+// 呼吸效果：2.6 秒一个循环（0.38Hz）。比常见 1s 更慢，
+// 靠余光可见的持续明暗变化吸引注意，又不会快到令人烦躁。
+- (CGFloat)breathSeconds { return 2.6; }
+
 - (void)tick {
+    // 【呼吸一律推进】无论是否需要滚动都累加相位并请求重绘，
+    // 否则文字放得下（不滚动）时 tick 直接 return，呼吸就完全不动了。
+    _phase += (1.0/20.0) / [self breathSeconds] * 2.0 * M_PI;
+    if (_phase > 2.0 * M_PI) _phase -= 2.0 * M_PI;
+    [self setNeedsDisplay:YES];
+
     if (![self needsScroll]) return;
     if (_pauseLeft > 0) {
         _pauseLeft -= 1.0/20.0;
@@ -378,10 +390,31 @@ static NSFont* PXNoticeFont(void) {
 
 - (void)drawRect:(NSRect)dirtyRect {
     NSFont* font = PXNoticeFont();
-    NSDictionary* attrs = @{
+
+    // ─── 呼吸配色：亮黄 ⇄ 琥珀橙，靠余光可感知的明暗脉动吸引注意 ───
+    // 只做亮度/饱和度的小幅变化，不做色相跳变、不做渐变扫光：
+    // 简约、不刺眼，也不影响深色/浅色两种标题栏下的可读性。
+    // 相位 sin 映射 0→1：0 = 暗（琥珀橙），1 = 亮（亮黄）。
+    CGFloat k = (sin(_phase) + 1.0) * 0.5;      // 0…1
+    CGFloat r = 0.72 + 0.28 * k;                // 0.72 → 1.00
+    CGFloat g = 0.45 + 0.385 * k;               // 0.45 → 0.835
+    CGFloat b = 0.10 + 0.19 * k;                // 0.10 → 0.29
+    NSColor* fg = [NSColor colorWithSRGBRed:r green:g blue:b alpha:1.0];
+
+    NSMutableDictionary* attrs = [NSMutableDictionary dictionaryWithDictionary:@{
         NSFontAttributeName: font,
-        NSForegroundColorAttributeName: [NSColor colorWithSRGBRed:1.0 green:0.835 blue:0.29 alpha:1.0]  // #FFD54A 醒目黄
-    };
+        NSForegroundColorAttributeName: fg
+    }];
+    // 极轻投影：暗相位时文字不至于糊进深色标题栏，仅作可读性保底。
+    static NSShadow* sh = nil;
+    if (!sh) {
+        sh = [[NSShadow alloc] init];
+        sh.shadowColor = [NSColor colorWithWhite:0.0 alpha:0.35];
+        sh.shadowOffset = NSMakeSize(0, -0.5);
+        sh.shadowBlurRadius = 1.0;
+    }
+    attrs[NSShadowAttributeName] = sh;
+
     // 垂直精确居中：用字体度量（ascender 向上为正、descender 向下为负）
     // 算出真实墨迹高度，再按容器高（28，即标准标题栏高）居中，
     // 避免原来用固定 12 估算导致的偏上。
