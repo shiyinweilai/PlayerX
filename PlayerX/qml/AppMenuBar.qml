@@ -24,6 +24,16 @@ MenuBar {
     // 系统按钮等高），右侧 140px 留给系统按钮，菜单项垂直居中。
     // macOS / Linux 保持原 26px 经典菜单栏。
     readonly property bool inTitleBar: Qt.platform.os === "windows"
+
+    // ─── 顶层菜单清单（登录项不入栏）───────────────────────────────
+    // 顶部此前同时出现两个登录入口：loginMenu（显示评分人名字）+
+    // 标题栏右侧个人中心按钮。两个平台都已有右侧按钮 → 顶部菜单项去掉。
+    // 只去掉它的"布局"，对象/信号/内部 DarkMenuItem 全部保留（未删除定义），
+    // 避免 C++ installLoginMenuSuppressor 等既有链路出现悬空引用。
+    // 【为什么用 menus 而不是 visible】MenuBar 忽略顶层 Menu 的 visible，
+    // 仍会为它生成按钮（实测仍显示、仍可点开"个人信息…"）。
+    // 唯有从 menus 列表移除才真正不生成。
+    menus: [fileMenu, playCompareMenu, yuvMenu, imageMenu, streamMenu, generalMenu, helpMenu]
     // 显式 height（不用 implicitHeight）：实测 implicitHeight 赋值在某些
     // 场景下不生效（menuBar 高度变 0 → 子项居中错位/不可见），显式 height 最稳。
     height: inTitleBar ? 32 : 26
@@ -394,6 +404,7 @@ MenuBar {
     }
 
     DarkMenu {
+        id: fileMenu
         title: qsTr("文件")
         DarkMenuItem {
             id: miQuit
@@ -994,17 +1005,25 @@ MenuBar {
         }
     }
 
-    // ─── 登录 ────────────────────────────────────────────────
-    // 未登录显示「登录」，已登录显示评分人名字。
-    // 点击直接弹登录/个人信息对话框、永不出下拉：
-    //   · macOS：C++ 在 NSMenu 即将展开时 cancelTracking 拦截
-    //     （src/qt/MacAppearance.mm installLoginMenuSuppressor）；
-    //   · Windows/Linux：menuBar delegate 特判点击直弹。
-    // 菜单项仅作兜底（拦截失效时仍可点开对话框）。
-    // 评分人即 Rating.currentUser，与评分数据面板顶部输入框同一份数据。
-    DarkMenu {
-        id: loginMenu
-        title: root._loggedIn ? Rating.currentUser : qsTr("登录")
+    // ─── 登录（已停用，保留定义）───────────────────────────────────
+    // 【当前状态】两个平台顶部都已有右侧个人中心按钮，本菜单项已从上方的
+    // menus 列表移除，不再生成顶部按钮（Windows 自绘 capProfileBtn /
+    // macOS 原生 PXProfileBtnView 覆盖入口）。
+    // 【为什么保留而不删】定义保留、零成本：内部 DarkMenuItem 与
+    // root._toggleLoginDialog 的连线完整，将来任一端入口失效可一行接回；
+    // 同时避免 C++ 侧（installLoginMenuSuppressor 按标题匹配登录菜单）
+    // 出现悬空引用。未登录显示「登录」，已登录显示评分人名字。
+        //
+        // 【Windows 隐藏，macOS 保留】顶部已同时出现两个登录入口：
+        // 本菜单项（显示评分人名字）+ 自绘个人中心按钮 capProfileBtn。
+        // 二者调用同一逻辑（root._toggleLoginDialog / _openLoginDialogFromNative）。
+        // 只隐藏本项的"布局"，逻辑全部保留：
+        //   · Windows（inTitleBar）：自绘 capProfileBtn 已覆盖入口 → 本项隐藏；
+        //   · macOS：自绘区不显示，本菜单项是唯一登录入口 → 必须保留，
+        //     否则 macOS 无法登录（C++ installLoginMenuSuppressor 也依赖它）。
+        DarkMenu {
+            id: loginMenu
+            title: root._loggedIn ? Rating.currentUser : qsTr("登录")
         // Windows/Linux（QML 菜单）：C++ MenuBar 点击菜单项时会无条件 popup
         // 本菜单，这里在 aboutToShow 阶段立即收起 → 永不出现下拉，
         // 与 macOS 原生 NSMenuDelegate cancelTracking 拦截同语义。
