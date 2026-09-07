@@ -82,6 +82,50 @@ int peekNalTypeAvcc(const uint8_t* data, int size, int lengthSize) {
     return data[lengthSize] & 0x1F;  // h264 末 5 bit
 }
 
+// VVC（H.266）帧类型判定：
+//   nal_unit_type ∈ {7,8} → IDR_W_RADL / IDR_N_LP
+//   nal_unit_type ∈ {9,10} → CRA / GDR（同为 IRAP 关键帧，按 IDR 处理以切 GOP）
+//   nal_unit_type ∈ {0,1,2,3} → TRAIL/STSA/RADL/RASL 视作 P
+//   nal_unit_type ∈ {15,16} → SPS / PPS（非 VCL，跳过）
+// 不区分 P / B（与 h264/hevc 分支保持一致）。
+[[maybe_unused]] int classifyNalUnitTypeVvc(int nalType) {
+    if (nalType == 7 || nalType == 8)  return 3;   // IDR_W_RADL / IDR_N_LP
+    if (nalType == 9 || nalType == 10) return 3;   // CRA / GDR（IRAP）
+    if (nalType == 0 || nalType == 1 ||
+        nalType == 2 || nalType == 3)  return 1;   // TRAIL / STSA / RADL / RASL
+    if (nalType == 15 || nalType == 16) return -1; // SPS / PPS
+    return 0;
+}
+
+// ★ VVC 的 NAL header 布局与 HEVC 不同，必须单独处理：
+//   HEVC: forbidden(1) | type(6) | layer_id(6) | tid(3)   → type 在 bit1..bit6
+//   VVC : forbidden(1) | reserved(1) | layer_id(6) | type(5) | tid(3) → type 在 bit8..bit12
+// 因此 VVC 的 nal_unit_type 位于 **第 2 个字节**（bit8..bit12），
+// 提取方式为 (b1 >> 3) & 0x1F，而 HEVC 是 (b0 & 0x7E) >> 1。
+// 若沿用 HEVC 的掩码解析 VVC，type 会整体错位，导致帧类型/GOP 全判错。
+[[maybe_unused]] int peekNalTypeVvcAnnexB(const uint8_t* data, int size) {
+    if (!data || size < 6) return -1;
+    int i = 0;
+    if (data[0] == 0 && data[1] == 0) {
+        if (data[2] == 1)              { i = 3; }
+        else if (data[2] == 0 && data[3] == 1) { i = 4; }
+        else return -1;
+    }
+    // VVC header 是 2 字节：需要 i+1 < size
+    if (i + 1 >= size) return -1;
+    return (data[i + 1] >> 3) & 0x1F;
+}
+[[maybe_unused]] int peekNalTypeVvcAvcc(const uint8_t* data, int size, int lengthSize) {
+    if (!data || size < lengthSize + 2) return -1;
+    int nalLen = 0;
+    for (int i = 0; i < lengthSize; ++i) {
+        nalLen = (nalLen << 8) | data[i];
+    }
+    if (nalLen <= 0 || lengthSize + nalLen > size) return -1;
+    // 第 2 个字节（bit8..bit12）才是 type
+    return (data[lengthSize + 1] >> 3) & 0x1F;
+}
+
 // hevc 的 nal_unit_type 是首字节的 bit1..bit6（mask 0x7E 右移 1）
 int peekNalTypeHevcAnnexB(const uint8_t* data, int size) {
     if (!data || size < 5) return -1;
@@ -209,6 +253,9 @@ bool RBStreamBridge::parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer) {
     } else if (par->codec_id == AV_CODEC_ID_HEVC) {
         s.codecName = "hevc";
         s.codecLongName = "H.265 / HEVC";
+    } else if (par->codec_id == AV_CODEC_ID_VVC) {
+        s.codecName = "vvc";
+        s.codecLongName = "H.266 / VVC";
     } else {
         // 非 h264/hevc（vp9/av1/mpeg 等）：用编码器短名，不要用容器名
         s.codecName = codecIdToShortName(par->codec_id);
@@ -225,6 +272,7 @@ bool RBStreamBridge::parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer) {
     bool isAnnexB = fmt->iformat->name
                     && (std::strcmp(fmt->iformat->name, "h264") == 0
                         || std::strcmp(fmt->iformat->name, "hevc") == 0
+                        || std::strcmp(fmt->iformat->name, "vvc") == 0
                         || std::strcmp(fmt->iformat->name, "mpegts") == 0
                         || std::strcmp(fmt->iformat->name, "flv") == 0
                         || std::strcmp(fmt->iformat->name, "matroska") == 0
@@ -232,13 +280,14 @@ bool RBStreamBridge::parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer) {
     int avccLengthSize = 0;  // mp4: 4 字节长度
     if (!isAnnexB) {
         // 从 extradata 解析 AVCC lengthSizeMinusOne（h264 7bit / hevc 6bit）
+        // VVC 的 mp4 封装同样使用长度前缀（4 字节），无 AVCC 结构可解析，走默认。
         if (par->extradata && par->extradata_size > 0) {
             if (s.codecName == "h264" && par->extradata_size >= 5) {
                 avccLengthSize = (par->extradata[4] & 0x03) + 1;
             } else if (s.codecName == "hevc" && par->extradata_size >= 3) {
                 avccLengthSize = (par->extradata[2] & 0x03) + 1;
             } else {
-                avccLengthSize = 4;  // mp4 默认 4 字节
+                avccLengthSize = 4;  // mp4 默认 4 字节（含 VVC）
             }
         } else {
             avccLengthSize = 4;
@@ -405,6 +454,9 @@ QString RBStreamBridge::profileName(int slot) const {
     }
     if (m_slots[slot].codecName == "hevc") {
         return profileIdToString(AV_CODEC_ID_HEVC, m_slots[slot].profile);
+    }
+    if (m_slots[slot].codecName == "vvc") {
+        return profileIdToString(AV_CODEC_ID_VVC, m_slots[slot].profile);
     }
     return QString::number(m_slots[slot].profile);
 }
@@ -1192,6 +1244,7 @@ QString RBStreamBridge::codecIdToShortName(AVCodecID id) {
     switch (id) {
         case AV_CODEC_ID_H264:       return "h264";
         case AV_CODEC_ID_HEVC:       return "hevc";
+        case AV_CODEC_ID_VVC:        return "vvc";
         case AV_CODEC_ID_VP9:        return "vp9";
         case AV_CODEC_ID_AV1:        return "av1";
         case AV_CODEC_ID_MPEG1VIDEO: return "mpeg1";
@@ -1208,6 +1261,7 @@ QString RBStreamBridge::codecIdToLongName(AVCodecID id) {
     switch (id) {
         case AV_CODEC_ID_H264:       return "H.264 / AVC";
         case AV_CODEC_ID_HEVC:       return "H.265 / HEVC";
+        case AV_CODEC_ID_VVC:        return "H.266 / VVC";
         case AV_CODEC_ID_VP9:        return "VP9";
         case AV_CODEC_ID_AV1:        return "AV1";
         case AV_CODEC_ID_MPEG1VIDEO: return "MPEG-1 Video";
@@ -1241,6 +1295,16 @@ QString RBStreamBridge::profileIdToString(AVCodecID id, int profileId) {
             case 3:  return "MainStillPicture";
             case 4:  return "Rext";
             case 9:  return "Scc";
+            default: return QString::number(profileId);
+        }
+    }
+    if (id == AV_CODEC_ID_VVC) {
+        // FFmpeg 的 ff_vvc_profiles 仅定义两项（defs.h）：
+        //   AV_PROFILE_VVC_MAIN_10     = 1
+        //   AV_PROFILE_VVC_MAIN_10_444 = 33
+        switch (profileId) {
+            case 1:  return "Main 10";
+            case 33: return "Main 10 4:4:4";
             default: return QString::number(profileId);
         }
     }

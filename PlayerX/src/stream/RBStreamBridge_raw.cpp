@@ -1,5 +1,5 @@
 /**
- * RBStreamBridge_raw.cpp — 裸 annexb 流 fallback 解析（h264 / hevc）
+ * RBStreamBridge_raw.cpp — 裸 annexb 流 fallback 解析（h264 / hevc / vvc）
  *
  * 仅当 avformat_open_input + av_find_best_stream 走不通时调用。
  * 设计目标：不依赖 FFmpeg 容器层、不做完整 SPS 解析，只提取：
@@ -72,7 +72,8 @@ int parseH264SpsWidthHeight(const uint8_t* rbsp, int rbspSize, int& w, int& h) {
     return 0;   // 留给后续 PR 扩展
 }
 
-// AnnexB NAL 扫描 + SPS/PPS/slice 分类（h264：nal_type 末 5 bit，hevc：(b1)>>1）
+// AnnexB NAL 扫描 + SPS/PPS/slice 分类
+//   codecKind: 0=h264(末5bit) 1=hevc((b&0x7E)>>1) 2=vvc(第2字节(b1>>3)&0x1F)
 // 返回发现的 NAL 数量
 struct NalSpan {
     int64_t offset;
@@ -81,7 +82,7 @@ struct NalSpan {
 };
 
 void scanAnnexBNals(const uint8_t* data, int64_t size,
-                    int codecKind /*0=h264 1=hevc*/,
+                    int codecKind /*0=h264 1=hevc 2=vvc*/,
                     std::vector<NalSpan>& out) {
     out.clear();
     int64_t i = 0;
@@ -106,9 +107,18 @@ void scanAnnexBNals(const uint8_t* data, int64_t size,
         int64_t nalEnd = (j + 3 < size) ? j : size;
         int nalType = 0;
         if (i + startCodeLen < nalEnd) {
-            const uint8_t b = data[i + startCodeLen];
-            if (codecKind == 0) nalType = b & 0x1F;          // h264
-            else                nalType = (b & 0x7E) >> 1;    // hevc
+            const uint8_t b0 = data[i + startCodeLen];
+            if (codecKind == 0) {
+                nalType = b0 & 0x1F;                              // h264
+            } else if (codecKind == 1) {
+                nalType = (b0 & 0x7E) >> 1;                       // hevc
+            } else {
+                // VVC：header 2 字节，type 在 bit8..bit12（第 2 字节的高 5 位）
+                if (i + startCodeLen + 1 < nalEnd) {
+                    const uint8_t b1 = data[i + startCodeLen + 1];
+                    nalType = (b1 >> 3) & 0x1F;
+                }
+            }
         }
         NalSpan ns;
         ns.offset = i;
@@ -125,11 +135,15 @@ void scanAnnexBNals(const uint8_t* data, int64_t size,
 bool RBStreamBridge::parseRawAnnexB(Slot& s) {
     QFileInfo fi(s.path);
     QString suf = fi.suffix().toLower();
-    int codecKind = 0;   // 0 h264 / 1 hevc
+    int codecKind = 0;   // 0 h264 / 1 hevc / 2 vvc
     QString codecLong = "H.264 / AVC";
     if (suf == "h264")        { codecKind = 0; codecLong = "H.264 / AVC"; }
     else if (suf == "hevc" || suf == "h265" || suf == "265") {
         codecKind = 1; codecLong = "H.265 / HEVC";
+    } else if (suf == "vvc" || suf == "h266" || suf == "266") {
+        // VVC（H.266）裸流：annexb 结构与 hevc 一致（startcode 相同），
+        // 仅 NAL header 布局不同（type 在 bit8..bit12），由 scanAnnexBNals 分支处理。
+        codecKind = 2; codecLong = "H.266 / VVC";
     } else {
         return false;   // 未知后缀不 fallback
     }
@@ -146,10 +160,10 @@ bool RBStreamBridge::parseRawAnnexB(Slot& s) {
     scanAnnexBNals(data, size, codecKind, nals);
     if (nals.empty()) return false;
 
-    // 找到第一个 SPS (h264 NAL7 / hevc NAL32) 提取宽高
+    // 找到第一个 SPS (h264 NAL7 / hevc NAL32 / vvc NAL15) 提取宽高
     int w = 0, h = 0;
     for (const auto& n : nals) {
-        int spsType = (codecKind == 0) ? 7 : 32;
+        int spsType = (codecKind == 0) ? 7 : (codecKind == 1) ? 32 : 15;
         if (n.nalType == spsType && n.size > 8) {
             // 跳过 startcode 不在 rbsp 范围内（n.offset 已含 startcode，n.size 不含），
             // 实际 NAL 起点 = n.offset + startcodeLen；startcodeLen 不可恢复，需要重新查
@@ -179,7 +193,9 @@ bool RBStreamBridge::parseRawAnnexB(Slot& s) {
                    << "fallback to 0,0 (UI shows 未加载)";
     }
 
-    s.codecName      = (codecKind == 0) ? QStringLiteral("h264") : QStringLiteral("hevc");
+    s.codecName      = (codecKind == 0) ? QStringLiteral("h264")
+                     : (codecKind == 1) ? QStringLiteral("hevc")
+                                        : QStringLiteral("vvc");
     s.codecLongName  = codecLong;
     s.width          = w;
     s.height         = h;
@@ -196,6 +212,8 @@ bool RBStreamBridge::parseRawAnnexB(Slot& s) {
     // 帧切分：把 NAL list 按 slice header 启发分组成"帧"
     // h264: NAL type 5 = IDR，1 = non-IDR slice (全部视作 P)
     // hevc: NAL type 19/20 = IDR，0/1 = trail (P)
+    // vvc : NAL type 7/8 = IDR，9/10 = CRA/GDR（同 IRAP，按关键帧切 GOP），
+    //       0/1/2/3 = TRAIL/STSA/RADL/RASL（视作 P）
     s.frameTypes.clear();
     s.frameSizes.clear();
     s.frameAvgQp.assign(1, -1.0);
@@ -203,21 +221,30 @@ bool RBStreamBridge::parseRawAnnexB(Slot& s) {
     s.gopFrameCounts.clear();
     s.gopIsOpen.clear();
 
-    int sliceTypeIdr = (codecKind == 0) ? 5 : 19;
-    int sliceTypeP   = (codecKind == 0) ? 1 : 0;
-
     int gopStart = 0, frameCount = 0;
     bool firstFrame = true;
     int frameIdx = 0;
     for (const auto& n : nals) {
-        // 仅 slice NAL 计入"帧"
-        bool isSlice = (codecKind == 0)
-                       ? (n.nalType == sliceTypeIdr || n.nalType == sliceTypeP
-                          /* 还可加 2/3/4 表示其他 slice types */)
-                       : (n.nalType == sliceTypeIdr || n.nalType == sliceTypeP
-                          || n.nalType == 1 /* TRAIL_R */);
-        if (!isSlice) continue;
-        int t = (n.nalType == sliceTypeIdr) ? 3 /* IDR */ : 1 /* P */;
+        int t = 0;        // 0=I 1=P 3=IDR；-1 表示非 VCL，跳过
+        if (codecKind == 0) {
+            // h264
+            if (n.nalType == 5)      t = 3;   // IDR
+            else if (n.nalType == 1) t = 1;   // non-IDR slice
+            else                     t = -1;
+        } else if (codecKind == 1) {
+            // hevc
+            if (n.nalType == 19 || n.nalType == 20) t = 3;  // IDR_W_RADL / IDR_N_LP
+            else if (n.nalType == 0 || n.nalType == 1) t = 1;
+            else t = -1;
+        } else {
+            // vvc：7/8 IDR，9 CRA，10 GDR 均为 IRAP 关键帧
+            if (n.nalType == 7 || n.nalType == 8 ||
+                n.nalType == 9 || n.nalType == 10)   t = 3;
+            else if (n.nalType == 0 || n.nalType == 1 ||
+                     n.nalType == 2 || n.nalType == 3) t = 1;
+            else t = -1;
+        }
+        if (t < 0) continue;   // 非 slice NAL，不计入"帧"
         if (t == 3 || (t == 0 && firstFrame)) {
             if (!firstFrame) {
                 s.gopFrameCounts.push_back(frameCount);
