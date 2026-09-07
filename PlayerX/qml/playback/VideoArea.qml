@@ -18,11 +18,17 @@ Item {
     property var multiGroupDialog: null
     property var ratingsDialog: null
     property Item leftNavBar: null
+    // 顶部公告条（NoticeBar）引用：用于把视频网格顶部让出公告条高度。
+    // 由 Main.qml 传入；未传入（null）时让位高度按 0 处理，不影响其它 tab。
+    property Item noticeBarRef: null
     // videoArea 始终跟随 refSidebar 右侧（refSidebar 折叠时宽度=0，等价于贴 leftNavBar.right）。
     // immersive 模式下 leftNavBar 宽度变为 0，refSidebar 自然贴左边。
     anchors.left: refSidebar.right
     anchors.right: parent.right
     anchors.top: parent.top
+    // 顶部余白 2px（避免与上方元素视觉粘连 + 给 cell 2px 选中边框留位）；
+    // 播放 tab 顶部还有一条公告条（noticeBar，自绘黄色滚动文字），
+    // 这里额外让出它的高度，避免视频网格被公告条盖住。
     anchors.topMargin: 2
     anchors.bottom: csvBottomBar.top
     visible: root.currentTab === "play"

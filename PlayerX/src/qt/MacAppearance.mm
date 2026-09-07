@@ -194,6 +194,162 @@ void installTitleBarProfileButton(QQuickWindow* win, void* ctx, void(*fn)(void*)
     [nswin addTitlebarAccessoryViewController:acc];
 }
 
+// ─── 标题栏「公告文字」（原生 AppKit，嵌进系统标题栏，不占内容区）──────────
+// 用 NSTitlebarAccessoryViewController + layoutAttribute=Left 把一段可横向
+// 滚动的黄色文字放进系统标题栏（红绿灯右侧、窗口标题位置），完全不占用
+// 内容区空间。
+//
+// 滚动策略：文字宽度 ≤ 可用宽度 → 居中静止；超出 → 左右往复（pingpong）
+// 滚动，两端各停顿 1.2s 让用户看清首尾，速度约 30ms/px。
+// 用 NSTimer 驱动（20fps 重绘），轻量、不阻塞主线程。
+// 公告文字垂直微调：正值 = 下移，负值 = 上移（单位 pt）。
+// 实测按红绿灯 centerY 对齐后文字仍偏上，用这个常量补偿；要再调改这一个数即可。
+#define NOTICE_DY 5.0
+
+// 公告文字字体：统一抽出来，保证「测宽」与「绘制」两处用同一字号，
+// 否则会出现宽度算错、滚动判定失真。13px semibold 比原来的 11px 更醒目。
+static NSFont* PXNoticeFont(void) {
+    return [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
+}
+
+@interface PXNoticeTextView : NSView
+@property (nonatomic, copy) NSString* noticeText;
+@property (nonatomic, strong) NSTimer* timer;
+@property (nonatomic, assign) CGFloat offset;      // 当前横向偏移（≤0）
+@property (nonatomic, assign) CGFloat dir;         // 1 = 右移（露出尾部），-1 = 回退
+@property (nonatomic, assign) CGFloat pauseLeft;   // 剩余停顿（秒）
+@property (nonatomic, assign) CGFloat textW;       // 文字自然宽度
+@property (nonatomic, assign) CGFloat boxW;        // 可用宽度
+@end
+
+@implementation PXNoticeTextView
+
+- (instancetype)initWithFrame:(NSRect)f text:(NSString*)t {
+    if ((self = [super initWithFrame:f])) {
+        _noticeText = [t copy];
+        _offset = 0;
+        _dir = 1;
+        _pauseLeft = 1.2;
+        [self recomputeMetrics];
+        // 20fps 驱动滚动（标题栏条很窄，60fps 没必要，省 CPU）。
+        // 用 target-action 形式（MRC 下不能用 __weak block），
+        // timer 持有 self 并在 dealloc 中 invalidate，不会泄漏。
+        _timer = [NSTimer scheduledTimerWithTimeInterval:1.0/20.0
+                                                  target:self
+                                                selector:@selector(tick)
+                                                userInfo:nil
+                                                 repeats:YES];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [_timer invalidate];
+}
+
+// 重新计算文字宽度 / 可用宽度；放不下才标记为需要滚动。
+- (void)recomputeMetrics {
+    NSFont* font = PXNoticeFont();
+    NSDictionary* attrs = @{ NSFontAttributeName: font };
+    _textW = [_noticeText sizeWithAttributes:attrs].width;
+    _boxW = self.bounds.size.width;
+    if (_textW <= _boxW) {
+        _offset = (_boxW - _textW) / 2.0;   // 居中静止
+    }
+}
+
+- (void)setFrameSize:(NSSize)s {
+    [super setFrameSize:s];
+    [self recomputeMetrics];
+}
+
+- (BOOL)needsScroll { return _textW > _boxW; }
+
+- (void)tick {
+    if (![self needsScroll]) return;
+    if (_pauseLeft > 0) {
+        _pauseLeft -= 1.0/20.0;
+        if (_pauseLeft <= 0) _pauseLeft = 0;
+        return;
+    }
+    CGFloat maxOff = _boxW - _textW;        // 负值：能露到尾部的最左偏移
+    CGFloat speed = 30.0;                   // px/s（约 30ms/px）
+    CGFloat step = speed / 20.0;
+    _offset += (_dir > 0 ? -step : step);   // dir>0：向左推进（露出尾部）
+    if (_offset <= maxOff) {                // 到达尾部 → 停顿后回退
+        _offset = maxOff;
+        _dir = -1;
+        _pauseLeft = 1.2;
+    } else if (_offset >= 0) {              // 回到开头 → 停顿后再推进
+        _offset = 0;
+        _dir = 1;
+        _pauseLeft = 1.2;
+    }
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    NSFont* font = PXNoticeFont();
+    NSDictionary* attrs = @{
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: [NSColor colorWithSRGBRed:1.0 green:0.835 blue:0.29 alpha:1.0]  // #FFD54A 醒目黄
+    };
+    // 垂直精确居中：用字体度量（ascender 向上为正、descender 向下为负）
+    // 算出真实墨迹高度，再按容器高（28，即标准标题栏高）居中，
+    // 避免原来用固定 12 估算导致的偏上。
+    CGFloat textH = font.ascender - font.descender;
+    CGFloat y = (self.bounds.size.height - textH) / 2.0 - font.descender;
+    [_noticeText drawAtPoint:NSMakePoint(_offset, y) withAttributes:attrs];
+}
+@end
+
+void installTitleBarNotice(QQuickWindow* win, const char* text) {
+    if (!win || !text || !*text) return;
+    NSView* view = reinterpret_cast<NSView*>(win->winId());
+    NSWindow* nswin = [view window];
+    if (!nswin) return;
+
+    NSString* t = [NSString stringWithUTF8String:text];
+
+    // 不用 NSTitlebarAccessoryViewController 的 Left/Right —— 那两种
+    // layoutAttribute 会顶替/压缩系统标题「PlayerX」的位置。
+    // 改为：把一段透明 overlay 直接叠在标题栏视图（NSThemeFrame）上，
+    //   高 28（标准标题栏高）、贴顶、水平居中、宽度 = 标题栏宽 × 0.5。
+    // 系统标题原样保留在左（红绿灯右侧），公告在中间，两者不重叠；
+    // overlay 背景透明、只画中间这一条文字，不遮挡任何原生控件。
+    NSView* themeFrame = nswin.contentView.superview;   // NSThemeFrame
+    if (!themeFrame) return;
+
+    PXNoticeTextView* notice = [[PXNoticeTextView alloc] initWithFrame:NSMakeRect(0, 0, 400, 28)
+                                                                 text:t];
+    notice.translatesAutoresizingMaskIntoConstraints = NO;
+    [themeFrame addSubview:notice];
+
+    // 垂直定位不用「高 28 + 贴顶」—— NSThemeFrame 顶部还包含窗口边框/圆角区，
+    // 那样算出的几何中心比标题栏视觉中心偏上（这就是之前没居中的原因）。
+    // 改为：以红绿灯（关闭按钮）的垂直中心为基准，它就是标题栏的视觉中心线。
+    NSMutableArray* cons = [NSMutableArray array];
+    [cons addObject:[notice.centerXAnchor constraintEqualToAnchor:themeFrame.centerXAnchor]];
+    // 宽度取标题栏 60%：给文字足够空间，又不会延伸到左侧标题区。
+    [cons addObject:[notice.widthAnchor constraintEqualToAnchor:themeFrame.widthAnchor multiplier:0.6]];
+    // 高度略大于字号（13px 字 + 上下余量），文字在容器内再精确居中。
+    [cons addObject:[notice.heightAnchor constraintEqualToConstant:20.0]];
+
+    NSButton* closeBtn = [nswin standardWindowButton:NSWindowCloseButton];
+    if (closeBtn) {
+        // NOTICE_DY：整体垂直微调（正值 = 下移，负值 = 上移）。
+        // 红绿灯是系统按钮、走 autoresizing mask，约束到它的 centerY 未必
+        // 完全生效，实测文字仍偏上，故用这个常量做人工补偿，按需再调。
+        [cons addObject:[notice.centerYAnchor constraintEqualToAnchor:closeBtn.centerYAnchor
+                                                            constant:NOTICE_DY]];
+    } else {
+        // 兜底：拿不到红绿灯时贴顶 + 偏移
+        [cons addObject:[notice.topAnchor constraintEqualToAnchor:themeFrame.topAnchor
+                                                        constant:4.0 + NOTICE_DY]];
+    }
+    [NSLayoutConstraint activateConstraints:cons];
+}
+
 // ─── 菜单栏"点击守卫"（含登录菜单展开拦截）─────────────────────────────
 // 两条需求合一：
 //  1) 禁止悬停滑入切换：点开一个下拉后，鼠标未点击直接滑到相邻菜单，

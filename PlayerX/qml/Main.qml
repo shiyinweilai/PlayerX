@@ -1952,9 +1952,11 @@ ApplicationWindow {
     // ─── 视频网格容器 ────────────────────────────────────────────────────
     // 顶部留 2px 余白，避免与 ToolBar 视觉粘连；同时让 cell 的 2px 选中边
     // 框不被 ToolBar 阴影/分隔线压住。
+    // 播放 tab 下再额外让出顶部公告条高度，避免视频网格被公告条盖住。
     VideoArea {
         id: videoArea
         root: root
+        noticeBarRef: noticeBar
         shortcutsAboutDialogs: shortcutsAboutDialogs
         addDialog: fileDialogs.addDialog
         refSidebar: refSidebar

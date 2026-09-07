@@ -69,6 +69,9 @@ void installTitleBarProfileButton(QQuickWindow* win, void* ctx, void(*fn)(void*)
 // 登录菜单展开拦截：菜单栏「登录/评分人名」点击时在 menuWillOpen 阶段
 // 取消展开（永不出下拉）并回调此处，转而打开 QML 登录对话框。
 void installLoginMenuSuppressor(void* ctx, void(*fn)(void*));
+// 标题栏公告文字（macOS 原生标题栏内嵌，红绿灯右侧标题位置，
+// 不占内容区；文字放不下时左右往复滚动）。
+void installTitleBarNotice(QQuickWindow* win, const char* text);
 static void openLoginDialogFromNative(void* ctx) {
     // ctx = QML 根对象；QueuedConnection 保证回到 Qt 主事件循环再开对话框
     QMetaObject::invokeMethod(static_cast<QObject*>(ctx),
@@ -331,6 +334,10 @@ int main(int argc, char* argv[]) {
         installTitleBarSidebarButton(qobject_cast<QQuickWindow*>(rootObjs.first()),
                                      rootObjs.first(), &onTitleBarSidebarToggleFromNative);
         installLoginMenuSuppressor(rootObjs.first(), &openLoginDialogFromNative);
+        // 标题栏公告文字（放在红绿灯右侧、标题位置，不占内容区；
+        // 放不下时左右往复滚动）。内容即打分原则提示。
+        installTitleBarNotice(qobject_cast<QQuickWindow*>(rootObjs.first()),
+                              "打分原则: 相对分更重要，完全符合提示词无物理问题五分，三个视频中更差的要多扣更多分，体现出好坏。");
     }
 #endif
 
