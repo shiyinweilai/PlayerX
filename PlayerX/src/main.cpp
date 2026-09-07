@@ -45,6 +45,7 @@
 #include "qt/RatingStore.h"
 #include "qt/ReferenceStore.h"
 #include "qt/ScreenProbe.h"
+#include "qt/NoticeBarBridge.h"
 #include "qt/Updater.h"
 #include "yuv/YuvBridge.h"
 #include "yuv/YuvDisplayItem.h"
@@ -291,6 +292,9 @@ int main(int argc, char* argv[]) {
     // ImageBridge：图片分析工具桥接（独立模块，用 QImageReader 加载图片）
     ImageBridge imageBridge;
 
+    // NoticeBarBridge：标题栏公告条显隐（macOS 生效，其它平台空操作）
+    NoticeBarBridge noticeBarBridge;
+
     QQmlApplicationEngine engine;
 
     // 把 engineBridge 作为 context property 暴露给 QML，名称 = "Engine"
@@ -304,6 +308,8 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty("YuvBridge",   &yuvBridge);
     engine.rootContext()->setContextProperty("StreamBridge", &streamBridge);
     engine.rootContext()->setContextProperty("ImageBridge",  &imageBridge);
+    // 标题栏公告条显隐控制（QML 按当前 tab 调用；非 mac 平台为空操作）。
+    engine.rootContext()->setContextProperty("NoticeBar",    &noticeBarBridge);
 
     // 注册 YuvDisplayItem 为 QML 类型（供 YuvWindow.qml 使用）。
     // URI 用独立前缀，避免和 qt_add_qml_module(URI PlayerX) 冲突。

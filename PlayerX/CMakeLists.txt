@@ -136,6 +136,8 @@ src/image/ImageSliderCompareItem.cpp
     $<$<PLATFORM_ID:Darwin>:src/qt/MacAppearance.mm>
     # Windows 标题栏深色化（DWM 沉浸式深色 + Win11 精确配色）
     $<$<PLATFORM_ID:Windows>:src/qt/WinTitleBar.cpp>
+    # 标题栏公告条显隐桥（全平台编译，非 mac 为空操作）
+    src/qt/NoticeBarBridge.cpp
     # ── SIMD 加速层（运行时 dispatch，无 GPU 依赖）──────────────────────────
     # 基础设施（所有平台恒编译）
     src/simd/SimdCaps.cpp

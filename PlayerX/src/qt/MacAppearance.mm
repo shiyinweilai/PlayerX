@@ -303,6 +303,9 @@ static NSFont* PXNoticeFont(void) {
 }
 @end
 
+// 当前安装的标题栏公告视图（全局仅一个主窗口），供显隐控制使用。
+static PXNoticeTextView* g_noticeView = nil;
+
 void installTitleBarNotice(QQuickWindow* win, const char* text) {
     if (!win || !text || !*text) return;
     NSView* view = reinterpret_cast<NSView*>(win->winId());
@@ -348,6 +351,14 @@ void installTitleBarNotice(QQuickWindow* win, const char* text) {
                                                         constant:4.0 + NOTICE_DY]];
     }
     [NSLayoutConstraint activateConstraints:cons];
+
+    g_noticeView = notice;   // 供 setTitleBarNoticeVisible() 控制显隐
+}
+
+// 显示/隐藏标题栏公告（由 NoticeBarBridge 从 QML 按当前 tab 调用）。
+void setTitleBarNoticeVisible(bool visible) {
+    if (!g_noticeView) return;
+    [g_noticeView setHidden:(visible ? NO : YES)];
 }
 
 // ─── 菜单栏"点击守卫"（含登录菜单展开拦截）─────────────────────────────

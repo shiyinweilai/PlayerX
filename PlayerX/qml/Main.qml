@@ -64,6 +64,8 @@ ApplicationWindow {
     Component.onCompleted: {
         // 立即注册 root 到 Qt 对象（供 MainLogic.js 自动初始化）
         Qt._playerXRoot = root
+        // 标题栏公告初始显隐（默认 tab = play，故初始可见）
+        root.syncNoticeBar()
         console.log("[Init] Qt._playerXRoot 已注册（Component.onCompleted）")
         Logic._init({
             root: root,
@@ -125,7 +127,18 @@ ApplicationWindow {
         if (root.currentTab === "yuv") {
             YuvBridge.rightSidebarOpen = root.rightSidebarOpen
         }
+        // 标题栏公告只在「播放对比」tab 显示（打分原则提示，其它模块无关）
+        root.syncNoticeBar()
     }
+
+    // 标题栏公告（macOS 原生 overlay）显隐：仅播放对比 tab 可见。
+    // 非 mac 平台 NoticeBar 为空操作桥，调用无副作用。
+    function syncNoticeBar() {
+        if (typeof NoticeBar === "undefined" || !NoticeBar) return
+        NoticeBar.setVisible(root.currentTab === "play")
+    }
+
+
 
     // ─── 沉浸模式 ───────────────────────────────────────────────────────
     // true 表示已进入"独立子界面"：左右导航栏 / 参考图栏 全部隐藏，
