@@ -93,7 +93,7 @@ MenuBar {
             // 状态：open 直接绑定到 root.rightSidebarOpen → 主程序 toggle 时按钮自动填色。
             Rectangle {
                 id: capSidebarBtn
-                width: 32; height: parent.height
+                width: 26; height: parent.height
                 color: sbMa.containsMouse ? "#2a2a32" : "transparent"
                 property bool open: root.rightSidebarOpen
 
@@ -140,17 +140,22 @@ MenuBar {
             }
 
             // ─── 自绘按钮：个人中心（在右侧栏按钮右侧 → 更靠近系统三键）──
-            // 圆头 + 半月肩 + 嘴；激活时头+身填色（嘴留白）。
-            // 状态：open 直接绑定到 root.loginDialogOpen → 打开对话框时按钮自动填色。
+            // 未登录：圆头 + 半月肩 + 嘴的图标；已登录：直接显示评分人名字。
+            // 状态：open 直接绑定到 root.loginDialogOpen → 打开对话框时自动高亮。
+            // 宽度：图标态 32；文字态随名字自适应（32~120），超长省略号。
             Rectangle {
                 id: capProfileBtn
-                width: 32; height: parent.height
+                width: root._loggedIn
+                      ? Math.min(110, Math.max(26, profileName.implicitWidth + 10))
+                      : 26
+                height: parent.height
                 color: pfMa.containsMouse ? "#2a2a32" : "transparent"
                 property bool open: root.loginDialogOpen
 
                 Item {
                     anchors.centerIn: parent
                     width: 18; height: 18
+                    visible: !root._loggedIn
 
                     // ── 头部：圆头 r=4 ──
                     Rectangle {
@@ -184,6 +189,20 @@ MenuBar {
                     }
                 }
 
+                // ── 已登录：显示评分人名字（替代人像图标）──
+                Text {
+                    id: profileName
+                    visible: root._loggedIn
+                    anchors.centerIn: parent
+                    // 限宽：elide 需明确宽度才生效（112 上限 - 左右各 5 内边距）
+                    width: Math.min(102, implicitWidth)
+                    text: (typeof Rating !== "undefined") ? (Rating.currentUser || "") : ""
+                    font.pixelSize: 12
+                    font.weight: capProfileBtn.open ? Font.DemiBold : Font.Normal
+                    color: capProfileBtn.open ? "#ffffff" : "#cfcfd2"
+                    elide: Text.ElideRight
+                }
+
                 MouseArea {
                     id: pfMa
                     anchors.fill: parent
@@ -197,7 +216,7 @@ MenuBar {
             // 最小化
             Rectangle {
                 id: capMinBtn
-                width: 46
+                width: 32
                 height: parent.height
                 color: capMinMa.containsMouse ? "#2a2a32" : "transparent"
                 Rectangle { width: 10; height: 1.5; anchors.centerIn: parent; color: "#cfcfd2" }
@@ -206,7 +225,7 @@ MenuBar {
             // 最大化 / 还原
             Rectangle {
                 id: capMaxBtn
-                width: 46
+                width: 32
                 height: parent.height
                 color: capMaxMa.containsMouse ? "#2a2a32" : "transparent"
                 // 最大化图标：单方框
@@ -216,14 +235,15 @@ MenuBar {
                     color: "transparent"; border.color: "#cfcfd2"; border.width: 1.2
                 }
                 // 还原图标：前后双方框（后框右上、前框左下）
+                // 坐标按 width=32 居中：9 宽图标中心 x=16 → 后框 x=15、前框 x=11
                 Rectangle {
                     visible: root.visibility === Window.Maximized
-                    x: 21; y: 8; width: 9; height: 9
+                    x: 14; y: 8; width: 9; height: 9
                     color: capMaxBtn.color; border.color: "#cfcfd2"; border.width: 1.2
                 }
                 Rectangle {
                     visible: root.visibility === Window.Maximized
-                    x: 17; y: 13; width: 9; height: 9
+                    x: 10; y: 12; width: 9; height: 9
                     color: capMaxBtn.color; border.color: "#cfcfd2"; border.width: 1.2
                 }
                 MouseArea { id: capMaxMa; anchors.fill: parent; hoverEnabled: true
@@ -232,7 +252,7 @@ MenuBar {
             // 关闭
             Rectangle {
                 id: capCloseBtn
-                width: 46
+                width: 32
                 height: parent.height
                 color: capCloseMa.containsMouse ? "#e81123" : "transparent"
                 Rectangle { width: 12; height: 1.5; anchors.centerIn: parent; rotation: 45;  color: capCloseMa.containsMouse ? "#ffffff" : "#cfcfd2" }
@@ -279,7 +299,7 @@ MenuBar {
         anchors.left: parent.left
         anchors.leftMargin: 190               // 避开左侧菜单项
         anchors.right: parent.right
-        anchors.rightMargin: 190              // 避开右侧自绘三键（约 140）
+        anchors.rightMargin: 160              // 避开右侧按钮区（三键 32×3 + 26×2 ≈ 148）
         clip: true
 
         readonly property string text: "打分原则: 相对分更重要，完全符合提示词无物理问题五分，三个视频中更差的要多扣更多分，体现出好坏。"

@@ -136,6 +136,10 @@ ApplicationWindow {
     function syncNoticeBar() {
         if (typeof NoticeBar === "undefined" || !NoticeBar) return
         NoticeBar.setVisible(root.currentTab === "play")
+        // 同步标题栏「个人中心」按钮：已登录显示评分人名字，未登录显示图标。
+        // Windows 侧由 AppMenuBar 直接绑定，此调用为空操作。
+        NoticeBar.setProfileUser(root._loggedIn
+                                 ? String(Rating.currentUser || "").trim() : "")
     }
 
 
@@ -179,6 +183,14 @@ ApplicationWindow {
     // 登录态：评分人已设置（Rating.currentUser 非空）
     readonly property bool _loggedIn: (typeof Rating !== "undefined")
                                       && String(Rating.currentUser || "").trim().length > 0
+
+    // 登录态变化 → 同步 macOS 原生标题栏「个人中心」按钮（图标 ↔ 用户名）。
+    // 监听源属性 Rating.currentUserChanged：_loggedIn 是 readonly 计算属性，
+    // 自身变更信号不可靠，监听源最稳。
+    Connections {
+        target: typeof Rating !== "undefined" ? Rating : null
+        function onCurrentUserChanged() { root.syncNoticeBar() }
+    }
 
     function _logout() {
         if (typeof Rating !== "undefined") Rating.currentUser = ""

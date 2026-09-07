@@ -344,6 +344,10 @@ int main(int argc, char* argv[]) {
         // 放不下时左右往复滚动）。内容即打分原则提示。
         installTitleBarNotice(qobject_cast<QQuickWindow*>(rootObjs.first()),
                               "打分原则: 相对分更重要，完全符合提示词无物理问题五分，三个视频中更差的要多扣更多分，体现出好坏。");
+        // 【补一次登录态同步】QML 的 Component.onCompleted 早于此处安装原生按钮，
+        // 那次调用因 g_profileBtn 为 nil 被丢弃；而 currentUser 是持久化值、
+        // 启动后不再变化，不会触发 currentUserChanged → 按钮会停在图标态。
+        QMetaObject::invokeMethod(rootObjs.first(), "syncNoticeBar", Qt::QueuedConnection);
     }
 #endif
 

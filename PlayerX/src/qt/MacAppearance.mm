@@ -24,6 +24,15 @@ void applyMacDarkAppearance() {
 // 按钮自维护展开状态（g_sidebarOpen）用于重绘，点击时同步 toggle 并回调 QML。
 // LEFT_INSET：让两个按钮整体左移，避开 macOS 窗口右上角的圆弧区域。
 #define LEFT_INSET 16.0
+// PROFILE_RIGHT_GAP：个人中心按钮与右侧栏按钮之间的间距。
+// 两个按钮各是一个独立的 titlebar accessory，按钮都贴容器左端，因此
+// 两者间隙 = 左侧容器尾部留白。原先用 LEFT_INSET(16) 导致间隙偏大，
+// 这里单独取更小值；最右侧仍由 sidebar 容器的 LEFT_INSET 负责避让圆弧。
+#define PROFILE_RIGHT_GAP 2.0
+// TITLEBAR_BTN_W：标题栏小按钮宽度。图标实际只有 16 且居中，
+// 原先 26 会在图标左右各留 5 的空白，两个按钮并排时空白叠加成 ~17 的
+// 视觉间隙。收到 20 后内部空白只剩左右各 2，按钮之间看起来才真的紧。
+#define TITLEBAR_BTN_W 20.0
 static void* g_sbCtx = nullptr;
 static void (*g_sbFn)(void*) = nullptr;
 static BOOL g_sidebarOpen = NO;
@@ -102,9 +111,9 @@ void installTitleBarSidebarButton(QQuickWindow* win, void* ctx, void(*fn)(void*)
     // 右边多出的 LEFT_INSET 空隙让按钮整体左移，避开窗口右上角圆弧。
     // 容器高度 = 28（macOS 标准标题栏高度），按钮 22 高居中于容器，
     // 这样 accessory 居中对齐标题栏中心时按钮也正好和 traffic lights 同基线。
-    NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 26 + LEFT_INSET, 28)];
+    NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, TITLEBAR_BTN_W + LEFT_INSET, 28)];
     [container addSubview:btn];
-    btn.frame = NSMakeRect(0, 3, 26, 22);   // 22 高的按钮在 28 高的容器里居中
+    btn.frame = NSMakeRect(0, 3, TITLEBAR_BTN_W, 22);   // 22 高的按钮在 28 高的容器里居中
 
     NSTitlebarAccessoryViewController* acc = [[NSTitlebarAccessoryViewController alloc] init];
     acc.layoutAttribute = NSLayoutAttributeRight;
@@ -119,11 +128,50 @@ static void* g_pfCtx = nullptr;
 static void (*g_pfFn)(void*) = nullptr;
 static BOOL g_profileOpen = NO;
 
+// ─── 已登录：显示评分人名字 ────────────────────────────────────────
+// 为空 = 未登录 → 绘制人像图标；非空 → 直接把名字画在【同一个视图】里。
+// 【关键】绝不使用 NSTextField 等子视图覆盖：NSTextField 会拦截鼠标事件，
+// 导致点击落不到按钮 → 名字显示后无法再点开面板、无法退出登录。
+// 在 drawRect 中绘制文字不存在此问题，hitTest 始终命中本视图。
+static NSString* g_profileUser = nil;
+static const CGFloat kProfileBtnH = 22.0;
+// 标志位：当前 g_profileUser 对应的宽度是否已应用到按钮 frame。
+// 用于区分「名字没变但还没排过版」（启动回补场景，必须重排）
+// 和「名字没变且已排过版」（对话框开合只需重绘）。
+static BOOL g_profileLayoutApplied = NO;
+
+// 类前置声明：下面的静态指针需要它。
+@class PXProfileBtnView;
+// 前置声明：安装末尾需回补一次登录态（QML 侧可能先于安装调用）。
+void updateTitleBarProfileUser(const char* user);
+
+static PXProfileBtnView* g_profileBtn = nil;
+static NSView* g_profileContainer = nil;
+
 @interface PXProfileBtnView : PXTitleBarButton @end
 @implementation PXProfileBtnView
 // 不翻折：使用 macOS 默认坐标系（y 从底部向上），与侧栏按钮一致，
 // 保证两个按钮图标视觉垂直对齐。
 - (void)drawRect:(NSRect)dirtyRect {
+    // ─── 已登录：直接绘制用户名 ───
+    if (g_profileUser.length > 0) {
+        NSColor* fg = g_profileOpen ? [NSColor whiteColor] : [NSColor labelColor];
+        NSFont* font = g_profileOpen
+            ? [NSFont boldSystemFontOfSize:12]
+            : [NSFont systemFontOfSize:12];
+        NSDictionary* attrs = @{ NSFontAttributeName: font,
+                                 NSForegroundColorAttributeName: fg };
+        NSAttributedString* s = [[NSAttributedString alloc] initWithString:g_profileUser
+                                                               attributes:attrs];
+        NSSize sz = [s size];
+        // 垂直居中（默认坐标系，y 从底向上）
+        NSRect r = NSMakeRect((self.bounds.size.width - sz.width) / 2.0,
+                              (self.bounds.size.height - sz.height) / 2.0,
+                              sz.width, sz.height);
+        [s drawInRect:r];
+        return;
+    }
+
     NSColor* fg = [NSColor labelColor];   // 深色模式下系统自动取白
     CGFloat cx = self.bounds.size.width / 2.0;
     CGFloat cy = self.bounds.size.height / 2.0;   // 垂直中心（按钮 22 高 → cy=11）
@@ -177,21 +225,61 @@ void installTitleBarProfileButton(QQuickWindow* win, void* ctx, void(*fn)(void*)
     if (!nswin) return;
 
     PXProfileBtnView* btn = [[PXProfileBtnView alloc] initWithFrame:NSMakeRect(0, 0, 26, 22)];
+    g_profileBtn = btn;   // 供 updateTitleBarProfileUser 更新（重绘文字/改宽度）
     btn.onClick = ^{
         g_profileOpen = !g_profileOpen;
         [btn setNeedsDisplay:YES];
         if (g_pfFn) g_pfFn(g_pfCtx);
     };
 
-    // 与侧栏按钮一致：容器高 28、宽 = 26+LEFT_INSET，按钮 22 高在容器内居中。
-    NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 26 + LEFT_INSET, 28)];
+    // 与侧栏按钮一致：容器高 28；尾部留白改用 PROFILE_RIGHT_GAP（更小），
+    // 让本按钮与右侧栏按钮靠得更紧（最右侧避让圆弧由 sidebar 容器负责）。
+    NSView* container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, TITLEBAR_BTN_W + PROFILE_RIGHT_GAP, 28)];
+    g_profileContainer = container;
     [container addSubview:btn];
-    btn.frame = NSMakeRect(0, 3, 26, 22);   // 22 高按钮在 28 高容器里居中
+    btn.frame = NSMakeRect(0, 3, TITLEBAR_BTN_W, 22);   // 22 高按钮在 28 高容器里居中
 
     NSTitlebarAccessoryViewController* acc = [[NSTitlebarAccessoryViewController alloc] init];
     acc.layoutAttribute = NSLayoutAttributeRight;
     acc.view = container;
     [nswin addTitlebarAccessoryViewController:acc];
+
+    // 若登录态同步早于安装发生（QML 的 Component.onCompleted 先跑），
+    // 这里补应用一次，避免按钮停在图标态。
+    if (g_profileUser.length > 0) updateTitleBarProfileUser(g_profileUser.UTF8String);
+}
+
+// ─── 个人中心按钮：登录态同步（显示评分人名字）───────────────────────────
+// 已登录：视图内直接绘制评分人名字（宽度随文字自适应）；未登录：人像图标。
+// 名字不变时仅重绘（用于对话框开合时的高亮切换）。
+void updateTitleBarProfileUser(const char* user) {
+    NSString* s = (user && user[0]) ? [NSString stringWithUTF8String:user] : @"";
+    BOOL changed = ![s isEqualToString:g_profileUser ?: @""];
+    g_profileUser = [s copy];
+
+    PXProfileBtnView* btn = g_profileBtn;
+    if (!btn) return;   // 尚未安装：只记录名字，等安装完成后回补
+
+    // 【关键】宽度必须至少应用一次，不能因为「名字没变」就跳过。
+    // 启动时序：QML 的 onCompleted 先调用本函数（此时 btn 为 nil，只记录了名字），
+    // 安装完成后的回补调用名字相同 → changed=NO。若这里直接 return，
+    // 按钮 frame 仍是图标态的 26 宽，文字被裁掉左侧（表现为只剩 "byang"）。
+    // 退出重登时名字真发生变化才走到重排分支，所以那条路径看起来是正常的。
+    if (!changed && g_profileLayoutApplied) { [btn setNeedsDisplay:YES]; return; }
+
+    // 宽度自适应：图标态 26；文字态 = 文字宽 + 左右各 5 内边距（上限 112）
+    CGFloat w = 26.0;
+    if (g_profileUser.length > 0) {
+        NSFont* f = [NSFont boldSystemFontOfSize:12];
+        NSSize sz = [g_profileUser sizeWithAttributes:@{NSFontAttributeName: f}];
+        w = MIN(112.0, MAX(TITLEBAR_BTN_W, ceil(sz.width) + 10.0));
+    }
+
+    btn.frame = NSMakeRect(0, 3, w, kProfileBtnH);
+    if (g_profileContainer)
+        g_profileContainer.frame = NSMakeRect(0, 0, w + PROFILE_RIGHT_GAP, 28);
+    g_profileLayoutApplied = YES;   // 已按当前名字排过版
+    [btn setNeedsDisplay:YES];
 }
 
 // ─── 标题栏「公告文字」（原生 AppKit，嵌进系统标题栏，不占内容区）──────────
