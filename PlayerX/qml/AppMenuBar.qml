@@ -231,6 +231,7 @@ MenuBar {
             }
         }
 
+
         // ─── 无边框：窗口顶边 + 顶部左右角的缩放条（其余边在 root 层） ───
         ResizeEdge { root: root; edges: Qt.TopEdge; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.leftMargin: 10; anchors.rightMargin: 10; height: 5; z: 20; visible: appMenuBar.inTitleBar }
         ResizeEdge { root: root; edges: Qt.TopEdge | Qt.LeftEdge;  anchors.left: parent.left;  anchors.top: parent.top; width: 10; height: 10; z: 21; visible: appMenuBar.inTitleBar }
@@ -246,14 +247,106 @@ MenuBar {
         }
     }
 
+    // ─── 标题栏公告（仅 Windows 无边框模式；macOS 走原生 overlay）─────────
+    // 【为什么放这里而不是 background 里】background 的 parent 不是 MenuBar
+    // 本身，写 parent.width 取到的宽度/坐标系都不对（实测公告跑到最左边、
+    // 压住"文件"菜单项）。挂在 MenuBar 根层级，用 appMenuBar.width 定位才准。
+    // 显隐：仅「播放对比」tab（与 macOS 端 NoticeBar 桥同一语义）。
+    // 行为：放得下居中静止；放不下左右往复滚动，两端各停 1.2s。
+    Item {
+        id: titleNotice
+        visible: appMenuBar.inTitleBar && appMenuBar.root
+                 && appMenuBar.root.currentTab === "play"
+        enabled: false                        // 鼠标穿透：不影响拖拽/双击最大化
+        parent: appMenuBar                    // 明确挂在 MenuBar 根上
+        anchors.top: appMenuBar.top
+        height: appMenuBar.height
+        // 【左右双锚，不做任何宽度计算】此前无论 x 计算还是 horizontalCenter+width，
+        // 都依赖 width 在窗口尺寸变化时同步重算；最大化/还原时该重算不同步
+        // （表现为最大化后不居中、还原也不回正，只有重启才对）。
+        // 改成 left/right 双锚后，宽度由布局系统在每次尺寸变化时自动推导，
+        // 天然居中且永不漂移。
+        anchors.left: parent.left
+        anchors.leftMargin: 190               // 避开左侧菜单项
+        anchors.right: parent.right
+        anchors.rightMargin: 190              // 避开右侧自绘三键（约 140）
+        clip: true
+
+        readonly property string text: "打分原则: 相对分更重要，完全符合提示词无物理问题五分，三个视频中更差的要多扣更多分，体现出好坏。"
+        readonly property int textW: noticeTxt.implicitWidth
+        readonly property bool scrolling: textW > width
+        property real offset: 0
+        property bool dirRight: false
+        property bool paused: false
+        // 静止时让文字自身居中：offset = (容器宽 - 文字宽)/2。
+        // 【上一版 bug】静止时 offset 置 0 → 文字贴容器左边缘，看着像"没居中"。
+        readonly property real restOffset: Math.max(0, (width - textW) / 2)
+
+        onWidthChanged: {
+            // 尺寸突变（最大化/还原）时重置滚动状态，
+            // 否则旧的 offset/dirRight 会基于旧宽度继续跑，看起来"没居中"。
+            dirRight = false
+            paused = false
+            recompute()
+        }
+        Component.onCompleted: recompute()
+        function recompute() {
+            offset = scrolling ? (dirRight ? (width - textW) : restOffset) : restOffset
+        }
+
+        Text {
+            id: noticeTxt
+            anchors.verticalCenter: parent.verticalCenter
+            x: titleNotice.offset
+            text: titleNotice.text
+            font.pixelSize: 13
+            font.weight: Font.Medium
+            color: "#ffd54a"
+            elide: Text.ElideNone
+        }
+
+        Timer {
+            interval: 30
+            running: titleNotice.scrolling && titleNotice.visible && !titleNotice.paused
+            repeat: true
+            onTriggered: {
+                if (!titleNotice.dirRight) {
+                    titleNotice.offset -= 1
+                    // 向左滚到末尾：文字右端与容器右端对齐
+                    if (titleNotice.offset <= titleNotice.width - titleNotice.textW) {
+                        titleNotice.offset = titleNotice.width - titleNotice.textW
+                        titleNotice.dirRight = true
+                        titleNotice.paused = true
+                        pauseTimer.restart()
+                    }
+                } else {
+                    titleNotice.offset += 1
+                    // 回滚到起点：恢复居中位置（原来写死 0 → 会跳到左边缘）
+                    if (titleNotice.offset >= titleNotice.restOffset) {
+                        titleNotice.offset = titleNotice.restOffset
+                        titleNotice.dirRight = false
+                        titleNotice.paused = true
+                        pauseTimer.restart()
+                    }
+                }
+            }
+        }
+        Timer {
+            id: pauseTimer
+            interval: 1200
+            repeat: false
+            onTriggered: titleNotice.paused = false
+        }
+    }
+
     delegate: MenuBarItem {
         id: mbItem
         implicitHeight: 26
         padding: 0
         // 调试：标题栏菜单输入可达性（Windows 无边框排查用）
         onPressed: console.log("[TitleBar] 菜单按钮按下:", mbItem.text)
-        leftPadding: 10
-        rightPadding: 10
+        leftPadding: 5                       // 标题栏模式收紧（原 10）：给中间公告腾出宽度
+        rightPadding: 5
         topPadding: 0
         bottomPadding: 0
 
