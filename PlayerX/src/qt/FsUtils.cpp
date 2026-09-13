@@ -43,7 +43,11 @@ static const QStringList kVideoExts = {
     "mp4", "mov", "mkv", "avi", "webm", "flv", "ts", "m4v", "wmv",
     "mpg", "mpeg", "m2ts", "mts", "vob", "ogv", "3gp", "asf",
     // 原始码流与 YUV 序列也允许（rb_demuxer 支持 rawvideo / y4m）
-    "h264", "h265", "hevc", "264", "265", "y4m", "yuv"
+    "h264", "h265", "hevc", "264", "265", "y4m", "yuv",
+    // VVC / H.266 裸流（RBStreamBridge_raw 已实现 annexb fallback）
+    "266", "h266", "vvc",
+    // 其他常见原始码流与容器
+    "av1", "ivf", "obu", "avc", "m2v", "mpv", "m1v", "stream", "bin"
 };
 
 static bool isVideoFile(const QFileInfo& fi) {

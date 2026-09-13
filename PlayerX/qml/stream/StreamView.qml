@@ -384,7 +384,8 @@ Item {
         const videoExts = ["mp4", "mov", "mkv", "avi", "webm", "flv", "ts", "m4v",
                            "wmv", "mpg", "mpeg", "m2ts", "mts", "vob", "ogv",
                            "3gp", "asf", "h264", "h265", "hevc", "264", "265",
-                           "y4m", "yuv"]
+                           "266", "h266", "vvc", "av1", "ivf", "obu", "avc",
+                           "m2v", "mpv", "m1v", "y4m", "stream","bin"]
         const newPaths = []
         for (let i = 0; i < urls.length; ++i) {
             const localPath = streamView._normalizeFilePath(urls[i])
@@ -1513,7 +1514,7 @@ Item {
         title: "添加码流文件"
         fileMode: FileDialog.OpenFiles
         nameFilters: [
-            "视频文件 (*.mp4 *.mov *.m4v *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv *.mpg *.mpeg *.m2ts *.mts *.vob *.ogv *.3gp *.asf *.h264 *.hevc *.h265 *.265 *.264 *.y4m *.yuv)",
+            "视频文件 (*.mp4 *.mov *.m4v *.mkv *.avi *.webm *.flv *.ts *.m4v *.wmv *.mpg *.mpeg *.m2ts *.mts *.vob *.ogv *.3gp *.asf *.h264 *.hevc *.h265 *.265 *.264 *.266 *.h266 *.vvc *.av1 *.ivf *.obu *.avc *.m2v *.mpv *.m1v *.y4m *.yuv)",
             "所有文件 (*)"
         ]
         onAccepted: {

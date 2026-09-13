@@ -899,6 +899,9 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
         } else if (suf == "hevc" || suf == "h265" || suf == "265") {
             m["codec"]     = "hevc";
             m["codecLong"] = "H.265 / HEVC";
+        } else if (suf == "vvc" || suf == "h266" || suf == "266") {
+            m["codec"]     = "vvc";
+            m["codecLong"] = "H.266 / VVC";
         }
         m["format"]    = "annexb";
         m["formatLong"] = "Raw Annex-B bitstream";
