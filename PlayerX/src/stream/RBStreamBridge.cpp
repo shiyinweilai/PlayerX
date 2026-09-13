@@ -20,6 +20,7 @@
  */
 
 #include "stream/RBStreamBridge.h"
+#include "stream/RBBlockAnalyzer.h"
 #include "core/rb_demuxer.h"
 
 extern "C" {
@@ -583,10 +584,129 @@ QVariantMap RBStreamBridge::hrdEstimate(int slot) const {
     return m;
 }
 
-QVariantList RBStreamBridge::blockInfoAt(int /*slot*/, int /*frameIndex*/) const {
-    // 一期占位：始终返回空数组。
-    // 接入路径见 码流分析架构.md §4（FFmpeg 解码器打补丁导出）。
-    return QVariantList{};
+rb::RBBlockAnalyzer* RBStreamBridge::blockAnalyzerFor(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return nullptr;
+    Slot& s = const_cast<Slot&>(m_slots[slot]);
+    if (!s.inUse) return nullptr;
+    if (s.blockAnalyzer) return s.blockAnalyzer.get();
+    if (s.blockAnalyzerTried) return nullptr;   // 曾失败，不再重试
+
+    s.blockAnalyzerTried = true;
+    s.blockAnalyzer = std::make_unique<rb::RBBlockAnalyzer>();
+    if (!s.blockAnalyzer->rbOpen(s.path.toStdString())) {
+        qWarning() << "[StreamBridge] block analyzer open failed:" << s.path;
+        s.blockAnalyzer.reset();
+        return nullptr;
+    }
+    // 开启底层原始画面导出：UI 需要在真实渲染图上叠加 CU 划分网格
+    s.blockAnalyzer->rbEnableFrameImage(true);
+    qInfo() << "[StreamBridge] block analyzer ready:" << s.path
+            << "granularity=" << QString::fromStdString(s.blockAnalyzer->rbBlockGranularity());
+    return s.blockAnalyzer.get();
+}
+
+QVariantMap RBStreamBridge::blockInfoToMap(const rb::RBBlockInfo& bi) {
+    QVariantMap m;
+    m["x"]       = bi.x;
+    m["y"]       = bi.y;
+    m["w"]       = bi.w;
+    m["h"]       = bi.h;
+    m["qp"]      = bi.qp;
+    m["isSkip"]  = bi.isSkip;
+    m["isIntra"] = bi.isIntra;
+    m["mvx"]     = double(bi.mvx);
+    m["mvy"]     = double(bi.mvy);
+    // ── 图2 详情卡片扩展字段 ──
+    m["refIdx"]      = bi.refIdx;
+    m["predMode"]    = bi.predMode;
+    m["hasResidual"] = bi.hasResidual;
+    return m;
+}
+
+bool RBStreamBridge::blockInfoSupported(int slot) const {
+    auto* ba = blockAnalyzerFor(slot);
+    return (ba && ba->rbBlockSupport());
+}
+
+QString RBStreamBridge::blockGranularity(int slot) const {
+    auto* ba = blockAnalyzerFor(slot);
+    if (!ba || !ba->rbBlockSupport()) return QString{};
+    return QString::fromStdString(ba->rbBlockGranularity());
+}
+
+QVariantList RBStreamBridge::blockInfoAt(int slot, int frameIndex) const {
+    QVariantList out;
+    auto* ba = blockAnalyzerFor(slot);
+    if (!ba || !ba->rbBlockSupport() || frameIndex < 0) return out;
+
+    const rb::RBFrameBlocks& fb = ba->rbBlockInfoAt(frameIndex);
+    if (!fb.valid) return out;
+
+    // ── 同步底层原始画面：把解码出的 RGB 缓存为 QImage，供 CU 网格叠加 ──
+    // blockInfoAt 是 const，这里需要修改缓存，故做 const_cast（逻辑上是缓存更新）
+    Slot& s = const_cast<Slot&>(m_slots[slot]);
+    if (fb.hasRgb && !fb.rgb.empty() && fb.rgbWidth > 0 && fb.rgbHeight > 0) {
+        QImage img(fb.rgb.data(), fb.rgbWidth, fb.rgbHeight,
+                   fb.rgbWidth * 3, QImage::Format_RGB888);
+        s.lastFrameImage    = img.copy();   // 深拷贝，脱离 fb 内存
+        s.lastFrameImageFor = frameIndex;
+        s.frameImageVersion++;
+        // blockInfoAt 是 const，发信号需去掉 const（逻辑上仍是本对象）
+        const_cast<RBStreamBridge*>(this)->frameImageChanged(slot);
+    }
+
+    out.reserve(static_cast<int>(fb.blocks.size()));
+    for (const auto& bi : fb.blocks)
+        out.push_back(blockInfoToMap(bi));
+    return out;
+}
+
+QImage RBStreamBridge::FrameImageProvider::requestImage(const QString& id,
+                                                        QSize* size,
+                                                        const QSize& requestedSize) {
+    Q_UNUSED(requestedSize)
+    // id 形如 "<slot>_<frame>_<version>"，只需 slot
+    const int slot = id.section('_', 0, 0).toInt();
+    if (m_bridge && slot >= 0 && slot < MaxSlots) {
+        const Slot& s = m_bridge->m_slots[slot];
+        if (!s.lastFrameImage.isNull()) {
+            if (size) *size = s.lastFrameImage.size();
+            return s.lastFrameImage;
+        }
+    }
+    if (size) *size = QSize(1, 1);
+    return QImage();   // 空图：QML 侧显示占位/不绘制
+}
+
+int RBStreamBridge::frameImageVersion(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return 0;
+    return m_slots[slot].frameImageVersion;
+}
+
+QVariantMap RBStreamBridge::blockStats(int slot, int frameIndex) const {
+    QVariantMap m;
+    m["valid"]      = false;
+    m["avgQp"]      = 0.0;
+    m["minQp"]      = 0;
+    m["maxQp"]      = 0;
+    m["blockCount"] = 0;
+    m["width"]      = 0;
+    m["height"]     = 0;
+
+    auto* ba = blockAnalyzerFor(slot);
+    if (!ba || !ba->rbBlockSupport() || frameIndex < 0) return m;
+
+    const rb::RBFrameBlocks& fb = ba->rbBlockInfoAt(frameIndex);
+    if (!fb.valid) return m;
+
+    m["valid"]      = true;
+    m["avgQp"]      = fb.avgQp;
+    m["minQp"]      = fb.minQp;
+    m["maxQp"]      = fb.maxQp;
+    m["blockCount"] = static_cast<int>(fb.blocks.size());
+    m["width"]      = fb.width;
+    m["height"]     = fb.height;
+    return m;
 }
 
 void RBStreamBridge::seekPlayerTo(int slot, int frameIndex) {

@@ -512,20 +512,159 @@ Item {
     }
     readonly property bool   blockSupported: slotBlocks && slotBlocks.length > 0
     property bool qpOverlayEnabled: false
+    // P1：块级精度描述（如"宏块级 (16×16)"），由 C++ 侧 blockGranularity 提供
+    readonly property string blockGranularityText: {
+        const _ = streamView.globalVer
+        return slotActive ? StreamBridge.blockGranularity(effectiveSlot) : ""
+    }
+    // P1：当前帧的块级统计（{ valid, avgQp, minQp, maxQp, blockCount, width, height }）
+    // 底层原始画面版本号：C++ 端解码出新画面后递增，用于刷新 Image source。
+    // 注意：必须依赖 globalVer（帧切换），否则翻帧时不会重新取图。
+    readonly property int    frameImageVersion: {
+        const _ = streamView.globalVer
+        const __ = streamView.imgVer
+        return slotActive ? StreamBridge.frameImageVersion(effectiveSlot) : 0
+    }
+    // frameImageChanged 信号计数：仅用于打断 QML 绑定缓存
+    property int imgVer: 0
+    Connections {
+        target: StreamBridge
+        function onFrameImageChanged(slot) {
+            if (slot === streamView.effectiveSlot) {
+                streamView.imgVer++
+                frameUnderlay.refreshKey++
+            }
+        }
+    }
+    readonly property var    slotBlockStats: {
+        const _ = streamView.globalVer
+        return slotActive ? StreamBridge.blockStats(effectiveSlot, slotCurrent)
+                          : ({ valid: false, avgQp: 0, minQp: 0, maxQp: 0, blockCount: 0 })
+    }
+    // 当前点击选中的块索引（-1 = 未选中），驱动 CU 详情卡片
+    property int selectedBlockIndex: -1
+
+    // ── 图2 右侧「帧统计」面板数据源 ──────────────────────────────
+    // 当前帧（来自 slotFrameList）
+    readonly property var curFrameItem: {
+        const _ = streamView.globalVer
+        const list = streamView.slotFrameList
+        return (list && streamView.slotCurrent >= 0 && streamView.slotCurrent < list.length)
+               ? list[streamView.slotCurrent] : ({})
+    }
+    // 全序列聚合统计（一次性遍历 slotFrameList，算出平均/最小/最大）
+    readonly property var seqStats: {
+        const _ = streamView.globalVer
+        const list = streamView.slotFrameList
+        let n = 0, qpSum = 0, sizeSum = 0, qpCount = 0
+        let qpMin = 999, qpMax = -999, sizeMin = 1e18, sizeMax = -1
+        let kbpsMin = 1e18, kbpsMax = -1
+        const fps = Number(streamView.slotInfo.fps) > 0 ? Number(streamView.slotInfo.fps) : 25
+        for (let i = 0; i < (list ? list.length : 0); ++i) {
+            const f = list[i]
+            const qp = Number(f.avgQp)
+            const sz = Number(f.sizeBytes)
+            // ★ 修正：avgQp 可能为 -1（C++ 侧未算出的帧），必须排除，
+            //   否则平均值/最小值会被 -1 污染（此前显示 -1.0 / -1）。
+            if (!isNaN(qp) && qp >= 0) {
+                qpSum += qp
+                if (qp < qpMin) qpMin = qp
+                if (qp > qpMax) qpMax = qp
+                ++qpCount
+            }
+            if (!isNaN(sz)) {
+                sizeSum += sz
+                if (sz < sizeMin) sizeMin = sz
+                if (sz > sizeMax) sizeMax = sz
+                const kb = sz * 8 / 1000 * fps / 1000   // 近似瞬时码率 kbps
+                if (kb < kbpsMin) kbpsMin = kb
+                if (kb > kbpsMax) kbpsMax = kb
+            }
+            ++n
+        }
+        if (n === 0) return ({ avgQp: 0, minQp: 0, maxQp: 0, avgSize: 0, minSize: 0, maxSize: 0,
+                               minKbps: 0, maxKbps: 0, fps: fps })
+        return ({
+            // 平均值只对有效 QP 帧求平均（qpCount 可能 < n）
+            avgQp:  qpCount > 0 ? (qpSum / qpCount) : 0,
+            minQp:  qpMin === 999 ? 0 : qpMin,
+            maxQp:  qpMax === -999 ? 0 : qpMax,
+            avgSize: sizeSum / n,
+            minSize: sizeMin === 1e18 ? 0 : sizeMin,
+            maxSize: sizeMax === -1 ? 0 : sizeMax,
+            minKbps: kbpsMin === 1e18 ? 0 : kbpsMin,
+            maxKbps: kbpsMax === -1 ? 0 : kbpsMax,
+            fps: fps
+        })
+    }
+    // 当前帧的瞬时码率（kbps）与大小（KB）
+    readonly property real  curKbps: {
+        const _ = streamView.globalVer
+        const sz = Number(streamView.curFrameItem.sizeBytes)
+        if (isNaN(sz)) return 0
+        const fps = streamView.seqStats.fps
+        return sz * 8 / 1000 * fps / 1000
+    }
+    readonly property real  curSizeKB: {
+        const _ = streamView.globalVer
+        const sz = Number(streamView.curFrameItem.sizeBytes)
+        return isNaN(sz) ? 0 : sz / 1024
+    }
+    // 当前帧 QP 极差（块级 max-min，来自 slotBlockStats）
+    readonly property int   curQpRange: {
+        const _ = streamView.globalVer
+        const s = streamView.slotBlockStats
+        return s.valid ? (s.maxQp - s.minQp) : 0
+    }
 
     // 全局版本号：任意 slot 的帧变化/打开/关闭都 ++，驱动底部总控栏的"▶/⏸"图标等
     property int globalVer: 0
     Connections {
         target: StreamBridge
         function onCurrentFrameChanged(changedSlot) { streamView.globalVer++ }
-        function onFileOpened(openedSlot)            { streamView.globalVer++ }
-        function onFileClosed(closedSlot)            { streamView.globalVer++ }
-        function onSlotCountChanged()                { streamView.globalVer++ }
+        function onFileOpened(openedSlot)            { streamView.stopPlay(); streamView.globalVer++ }
+        function onFileClosed(closedSlot)            { streamView.stopPlay(); streamView.globalVer++ }
+        function onSlotCountChanged()                { streamView.stopPlay(); streamView.globalVer++ }
     }
-    // 当前 slot 是否"正在播放"（P1 真接播放时才有意义；P0 永远 false，▶ 一直显示）
+    // 当前是否有 slot 正在播放（P1：由 QML 侧逐帧定时器驱动的真实播放）
+    property bool playing: false
+
+    // 逐帧播放定时器：按码流帧率连续调用 nextFrame，到末帧自动停
+    Timer {
+        id: playTimer
+        interval: streamView.playInterval()
+        repeat: true
+        running: streamView.playing
+        onTriggered: streamView.playStep()
+    }
+    // 帧率 → 定时器间隔（ms）；帧率无效时兜底 40ms（25fps）
+    function playInterval() {
+        if (!streamView.slotActive) return 40
+        const f = Number(streamView.slotInfo.fps)
+        return (f > 0 && f < 240) ? Math.max(1, Math.round(1000 / f)) : 40
+    }
+    function togglePlay() {
+        if (!streamView.slotActive) return
+        streamView.playing = !streamView.playing
+    }
+    function stopPlay() {
+        if (streamView.playing) {
+            streamView.playing = false
+            // 触发块级数据重新加载（播放期间被跳过）
+            streamView.globalVer++
+        }
+    }
+    function playStep() {
+        if (!streamView.slotActive) { streamView.playing = false; return }
+        if (streamView.slotCurrent >= streamView.slotFrames - 1) {
+            streamView.playing = false
+            return
+        }
+        StreamBridge.nextFrame(streamView.effectiveSlot)
+    }
     function globalAnyPlaying() {
         const _ = streamView.globalVer
-        return false
+        return streamView.playing
     }
 
     Rectangle { anchors.fill: parent; color: "#101012" }
@@ -1276,6 +1415,42 @@ Item {
                     Text { visible: streamView.slotActive
                         text: (Number(streamView.slotInfo.bitrate) / 1e6).toFixed(2) + " Mbps"
                         color: "#cccccc"; font.pixelSize: 11 }
+                    // ── P1：块级 QP 统计（真实值，来自 RBBlockAnalyzer）──
+                    Text {
+                        visible: streamView.slotActive && streamView.slotBlockStats.valid
+                        text: "QP均值 " + Number(streamView.slotBlockStats.avgQp).toFixed(1)
+                              + "（" + streamView.slotBlockStats.minQp + "–"
+                              + streamView.slotBlockStats.maxQp + "）"
+                        color: "#f0c040"; font.pixelSize: 11
+                        font.family: "Monospace"
+                    }
+                    Text {
+                        visible: streamView.slotActive && streamView.slotBlockStats.valid
+                        text: "块数 " + streamView.slotBlockStats.blockCount
+                              + " · " + streamView.blockGranularityText
+                        color: "#9aa0a6"; font.pixelSize: 11
+                        font.family: "Monospace"
+                    }
+                    // 总帧数 / GOP 数（图2 文件信息区）
+                    Text {
+                        visible: streamView.slotActive
+                        text: "帧数 " + streamView.slotFrames
+                              + " · GOP " + streamView.slotGopList.length
+                        color: "#9aa0a6"; font.pixelSize: 11
+                        font.family: "Monospace"
+                    }
+                    // 时长（mm:ss.mmm）
+                    Text {
+                        visible: streamView.slotActive && Number(streamView.slotInfo.duration) > 0
+                        readonly property real d: Number(streamView.slotInfo.duration)
+                        readonly property int mm: Math.floor(d / 60)
+                        readonly property int ss: Math.floor(d % 60)
+                        readonly property int ms: Math.floor((d % 1) * 1000)
+                        text: "时长 " + (mm < 10 ? "0" : "") + mm + ":" + (ss < 10 ? "0" : "") + ss
+                              + "." + (ms < 100 ? (ms < 10 ? "00" : "0") : "") + ms
+                        color: "#9aa0a6"; font.pixelSize: 11
+                        font.family: "Monospace"
+                    }
                     Text { visible: streamView.slotActive
                         text: "File: " + streamView.slotInfo.fileName
                         color: "#9aa0a6"; font.pixelSize: 11 }
@@ -1284,13 +1459,13 @@ Item {
                         color: "#6a6f76"; font.pixelSize: 11 }
                 }
 
-                // 显示 QP 开关（占位）
+                // 显示 QP 开关（P1：驱动块级 QP 着色叠加层）
                 Row {
                     spacing: 6
                     visible: streamView.slotActive
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "显示QP"
+                        text: streamView.qpOverlayEnabled ? "画面+QP+CU网格" : "仅画面"
                         color: "#9aa0a6"; font.pixelSize: 11
                     }
                     Rectangle {
@@ -1310,8 +1485,9 @@ Item {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 streamView.qpOverlayEnabled = !streamView.qpOverlayEnabled
-                                console.log("[StreamView] 显示QP =", streamView.qpOverlayEnabled,
-                                            "（占位，未实现 CU 网格 / QP 着色）")
+                                console.log("[StreamView] 模式 =",
+                                            streamView.qpOverlayEnabled ? "画面+QP+CU网格" : "仅画面（无网格无色块）",
+                                            "块数 =", streamView.slotBlocks.length)
                             }
                         }
                     }
@@ -1319,45 +1495,564 @@ Item {
             }
         }
 
-        // ── 中部：主显示区（CU 网格 + QP 占位） ──
+        // ── 中部：主显示区（CU 网格 + QP 着色，P1 真实渲染） ──
         Item {
             id: mainDisplay
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: topInfoBar.bottom
-            anchors.bottom: bottomBar.top
+            anchors.bottom: gopBar.top
 
             Rectangle { anchors.fill: parent; color: "#0a0a0e" }
 
+            // 未加载码流时的占位
             ColumnLayout {
                 anchors.centerIn: parent
                 spacing: 8
+                visible: !streamView.slotActive
                 Text { Layout.alignment: Qt.AlignHCenter; text: "🎞"; font.pixelSize: 56 }
                 Text { Layout.alignment: Qt.AlignHCenter
-                    visible: !streamView.slotActive
                     text: "未加载码流文件"
                     color: "#e8e8ec"; font.pixelSize: 16; font.bold: true }
+            }
+
+            // 已加载：块级 CU 网格 + QP 着色叠加层
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: 10
+                visible: streamView.slotActive && !streamView.blockSupported
+                Text { Layout.alignment: Qt.AlignHCenter; text: "🎞"; font.pixelSize: 56 }
                 Text { Layout.alignment: Qt.AlignHCenter
-                    visible: streamView.slotActive
                     text: "帧级信息已加载"
                     color: "#e8e8ec"; font.pixelSize: 16; font.bold: true }
                 Text { Layout.alignment: Qt.AlignHCenter
-                    visible: streamView.slotActive
-                    text: "块级 CU 划分 / QP 着色需要 P1 阶段接入 FFmpeg 解码器补丁"
+                    text: streamView.blockGranularityText.length > 0
+                          ? "当前帧块级数据暂不可用（" + streamView.blockGranularityText + "）"
+                          : "当前编码格式暂不支持块级分析（P1 支持 H.264 / HEVC）"
                     color: "#9aa0a6"; font.pixelSize: 12 }
-                Text { Layout.alignment: Qt.AlignHCenter
-                    visible: streamView.slotActive
-                            && streamView.slotInfo.width > 0 && streamView.slotInfo.height > 0
-                    text: "（已加载：" + streamView.slotInfo.width + "×" + streamView.slotInfo.height
-                          + " @ " + Number(streamView.slotInfo.fps).toFixed(2) + " fps，"
-                          + streamView.slotInfo.codecLong + "）"
-                    color: "#6a6f76"; font.pixelSize: 11 }
-                Text { Layout.alignment: Qt.AlignHCenter
-                    visible: streamView.slotActive
-                            && (streamView.slotInfo.width <= 0 || streamView.slotInfo.height <= 0)
-                    text: "（裸流 fallback：帧级统计 / GOP 切分可用，宽高 / fps / profile 等"
-                          + " 需要 P1 接入 FFmpeg 解码器补丁）"
-                    color: "#6a6f76"; font.pixelSize: 11 }
+            }
+
+            // ── 底层：当前帧真实解码画面（CU 网格叠加在它上面）──
+            // source 里的版本号变化时强制刷新，帧切换即重新取图。
+            Image {
+                id: frameUnderlay
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: rightStatsPanel.left
+                anchors.margins: 12
+                visible: streamView.slotActive && streamView.blockSupported
+                fillMode: Image.PreserveAspectFit
+                asynchronous: true
+                cache: false
+                source: "image://streamframe/" + streamView.effectiveSlot
+                        + "_" + streamView.slotCurrent
+                        + "_" + streamView.frameImageVersion
+                        + "_" + frameUnderlay.refreshKey
+                // URL 必须每次不同才会触发重新加载，故追加自增 key
+                property int refreshKey: 0
+                // 与画布保持完全一致的几何，保证网格与画面对齐
+                onStatusChanged: {
+                    if (status === Image.Ready)
+                        blockCanvas.requestPaint()
+                }
+            }
+
+            // ── CU 网格 + QP 着色画布 ──
+            // 透明底：只画网格线 / QP 半透明色块 / 选中高亮，
+            // 真实画面由下方 frameUnderlay 提供。
+            Canvas {
+                id: blockCanvas
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: rightStatsPanel.left
+                anchors.margins: 12
+                visible: streamView.slotActive && streamView.blockSupported
+
+                // 悬停高亮的块索引（-1 表示无）
+                property int hoverIndex: -1
+                // 点击选中的块索引（-1 表示无）
+                property int selectedIndex: -1
+
+                onPaint: {
+                    const ctx = getContext("2d")
+                    ctx.clearRect(0, 0, width, height)
+                    const blocks = streamView.slotBlocks
+                    if (!blocks || blocks.length === 0) return
+
+                    // 计算等比缩放：适应画布，保持宽高比
+                    let vw = 0, vh = 0
+                    for (let i = 0; i < blocks.length; ++i) {
+                        vw = Math.max(vw, blocks[i].x + blocks[i].w)
+                        vh = Math.max(vh, blocks[i].y + blocks[i].h)
+                    }
+                    const info = streamView.slotInfo
+                    if (info.width > 0)  vw = info.width
+                    if (info.height > 0) vh = info.height
+                    if (vw <= 0 || vh <= 0) return
+
+                    // 等比缩放：必须与底层 frameUnderlay 的 PreserveAspectFit
+                    // 完全一致，否则 CU 网格会和真实画面错位。
+                    // 优先直接采用 Image 计算出的实际绘制矩形。
+                    let offX = 0, offY = 0, drawW = width, drawH = height
+                    const pw = frameUnderlay.paintedWidth
+                    const ph = frameUnderlay.paintedHeight
+                    if (frameUnderlay.visible && pw > 0 && ph > 0) {
+                        // Image 在 PreserveAspectFit 下把画面居中绘制
+                        drawW = pw
+                        drawH = ph
+                        offX = (width  - pw) / 2
+                        offY = (height - ph) / 2
+                    } else {
+                        // 无底层画面时退化为自适应缩放（保持原有行为）
+                        const sw = Math.min(width / vw, height / vh)
+                        drawW = vw * sw
+                        drawH = vh * sw
+                        offX = (width  - drawW) / 2
+                        offY = (height - drawH) / 2
+                    }
+                    const scale = drawW / vw
+
+                    // ── QP 着色层（可切换）──
+                    if (streamView.qpOverlayEnabled) {
+                        for (let i = 0; i < blocks.length; ++i) {
+                            const b = blocks[i]
+                            const qp = b.qp
+                            // QP 0..51 映射到 冷蓝 → 中性灰 → 暖红（不用绿色）
+                            const t = Math.max(0, Math.min(1, qp / 51))
+                            let r, g, bl
+                            if (t < 0.5) {
+                                // 冷蓝 → 灰
+                                const k = t / 0.5
+                                r = Math.round(60  + k * (128 - 60))
+                                g = Math.round(120 + k * (128 - 120))
+                                bl = Math.round(230 + k * (128 - 230))
+                            } else {
+                                // 灰 → 暖红
+                                const k = (t - 0.5) / 0.5
+                                r = Math.round(128 + k * (230 - 128))
+                                g = Math.round(128 + k * (70  - 128))
+                                bl = Math.round(128 + k * (60  - 128))
+                            }
+                            ctx.fillStyle = "rgba(" + r + "," + g + "," + bl + ",0.48)"
+                            ctx.fillRect(offX + b.x * scale, offY + b.y * scale,
+                                         b.w * scale, b.h * scale)
+                        }
+                    }
+
+                    // ── CU 网格线（跟随开关：关闭时纯画面，开启时画面+QP+网格）──
+                    if (streamView.qpOverlayEnabled) {
+                        ctx.lineWidth = 1
+                        ctx.strokeStyle = "rgba(0,0,0,0.55)"
+                        for (let i = 0; i < blocks.length; ++i) {
+                            const b = blocks[i]
+                            ctx.strokeRect(offX + b.x * scale + 0.5,
+                                           offY + b.y * scale + 0.5,
+                                           b.w * scale, b.h * scale)
+                        }
+                        ctx.strokeStyle = "rgba(255,255,255,0.75)"
+                        for (let i = 0; i < blocks.length; ++i) {
+                            const b = blocks[i]
+                            ctx.strokeRect(offX + b.x * scale, offY + b.y * scale,
+                                           b.w * scale, b.h * scale)
+                        }
+                    }
+
+                    // ── 悬停 / 选中高亮（黄色描边）──
+                    const hi = blockCanvas.hoverIndex
+                    const si = blockCanvas.selectedIndex
+                    const drawHi = (idx, lw) => {
+                        if (idx < 0 || idx >= blocks.length) return
+                        const b = blocks[idx]
+                        ctx.strokeStyle = "#f0c040"
+                        ctx.lineWidth = lw
+                        ctx.strokeRect(offX + b.x * scale, offY + b.y * scale,
+                                       b.w * scale, b.h * scale)
+                    }
+                    drawHi(hi, 1.5)
+                    drawHi(si, 2)
+
+                    // ── 大尺寸 CU 时叠加 QP 数值文本 ──
+                    if (streamView.qpOverlayEnabled) {
+                        for (let i = 0; i < blocks.length; ++i) {
+                            const b = blocks[i]
+                            const bw = b.w * scale
+                            const bh = b.h * scale
+                            if (bw < 40 || bh < 24) continue
+                            ctx.font = "11px Monospace"
+                            ctx.textAlign = "center"
+                            ctx.textBaseline = "middle"
+                            const tx = offX + b.x * scale + bw / 2
+                            const ty = offY + b.y * scale + bh / 2
+                            // 深色描边 + 亮色填充，保证任意底色上都可辨识
+                            ctx.lineWidth = 3
+                            ctx.strokeStyle = "rgba(0,0,0,0.85)"
+                            ctx.strokeText(String(b.qp), tx, ty)
+                            ctx.fillStyle = "#ffffff"
+                            ctx.fillText(String(b.qp), tx, ty)
+                        }
+                    }
+
+                    // 记录映射参数供命中测试复用
+                    blockCanvas._scale = scale
+                    blockCanvas._offX  = offX
+                    blockCanvas._offY  = offY
+                    blockCanvas._vw    = vw
+                    blockCanvas._vh    = vh
+                }
+
+                property real _scale: 1
+                property real _offX: 0
+                property real _offY: 0
+                property int  _vw: 0
+                property int  _vh: 0
+
+                // 帧切换 / QP 开关切换 / 块数据变化时重绘，并复位选中态
+                onVisibleChanged: requestPaint()
+                Connections {
+                    target: streamView
+                    function onSlotBlocksChanged()       { blockCanvas.requestPaint() }
+                    function onQpOverlayEnabledChanged() { blockCanvas.requestPaint() }
+                    function onSlotCurrentChanged() {
+                        blockCanvas.selectedIndex = -1
+                        streamView.selectedBlockIndex = -1
+                        blockCanvas.requestPaint()
+                    }
+                }
+
+                // 命中测试：屏幕坐标 → 块索引
+                function hitTest(mx, my) {
+                    const blocks = streamView.slotBlocks
+                    if (!blocks || blocks.length === 0) return -1
+                    const vx = (mx - blockCanvas._offX) / blockCanvas._scale
+                    const vy = (my - blockCanvas._offY) / blockCanvas._scale
+                    for (let i = 0; i < blocks.length; ++i) {
+                        const b = blocks[i]
+                        if (vx >= b.x && vx < b.x + b.w &&
+                            vy >= b.y && vy < b.y + b.h)
+                            return i
+                    }
+                    return -1
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton
+                    onPositionChanged: {
+                        const idx = blockCanvas.hitTest(mouseX, mouseY)
+                        if (idx !== blockCanvas.hoverIndex) {
+                            blockCanvas.hoverIndex = idx
+                            blockCanvas.requestPaint()
+                        }
+                    }
+                    onExited: {
+                        if (blockCanvas.hoverIndex !== -1) {
+                            blockCanvas.hoverIndex = -1
+                            blockCanvas.requestPaint()
+                        }
+                    }
+                    onClicked: {
+                        const idx = blockCanvas.hitTest(mouseX, mouseY)
+                        blockCanvas.selectedIndex = idx
+                        streamView.selectedBlockIndex = idx
+                        blockCanvas.requestPaint()
+                    }
+                }
+            }
+
+            // ── CU 详情卡片（点击块后弹出，跟随点击点）──
+            Rectangle {
+                id: blockDetailCard
+                visible: streamView.selectedBlockIndex >= 0
+                         && streamView.selectedBlockIndex < streamView.slotBlocks.length
+                width: 200; height: 132
+                radius: 5
+                color: "#cc1a1a1f"
+                border.color: "#2a2e33"; border.width: 1
+                x: 16
+                y: 16
+
+                Column {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 3
+                    Text {
+                        readonly property var b: streamView.slotBlocks[streamView.selectedBlockIndex] || ({})
+                        text: "CU  x:" + (b.x !== undefined ? b.x : 0)
+                              + " y:" + (b.y !== undefined ? b.y : 0)
+                              + "  " + (b.w !== undefined ? b.w : 0) + "×" + (b.h !== undefined ? b.h : 0)
+                        color: "#e8e8ec"; font.pixelSize: 11; font.bold: true
+                        font.family: "Monospace"
+                    }
+                    Rectangle { width: parent.width; height: 1; color: "#2a2e33" }
+
+                    readonly property var b: streamView.slotBlocks[streamView.selectedBlockIndex] || ({})
+
+                    // QP
+                    Row {
+                        spacing: 8
+                        Text { text: "QP"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
+                        Text {
+                            text: parent.parent.b.qp !== undefined ? String(parent.parent.b.qp) : "—"
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
+                    // 类型
+                    Row {
+                        spacing: 8
+                        Text { text: "类型"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
+                        Text {
+                            text: parent.parent.b.isIntra ? "Intra" : "Inter"
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
+                    // MV
+                    Row {
+                        spacing: 8
+                        Text { text: "MV"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
+                        Text {
+                            text: "(" + (parent.parent.b.mvx ? parent.parent.b.mvx.toFixed(0) : "0")
+                                  + "," + (parent.parent.b.mvy ? parent.parent.b.mvy.toFixed(0) : "0") + ")"
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
+                    // 参考索引
+                    Row {
+                        spacing: 8
+                        Text { text: "参考索引"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
+                        Text {
+                            text: parent.parent.b.refIdx !== undefined ? String(parent.parent.b.refIdx) : "0"
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
+                    // 预测模式
+                    Row {
+                        spacing: 8
+                        Text { text: "预测模式"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
+                        Text {
+                            readonly property int pm: parent.parent.b.predMode !== undefined ? parent.parent.b.predMode : 0
+                            text: pm === 0 ? "Intra" : (pm === 1 ? "P_L0" : (pm === 2 ? "B_L0L1" : "—"))
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
+                    // 残差信息
+                    Row {
+                        spacing: 8
+                        Text { text: "残差信息"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
+                        Text {
+                            text: (parent.parent.b.hasResidual !== undefined && parent.parent.b.hasResidual) ? "有" : "无"
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        streamView.selectedBlockIndex = -1
+                        blockCanvas.selectedIndex = -1
+                        blockCanvas.requestPaint()
+                    }
+                }
+            }
+
+            // ── 图2 右侧「帧统计（当前帧）」面板 ──────────────────
+            // 布局：项目 | 当前帧 | 平均值 | 最小值 | 最大值
+            Rectangle {
+                id: rightStatsPanel
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 260
+                visible: streamView.slotActive
+                color: "#141418"
+                border.color: "#2a2e33"; border.width: 1
+
+                Column {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 6
+
+                    Text {
+                        text: "帧统计（当前帧）"
+                        color: "#e8e8ec"; font.pixelSize: 12; font.bold: true
+                    }
+                    Rectangle { width: parent.width; height: 1; color: "#2a2e33" }
+
+                    // 表头
+                    Row {
+                        spacing: 4
+                        Text { text: "项目"; color: "#9aa0a6"; font.pixelSize: 9; width: 82 }
+                        Text { text: "当前帧"; color: "#9aa0a6"; font.pixelSize: 9; width: 46; horizontalAlignment: Text.AlignRight }
+                        Text { text: "平均值"; color: "#9aa0a6"; font.pixelSize: 9; width: 42; horizontalAlignment: Text.AlignRight }
+                        Text { text: "最小值"; color: "#9aa0a6"; font.pixelSize: 9; width: 36; horizontalAlignment: Text.AlignRight }
+                        Text { text: "最大值"; color: "#9aa0a6"; font.pixelSize: 9; width: 36; horizontalAlignment: Text.AlignRight }
+                    }
+                    Rectangle { width: parent.width; height: 1; color: "#2a2e33" }
+
+                    // 数据行统一构件
+                    component StatRow : Row {
+                        spacing: 4
+                        property string label: ""
+                        property string cur: "—"
+                        property string avg: "—"
+                        property string mn: "—"
+                        property string mx: "—"
+                        property bool   highlight: false
+                        Text { text: label; color: "#9aa0a6"; font.pixelSize: 10; width: 82; elide: Text.ElideRight }
+                        Text { text: cur; color: highlight ? "#f0c040" : "#cccccc"; font.pixelSize: 10
+                               width: 46; horizontalAlignment: Text.AlignRight; font.family: "Monospace" }
+                        Text { text: avg; color: "#cccccc"; font.pixelSize: 10
+                               width: 42; horizontalAlignment: Text.AlignRight; font.family: "Monospace" }
+                        Text { text: mn; color: "#cccccc"; font.pixelSize: 10
+                               width: 36; horizontalAlignment: Text.AlignRight; font.family: "Monospace" }
+                        Text { text: mx; color: "#cccccc"; font.pixelSize: 10
+                               width: 36; horizontalAlignment: Text.AlignRight; font.family: "Monospace" }
+                    }
+
+                    StatRow {
+                        label: "帧类型"
+                        cur: streamView.curFrameItem.type !== undefined ? String(streamView.curFrameItem.type) : "—"
+                    }
+                    StatRow {
+                        label: "POC"
+                        cur: streamView.curFrameItem.poc !== undefined ? String(streamView.curFrameItem.poc) : "—"
+                    }
+                    StatRow {
+                        label: "QP 均值"
+                        highlight: true
+                        cur: streamView.slotBlockStats.valid
+                             ? Number(streamView.slotBlockStats.avgQp).toFixed(1) : "—"
+                        avg: Number(streamView.seqStats.avgQp).toFixed(1)
+                        mn:  String(Math.round(streamView.seqStats.minQp))
+                        mx:  String(Math.round(streamView.seqStats.maxQp))
+                    }
+                    StatRow {
+                        label: "QP 极差"
+                        cur: streamView.slotBlockStats.valid ? String(streamView.curQpRange) : "—"
+                    }
+                    StatRow {
+                        label: "码率 (kbps)"
+                        cur: streamView.curKbps > 0 ? String(Math.round(streamView.curKbps)) : "—"
+                        avg: String(Math.round(streamView.slotInfo.bitrate / 1000))
+                        mn:  String(Math.round(streamView.seqStats.minKbps))
+                        mx:  String(Math.round(streamView.seqStats.maxKbps))
+                    }
+                    StatRow {
+                        label: "大小 (KB)"
+                        cur: streamView.curSizeKB > 0 ? streamView.curSizeKB.toFixed(1) : "—"
+                        avg: (streamView.seqStats.avgSize / 1024).toFixed(1)
+                        mn:  (streamView.seqStats.minSize / 1024).toFixed(1)
+                        mx:  (streamView.seqStats.maxSize / 1024).toFixed(1)
+                    }
+                    StatRow {
+                        label: "时间戳 (ms)"
+                        cur: streamView.curFrameItem.pts !== undefined
+                             ? String(Math.round(Number(streamView.curFrameItem.pts) * 1000)) : "—"
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: "#2a2e33" }
+
+                }
+            }
+        }
+
+        // ── 图1 底部：GOP 结构图（IDR 黄 / P 蓝 / B 灰 + GOP 边界） ──
+        Rectangle {
+            id: gopBar
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: bottomBar.top
+            height: 26
+            color: "#141418"
+            border.color: "#2a2e33"; border.width: 1
+            visible: streamView.slotActive && streamView.slotFrames > 0
+
+            Row {
+                anchors.left: parent.left
+                anchors.leftMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 6
+                Text { text: "GOP结构"; color: "#9aa0a6"; font.pixelSize: 10
+                       anchors.verticalCenter: parent.verticalCenter }
+                // 图例
+                Rectangle { width: 8; height: 10; color: "#f0c040"; radius: 1
+                            anchors.verticalCenter: parent.verticalCenter }
+                Text { text: "I/IDR"; color: "#9aa0a6"; font.pixelSize: 9
+                       anchors.verticalCenter: parent.verticalCenter }
+                Rectangle { width: 8; height: 10; color: "#3a7adf"; radius: 1
+                            anchors.verticalCenter: parent.verticalCenter }
+                Text { text: "P"; color: "#9aa0a6"; font.pixelSize: 9
+                       anchors.verticalCenter: parent.verticalCenter }
+                Rectangle { width: 8; height: 10; color: "#6a6f76"; radius: 1
+                            anchors.verticalCenter: parent.verticalCenter }
+                Text { text: "B"; color: "#9aa0a6"; font.pixelSize: 9
+                       anchors.verticalCenter: parent.verticalCenter }
+            }
+
+            // GOP 竖条带
+            Canvas {
+                id: gopCanvas
+                anchors.left: parent.left
+                anchors.leftMargin: 190
+                anchors.right: parent.right
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                height: 14
+                visible: streamView.slotFrames > 0
+
+                onPaint: {
+                    const ctx = getContext("2d")
+                    ctx.clearRect(0, 0, width, height)
+                    const list = streamView.slotFrameList
+                    const n = list ? list.length : 0
+                    if (n === 0) return
+
+                    const bw = width / n
+                    const bwAct = Math.max(bw, 1)
+
+                    // 先画 GOP 边界（每个 GOP 起始处一条竖线）
+                    const gops = streamView.slotGopList
+                    ctx.fillStyle = "rgba(240,192,64,0.45)"
+                    for (let g = 0; g < (gops ? gops.length : 0); ++g) {
+                        const sf = Number(gops[g].startFrameIndex)
+                        if (isNaN(sf)) continue
+                        ctx.fillRect(sf * bw, 0, Math.max(bwAct * 0.6, 1), height)
+                    }
+
+                    // 再画每帧类型色条
+                    for (let i = 0; i < n; ++i) {
+                        const t = String(list[i].type)
+                        let c = "#6a6f76"           // B（默认灰）
+                        if (t === "IDR" || t === "I") c = "#f0c040"   // I/IDR 黄
+                        else if (t === "P")          c = "#3a7adf"    // P 蓝
+                        ctx.fillStyle = c
+                        ctx.fillRect(i * bw, 2, bwAct, height - 4)
+                    }
+
+                    // 当前帧指示（白色游标）
+                    const cur = streamView.slotCurrent
+                    ctx.fillStyle = "#ffffff"
+                    ctx.fillRect(cur * bw, 0, Math.max(bwAct, 2), height)
+                }
+
+                Connections {
+                    target: streamView
+                    function onSlotCurrentChanged() { gopCanvas.requestPaint() }
+                    function onSlotFrameListChanged() { gopCanvas.requestPaint() }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: {
+                        const n = streamView.slotFrames
+                        if (n > 0) {
+                            const idx = Math.floor(mouseX / width * n)
+                            StreamBridge.gotoFrame(streamView.effectiveSlot,
+                                                   Math.max(0, Math.min(n - 1, idx)))
+                        }
+                    }
+                }
             }
         }
 
@@ -1397,11 +2092,26 @@ Item {
                     spacing: 2
                     Layout.alignment: Qt.AlignVCenter
 
+                    // ◀◀（上一帧，帧级步进）
+                    Rectangle {
+                        width: 30; height: 22; radius: 3
+                        color: gPrevMa.containsMouse ? "#803a3a3d" : "#80252528"
+                        Text { anchors.centerIn: parent; text: "◀◀"; color: "#ccc"; font.pixelSize: 10 }
+                        ToolTip.visible: gPrevMa.containsMouse
+                        ToolTip.text: qsTr("上一帧（帧级步进）")
+                        MouseArea {
+                            id: gPrevMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { streamView.stopPlay(); StreamBridge.prevFrame(streamView.effectiveSlot) }
+                        }
+                    }
                     // ⏮（快退 15 帧）
                     Rectangle {
                         width: 28; height: 22; radius: 3
                         color: gSkipBackMa.containsMouse ? "#803a3a3d" : "#80252528"
                         Text { anchors.centerIn: parent; text: "⏮"; color: "#ccc"; font.pixelSize: 11 }
+                        ToolTip.visible: gSkipBackMa.containsMouse
+                        ToolTip.text: qsTr("快退 15 帧")
                         MouseArea {
                             id: gSkipBackMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -1409,47 +2119,21 @@ Item {
                                                               streamView.slotCurrent - 15)
                         }
                     }
-                    // ◀（上一帧）
+                    // ▶/⏸（主播放按钮，蓝色，真实逐帧播放）
                     Rectangle {
                         width: 28; height: 22; radius: 3
-                        color: gPrevMa.containsMouse ? "#803a3a3d" : "#80252528"
-                        Text { anchors.centerIn: parent; text: "◀"; color: "#ccc"; font.pixelSize: 11 }
-                        MouseArea {
-                            id: gPrevMa; anchors.fill: parent
-                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: StreamBridge.prevFrame(streamView.effectiveSlot)
-                        }
-                    }
-                    // ▶/⏸（主播放按钮，蓝色）
-                    Rectangle {
-                        width: 28; height: 22; radius: 3
-                        color: gPlayMa.containsMouse ? "#803d7adf" : "#802a5fc0"
+                        color: gPlayMa.containsMouse ? "#803d7adf" : (streamView.playing ? "#805a8ae0" : "#802a5fc0")
                         Text {
                             anchors.centerIn: parent
-                            text: {
-                                const _ = streamView.globalVer
-                                return streamView.globalAnyPlaying() ? "⏸" : "▶"
-                            }
+                            text: streamView.playing ? "⏸" : "▶"
                             color: "#fff"; font.pixelSize: 11
                         }
+                        ToolTip.visible: gPlayMa.containsMouse
+                        ToolTip.text: streamView.playing ? qsTr("暂停播放") : qsTr("播放（按帧率连续解码）")
                         MouseArea {
                             id: gPlayMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                // 一期未实现真播放：仅 console.log
-                                console.log("[StreamView] 播放/暂停（一期未实现，仅切换当前帧）")
-                            }
-                        }
-                    }
-                    // ▶（下一帧）
-                    Rectangle {
-                        width: 28; height: 22; radius: 3
-                        color: gNextMa.containsMouse ? "#803a3a3d" : "#80252528"
-                        Text { anchors.centerIn: parent; text: "▶"; color: "#ccc"; font.pixelSize: 11 }
-                        MouseArea {
-                            id: gNextMa; anchors.fill: parent
-                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: StreamBridge.nextFrame(streamView.effectiveSlot)
+                            onClicked: streamView.togglePlay()
                         }
                     }
                     // ⏭（快进 15 帧）
@@ -1457,11 +2141,26 @@ Item {
                         width: 28; height: 22; radius: 3
                         color: gSkipFwdMa.containsMouse ? "#803a3a3d" : "#80252528"
                         Text { anchors.centerIn: parent; text: "⏭"; color: "#ccc"; font.pixelSize: 11 }
+                        ToolTip.visible: gSkipFwdMa.containsMouse
+                        ToolTip.text: qsTr("快进 15 帧")
                         MouseArea {
                             id: gSkipFwdMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: StreamBridge.gotoFrame(streamView.effectiveSlot,
                                                               streamView.slotCurrent + 15)
+                        }
+                    }
+                    // ▶▶（下一帧，帧级步进）
+                    Rectangle {
+                        width: 30; height: 22; radius: 3
+                        color: gNextMa.containsMouse ? "#803a3a3d" : "#80252528"
+                        Text { anchors.centerIn: parent; text: "▶▶"; color: "#ccc"; font.pixelSize: 10 }
+                        ToolTip.visible: gNextMa.containsMouse
+                        ToolTip.text: qsTr("下一帧（帧级步进）")
+                        MouseArea {
+                            id: gNextMa; anchors.fill: parent
+                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { streamView.stopPlay(); StreamBridge.nextFrame(streamView.effectiveSlot) }
                         }
                     }
                     // ↺（复位到 0 帧，红色）

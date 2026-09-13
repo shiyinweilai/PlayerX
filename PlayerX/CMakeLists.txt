@@ -113,9 +113,11 @@ src/yuv/YuvSliderCompareItem.cpp
 src/image/ImageBridge.cpp
 src/image/ImageDisplayItem.cpp
 src/image/ImageSliderCompareItem.cpp
-    # 码流分析工具（独立模块，依赖 RBDemuxer 复用做预扫描；块级深度信息
-    # 走"FFmpeg 解码器打补丁导出"路径，本期返回空数组占位）
+    # 码流分析工具（独立模块，依赖 RBDemuxer 复用做预扫描）
+    # P1 块级分析：H.264 复用 FFmpeg 原生 enc_params side data（无需打补丁），
+    #   HEVC 走 CTU 降级；见 src/stream/RBBlockAnalyzer.h 顶部说明。
     src/stream/RBStreamBridge.cpp
+    src/stream/RBBlockAnalyzer.cpp
     # 异步文件下载器（供 QML 测试源下载使用，不阻塞 UI 线程）
     src/qt/FileDownloader.cpp
     # 平台原生多选文件夹对话框：仅 macOS 走 NSOpenPanel。

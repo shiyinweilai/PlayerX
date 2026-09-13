@@ -311,6 +311,12 @@ int main(int argc, char* argv[]) {
     // 标题栏公告条显隐控制（QML 按当前 tab 调用；非 mac 平台为空操作）。
     engine.rootContext()->setContextProperty("NoticeBar",    &noticeBarBridge);
 
+    // 注册码流分析"底层原始画面"图像提供者：
+    // QML 用 image://streamframe/<slot>_<frame>_<version> 取当前帧真实画面，
+    // CU 划分网格直接叠加在它上面（而非纯色块底）。
+    engine.addImageProvider("streamframe",
+                            new RBStreamBridge::FrameImageProvider(&streamBridge));
+
     // 注册 YuvDisplayItem 为 QML 类型（供 YuvWindow.qml 使用）。
     // URI 用独立前缀，避免和 qt_add_qml_module(URI PlayerX) 冲突。
     qmlRegisterType<YuvDisplayItem>("PlayerX.YuvTools", 1, 0, "YuvDisplayItem");

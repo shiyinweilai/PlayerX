@@ -32,6 +32,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QSettings>
+#include <QImage>
+#include <QQuickImageProvider>
 #include <cstdio>
 #include <memory>
 #include <vector>
@@ -44,10 +46,14 @@ extern "C" {
 
 namespace rb {
 class RBDemuxer;
+class RBBlockAnalyzer;
+struct RBBlockInfo;
 }
 
 class RBStreamBridge : public QObject {
     Q_OBJECT
+    // 帧图像提供者需要直接读取槽位内的画面缓存
+    friend class FrameImageProvider;
     Q_PROPERTY(int slotCount READ slotCount NOTIFY slotCountChanged)
     Q_PROPERTY(int prescanning READ prescanning NOTIFY prescanningChanged)
     // 暴露给 QML 的最大 slot 数（与 YuvBridge.MaxSlots 一致），便于
@@ -129,11 +135,20 @@ public:
     // 字段不可用时 available=false，其它字段为 0/false。
     Q_INVOKABLE QVariantMap hrdEstimate(int slot) const;
 
-    // ── 块级信息（CU 划分 / QP / MV）—— 一期占位 ────────────────
+    // ── 块级信息（CU 划分 / QP / MV）—— P1 真实实现 ──────────────
     // 返回 QVariantList（每项一帧内一个块）：
     //   { x, y, w, h, qp, isSkip, isIntra, mvx, mvy }
-    // 一期不接 FFmpeg 补丁，返回空数组；UI 走"该格式暂不支持块级分析"降级。
+    // P1：通过 RBBlockAnalyzer 解码该帧并从 AVVideoEncParams side data 提取。
+    //      H.264 原生支持（逐宏块 16×16）；HEVC 走 CTU 降级；其它编码返回空数组。
+    // 取不到时返回空数组，UI 走"该格式暂不支持块级分析"降级。
     Q_INVOKABLE QVariantList blockInfoAt(int slot, int frameIndex) const;
+
+    // 当前码流是否支持块级分析（避免 UI 白等）
+    Q_INVOKABLE bool blockInfoSupported(int slot) const;
+    // 块级精度描述，如 "宏块级 (16×16)"；不支持时为空串
+    Q_INVOKABLE QString blockGranularity(int slot) const;
+    // 该帧块级统计：{ valid, avgQp, minQp, maxQp, blockCount, width, height }
+    Q_INVOKABLE QVariantMap blockStats(int slot, int frameIndex) const;
 
     // ── 联动播放器 seek（占位）────────────────────────────────────
     // 一期仅日志 + 后续接 EngineBridge.seekPlayerTo。
@@ -154,6 +169,23 @@ public:
     // 返回 QVariantMap：{ ok(bool), frameCount(int), fileSize(qint64), error(QString) }
     Q_INVOKABLE QVariantMap demuxToAnnexB(const QString& path, const QString& outPath);
 
+    // ── 底层原始画面（供 CU 网格叠加在真实渲染图上）──────────────
+    // 返回该 slot 当前帧解码后的画面。QML 侧用量：
+    //   Image { source: "image://streamframe/" + slot + "_" + frame + "_" + version }
+    // version 用于强制刷新（帧切换时递增）。
+    class FrameImageProvider : public QQuickImageProvider {
+    public:
+        explicit FrameImageProvider(RBStreamBridge* bridge)
+            : QQuickImageProvider(QQuickImageProvider::Image), m_bridge(bridge) {}
+        QImage requestImage(const QString& id, QSize* size,
+                            const QSize& requestedSize) override;
+    private:
+        RBStreamBridge* m_bridge;
+    };
+
+    // 帧图像版本号：帧切换时递增，供 QML 拼接 URL 强制刷新
+    Q_INVOKABLE int frameImageVersion(int slot) const;
+
 signals:
     void slotCountChanged();
     void prescanningChanged();
@@ -163,6 +195,8 @@ signals:
     void fileClosed(int slot);
     void currentFrameChanged(int slot);
     void demuxProgress(const QString& path, double ratio);  // 裸码流导出进度
+    // 帧图像就绪（画面解码完成，QML 需刷新 Image source）
+    void frameImageChanged(int slot);
 
 private:
     struct Slot {
@@ -193,7 +227,19 @@ private:
         std::vector<double>  frameAvgQp;          // 每帧平均 QP（未启用补丁：-1）
         long long cpbSizeBits = 0;                // SPS 声明的 CPB 容量（0=未知）
         long long cbrBitrateBits = 0;             // SPS 声明的目标码率（0=未知）
+        // P1：块级分析器（惰性创建，仅在首次请求块级信息时打开解码器）
+        std::unique_ptr<rb::RBBlockAnalyzer> blockAnalyzer;
+        bool blockAnalyzerTried = false;          // 已尝试创建过（失败则不再重试）
+        // 底层画面版本号：每次帧切换/画面更新时递增，供 QML URL 强制刷新
+        int  frameImageVersion = 0;
+        // 最近一次成功导出的画面（避免 Image provider 重复解码）
+        QImage lastFrameImage;
+        int    lastFrameImageFor = -1;           // 该画面对应的帧号（-1=无）
     };
+
+    // 惰性获取/创建该 slot 的块级分析器；失败返回 nullptr
+    rb::RBBlockAnalyzer* blockAnalyzerFor(int slot) const;
+    static QVariantMap  blockInfoToMap(const rb::RBBlockInfo& bi);
 
     bool parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer);
     // 裸流 fallback：当 avformat 解析失败（裸 h264/hevc annexb）时直接读文件，
