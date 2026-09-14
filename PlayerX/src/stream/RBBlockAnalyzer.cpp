@@ -145,6 +145,9 @@ bool RBBlockAnalyzer::rbOpen(const std::string& filePath) {
 
     m_opened     = true;
     m_cursorFrame = -1;
+    // 暂不启用后台顺序解码线程：它与主线程 decodeFrameAt 并发访问
+    // FFmpeg（且共用非线程安全的 m_sws），会触发解码内部 abort（SIGABRT）。
+    // 播放流畅性改由"顺序前进复用游标"保证（见 decodeFrameAt）。
     return true;
 }
 
@@ -183,7 +186,10 @@ void RBBlockAnalyzer::releaseFrame(AVFrame*& frame) {
 AVFrame* RBBlockAnalyzer::decodeFrameAt(int frameIndex) {
     if (!m_opened || !m_codecCtx) return nullptr;
 
-    // 游标优化：目标帧 = 上一帧 +1，直接继续解码
+
+    // 游标优化：仅当目标帧恰为"上一帧 +1"时继续顺序解码（不 seek）。
+    // 不可放宽为 frameIndex > m_cursorFrame：VVC/HEVC 帧间有参考依赖，
+    // 跳过中间包不解码会丢失参考帧，导致后续帧解不出（画面全黑）。
     bool needSeek = true;
     if (m_cursorFrame >= 0 && frameIndex == m_cursorFrame + 1) {
         needSeek = false;
@@ -191,20 +197,11 @@ AVFrame* RBBlockAnalyzer::decodeFrameAt(int frameIndex) {
 
     if (needSeek) {
         avcodec_flush_buffers(m_codecCtx);
-        // 按帧号换算时间戳；对裸流（无时间戳）退化为按字节 seek 不准，
-        // 故裸流场景统一从 0 顺序解码到目标帧（帧数一般可控）。
-        AVStream* vs = m_fmt->streams[m_videoStream];
-        if (vs->avg_frame_rate.den > 0 && m_fmt->duration > 0) {
-            double fps = av_q2d(vs->avg_frame_rate);
-            int64_t ts = static_cast<int64_t>(frameIndex / fps * AV_TIME_BASE);
-            int64_t seekTs = av_rescale_q(ts, AV_TIME_BASE_Q, vs->time_base);
-            // 往前多退一点，确保目标帧是完整可解码的（seek 到关键帧）
-            if (av_seek_frame(m_fmt, m_videoStream, seekTs, AVSEEK_FLAG_BACKWARD) < 0) {
-                // seek 失败：退回从头顺序解码
-                av_seek_frame(m_fmt, m_videoStream, 0, AVSEEK_FLAG_BYTE);
-            }
-        } else {
-            av_seek_frame(m_fmt, m_videoStream, 0, AVSEEK_FLAG_BYTE);
+        // 裸流（VVC .266 / HEVC .265）duration<=0 且无时间戳：
+        // av_seek_frame 在其上会直接触发 FFmpeg 内部崩溃（Abort trap 6）。
+        // 因此完全不用 av_seek_frame，改用底层 avio_seek 回到数据起点。
+        if (m_fmt->pb) {
+            avio_seek(m_fmt->pb, 0, SEEK_SET);
         }
         m_cursorFrame = -1;
     }
@@ -213,10 +210,13 @@ AVFrame* RBBlockAnalyzer::decodeFrameAt(int frameIndex) {
     AVFrame*  frame = av_frame_alloc();
     AVFrame*  result = nullptr;
     int       decodedCount = 0;
+    const int baseCount = (m_cursorFrame >= 0) ? (m_cursorFrame + 1) : 0;
 
-    // 起始解码序号：seek 后按实际解码计数逼近目标帧
-    int baseCount = (m_cursorFrame >= 0) ? (m_cursorFrame + 1) : 0;
-
+    // 从文件头顺序读包。
+    // ⚠️ 不可"跳过前面的包不解码"：VVC/HEVC 帧间有参考依赖，
+    // 被跳过的帧正是后续帧的参考帧，不解码会导致解码器参考丢失，
+    // 表现为从某帧起画面全黑（实测 21 帧后全黑）。
+    // 正确做法：每一帧都必须送进解码器，仅丢弃不需要的输出帧。
     while (av_read_frame(m_fmt, pkt) >= 0) {
         if (pkt->stream_index != m_videoStream) {
             av_packet_unref(pkt);
@@ -237,19 +237,41 @@ AVFrame* RBBlockAnalyzer::decodeFrameAt(int frameIndex) {
                 av_frame_ref(result, frame);
                 m_cursorFrame = frameIndex;
                 av_frame_unref(frame);
-                goto done;
+                break;
             }
             if (cur > frameIndex) {
-                // 越过目标帧：放弃（理论上 seek 到前一关键帧不会出现）
                 av_frame_unref(frame);
-                goto done;
+                break;
             }
+            ++decodedCount;
+            av_frame_unref(frame);
+        }
+        if (result) break;
+    }
+
+    // ★ 关键修复：VVC/HEVC 解码器有帧延迟（B 帧重排序缓冲），
+    //   读完所有 packet 后解码器内仍压着约 20 帧未输出。
+    //   若不排空（flush），末尾若干帧（实测 280/299）永远解不出来 → 卡在 281/282。
+    if (!result) {
+        avcodec_send_packet(m_codecCtx, nullptr);  // 触发排空
+        while (true) {
+            int ret = avcodec_receive_frame(m_codecCtx, frame);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
+            if (ret < 0) break;
+            const int cur = baseCount + decodedCount;
+            if (cur == frameIndex) {
+                result = av_frame_alloc();
+                av_frame_ref(result, frame);
+                m_cursorFrame = frameIndex;
+                av_frame_unref(frame);
+                break;
+            }
+            if (cur > frameIndex) { av_frame_unref(frame); break; }
             ++decodedCount;
             av_frame_unref(frame);
         }
     }
 
-done:
     av_packet_free(&pkt);
     av_frame_free(&frame);
     return result;
@@ -501,7 +523,7 @@ const RBFrameBlocks& RBBlockAnalyzer::rbBlockInfoAt(int frameIndex) {
     result.frameIndex = frameIndex;
 
     if (m_opened && m_blockSupport && frameIndex >= 0) {
-        // 加锁：解码器非线程安全，异步播放线程可能与本线程并发解码
+        // 解码器非线程安全，需加锁
         std::lock_guard<std::mutex> lk(m_codecMutex);
         AVFrame* frame = decodeFrameAt(frameIndex);
         if (frame) {

@@ -607,6 +607,8 @@ rb::RBBlockAnalyzer* RBStreamBridge::blockAnalyzerFor(int slot) const {
     }
     // 开启底层原始画面导出：UI 需要在真实渲染图上叠加 CU 划分网格
     s.blockAnalyzer->rbEnableFrameImage(true);
+    // LRU 容量：4K RGB24 约 24MB/帧，取 12 兼顾翻帧命中率与内存占用
+    s.blockAnalyzer->rbSetCacheSize(12);
     qInfo() << "[StreamBridge] block analyzer ready:" << s.path
             << "granularity=" << QString::fromStdString(s.blockAnalyzer->rbBlockGranularity());
     return s.blockAnalyzer.get();

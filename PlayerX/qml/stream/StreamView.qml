@@ -646,6 +646,11 @@ Item {
     }
     function togglePlay() {
         if (!streamView.slotActive) return
+        // 已停在末尾：本意是"从头重播"，先 seek 到第 0 帧再开始播放
+        if (streamView.atEnd && !streamView.playing) {
+            streamView.atEnd = false
+            StreamBridge.gotoFrame(streamView.effectiveSlot, 0)
+        }
         streamView.playing = !streamView.playing
     }
     function stopPlay() {
@@ -654,16 +659,50 @@ Item {
             streamView.globalVer++
         }
     }
+    // 是否已停在末尾（播完最后一帧后置 true；按空格时据此决定从头播）
+    property bool atEnd: false
+
     function playStep() {
         if (!streamView.slotActive) { streamView.playing = false; return }
         const cur = streamView.slotCurrent
         if (cur >= streamView.slotFrames - 1) {
-            // 已到最后一帧：停止播放（不空转）
+            // 已到最后一帧：暂停并标记末尾（等待用户按空格才从头重播）
             streamView.playing = false
+            streamView.atEnd = true
             return
         }
         // 异步：忙时由 StreamBridge 丢弃本拍，主线程不阻塞
         StreamBridge.requestPlayStep(streamView.effectiveSlot, cur + 1)
+    }
+    // 单帧步进（供 ←/→ 快捷键与按钮共用）：先停播放，再 seek 到相邻帧。
+    // 节流：4K VVC 单帧解码+取块是同步的（blockInfoAt 随 slotCurrent 变化即触发），
+    // 连按方向键会高频堆积同步解码把主线程堵死（表现为"卡"）。
+    // 这里只累加目标帧号并延迟合并执行，连按时只解最终那一帧。
+    property int  _stepTarget: -1
+    property bool _stepScheduled: false
+    Timer {
+        id: stepThrottle
+        interval: 120          // 合并窗口：连按只解最后一次目标
+        repeat: false
+        onTriggered: {
+            streamView._stepScheduled = false
+            if (streamView._stepTarget < 0) return
+            const t = streamView._stepTarget
+            streamView._stepTarget = -1
+            StreamBridge.gotoFrame(streamView.effectiveSlot, t)
+        }
+    }
+    function stepFrame(delta) {
+        if (!streamView.slotActive) return
+        streamView.atEnd = false          // 手动翻帧后不再是"停在末尾"态
+        streamView.stopPlay()
+        const cur = streamView.slotCurrent
+        const n = streamView.slotFrames
+        streamView._stepTarget = Math.max(0, Math.min(n - 1, cur + delta))
+        if (!streamView._stepScheduled) {
+            streamView._stepScheduled = true
+            stepThrottle.restart()
+        }
     }
     function globalAnyPlaying() {
         const _ = streamView.globalVer
@@ -2130,7 +2169,7 @@ Item {
                         MouseArea {
                             id: gPrevMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: { streamView.stopPlay(); StreamBridge.prevFrame(streamView.effectiveSlot) }
+                            onClicked: { streamView.atEnd = false; streamView.stopPlay(); StreamBridge.prevFrame(streamView.effectiveSlot) }
                         }
                     }
                     // ⏮（快退 15 帧）
@@ -2188,7 +2227,7 @@ Item {
                         MouseArea {
                             id: gNextMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: { streamView.stopPlay(); StreamBridge.nextFrame(streamView.effectiveSlot) }
+                            onClicked: { streamView.atEnd = false; streamView.stopPlay(); StreamBridge.nextFrame(streamView.effectiveSlot) }
                         }
                     }
                     // ↺（复位到 0 帧，红色）

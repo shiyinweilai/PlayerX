@@ -147,6 +147,7 @@ private:
 
     // 是否需要在解析块级信息时顺带导出原始画面（RGB24）
     bool             m_wantFrameImage{false};
+
     struct SwsContext* m_sws{nullptr};      // 复用的 swscale 上下文
 };
 

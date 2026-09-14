@@ -40,6 +40,13 @@ Shortcut {
             YuvBridge.globalTogglePlayPause()
             return
         }
+        // 码流分析 tab：该 tab 的播放由 StreamView 自有逐帧定时器驱动
+        //（streamView.playing），不经过 Engine，故单独分流到 togglePlay()。
+        if (root.currentTab === "stream" && typeof streamViewComp !== "undefined"
+                && streamViewComp && streamViewComp.slotActive) {
+            streamViewComp.togglePlay()
+            return
+        }
         Engine.togglePause()
     }
 }
@@ -96,6 +103,12 @@ Shortcut {
             if (n > 0) imageView.currentSlot = (imageView.currentSlot - 1 + n) % n
             return
         }
+        // 码流分析 tab：单帧后退（走 StreamBridge.prevFrame，非 Engine）
+        if (root.currentTab === "stream" && typeof streamViewComp !== "undefined"
+                && streamViewComp && streamViewComp.slotActive) {
+            streamViewComp.stepFrame(-1)
+            return
+        }
         if (Logic._isAtFirstFrameNow()) return
         Engine.seek(Math.max(0, Engine.position - 5))
     }
@@ -114,6 +127,12 @@ Shortcut {
         if (root.currentTab === "image" && imageView.layoutMode === "carousel") {
             const n = ImageBridge.slotCount
             if (n > 0) imageView.currentSlot = (imageView.currentSlot + 1) % n
+            return
+        }
+        // 码流分析 tab：单帧前进（走 StreamBridge.nextFrame，非 Engine）
+        if (root.currentTab === "stream" && typeof streamViewComp !== "undefined"
+                && streamViewComp && streamViewComp.slotActive) {
+            streamViewComp.stepFrame(1)
             return
         }
         if (Logic._isAtLastFrameNow()) return
