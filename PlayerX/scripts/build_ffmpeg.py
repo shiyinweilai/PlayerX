@@ -106,6 +106,11 @@ def build_ffmpeg(target: str, mode: str, log_file: str):
     configure = os.path.join(FFMPEG_SRC, "configure")
     cfg_args = [configure, f"--prefix={install_dir}"]
 
+    # PlayerX: 新版 FFmpeg（>= 8.1）会自动探测 Homebrew 的 libcurl 并启用
+    # libcurl 协议，PlayerX 自带网络层且 CMake 未链接 curl，会导致符号缺失。
+    # 显式禁用，保持与旧版 8.0.x 的行为一致。
+    cfg_args += ["--disable-libcurl"]
+
     if mode == "shared":
         cfg_args += ["--enable-shared", "--disable-static"]
     elif mode == "static":
