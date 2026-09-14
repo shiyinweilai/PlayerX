@@ -29,6 +29,7 @@
 #include <vector>
 #include <list>
 #include <unordered_map>
+#include <mutex>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -136,6 +137,10 @@ private:
     std::list<std::pair<int, RBFrameBlocks>>                m_cacheList;
     std::unordered_map<int, decltype(m_cacheList)::iterator> m_cacheMap;
     int                                                     m_cacheMax{8};
+    // 解码器互斥锁：AVCodecContext 非线程安全。
+    // 异步播放（Worker 线程）与主线程统计/取块可能同时解码，
+    // 并发 avcodec_send/receive 会踩坏解码器内部状态导致崩溃（pred_regular 空指针）。
+    mutable std::mutex                                      m_codecMutex;
 
     // 顺序解码游标：多数场景下用户是连续翻帧，缓存游标可避免重复 seek
     int              m_cursorFrame{-1};

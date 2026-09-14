@@ -629,7 +629,8 @@ Item {
     // 当前是否有 slot 正在播放（P1：由 QML 侧逐帧定时器驱动的真实播放）
     property bool playing: false
 
-    // 逐帧播放定时器：按码流帧率连续调用 nextFrame，到末帧自动停
+    // 逐帧播放定时器：按码流帧率请求下一帧；解码在 Worker 线程，
+    // 上一帧未完成时 StreamBridge 会自动丢弃本拍 → 播放可变慢但绝不卡死。
     Timer {
         id: playTimer
         interval: streamView.playInterval()
@@ -650,17 +651,19 @@ Item {
     function stopPlay() {
         if (streamView.playing) {
             streamView.playing = false
-            // 触发块级数据重新加载（播放期间被跳过）
             streamView.globalVer++
         }
     }
     function playStep() {
         if (!streamView.slotActive) { streamView.playing = false; return }
-        if (streamView.slotCurrent >= streamView.slotFrames - 1) {
+        const cur = streamView.slotCurrent
+        if (cur >= streamView.slotFrames - 1) {
+            // 已到最后一帧：停止播放（不空转）
             streamView.playing = false
             return
         }
-        StreamBridge.nextFrame(streamView.effectiveSlot)
+        // 异步：忙时由 StreamBridge 丢弃本拍，主线程不阻塞
+        StreamBridge.requestPlayStep(streamView.effectiveSlot, cur + 1)
     }
     function globalAnyPlaying() {
         const _ = streamView.globalVer
@@ -1532,6 +1535,25 @@ Item {
                     color: "#9aa0a6"; font.pixelSize: 12 }
             }
 
+            // ── 前一帧保持层（消除播放闪屏）──
+            // frameUnderlay 用 cache:false + asynchronous:true 且 URL 每帧变化，
+            // 重载期间 status != Ready 会露出空白底 → 4K 下肉眼可见闪屏。
+            // 本层始终保留"上一张已加载完成的图"，新图 Ready 前遮住空白。
+            Image {
+                id: prevUnderlay
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: rightStatsPanel.left
+                anchors.margins: 12
+                visible: streamView.slotActive && streamView.blockSupported
+                fillMode: Image.PreserveAspectFit
+                asynchronous: true
+                cache: true
+                source: ""
+                z: frameUnderlay.z + 1
+            }
+
             // ── 底层：当前帧真实解码画面（CU 网格叠加在它上面）──
             // source 里的版本号变化时强制刷新，帧切换即重新取图。
             Image {
@@ -1552,9 +1574,15 @@ Item {
                 // URL 必须每次不同才会触发重新加载，故追加自增 key
                 property int refreshKey: 0
                 // 与画布保持完全一致的几何，保证网格与画面对齐
+                // 加载中(status != Ready) → 显示保持层遮住空白；就绪 → 隐藏保持层
                 onStatusChanged: {
-                    if (status === Image.Ready)
+                    prevUnderlay.visible = (status !== Image.Ready)
+                                           && streamView.slotActive
+                                           && streamView.blockSupported
+                    if (status === Image.Ready) {
+                        prevUnderlay.source = frameUnderlay.source
                         blockCanvas.requestPaint()
+                    }
                 }
             }
 

@@ -370,6 +370,11 @@ bool RBStreamBridge::parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer) {
 void RBStreamBridge::freeSlot(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_slots[slot].inUse) return;
+    // 关键：先停掉该 slot 的异步解码任务并等待其真正结束。
+    // 否则 Worker 线程仍在 rbBlockInfoAt() 里使用 AVCodecContext，
+    // 而下面 m_slots[slot] = Slot{} 会销毁解码器 → 野指针崩溃
+    // （崩溃栈：ff_executor_execute / task_stage_done 空指针）。
+    cancelPlayAsync(slot);
     m_slots[slot] = Slot{};
     --m_slotCount;
     if (m_slotCount < 0) m_slotCount = 0;
@@ -387,6 +392,8 @@ void RBStreamBridge::closeAll() {
     bool any = false;
     for (int i = 0; i < MaxSlots; ++i) {
         if (m_slots[i].inUse) {
+            // 同 freeSlot：销毁解码器前必须先结束异步任务
+            cancelPlayAsync(i);
             m_slots[i] = Slot{};
             any = true;
         }
@@ -716,6 +723,93 @@ void RBStreamBridge::seekPlayerTo(int slot, int frameIndex) {
     const double secs = fps(slot) > 0 ? double(frameIndex) / fps(slot) : 0;
     qInfo() << "[StreamBridge] seekPlayerTo slot=" << slot
             << "frame=" << frameIndex << "secs=" << secs;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 异步"真播放"（策略与 YuvBridge 一致）
+//
+// 4K VVC 单帧可达数十万 CU，若在主线程同步做 decode + extractBlocks +
+// 转 QVariantList，单帧就要数秒；播放定时器每 40ms 一拍会持续堆积，
+// 最终 UI 冻结（表现为"卡死"）。
+//
+// 策略：
+//   1) 解码（含 CU 导出、RGB 转换）全部放进 Worker 线程，主线程零阻塞；
+//   2) 用 playBusy 做"忙则跳过本拍"——上一帧还没解完就丢弃本次 tick，
+//      因此播放可以变慢（取决于解码速度），但绝不堆积、绝不卡死；
+//   3) 解码完成后仅在主线程更新缓存并发信号，QML 自然刷新。
+// ─────────────────────────────────────────────────────────────────────────
+// 停止该 slot 的异步解码任务并等待其结束。
+// 必须在销毁 Slot（解码器）之前调用，否则 Worker 线程会访问已释放资源。
+void RBStreamBridge::cancelPlayAsync(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+
+    QFutureWatcher<void>* w = m_playWatchers[slot];
+    if (!w) { m_slots[slot].playBusy = false; return; }
+
+    // 1) 先断开信号：避免 finished 回调在本对象/slot 已重置后仍被调用
+    disconnect(w, nullptr, this, nullptr);
+
+    // 2) 等待正在跑的任务真正结束（解码不可中断，只能等）
+    if (w->isRunning() || w->isStarted())
+        w->waitForFinished();
+
+    w->deleteLater();
+    m_playWatchers[slot] = nullptr;
+    m_slots[slot].playBusy = false;
+    m_slots[slot].playPendingFrame = -1;
+}
+
+bool RBStreamBridge::isPlayBusy(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return false;
+    return m_slots[slot].playBusy;
+}
+
+void RBStreamBridge::requestPlayStep(int slot, int frameIndex) {
+    if (!hasFile(slot) || frameIndex < 0) return;
+    Slot& s = m_slots[slot];
+
+    // 忙：记录最新目标帧后直接返回（跳过本拍，不堆积）
+    if (s.playBusy) {
+        s.playPendingFrame = frameIndex;
+        return;
+    }
+
+    runPlayStepAsync(slot, frameIndex);
+}
+
+void RBStreamBridge::runPlayStepAsync(int slot, int frameIndex) {
+    Slot& s = m_slots[slot];
+    s.playBusy = true;
+    s.playPendingFrame = -1;
+
+    // Worker 线程：解码目标帧（内部会更新 lastFrameImage / 块缓存由主线程补）
+    auto* ba = blockAnalyzerFor(slot);
+    if (!ba) { s.playBusy = false; return; }
+
+    QFuture<void> future = QtConcurrent::run([ba, frameIndex]() {
+        // 仅做解码 + 块提取（结果留在 RBBlockAnalyzer 的 LRU 缓存中）
+        // 注意：不在此处触碰任何 QImage / QObject（Worker 线程禁止）
+        (void)ba->rbBlockInfoAt(frameIndex);
+    });
+
+    if (!m_playWatchers[slot]) {
+        m_playWatchers[slot] = new QFutureWatcher<void>(this);
+        connect(m_playWatchers[slot], &QFutureWatcher<void>::finished,
+                this, [this, slot]() { onPlayStepFinished(slot); });
+    }
+    m_playWatchers[slot]->setFuture(future);
+}
+
+void RBStreamBridge::onPlayStepFinished(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    s.playBusy = false;
+
+    // 回到主线程：推进当前帧号并发信号（触发 QML 重新取画面/块）
+    const int next = s.playPendingFrame >= 0 ? s.playPendingFrame : s.currentFrame + 1;
+    s.playPendingFrame = -1;
+    s.currentFrame = next;
+    emit currentFrameChanged(slot);
 }
 
 // ═════════════════════════════════════════════════════════════════════════

@@ -501,6 +501,8 @@ const RBFrameBlocks& RBBlockAnalyzer::rbBlockInfoAt(int frameIndex) {
     result.frameIndex = frameIndex;
 
     if (m_opened && m_blockSupport && frameIndex >= 0) {
+        // 加锁：解码器非线程安全，异步播放线程可能与本线程并发解码
+        std::lock_guard<std::mutex> lk(m_codecMutex);
         AVFrame* frame = decodeFrameAt(frameIndex);
         if (frame) {
             extractBlocks(frame, result);

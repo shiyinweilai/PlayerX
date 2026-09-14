@@ -28,6 +28,8 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QtConcurrent/QtConcurrent>
+#include <QFutureWatcher>
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
@@ -186,6 +188,12 @@ public:
     // 帧图像版本号：帧切换时递增，供 QML 拼接 URL 强制刷新
     Q_INVOKABLE int frameImageVersion(int slot) const;
 
+    // ── 异步"真播放"（仿 YuvBridge：解码在 Worker 线程，主线程零阻塞）──
+    // QML 播放定时器每拍调用 requestPlayStep；若上一帧仍在解码则直接跳过本拍，
+    // 保证播放可以慢，但绝不堆积、绝不卡死（4K VVC 单帧可达数十万 CU）。
+    Q_INVOKABLE void requestPlayStep(int slot, int frameIndex);
+    Q_INVOKABLE bool isPlayBusy(int slot) const;
+
 signals:
     void slotCountChanged();
     void prescanningChanged();
@@ -235,6 +243,9 @@ private:
         // 最近一次成功导出的画面（避免 Image provider 重复解码）
         QImage lastFrameImage;
         int    lastFrameImageFor = -1;           // 该画面对应的帧号（-1=无）
+        // ── 异步播放状态（Worker 线程解码画面+块，主线程只发信号）──
+        bool   playBusy = false;                 // 上一帧仍在解码中
+        int    playPendingFrame = -1;            // 解码期间新请求的帧号（-1=无）
     };
 
     // 惰性获取/创建该 slot 的块级分析器；失败返回 nullptr
@@ -259,6 +270,13 @@ private:
     static QString profileIdToString(AVCodecID id, int profileId);
     static QString codecIdToShortName(AVCodecID id);
     static QString codecIdToLongName(AVCodecID id);
+
+    // 异步播放：Worker 线程解码指定帧（画面+块），完成后回主线程更新缓存
+    void runPlayStepAsync(int slot, int frameIndex);
+    void onPlayStepFinished(int slot);
+    // 停止并等待该 slot 的异步解码任务结束（销毁解码器前必须调用）
+    void cancelPlayAsync(int slot);
+    QFutureWatcher<void>* m_playWatchers[MaxSlots]{nullptr};
 
     Slot m_slots[MaxSlots];
     int  m_slotCount = 0;
