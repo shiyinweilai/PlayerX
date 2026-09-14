@@ -208,11 +208,36 @@ void RBDecoder::decodeLoop(RBPacketQueue* pktQueue, RBFrameQueue* frameQueue) {
             continue;
         }
 
-        if (!m_codecCtx || avcodec_send_packet(m_codecCtx, pkt) < 0) {
-            av_packet_free(&pkt);
-            continue;
+        int sendRet = avcodec_send_packet(m_codecCtx, pkt);
+        if (sendRet == AVERROR(EAGAIN)) {
+            // ★ EAGAIN：内部缓冲满。先排空输出，再重发同一包（pkt 未被消费）。
+            //   旧写法直接丢包，B 帧重排序时一个包释放多帧会偶发丢帧。
+            while (true) {
+                int ret = avcodec_receive_frame(m_codecCtx, frame);
+                if (ret < 0) break;
+                AVFrame* out = av_frame_alloc();
+                if (frame->format == m_hwPixFmt && m_hwPixFmt != AV_PIX_FMT_NONE) {
+                    if (av_hwframe_transfer_data(swFrame, frame, 0) >= 0) {
+                        swFrame->pts                  = frame->pts;
+                        swFrame->best_effort_timestamp = frame->best_effort_timestamp;
+                        swFrame->pkt_dts              = frame->pkt_dts;
+                        swFrame->duration             = frame->duration;
+                        swFrame->pict_type            = frame->pict_type;
+                        swFrame->flags                = frame->flags;
+                        av_frame_move_ref(out, swFrame);
+                    } else {
+                        av_frame_free(&out);
+                        continue;
+                    }
+                } else {
+                    av_frame_move_ref(out, frame);
+                }
+                frameQueue->rbPush(out);
+            }
+            sendRet = avcodec_send_packet(m_codecCtx, pkt);   // 重发
         }
         av_packet_free(&pkt);
+        if (sendRet < 0) continue;
 
         while (m_codecCtx) {
             int ret = avcodec_receive_frame(m_codecCtx, frame);

@@ -1507,7 +1507,7 @@ Item {
                     visible: streamView.slotActive
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: streamView.qpOverlayEnabled ? "画面+QP+CU网格" : "仅画面"
+                        text: streamView.qpOverlayEnabled ? "画面+CU网格" : "仅画面"
                         color: "#9aa0a6"; font.pixelSize: 11
                     }
                     Rectangle {
@@ -1528,7 +1528,7 @@ Item {
                             onClicked: {
                                 streamView.qpOverlayEnabled = !streamView.qpOverlayEnabled
                                 console.log("[StreamView] 模式 =",
-                                            streamView.qpOverlayEnabled ? "画面+QP+CU网格" : "仅画面（无网格无色块）",
+                                            streamView.qpOverlayEnabled ? "画面+CU网格" : "仅画面（无网格）",
                                             "块数 =", streamView.slotBlocks.length)
                             }
                         }
@@ -1679,50 +1679,22 @@ Item {
                         offX = (width  - drawW) / 2
                         offY = (height - drawH) / 2
                     }
-                    const scale = drawW / vw
+                    // ★ 修复：X / Y 独立缩放。
+                    // 画布宽高比与视频不一致时 pw/vw ≠ ph/vh，若只取 X 方向的
+                    // 单一 scale 去缩放 Y，垂直方向就会整体错位（网格与画面对不齐、
+                    // 甚至缺垂直边界）。改为分别按 X / Y 计算。
+                    const scale  = drawW / vw
+                    const scaleY = drawH / vh
 
-                    // ── QP 着色层（可切换）──
-                    if (streamView.qpOverlayEnabled) {
-                        for (let i = 0; i < blocks.length; ++i) {
-                            const b = blocks[i]
-                            const qp = b.qp
-                            // QP 0..51 映射到 冷蓝 → 中性灰 → 暖红（不用绿色）
-                            const t = Math.max(0, Math.min(1, qp / 51))
-                            let r, g, bl
-                            if (t < 0.5) {
-                                // 冷蓝 → 灰
-                                const k = t / 0.5
-                                r = Math.round(60  + k * (128 - 60))
-                                g = Math.round(120 + k * (128 - 120))
-                                bl = Math.round(230 + k * (128 - 230))
-                            } else {
-                                // 灰 → 暖红
-                                const k = (t - 0.5) / 0.5
-                                r = Math.round(128 + k * (230 - 128))
-                                g = Math.round(128 + k * (70  - 128))
-                                bl = Math.round(128 + k * (60  - 128))
-                            }
-                            ctx.fillStyle = "rgba(" + r + "," + g + "," + bl + ",0.48)"
-                            ctx.fillRect(offX + b.x * scale, offY + b.y * scale,
-                                         b.w * scale, b.h * scale)
-                        }
-                    }
-
-                    // ── CU 网格线（跟随开关：关闭时纯画面，开启时画面+QP+网格）──
+                    // ── CU 网格线（只画白色线条，不填充色块）──
+                    // 用户需求：不要蓝色底，划分仅用白色线条，且白线更亮。
                     if (streamView.qpOverlayEnabled) {
                         ctx.lineWidth = 1
-                        ctx.strokeStyle = "rgba(0,0,0,0.55)"
+                        ctx.strokeStyle = "rgba(255,255,255,0.95)"
                         for (let i = 0; i < blocks.length; ++i) {
                             const b = blocks[i]
-                            ctx.strokeRect(offX + b.x * scale + 0.5,
-                                           offY + b.y * scale + 0.5,
-                                           b.w * scale, b.h * scale)
-                        }
-                        ctx.strokeStyle = "rgba(255,255,255,0.75)"
-                        for (let i = 0; i < blocks.length; ++i) {
-                            const b = blocks[i]
-                            ctx.strokeRect(offX + b.x * scale, offY + b.y * scale,
-                                           b.w * scale, b.h * scale)
+                            ctx.strokeRect(offX + b.x * scale, offY + b.y * scaleY,
+                                           b.w * scale, b.h * scaleY)
                         }
                     }
 
@@ -1734,35 +1706,15 @@ Item {
                         const b = blocks[idx]
                         ctx.strokeStyle = "#f0c040"
                         ctx.lineWidth = lw
-                        ctx.strokeRect(offX + b.x * scale, offY + b.y * scale,
-                                       b.w * scale, b.h * scale)
+                        ctx.strokeRect(offX + b.x * scale, offY + b.y * scaleY,
+                                       b.w * scale, b.h * scaleY)
                     }
                     drawHi(hi, 1.5)
                     drawHi(si, 2)
 
-                    // ── 大尺寸 CU 时叠加 QP 数值文本 ──
-                    if (streamView.qpOverlayEnabled) {
-                        for (let i = 0; i < blocks.length; ++i) {
-                            const b = blocks[i]
-                            const bw = b.w * scale
-                            const bh = b.h * scale
-                            if (bw < 40 || bh < 24) continue
-                            ctx.font = "11px Monospace"
-                            ctx.textAlign = "center"
-                            ctx.textBaseline = "middle"
-                            const tx = offX + b.x * scale + bw / 2
-                            const ty = offY + b.y * scale + bh / 2
-                            // 深色描边 + 亮色填充，保证任意底色上都可辨识
-                            ctx.lineWidth = 3
-                            ctx.strokeStyle = "rgba(0,0,0,0.85)"
-                            ctx.strokeText(String(b.qp), tx, ty)
-                            ctx.fillStyle = "#ffffff"
-                            ctx.fillText(String(b.qp), tx, ty)
-                        }
-                    }
-
                     // 记录映射参数供命中测试复用
                     blockCanvas._scale = scale
+                    blockCanvas._scaleY = scaleY
                     blockCanvas._offX  = offX
                     blockCanvas._offY  = offY
                     blockCanvas._vw    = vw
@@ -1770,6 +1722,7 @@ Item {
                 }
 
                 property real _scale: 1
+                property real _scaleY: 1
                 property real _offX: 0
                 property real _offY: 0
                 property int  _vw: 0
@@ -1793,7 +1746,7 @@ Item {
                     const blocks = streamView.slotBlocks
                     if (!blocks || blocks.length === 0) return -1
                     const vx = (mx - blockCanvas._offX) / blockCanvas._scale
-                    const vy = (my - blockCanvas._offY) / blockCanvas._scale
+                    const vy = (my - blockCanvas._offY) / blockCanvas._scaleY
                     for (let i = 0; i < blocks.length; ++i) {
                         const b = blocks[i]
                         if (vx >= b.x && vx < b.x + b.w &&

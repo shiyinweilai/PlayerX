@@ -95,10 +95,11 @@ bool RBBlockAnalyzer::openDecoder() {
         m_granularity  = "宏块级 (16×16)";
         break;
     case AV_CODEC_ID_HEVC:
-        // HEVC 原生未导出 enc_params；一期走 CTU 降级（需 qp_y_tab 可访问）。
-        // 若补丁未就绪，extractHevcCtu 会返回 false，UI 自动降级。
+        // HEVC：已给 libavcodec/hevc/ 打补丁，在 hls_coding_unit 采集叶子 CU
+        // （四叉树，方形 cb_size×cb_size），经 refs.c 导出为 enc_params，
+        // 与 VVC 同构，为真实块级划分（非降级）。
         m_blockSupport = true;
-        m_granularity  = "CTU级 (64×64, 降级)";
+        m_granularity  = "块级 (CU 真实划分)";
         break;
     case AV_CODEC_ID_VVC:
         // VVC（H.266）：已给 libavcodec/vvc/refs.c 打补丁，
@@ -222,7 +223,34 @@ AVFrame* RBBlockAnalyzer::decodeFrameAt(int frameIndex) {
             av_packet_unref(pkt);
             continue;
         }
+        // ★ EAGAIN 修复：B 帧重排序时一个 packet 可能一次释放多帧，
+        //   若只 receive 一帧就退出，解码器内部 buffer_pkt/buffer_frame 仍满，
+        //   下一次 send_packet 会返回 EAGAIN（-35）。
+        //   旧写法把 EAGAIN 当致命错误直接丢包 → 后续所有包全部 EAGAIN
+        //   → 从该帧起全部解不出（表现为黑帧/块级数据不可用）。
+        //   FFmpeg 契约：send 返回 EAGAIN 时必须先 receive 排空，再重发同一包。
         int ret = avcodec_send_packet(m_codecCtx, pkt);
+        if (ret == AVERROR(EAGAIN)) {
+            // 先排空内部缓冲帧，再重发当前包（pkt 尚未被消费，不能 unref）
+            while (true) {
+                ret = avcodec_receive_frame(m_codecCtx, frame);
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
+                if (ret < 0) break;
+                const int cur = baseCount + decodedCount;
+                if (cur == frameIndex) {
+                    result = av_frame_alloc();
+                    av_frame_ref(result, frame);
+                    m_cursorFrame = frameIndex;
+                    av_frame_unref(frame);
+                    break;
+                }
+                if (cur > frameIndex) { av_frame_unref(frame); break; }
+                ++decodedCount;
+                av_frame_unref(frame);
+            }
+            if (result) break;
+            ret = avcodec_send_packet(m_codecCtx, pkt);   // 重发同一包
+        }
         av_packet_unref(pkt);
         if (ret < 0) continue;
 
