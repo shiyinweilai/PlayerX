@@ -39,12 +39,15 @@
 #include <cstdio>
 #include <memory>
 #include <vector>
+#include <atomic>
 
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/pixfmt.h>
 }
+
+#include "stream/RBFrameOrderMapper.h"
 
 namespace rb {
 class RBDemuxer;
@@ -120,6 +123,12 @@ public:
     // 每项：{ packetIndex, pts, dts, poc, type(I/P/B/IDR), sizeBytes, avgQp }
     // avgQp 在块级补丁未启用时统一为 -1，UI 走降级展示。
     Q_INVOKABLE QVariantList frameList(int slot) const;
+    // 编码顺序勾选（仅影响 POC 展示口径，不动播放/解码管线）：
+    // 0=显示顺序（POC 递增） 1=编码顺序（POC 按 GOP 重排，如 GOP=4 → 0,4,2,1,3）
+    Q_INVOKABLE int frameOrderMode(int slot) const;
+    Q_INVOKABLE void setFrameOrderMode(int slot, int mode);
+    // 编码序映射是否就绪（后台解码完成）。未就绪时 UI 保持显示顺序、勾选禁用。
+    Q_INVOKABLE bool frameOrderMapReady(int slot) const;
 
     // ── GOP 列表（预扫描结果）─────────────────────────────────────
     // 每项：{ startFrameIndex, frameCount, isOpenGop }
@@ -205,6 +214,10 @@ signals:
     void demuxProgress(const QString& path, double ratio);  // 裸码流导出进度
     // 帧图像就绪（画面解码完成，QML 需刷新 Image source）
     void frameImageChanged(int slot);
+    // 编码顺序勾选变化（POC 展示口径切换，QML 需刷新帧列表绑定）
+    void frameOrderModeChanged(int slot);
+    // 编码序映射就绪变化（后台解码完成，QML 需刷新帧列表并放开切换）
+    void frameOrderMapReadyChanged(int slot);
 
 private:
     struct Slot {
@@ -231,6 +244,14 @@ private:
         std::vector<int> gopFrameCounts;          // 每个 GOP 的帧数
         std::vector<bool> gopIsOpen;              // 是否 open GOP（占位：先 false）
         std::vector<int> frameTypes;              // 每帧的 I/P/B 标记（0=I 1=P 2=B 3=IDR）
+        int  frameOrderMode = 0;                  // 0=显示顺序 1=编码顺序（仅影响展示口径）
+        // 编码序↔显示序映射（RBFrameOrderMapper 后台一次解码建立，纯真实数据）：
+        // 打开文件后异步启动，就绪后 frameList 的 POC 用 codeToDisp（真实显示序位置）。
+        // 例：GOP=4 编码序 I P B B → POC = 0,4,2,1,3。未就绪时退化简易递增，不阻塞秒开。
+        rb::RBFrameOrderMapper::Result orderMap;  // ok=false 表示不可用
+        QFutureWatcher<void>* orderMapWatcher = nullptr;
+        int orderMapBuilding = 0;                 // 1=后台解码中
+        std::shared_ptr<std::atomic_bool> orderMapCancel = nullptr;  // 协作式取消
         std::vector<long long> frameSizes;        // 每帧字节数（来自 AVPacket.size）
         std::vector<double>  frameAvgQp;          // 每帧平均 QP（未启用补丁：-1）
         long long cpbSizeBits = 0;                // SPS 声明的 CPB 容量（0=未知）
@@ -253,6 +274,11 @@ private:
     static QVariantMap  blockInfoToMap(const rb::RBBlockInfo& bi);
 
     bool parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer);
+    // 编码序↔显示序映射：打开文件后台异步解码一遍建立（RBFrameOrderMapper）。
+    // 不阻塞秒开与播放；就绪后 frameList 的 POC 使用真实显示序位置。
+    void startOrderMapBuild(int slot);   // 启动后台构建
+    void onOrderMapBuilt(int slot);      // 后台完成回调（主线程）
+    void cancelOrderMap(int slot);       // 取消并回收（freeSlot/换文件时）
     // 裸流 fallback：当 avformat 解析失败（裸 h264/hevc annexb）时直接读文件，
     // 按 0x000001 / 0x00000001 切 NAL 单元，识别 SPS 拿宽高，按 IDR 切 GOP。
     // 不依赖任何 FFmpeg 容器解析。

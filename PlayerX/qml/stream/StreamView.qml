@@ -498,8 +498,19 @@ Item {
         const _ = streamView.globalVer
         return slotActive ? StreamBridge.currentFrame(effectiveSlot) : 0
     }
+    // 帧序模式（仅影响 POC 展示口径）：0=显示顺序 1=编码顺序（POC 按 GOP 重排）
+    property int orderMode: 0
+    // 模式变化计数：驱动模式感知绑定刷新
+    property int orderVer: 0
+    // 编码序映射是否就绪（后台解码建立）；未就绪时开关禁用、保持显示顺序
+    readonly property bool orderMapReady: {
+        const _ = streamView.globalVer
+        const __ = streamView.orderVer
+        return slotActive ? StreamBridge.frameOrderMapReady(effectiveSlot) : false
+    }
     readonly property var    slotFrameList: {
         const _ = streamView.globalVer
+        const __ = streamView.orderVer
         return slotActive ? StreamBridge.frameList(effectiveSlot) : []
     }
     readonly property var    slotGopList: {
@@ -625,6 +636,25 @@ Item {
         function onFileOpened(openedSlot)            { streamView.stopPlay(); streamView.globalVer++ }
         function onFileClosed(closedSlot)            { streamView.stopPlay(); streamView.globalVer++ }
         function onSlotCountChanged()                { streamView.stopPlay(); streamView.globalVer++ }
+        // 编码顺序切换：刷新模式感知绑定（POC 展示口径）
+        function onFrameOrderModeChanged(changedSlot) {
+            if (changedSlot === streamView.effectiveSlot) {
+                streamView.orderMode = StreamBridge.frameOrderMode(streamView.effectiveSlot)
+                streamView.orderVer++
+            }
+        }
+        // 映射就绪：刷新帧列表（POC 换成真实值）并放开切换
+        function onFrameOrderMapReadyChanged(changedSlot) {
+            if (changedSlot === streamView.effectiveSlot) streamView.orderVer++
+        }
+    }
+    // 切换 POC 展示口径（显示顺序 / 编码顺序），仅改展示，不动播放与解码
+    function setOrderMode(m) {
+        if (!slotActive) return
+        if (m === 1 && !orderMapReady) return     // 映射未就绪：不切到编码序
+        StreamBridge.setFrameOrderMode(effectiveSlot, m)
+        orderMode = m
+        orderVer++
     }
     // 当前是否有 slot 正在播放（P1：由 QML 侧逐帧定时器驱动的真实播放）
     property bool playing: false
@@ -1435,6 +1465,47 @@ Item {
                                     onClicked: streamView.currentSlot = index
                                 }
                             }
+                        }
+                    }
+
+                    // ── 编码顺序勾选（仅切换 POC 展示口径，不影响播放/解码）──
+                    Row {
+                        spacing: 6
+                        visible: streamView.slotActive
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: streamView.orderMode === 1 ? "编码顺序" : "显示顺序"
+                            color: streamView.orderMapReady ? "#9aa0a6" : "#6a6f76"
+                            font.pixelSize: 11
+                        }
+                        Rectangle {
+                            width: 28; height: 16; radius: 8
+                            color: streamView.orderMode === 1 ? "#2a5fc0" : "#252528"
+                            border.color: streamView.orderMode === 1 ? "#3d7adf" : "#3a3a44"
+                            border.width: 1
+                            opacity: streamView.orderMapReady ? 1.0 : 0.4
+                            Rectangle {
+                                width: 12; height: 12; radius: 6
+                                color: "#e8e8ec"
+                                anchors.verticalCenter: parent.verticalCenter
+                                x: streamView.orderMode === 1 ? parent.width - 14 : 2
+                                Behavior on x { NumberAnimation { duration: 90 } }
+                            }
+                            MouseArea {
+                                id: orderSeqMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                enabled: streamView.orderMapReady
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    const m = streamView.orderMode === 1 ? 0 : 1
+                                    streamView.setOrderMode(m)
+                                }
+                            }
+                            ToolTip.visible: orderSeqMa.containsMouse
+                            ToolTip.text: streamView.orderMapReady
+                                          ? qsTr("切换显示顺序（播放序）/ 编码顺序（码流序，POC 为真实显示位置）")
+                                          : qsTr("编码顺序映射构建中，稍候可用")
                         }
                     }
 

@@ -118,6 +118,7 @@ src/image/ImageSliderCompareItem.cpp
     #   HEVC 走 CTU 降级；见 src/stream/RBBlockAnalyzer.h 顶部说明。
     src/stream/RBStreamBridge.cpp
     src/stream/RBBlockAnalyzer.cpp
+    src/stream/RBFrameOrderMapper.cpp
     # 异步文件下载器（供 QML 测试源下载使用，不阻塞 UI 线程）
     src/qt/FileDownloader.cpp
     # 平台原生多选文件夹对话框：仅 macOS 走 NSOpenPanel。

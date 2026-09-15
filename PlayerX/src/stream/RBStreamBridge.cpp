@@ -205,6 +205,9 @@ int RBStreamBridge::openFile(const QString& path) {
     ++m_slotCount;
     emit slotCountChanged();
     emit fileOpened(slot);
+    // 打开成功后异步建立编码序↔显示序映射（后台解码一遍，不阻塞秒开/播放）。
+    // 就绪后 frameList 的 POC 使用真实显示序位置，「编码顺序」勾选放开。
+    startOrderMapBuild(slot);
     return slot;
 }
 
@@ -355,6 +358,8 @@ bool RBStreamBridge::parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer) {
         s.gopIsOpen.push_back(false);
     }
 
+    // 编码序 POC 由后台映射器（RBFrameOrderMapper）真解码建立，见 buildOrderMap()
+
     // ── SPS/VUI 解析：解析码率 / CPB 容量（h264 仅基础，hevc 留空） ──
     // 一期：不展开完整 Exp-Golomb 解析，cpb 字段保持 0 → hrdEstimate available=false。
     // UI 端走"暂无法估算 HRD"降级显示，避免假数据误导用户。
@@ -375,6 +380,8 @@ void RBStreamBridge::freeSlot(int slot) {
     // 而下面 m_slots[slot] = Slot{} 会销毁解码器 → 野指针崩溃
     // （崩溃栈：ff_executor_execute / task_stage_done 空指针）。
     cancelPlayAsync(slot);
+    // 映射构建 worker 持有 &Slot 指针，重置前必须先取消并等待其结束，否则野指针。
+    cancelOrderMap(slot);
     m_slots[slot] = Slot{};
     --m_slotCount;
     if (m_slotCount < 0) m_slotCount = 0;
@@ -528,23 +535,62 @@ QVariantList RBStreamBridge::frameList(int slot) const {
     const Slot& s = m_slots[slot];
     const int n = int(s.frameTypes.size());
     list.reserve(n);
-    // 简易 POC 重建：IDR=0, 之后递增。真实 POC 需 slice header 解析，一期不实现。
+    const double fpsv = fps(slot) > 0 ? fps(slot) : 30.0;
+
+    // ── 有真实映射（RBFrameOrderMapper 后台解码建立的编码序↔显示序双射）──
+    // 真实 POC 语义：一帧在显示序里的位置（每个 IDR 处复位从 0 计）。
+    if (s.orderMap.ok) {
+        const bool codingOrder = (s.frameOrderMode == 1);
+        if (!codingOrder) {
+            // 显示顺序：按解码器真实输出序遍历（dispToCode），POC = 显示位置（IDR 复位）
+            const int nd = int(s.orderMap.dispToCode.size());
+            int pocBase = 0;
+            for (int d = 0; d < nd; ++d) {
+                const int c = s.orderMap.dispToCode[d];
+                if (c < 0 || c >= n) continue;
+                int t = s.frameTypes[c];
+                if (c < int(s.orderMap.codePictType.size())) {
+                    const int real = s.orderMap.codePictType[c];
+                    if (real == 1 || real == 2) t = real;         // P/B 以解码器为准
+                    else if (real == 0 && t != 3) t = 0;          // I（非 IDR）
+                }
+                if (t == 3) pocBase = d;
+                const int pocVal = d - pocBase;
+                const double ptsSec = double(d) / fpsv;
+                list.append(frameItemToMap(c, t,
+                                           (c < int(s.frameSizes.size())) ? s.frameSizes[c] : 0,
+                                           ptsSec, ptsSec, pocVal,
+                                           (c < int(s.frameAvgQp.size())) ? s.frameAvgQp[c] : s.frameAvgQp[0]));
+            }
+            return list;
+        }
+        // 编码顺序：按编码序（包序）列出，POC = 该帧的显示序位置 codeToDisp[i]
+        // GOP=4（编码序 I P B B）→ POC = 0,4,2,1,3
+        for (int i = 0; i < n; ++i) {
+            int t = s.frameTypes[i];
+            if (i < int(s.orderMap.codePictType.size())) {
+                const int real = s.orderMap.codePictType[i];
+                if (real == 0 || real == 1 || real == 2)
+                    t = (t == 3) ? 3 : real;                      // 保留 IDR 判定
+            }
+            const int dispIdx = (i < int(s.orderMap.codeToDisp.size()))
+                                ? s.orderMap.codeToDisp[i] : -1;
+            const double ptsSec = (dispIdx >= 0) ? double(dispIdx) / fpsv : double(i) / fpsv;
+            list.append(frameItemToMap(i, t,
+                                       (i < int(s.frameSizes.size())) ? s.frameSizes[i] : 0,
+                                       ptsSec, ptsSec,
+                                       (dispIdx >= 0) ? dispIdx : i,
+                                       (i < int(s.frameAvgQp.size())) ? s.frameAvgQp[i] : s.frameAvgQp[0]));
+        }
+        return list;
+    }
+
+    // ── 映射未就绪（打开瞬间/构建中/非 hevc-h264-vvc）：简易递增 POC，保证秒开先有值 ──
     int poc = 0;
     for (int i = 0; i < n; ++i) {
         int t = s.frameTypes[i];
-        // 帧类型字符串：IDR / I / P / B
-        QString tStr;
-        switch (t) {
-            case 3: tStr = "IDR"; break;
-            case 0: tStr = "I";   break;
-            case 1: tStr = "P";   break;
-            case 2: tStr = "B";   break;
-            default: tStr = "P"; break;  // 未知兜底
-        }
-        double ptsSec = (n > 0) ? double(i) / (fps(slot) > 0 ? fps(slot) : 30.0) : 0;
-        double dtsSec = ptsSec;  // 一期 DTS≈PTS
-        list.append(frameItemToMap(i, t, s.frameSizes[i], ptsSec, dtsSec, poc, s.frameAvgQp[0]));
-        // 简单 POC 规则：IDR 复位为 0；其余 ++
+        double ptsSec = double(i) / fpsv;
+        list.append(frameItemToMap(i, t, s.frameSizes[i], ptsSec, ptsSec, poc, s.frameAvgQp[0]));
         if (t == 3) poc = 0; else ++poc;
     }
     return list;
@@ -562,6 +608,81 @@ QVariantList RBStreamBridge::gopList(int slot) const {
         list.append(m);
     }
     return list;
+}
+
+// 编码顺序勾选：只切换 POC 展示口径（显示序 / 编码序），不重建解码器、
+// 不触发解码、不影响播放与秒开。真实 POC 由后台映射器（startOrderMapBuild）提供。
+int RBStreamBridge::frameOrderMode(int slot) const {
+    if (!hasFile(slot)) return 0;
+    return m_slots[slot].frameOrderMode;
+}
+void RBStreamBridge::setFrameOrderMode(int slot, int mode) {
+    if (!hasFile(slot)) return;
+    int& cur = m_slots[slot].frameOrderMode;
+    const int next = (mode == 1) ? 1 : 0;
+    if (cur != next) {
+        cur = next;
+        emit frameOrderModeChanged(slot);
+    }
+}
+
+// 映射是否就绪：后台解码完成且结果有效。未就绪时 UI 保持显示顺序、勾选禁用。
+bool RBStreamBridge::frameOrderMapReady(int slot) const {
+    if (!hasFile(slot)) return false;
+    const Slot& s = m_slots[slot];
+    return s.orderMapBuilding == 0 && s.orderMap.ok;
+}
+
+// 启动后台映射构建（打开文件后调用）：独立线程整流解码一遍，
+// 建立编码序↔显示序双射。与播放/块级解码零共享，不阻塞秒开。
+void RBStreamBridge::startOrderMapBuild(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (!s.inUse || s.orderMapWatcher) return;   // 已在构建或已完成
+
+    s.orderMapBuilding = 1;
+    Slot* target = &s;   // Slot 数组固定，指针稳定（freeSlot 前 cancel 已等待）
+    auto cancel = std::make_shared<std::atomic_bool>(false);
+    s.orderMapCancel = cancel;
+
+    QFuture<void> future = QtConcurrent::run([target, cancel]() {
+        // 纯 Worker：独立解码整个流（软解、无 side_data），与其它组件零共享。
+        target->orderMap = rb::RBFrameOrderMapper::build(target->path.toStdString(),
+                                                         cancel.get());
+    });
+    s.orderMapWatcher = new QFutureWatcher<void>(this);
+    s.orderMapWatcher->setFuture(future);
+    connect(s.orderMapWatcher, &QFutureWatcher<void>::finished,
+            this, [this, slot]() { onOrderMapBuilt(slot); });
+}
+
+void RBStreamBridge::onOrderMapBuilt(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (s.orderMapWatcher) {
+        s.orderMapWatcher->deleteLater();
+        s.orderMapWatcher = nullptr;
+    }
+    s.orderMapBuilding = 0;
+    emit frameOrderMapReadyChanged(slot);
+}
+
+// 取消并回收映射构建（freeSlot / 换文件时）：先置协作式取消标志（worker 每包检查，
+// 毫秒级退出），再等待真正结束，避免野指针与 worker 泄漏。
+void RBStreamBridge::cancelOrderMap(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (QFutureWatcher<void>* w = s.orderMapWatcher) {
+        disconnect(w, nullptr, this, nullptr);
+        if (s.orderMapCancel)
+            s.orderMapCancel->store(true, std::memory_order_relaxed);
+        if (w->isRunning() || w->isStarted())
+            w->waitForFinished();
+        w->deleteLater();
+        s.orderMapWatcher = nullptr;
+        s.orderMapBuilding = 0;
+        s.orderMapCancel = nullptr;
+    }
 }
 
 QVariantMap RBStreamBridge::hrdEstimate(int slot) const {
