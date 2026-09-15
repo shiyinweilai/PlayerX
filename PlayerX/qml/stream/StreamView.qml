@@ -1414,206 +1414,12 @@ Item {
         anchors.fill: parent
         visible: StreamBridge.slotCount > 0
 
-        // ── 顶部：流信息条（与 YuvWindow 总控栏同款 #8018181c） ──
-        Rectangle {
-            id: topInfoBar
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: 36
-            color: "#8018181c"
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                spacing: 14
-
-                Text {
-                    text: "码流分析"
-                    color: "#e8e8ec"
-                    font.pixelSize: 12
-                    font.bold: true
-                }
-
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: 14
-
-                    // 槽位选择器（多 slot 时显示）
-                    Row {
-                        spacing: 4
-                        visible: StreamBridge.slotCount > 1
-                        Repeater {
-                            model: StreamBridge.slotCount
-                            delegate: Rectangle {
-                                required property int index
-                                width: 22; height: 18; radius: 3
-                                color: streamView.currentSlot === index
-                                       ? "#2a5fc0" : "#80252528"
-                                border.color: streamView.currentSlot === index
-                                              ? "#3d7adf" : "#3a3a44"
-                                border.width: 1
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: String.fromCharCode(0x2460 + index)
-                                    color: "#fff"; font.pixelSize: 10
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: streamView.currentSlot = index
-                                }
-                            }
-                        }
-                    }
-
-                    // ── 编码顺序勾选（仅切换 POC 展示口径，不影响播放/解码）──
-                    Row {
-                        spacing: 6
-                        visible: streamView.slotActive
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: streamView.orderMode === 1 ? "编码顺序" : "显示顺序"
-                            color: streamView.orderMapReady ? "#9aa0a6" : "#6a6f76"
-                            font.pixelSize: 11
-                        }
-                        Rectangle {
-                            width: 28; height: 16; radius: 8
-                            color: streamView.orderMode === 1 ? "#2a5fc0" : "#252528"
-                            border.color: streamView.orderMode === 1 ? "#3d7adf" : "#3a3a44"
-                            border.width: 1
-                            opacity: streamView.orderMapReady ? 1.0 : 0.4
-                            Rectangle {
-                                width: 12; height: 12; radius: 6
-                                color: "#e8e8ec"
-                                anchors.verticalCenter: parent.verticalCenter
-                                x: streamView.orderMode === 1 ? parent.width - 14 : 2
-                                Behavior on x { NumberAnimation { duration: 90 } }
-                            }
-                            MouseArea {
-                                id: orderSeqMa
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                enabled: streamView.orderMapReady
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    const m = streamView.orderMode === 1 ? 0 : 1
-                                    streamView.setOrderMode(m)
-                                }
-                            }
-                            ToolTip.visible: orderSeqMa.containsMouse
-                            ToolTip.text: streamView.orderMapReady
-                                          ? qsTr("切换显示顺序（播放序）/ 编码顺序（码流序，POC 为真实显示位置）")
-                                          : qsTr("编码顺序映射构建中，稍候可用")
-                        }
-                    }
-
-                    Text { visible: streamView.slotActive
-                        text: (streamView.slotInfo.width > 0 && streamView.slotInfo.height > 0)
-                              ? (streamView.slotInfo.width + " × " + streamView.slotInfo.height)
-                              : "分辨率未知"
-                        color: "#cccccc"; font.pixelSize: 11
-                        font.family: "Monospace" }
-                    Text { visible: streamView.slotActive
-                        text: Number(streamView.slotInfo.fps).toFixed(2) + " fps"
-                        color: "#cccccc"; font.pixelSize: 11
-                        font.family: "Monospace" }
-                    Text { visible: streamView.slotActive
-                        text: streamView.slotInfo.codecLong
-                        color: "#cccccc"; font.pixelSize: 11 }
-                    Text { visible: streamView.slotActive
-                        text: streamView.slotInfo.profile + " | Level " + streamView.slotInfo.level
-                        color: "#cccccc"; font.pixelSize: 11 }
-                    Text { visible: streamView.slotActive
-                        text: (Number(streamView.slotInfo.bitrate) / 1e6).toFixed(2) + " Mbps"
-                        color: "#cccccc"; font.pixelSize: 11 }
-                    // ── P1：块级 QP 统计（真实值，来自 RBBlockAnalyzer）──
-                    Text {
-                        visible: streamView.slotActive && streamView.slotBlockStats.valid
-                        text: "QP均值 " + Number(streamView.slotBlockStats.avgQp).toFixed(1)
-                              + "（" + streamView.slotBlockStats.minQp + "–"
-                              + streamView.slotBlockStats.maxQp + "）"
-                        color: "#f0c040"; font.pixelSize: 11
-                        font.family: "Monospace"
-                    }
-                    Text {
-                        visible: streamView.slotActive && streamView.slotBlockStats.valid
-                        text: "块数 " + streamView.slotBlockStats.blockCount
-                              + " · " + streamView.blockGranularityText
-                        color: "#9aa0a6"; font.pixelSize: 11
-                        font.family: "Monospace"
-                    }
-                    // 总帧数 / GOP 数（图2 文件信息区）
-                    Text {
-                        visible: streamView.slotActive
-                        text: "帧数 " + streamView.slotFrames
-                              + " · GOP " + streamView.slotGopList.length
-                        color: "#9aa0a6"; font.pixelSize: 11
-                        font.family: "Monospace"
-                    }
-                    // 时长（mm:ss.mmm）
-                    Text {
-                        visible: streamView.slotActive && Number(streamView.slotInfo.duration) > 0
-                        readonly property real d: Number(streamView.slotInfo.duration)
-                        readonly property int mm: Math.floor(d / 60)
-                        readonly property int ss: Math.floor(d % 60)
-                        readonly property int ms: Math.floor((d % 1) * 1000)
-                        text: "时长 " + (mm < 10 ? "0" : "") + mm + ":" + (ss < 10 ? "0" : "") + ss
-                              + "." + (ms < 100 ? (ms < 10 ? "00" : "0") : "") + ms
-                        color: "#9aa0a6"; font.pixelSize: 11
-                        font.family: "Monospace"
-                    }
-                    Text { visible: streamView.slotActive
-                        text: "File: " + streamView.slotInfo.fileName
-                        color: "#9aa0a6"; font.pixelSize: 11 }
-                    Text { visible: !streamView.slotActive
-                        text: "未加载文件"
-                        color: "#6a6f76"; font.pixelSize: 11 }
-                }
-
-                // 显示 QP 开关（P1：驱动块级 QP 着色叠加层）
-                Row {
-                    spacing: 6
-                    visible: streamView.slotActive
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: streamView.qpOverlayEnabled ? "画面+CU网格" : "仅画面"
-                        color: "#9aa0a6"; font.pixelSize: 11
-                    }
-                    Rectangle {
-                        width: 28; height: 16; radius: 8
-                        color: streamView.qpOverlayEnabled ? "#2a5fc0" : "#252528"
-                        border.color: streamView.qpOverlayEnabled ? "#3d7adf" : "#3a3a44"
-                        border.width: 1
-                        Rectangle {
-                            width: 12; height: 12; radius: 6
-                            color: "#e8e8ec"
-                            anchors.verticalCenter: parent.verticalCenter
-                            x: streamView.qpOverlayEnabled ? parent.width - 14 : 2
-                            Behavior on x { NumberAnimation { duration: 90 } }
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                streamView.qpOverlayEnabled = !streamView.qpOverlayEnabled
-                                console.log("[StreamView] 模式 =",
-                                            streamView.qpOverlayEnabled ? "画面+CU网格" : "仅画面（无网格）",
-                                            "块数 =", streamView.slotBlocks.length)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         // ── 中部：主显示区（CU 网格 + QP 着色，P1 真实渲染） ──
         Item {
             id: mainDisplay
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.top: topInfoBar.bottom
+            anchors.top: parent.top
             anchors.bottom: gopBar.top
 
             Rectangle { anchors.fill: parent; color: "#0a0a0e" }
@@ -2161,6 +1967,111 @@ Item {
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 spacing: 4
+
+                // ── 槽位选择器（多 slot 时显示，从原顶栏移入）──
+                Row {
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: 4
+                    visible: StreamBridge.slotCount > 1
+                    Repeater {
+                        model: StreamBridge.slotCount
+                        delegate: Rectangle {
+                            required property int index
+                            width: 22; height: 18; radius: 3
+                            color: streamView.currentSlot === index
+                                   ? "#2a5fc0" : "#80252528"
+                            border.color: streamView.currentSlot === index
+                                          ? "#3d7adf" : "#3a3a44"
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: String.fromCharCode(0x2460 + index)
+                                color: "#fff"; font.pixelSize: 10
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: streamView.currentSlot = index
+                            }
+                        }
+                    }
+                }
+
+                // ── 显示顺序 / 编码顺序开关（从原顶栏移入）──
+                Row {
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: 6
+                    visible: streamView.slotActive
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: streamView.orderMode === 1 ? "编码顺序" : "显示顺序"
+                        color: streamView.orderMapReady ? "#9aa0a6" : "#6a6f76"
+                        font.pixelSize: 11
+                    }
+                    Rectangle {
+                        width: 28; height: 16; radius: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: streamView.orderMode === 1 ? "#2a5fc0" : "#252528"
+                        border.color: streamView.orderMode === 1 ? "#3d7adf" : "#3a3a44"
+                        border.width: 1
+                        opacity: streamView.orderMapReady ? 1.0 : 0.4
+                        Rectangle {
+                            width: 12; height: 12; radius: 6
+                            color: "#e8e8ec"
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: streamView.orderMode === 1 ? parent.width - 14 : 2
+                            Behavior on x { NumberAnimation { duration: 90 } }
+                        }
+                        MouseArea {
+                            id: orderSeqMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            enabled: streamView.orderMapReady
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const m = streamView.orderMode === 1 ? 0 : 1
+                                streamView.setOrderMode(m)
+                            }
+                        }
+                        ToolTip.visible: orderSeqMa.containsMouse
+                        ToolTip.text: streamView.orderMapReady
+                                      ? qsTr("切换显示顺序（播放序）/ 编码顺序（码流序，POC 为真实显示位置）")
+                                      : qsTr("编码顺序映射构建中，稍候可用")
+                    }
+                }
+
+                // ── 仅画面 / 画面+CU网格 开关（从原顶栏移入）──
+                Row {
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: 6
+                    visible: streamView.slotActive
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: streamView.qpOverlayEnabled ? "画面+CU网格" : "仅画面"
+                        color: "#9aa0a6"; font.pixelSize: 11
+                    }
+                    Rectangle {
+                        width: 28; height: 16; radius: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: streamView.qpOverlayEnabled ? "#2a5fc0" : "#252528"
+                        border.color: streamView.qpOverlayEnabled ? "#3d7adf" : "#3a3a44"
+                        border.width: 1
+                        Rectangle {
+                            width: 12; height: 12; radius: 6
+                            color: "#e8e8ec"
+                            anchors.verticalCenter: parent.verticalCenter
+                            x: streamView.qpOverlayEnabled ? parent.width - 14 : 2
+                            Behavior on x { NumberAnimation { duration: 90 } }
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                streamView.qpOverlayEnabled = !streamView.qpOverlayEnabled
+                            }
+                        }
+                    }
+                }
 
                 // 左：弹性空白把按钮推到右
                 Item { Layout.fillWidth: true }

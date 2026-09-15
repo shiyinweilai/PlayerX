@@ -29,9 +29,11 @@ Rectangle {
     property int ver: 0
     Connections {
         target: StreamBridge
-        function onCurrentFrameChanged(changedSlot) {
-            if (changedSlot === panel.slot) panel.ver++
-        }
+        // 对齐图2「帧统计」面板的成功做法：帧变化不做 slot 过滤，
+        // 无条件 ver++。后端 currentFrameChanged 携带的 slot 号可能与 UI 的
+        // effectiveSlot 因时序对不上，一旦过滤就会漏刷，导致帧号卡在初值不动。
+        // 多 slot 时最多多刷新几次，curFrame 内部仍按 slot 取值，无副作用。
+        function onCurrentFrameChanged(changedSlot) { panel.ver++ }
         function onFileOpened(openedSlot) {
             if (openedSlot === panel.slot) panel.ver++
         }
@@ -56,15 +58,20 @@ Rectangle {
     }
     property int syntaxVer: 0
 
-    readonly property bool   slotActive:    StreamBridge.hasFile(slot)
-    readonly property var    info:          slotActive ? StreamBridge.streamInfo(slot) : ({})
-    readonly property int    curFrame:      slotActive ? StreamBridge.currentFrame(slot) : 0
-    readonly property var    frameList:     slotActive ? StreamBridge.frameList(slot) : []
-    readonly property var    currentFrameItem:
-        (slotActive && curFrame >= 0 && curFrame < frameList.length)
-        ? frameList[curFrame] : null
-    readonly property var    hrd:           slotActive ? StreamBridge.hrdEstimate(slot) : ({})
-    readonly property var    gopList:       slotActive ? StreamBridge.gopList(slot) : []
+    // slotActive 依赖 ver：Q_INVOKABLE 的 hasFile 不会自动响应内部状态变化，
+    // 必须靠 ver（随 fileOpened/fileClosed/slotCountChanged 递增）强制重算，
+    // 否则右侧栏挂载早于文件打开时会永久卡在初值 false，导致各段全显示"—"。
+    readonly property bool   slotActive:    { const _ = ver; return StreamBridge.hasFile(slot) }
+    readonly property var    info:          { const _ = ver; return slotActive ? StreamBridge.streamInfo(slot) : ({}) }
+    readonly property int    curFrame:      { const _ = ver; return slotActive ? StreamBridge.currentFrame(slot) : 0 }
+    readonly property var    frameList:     { const _ = ver; return slotActive ? StreamBridge.frameList(slot) : [] }
+    readonly property var    currentFrameItem: {
+        const _ = ver
+        return (slotActive && curFrame >= 0 && curFrame < frameList.length)
+               ? frameList[curFrame] : null
+    }
+    readonly property var    hrd:           { const _ = ver; return slotActive ? StreamBridge.hrdEstimate(slot) : ({}) }
+    readonly property var    gopList:       { const _ = ver; return slotActive ? StreamBridge.gopList(slot) : [] }
     // 语法元素（VPS/SPS/PPS 名值对）：后台一次 CBS 解析，就绪后只读缓存
     // 独立于 slotActive：syntaxVer 变化时强制重算，避免绑定卡在初值 false
     readonly property bool   syntaxReady:    { const _ = syntaxVer; return StreamBridge.hasFile(slot) && StreamBridge.syntaxReady(slot) }
@@ -132,7 +139,7 @@ Rectangle {
             Row {
                 width: parent.width
                 Text {
-                    text: "码流统计"
+                    text: "码流信息"
                     color: "#bbbbbb"; font.pixelSize: 14; font.bold: true
                 }
                 Text {
@@ -146,6 +153,48 @@ Rectangle {
                     }
                     color: "#9aa0a6"; font.pixelSize: 11
                     font.family: "Monospace"
+                }
+            }
+
+            // ── 文件信息卡片（从原顶栏移入，全部复用已缓存 streamInfo，零开销）──
+            StreamInfoCardSection {
+                title: "文件信息"
+                rows: {
+                    const _ = panel.ver
+                    if (!panel.slotActive) {
+                        return [
+                            { label: "分辨率",        value: "—" },
+                            { label: "帧率",          value: "—" },
+                            { label: "编码格式",      value: "—" },
+                            { label: "Profile / Level", value: "—" },
+                            { label: "码率",          value: "—" },
+                            { label: "总帧数 / GOP",  value: "—" },
+                            { label: "时长",          value: "—" },
+                            { label: "文件名",        value: "—" }
+                        ]
+                    }
+                    const inf = panel.info
+                    const w = Number(inf.width), h = Number(inf.height)
+                    const dur = Number(inf.duration)
+                    let durText = "—"
+                    if (dur > 0) {
+                        const mm = Math.floor(dur / 60)
+                        const ss = Math.floor(dur % 60)
+                        const ms = Math.floor((dur % 1) * 1000)
+                        durText = (mm < 10 ? "0" : "") + mm + ":"
+                                + (ss < 10 ? "0" : "") + ss + "."
+                                + (ms < 100 ? (ms < 10 ? "00" : "0") : "") + ms
+                    }
+                    return [
+                        { label: "分辨率",        value: (w > 0 && h > 0) ? (w + " × " + h) : "未知" },
+                        { label: "帧率",          value: Number(inf.fps).toFixed(2) + " fps" },
+                        { label: "编码格式",      value: String(inf.codecLong || "—") },
+                        { label: "Profile / Level", value: String(inf.profile) + " | Level " + String(inf.level) },
+                        { label: "码率",          value: (Number(inf.bitrate) / 1e6).toFixed(2) + " Mbps" },
+                        { label: "总帧数 / GOP",  value: String(panel.frameList.length) + " · " + String(panel.gopList.length) },
+                        { label: "时长",          value: durText },
+                        { label: "文件名",        value: String(inf.fileName || "—") }
+                    ]
                 }
             }
 
