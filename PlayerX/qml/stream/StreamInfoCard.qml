@@ -72,6 +72,8 @@ Rectangle {
     }
     readonly property var    hrd:           { const _ = ver; return slotActive ? StreamBridge.hrdEstimate(slot) : ({}) }
     readonly property var    gopList:       { const _ = ver; return slotActive ? StreamBridge.gopList(slot) : [] }
+    // 块级统计（{ valid, avgQp, minQp, maxQp, blockCount }）：随帧切换重取
+    readonly property var    blockStats:    { const _ = ver; return slotActive ? StreamBridge.blockStats(slot, curFrame) : ({ valid: false }) }
     // 语法元素（VPS/SPS/PPS 名值对）：后台一次 CBS 解析，就绪后只读缓存
     // 独立于 slotActive：syntaxVer 变化时强制重算，避免绑定卡在初值 false
     readonly property bool   syntaxReady:    { const _ = syntaxVer; return StreamBridge.hasFile(slot) && StreamBridge.syntaxReady(slot) }
@@ -222,16 +224,20 @@ Rectangle {
             }
 
             // ── 码流统计卡片 ──
+            // 块级统计来自 blockStats(slot, curFrame)：HEVC 补丁导出每 CU 真实 QP 后，
+            // avgQp/minQp/maxQp/blockCount 才有效（H.264/VVC 同理）；不可用时显示"—"。
             StreamInfoCardSection {
                 title: "码流统计（当前帧）"
                 rows: panel.slotActive && panel.currentFrameItem
                     ? [
                         { label: "帧大小",   value: (Number(panel.currentFrameItem.sizeBytes) / 1024).toFixed(1) + " KB" },
                         { label: "码率",     value: (Number(panel.info.bitrate) / 1e6).toFixed(2) + " Mbps" },
-                        { label: "QP 均值",  value: Number(panel.currentFrameItem.avgQp) >= 0
-                                                 ? Number(panel.currentFrameItem.avgQp).toFixed(1) : "—" },
-                        { label: "QP 最小 / 最大", value: "— / —" },
-                        { label: "CU 总数",  value: "—" },
+                        { label: "QP 均值",  value: panel.blockStats.valid
+                                                 ? Number(panel.blockStats.avgQp).toFixed(1) : "—" },
+                        { label: "QP 最小 / 最大", value: panel.blockStats.valid
+                                                 ? (panel.blockStats.minQp + " / " + panel.blockStats.maxQp) : "— / —" },
+                        { label: "CU 总数",  value: panel.blockStats.valid
+                                                 ? String(panel.blockStats.blockCount) : "—" },
                         { label: "跳过 CU 占比", value: "—" }
                       ]
                     : [
