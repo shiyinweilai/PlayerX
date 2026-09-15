@@ -33,6 +33,7 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QByteArray>
 #include <QSettings>
 #include <QImage>
 #include <QQuickImageProvider>
@@ -53,6 +54,7 @@ namespace rb {
 class RBDemuxer;
 class RBBlockAnalyzer;
 struct RBBlockInfo;
+class RBSyntaxAnalyzer;   // 语法面板：CBS 解析 SPS/PPS/VPS 名值对（实现在 .cpp include）
 }
 
 class RBStreamBridge : public QObject {
@@ -129,6 +131,12 @@ public:
     Q_INVOKABLE void setFrameOrderMode(int slot, int mode);
     // 编码序映射是否就绪（后台解码完成）。未就绪时 UI 保持显示顺序、勾选禁用。
     Q_INVOKABLE bool frameOrderMapReady(int slot) const;
+
+    // ── 语法元素面板（SPS/PPS/VPS 名值对，右侧栏 Syntax Info）──
+    // 后台一次 CBS 解析，结果缓存；QML 只读。每项 { set, name, value }。
+    Q_INVOKABLE QVariantList syntaxEntries(int slot) const;
+    // 语法解析是否就绪（后台完成后为 true）。
+    Q_INVOKABLE bool syntaxReady(int slot) const;
 
     // ── GOP 列表（预扫描结果）─────────────────────────────────────
     // 每项：{ startFrameIndex, frameCount, isOpenGop }
@@ -218,6 +226,8 @@ signals:
     void frameOrderModeChanged(int slot);
     // 编码序映射就绪变化（后台解码完成，QML 需刷新帧列表并放开切换）
     void frameOrderMapReadyChanged(int slot);
+    // 语法元素解析就绪（右侧栏 Syntax Info 刷新）
+    void syntaxReadyChanged(int slot);
 
 private:
     struct Slot {
@@ -252,6 +262,12 @@ private:
         QFutureWatcher<void>* orderMapWatcher = nullptr;
         int orderMapBuilding = 0;                 // 1=后台解码中
         std::shared_ptr<std::atomic_bool> orderMapCancel = nullptr;  // 协作式取消
+        // ── 语法元素面板（SPS/PPS/VPS 名值对，右侧栏 Syntax Info）──
+        // 打开文件后台一次 CBS 解析（RBSyntaxAnalyzer），结果缓存；QML 只读。
+        QByteArray  extradataCopy;                // 容器参数集拷贝（供 CBS 解析）
+        QVariantList syntaxCache;                 // SPS/PPS/VPS 名值对
+        bool        syntaxReadyFlag = false;      // 后台解析是否完成
+        QFutureWatcher<QVariantList>* syntaxWatcher = nullptr;
         std::vector<long long> frameSizes;        // 每帧字节数（来自 AVPacket.size）
         std::vector<double>  frameAvgQp;          // 每帧平均 QP（未启用补丁：-1）
         long long cpbSizeBits = 0;                // SPS 声明的 CPB 容量（0=未知）
@@ -279,6 +295,9 @@ private:
     void startOrderMapBuild(int slot);   // 启动后台构建
     void onOrderMapBuilt(int slot);      // 后台完成回调（主线程）
     void cancelOrderMap(int slot);       // 取消并回收（freeSlot/换文件时）
+    // 语法元素面板：打开文件后台一次 CBS 解析 SPS/PPS/VPS，结果缓存。
+    void startSyntaxBuild(int slot);     // 启动后台解析
+    void onSyntaxBuilt(int slot);        // 后台完成回调（主线程写缓存）
     // 裸流 fallback：当 avformat 解析失败（裸 h264/hevc annexb）时直接读文件，
     // 按 0x000001 / 0x00000001 切 NAL 单元，识别 SPS 拿宽高，按 IDR 切 GOP。
     // 不依赖任何 FFmpeg 容器解析。

@@ -40,6 +40,21 @@ Rectangle {
         }
         function onSlotCountChanged() { panel.ver++ }
     }
+    // 语法解析后台就绪后刷新（VPS/SPS/PPS 名值对，与 slot 对应）
+    Connections {
+        target: StreamBridge
+        function onSyntaxReadyChanged(readySlot) {
+            if (readySlot === panel.slot) panel.syntaxVer++
+        }
+        // 文件打开/关闭时也刷新，避免右侧栏挂载早于文件打开导致的绑定失效
+        function onFileOpened(openedSlot) {
+            if (openedSlot === panel.slot) panel.syntaxVer++
+        }
+        function onFileClosed(closedSlot) {
+            if (closedSlot === panel.slot) panel.syntaxVer++
+        }
+    }
+    property int syntaxVer: 0
 
     readonly property bool   slotActive:    StreamBridge.hasFile(slot)
     readonly property var    info:          slotActive ? StreamBridge.streamInfo(slot) : ({})
@@ -50,6 +65,23 @@ Rectangle {
         ? frameList[curFrame] : null
     readonly property var    hrd:           slotActive ? StreamBridge.hrdEstimate(slot) : ({})
     readonly property var    gopList:       slotActive ? StreamBridge.gopList(slot) : []
+    // 语法元素（VPS/SPS/PPS 名值对）：后台一次 CBS 解析，就绪后只读缓存
+    // 独立于 slotActive：syntaxVer 变化时强制重算，避免绑定卡在初值 false
+    readonly property bool   syntaxReady:    { const _ = syntaxVer; return StreamBridge.hasFile(slot) && StreamBridge.syntaxReady(slot) }
+    readonly property var    syntaxEntries:  { const _ = syntaxVer; return StreamBridge.hasFile(slot) ? StreamBridge.syntaxEntries(slot) : [] }
+    // 按参数集分组：{ "VPS": [...], "SPS": [...], "PPS": [...] }，保持解析顺序
+    readonly property var    syntaxGroups: {
+        const _ = syntaxVer
+        const groups = {}
+        const order = []
+        const arr = syntaxEntries
+        for (let i = 0; i < arr.length; ++i) {
+            const set = String(arr[i].set || "OTHER")
+            if (!groups[set]) { groups[set] = []; order.push(set) }
+            groups[set].push(arr[i])
+        }
+        return { map: groups, order: order }
+    }
     // 码率采样（Mbps）：取 frameList，每 16 帧一个采样点（minimap 思想）
     readonly property var    bitrateSamples: {
         const _ = ver
@@ -249,6 +281,168 @@ Rectangle {
                     target: StreamBridge
                     function onCurrentFrameChanged() { chartCanvas.requestPaint() }
                     function onFileOpened() { chartCanvas.requestPaint() }
+                }
+            }
+
+            // ── 语法元素（VPS / SPS / PPS，Tab 切换，仅当前组内滚动）──
+            Column {
+                id: syntaxSection
+                width: parent.width
+                spacing: 6
+
+                // 当前选中的 Tab 索引（对应 syntaxGroups.order 下标）
+                property int curTab: 0
+                // 解析就绪 / 换文件后 Tab 复位到第一个
+                Connections {
+                    target: panel
+                    function onSyntaxVerChanged() {
+                        if (syntaxSection.curTab >= panel.syntaxGroups.order.length)
+                            syntaxSection.curTab = 0
+                    }
+                }
+
+                Row {
+                    width: parent.width
+                    Text {
+                        text: "语法元素"
+                        color: "#bbbbbb"; font.pixelSize: 12; font.bold: true
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.right: parent.right
+                        text: {
+                            const _ = panel.syntaxVer
+                            if (!StreamBridge.hasFile(panel.slot)) return "—"
+                            if (!panel.syntaxReady) return "解析中…"
+                            return panel.syntaxEntries.length + " 项"
+                        }
+                        color: "#9aa0a6"; font.pixelSize: 10
+                        font.family: "Monospace"
+                    }
+                }
+
+                // 未就绪 / 无数据降级提示
+                Text {
+                    width: parent.width
+                    visible: {
+                        const _ = panel.syntaxVer
+                        return !StreamBridge.hasFile(panel.slot)
+                               || !panel.syntaxReady
+                               || panel.syntaxEntries.length === 0
+                    }
+                    text: {
+                        const _ = panel.syntaxVer
+                        if (!StreamBridge.hasFile(panel.slot)) return "未加载文件"
+                        if (!panel.syntaxReady) return "后台解析中，请稍候…"
+                        return "该码流暂无可解析的参数集"
+                    }
+                    color: "#6a6f76"; font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                }
+
+                // ── Tab 行（参数集名，横向；组多时可横向滚动）──
+                Flickable {
+                    id: tabFlick
+                    width: parent.width
+                    height: (panel.syntaxReady && panel.syntaxEntries.length > 0) ? 26 : 0
+                    visible: panel.syntaxReady && panel.syntaxEntries.length > 0
+                    contentWidth: tabRow.width
+                    contentHeight: height
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    flickableDirection: Flickable.HorizontalFlick
+
+                    Row {
+                        id: tabRow
+                        height: 26
+                        spacing: 4
+                        Repeater {
+                            model: (panel.syntaxReady && panel.syntaxEntries.length > 0)
+                                   ? panel.syntaxGroups.order : []
+                            delegate: Rectangle {
+                                width: tabLabel.implicitWidth + 18
+                                height: 24
+                                radius: 4
+                                color: (index === syntaxSection.curTab) ? "#2a3f5a" : "#1a1d22"
+                                border.color: (index === syntaxSection.curTab) ? "#42A5FF" : "#2a2e33"
+                                border.width: 1
+                                Text {
+                                    id: tabLabel
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    color: (index === syntaxSection.curTab) ? "#e6f0ff" : "#9aa0a6"
+                                    font.pixelSize: 11
+                                    font.bold: (index === syntaxSection.curTab)
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: syntaxSection.curTab = index
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── 当前 Tab 的名值对表（固定高度，仅本区域内竖向滚动）──
+                Rectangle {
+                    width: parent.width
+                    height: (panel.syntaxReady && panel.syntaxEntries.length > 0) ? 340 : 0
+                    visible: panel.syntaxReady && panel.syntaxEntries.length > 0
+                    color: "#0e1013"
+                    radius: 3
+                    border.color: "#1f2329"; border.width: 1
+
+                    ListView {
+                        id: syntaxList
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                        // 切 Tab 时回到顶部
+                        onModelChanged: positionViewAtBeginning()
+
+                        model: {
+                            const _ = panel.syntaxVer
+                            if (!panel.syntaxReady) return []
+                            const order = panel.syntaxGroups.order
+                            if (syntaxSection.curTab < 0 || syntaxSection.curTab >= order.length)
+                                return []
+                            return panel.syntaxGroups.map[order[syntaxSection.curTab]] || []
+                        }
+
+                        delegate: Row {
+                            width: syntaxList.width
+                            height: 18
+                            spacing: 6
+                            Text {
+                                width: parent.width - 84
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: String(modelData.name)
+                                color: "#9aa0a6"; font.pixelSize: 10
+                                font.family: "Monospace"
+                                elide: Text.ElideRight
+                                ToolTip.visible: hovNameMa.containsMouse
+                                ToolTip.text: String(modelData.name)
+                                MouseArea {
+                                    id: hovNameMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    acceptedButtons: Qt.NoButton
+                                }
+                            }
+                            Text {
+                                width: 78
+                                anchors.verticalCenter: parent.verticalCenter
+                                horizontalAlignment: Text.AlignRight
+                                text: String(modelData.value)
+                                color: "#cccccc"; font.pixelSize: 10
+                                font.family: "Monospace"
+                                elide: Text.ElideLeft
+                            }
+                        }
+                    }
                 }
             }
         }

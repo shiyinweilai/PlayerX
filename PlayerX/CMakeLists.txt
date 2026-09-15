@@ -119,6 +119,7 @@ src/image/ImageSliderCompareItem.cpp
     src/stream/RBStreamBridge.cpp
     src/stream/RBBlockAnalyzer.cpp
     src/stream/RBFrameOrderMapper.cpp
+    src/stream/RBSyntaxAnalyzer.cpp
     # 异步文件下载器（供 QML 测试源下载使用，不阻塞 UI 线程）
     src/qt/FileDownloader.cpp
     # 平台原生多选文件夹对话框：仅 macOS 走 NSOpenPanel。
@@ -267,6 +268,10 @@ target_include_directories(PlayerX PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/image
     ${CMAKE_CURRENT_SOURCE_DIR}/src/simd
     ${FFMPEG_INSTALL_DIR}/include
+    # 内嵌 FFmpeg 源码（仅头文件）：RBSyntaxAnalyzer 需要 libavcodec/cbs.h
+    # （CBS 公开头含 CodedBitstreamContext 完整定义与 trace 回调类型，
+    #  未随 make install 安装到 FFMPEG_INSTALL_DIR/include）
+    ${CMAKE_CURRENT_SOURCE_DIR}/../ffmpeg
 )
 
 # ─── 链接目录 ─────────────────────────────────────────────────────────────────

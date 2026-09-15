@@ -2012,6 +2012,8 @@ ApplicationWindow {
             // · image：图片渲染区底部控制条 36px 高，需避开
             if (root.currentTab === "yuv") return 36
             if (root.currentTab === "image") return 36
+            // stream：StreamView 底部有 36px 全局总控栏（进度条+播放按钮），需避开
+            if (root.currentTab === "stream") return 36
             return 0
         }
         // 宽度策略：固定 320，与参考侧栏（refSidebarUserWidth）保持视觉对齐，
@@ -2040,6 +2042,7 @@ ApplicationWindow {
         anchors.bottomMargin: {
             if (root.currentTab === "yuv") return 36
             if (root.currentTab === "image") return 36
+            if (root.currentTab === "stream") return 36
             return 0
         }
         width: 320

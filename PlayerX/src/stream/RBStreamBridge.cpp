@@ -21,6 +21,7 @@
 
 #include "stream/RBStreamBridge.h"
 #include "stream/RBBlockAnalyzer.h"
+#include "stream/RBSyntaxAnalyzer.h"
 #include "core/rb_demuxer.h"
 
 extern "C" {
@@ -206,8 +207,10 @@ int RBStreamBridge::openFile(const QString& path) {
     emit slotCountChanged();
     emit fileOpened(slot);
     // 打开成功后异步建立编码序↔显示序映射（后台解码一遍，不阻塞秒开/播放）。
-    // 就绪后 frameList 的 POC 使用真实显示序位置，「编码顺序」勾选放开。
+    // 就绪后 frameList 的 POC 使用真实显示位置，「编码顺序」勾选放开。
     startOrderMapBuild(slot);
+    // 后台一次 CBS 解析 SPS/PPS/VPS 名值对（右侧栏 Syntax Info），结果缓存后只读。
+    startSyntaxBuild(slot);
     return slot;
 }
 
@@ -282,6 +285,11 @@ bool RBStreamBridge::parseSlot(int slot, Slot& s, rb::RBDemuxer& demuxer) {
                         || std::strcmp(fmt->iformat->name, "matroska") == 0
                         || std::strcmp(fmt->iformat->name, "aac") == 0);
     int avccLengthSize = 0;  // mp4: 4 字节长度
+    // 保存容器 extradata 拷贝（语法面板：avcC/hvcC/vvcC 参数集，后台 CBS 解析用）
+    if (par->extradata && par->extradata_size > 0) {
+        s.extradataCopy = QByteArray(reinterpret_cast<const char*>(par->extradata),
+                                     par->extradata_size);
+    }
     if (!isAnnexB) {
         // 从 extradata 解析 AVCC lengthSizeMinusOne（h264 7bit / hevc 6bit）
         // VVC 的 mp4 封装同样使用长度前缀（4 字节），无 AVCC 结构可解析，走默认。
@@ -382,6 +390,14 @@ void RBStreamBridge::freeSlot(int slot) {
     cancelPlayAsync(slot);
     // 映射构建 worker 持有 &Slot 指针，重置前必须先取消并等待其结束，否则野指针。
     cancelOrderMap(slot);
+    // 语法解析 worker 是纯函数式（拷贝参数、不触碰 Slot），但 watcher 需回收防悬挂。
+    if (auto* w = m_slots[slot].syntaxWatcher) {
+        disconnect(w, nullptr, this, nullptr);
+        if (w->isRunning() || w->isStarted())
+            w->waitForFinished();
+        w->deleteLater();
+        m_slots[slot].syntaxWatcher = nullptr;
+    }
     m_slots[slot] = Slot{};
     --m_slotCount;
     if (m_slotCount < 0) m_slotCount = 0;
@@ -683,6 +699,59 @@ void RBStreamBridge::cancelOrderMap(int slot) {
         s.orderMapBuilding = 0;
         s.orderMapCancel = nullptr;
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 语法元素面板（纯增量：后台一次 CBS 解析 + 只读缓存 + 信号通知）
+// 独立模块：不触碰渲染/播放/块级路径，Worker 拷贝参数后台跑，主线程写缓存。
+// ─────────────────────────────────────────────────────────────────────────
+void RBStreamBridge::startSyntaxBuild(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (!s.inUse || s.syntaxWatcher) return;   // 已在构建或已完成
+
+    // Worker 拷贝参数（路径 / 编码名 / extradata），不触碰 Slot 与 Qt 对象
+    const QString path = s.path;
+    const QString codec = s.codecName;
+    const QByteArray extra = s.extradataCopy;
+
+    QFuture<QVariantList> future = QtConcurrent::run([path, codec, extra]() {
+        // 纯 Worker：CBS 解析参数集名值对，零共享状态
+        std::vector<rb::RBSyntaxEntry> result = rb::RBSyntaxAnalyzer::analyze(
+            codec,
+            reinterpret_cast<const uint8_t*>(extra.constData()),
+            extra.size(),
+            extra.size() > 0 ? QString() : path);   // 有 extradata 用容器数据，否则裸流
+        return rb::RBSyntaxAnalyzer::toVariantList(result);
+    });
+
+    auto* watcher = new QFutureWatcher<QVariantList>(this);
+    s.syntaxWatcher = watcher;
+    watcher->setFuture(future);
+    connect(watcher, &QFutureWatcher<QVariantList>::finished,
+            this, [this, slot]() { onSyntaxBuilt(slot); });
+}
+
+void RBStreamBridge::onSyntaxBuilt(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (auto* w = s.syntaxWatcher) {
+        s.syntaxCache = w->result();
+        w->deleteLater();
+    }
+    s.syntaxWatcher = nullptr;
+    s.syntaxReadyFlag = true;
+    emit syntaxReadyChanged(slot);
+}
+
+QVariantList RBStreamBridge::syntaxEntries(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return {};
+    return m_slots[slot].syntaxCache;
+}
+
+bool RBStreamBridge::syntaxReady(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return false;
+    return m_slots[slot].syntaxReadyFlag;
 }
 
 QVariantMap RBStreamBridge::hrdEstimate(int slot) const {
