@@ -86,6 +86,7 @@ Item {
             property bool autoFollow: true
             property int selRank: -1     // 选中节点（显示序 rank）
             property int hoverRank: -1
+            property bool detailDocked: true  // 详情面板：true=挤占右侧(等高)，false=悬浮覆盖(等高)
             slot: chartRoot.slot
 
             // 真实参考结构（C++ 解析 slice 头）是否就绪：就绪则用真实层级/参考，
@@ -349,11 +350,26 @@ Item {
                     }
                 }
 
-                // ── 层级图主体 ──
+                // ── 主体：层级图 + 参考关系面板（两者等高）──
                 Item {
-                    id: chartBody
+                    id: bodyRow
                     width: parent.width
                     height: parent.height - 26
+                    // 详情面板宽度：与层级图等高，宽度自适应但不小于 150
+                    readonly property real detailW:
+                        Math.min(300, Math.max(150, bodyRow.width * 0.34))
+
+                    // 层级图：挤占模式右侧让位（画布随之变窄并重绘），
+                    //         悬浮模式占满整宽，详情面板覆盖其上。
+                    Item {
+                        id: chartBody
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.right: parent.right
+                        anchors.rightMargin:
+                            (chartPanel.selFrame !== null && chartPanel.detailDocked)
+                            ? (bodyRow.detailW + 6) : 0
 
                     // 背景垫底（画布保持透明，滚动条在 Flickable 内可见）
                     Rectangle {
@@ -599,35 +615,55 @@ Item {
                         function onStructVerChanged() { hierCanvas.requestPaint() }
                     }
                 }
-            }
 
-            // ── 节点详情浮层：单击节点显示该帧参考关系 ──
-            Rectangle {
-                id: detailPop
-                visible: chartPanel.selFrame !== null
-                anchors.top: parent.top
-                anchors.topMargin: 30
-                anchors.right: parent.right
-                anchors.rightMargin: 8
-                width: Math.min(300, parent.width - 16)
-                height: detailCol.height + 16
-                radius: 6
-                color: "#f01a1d24"
-                border.color: "#3a3f46"
-                border.width: 1
-                z: 10
-
-                Column {
-                    id: detailCol
+                // ── 参考关系面板：与层级图等高，贴于右侧 ──
+                // detailDocked=true → 挤占（层级图收窄让位）
+                // detailDocked=false → 悬浮覆盖在层级图上层
+                Rectangle {
+                    id: detailPop
+                    visible: chartPanel.selFrame !== null
                     anchors.top: parent.top
-                    anchors.topMargin: 8
-                    anchors.left: parent.left
-                    anchors.leftMargin: 10
+                    anchors.bottom: parent.bottom
                     anchors.right: parent.right
-                    anchors.rightMargin: 10
-                    spacing: 3
+                    width: bodyRow.detailW
+                    radius: chartPanel.detailDocked ? 0 : 6
+                    color: chartPanel.detailDocked ? "#101318" : "#f01a1d24"
+                    border.color: "#2a2e33"
+                    border.width: 1
+                    z: chartPanel.detailDocked ? 5 : 20
 
-                    // 标题：帧号 + 类型
+                    // 悬浮模式下的投影感（分隔线）
+                    Rectangle {
+                        visible: chartPanel.detailDocked
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 1
+                        color: "#2a2e33"
+                    }
+
+                    Flickable {
+                        id: detailCol
+                        anchors.top: parent.top
+                        anchors.topMargin: 8
+                        anchors.left: parent.left
+                        anchors.leftMargin: 10
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 38   // 给贴底跳转按钮留位
+                        contentWidth: width
+                        contentHeight: detailInner.height
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        flickableDirection: Flickable.VerticalFlick
+
+                        Column {
+                            id: detailInner
+                            width: detailCol.width
+                            spacing: 3
+
+                            // 标题：帧号 + 类型
                     Item {
                         width: parent.width
                         height: 16
@@ -640,7 +676,32 @@ Item {
                             color: chartPanel.selFrame ? chartPanel.typeColor(chartPanel.selFrame.type) : "#ffffff"
                             font.pixelSize: 12; font.bold: true
                         }
+                        // 停靠/悬浮切换
+                        Rectangle {
+                            id: dockBtn
+                            anchors.right: popClose.left
+                            anchors.rightMargin: 6
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 18; height: 18; radius: 3
+                            color: dockMa.pressed ? "#2a3f5a" : "#1a1d22"
+                            border.color: "#2a2e33"; border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: chartPanel.detailDocked ? "⇥" : "⇤"
+                                color: "#9aa0a6"; font.pixelSize: 11
+                            }
+                            MouseArea {
+                                id: dockMa; anchors.fill: parent
+                                hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: chartPanel.detailDocked = !chartPanel.detailDocked
+                                ToolTip.visible: containsMouse
+                                ToolTip.text: chartPanel.detailDocked
+                                    ? "当前挤占：层级图收窄让位（点击切悬浮）"
+                                    : "当前悬浮：覆盖层级图上层（点击切挤占）"
+                            }
+                        }
                         Text {
+                            id: popClose
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
                             text: "×"
@@ -696,51 +757,55 @@ Item {
                             font.family: "Monospace"
                         }
                     }
-                    // 被参考列表（谁参考了该帧，最多 8 条）
+                    // 被参考列表（谁参考了该帧，全量，区域可滚动）
                     Text {
                         text: "被参考 (" + chartPanel.selBackRefs.length + ")"
                         color: "#bbbbbb"; font.pixelSize: 10; font.bold: true
                         visible: chartPanel.selBackRefs.length > 0
                     }
                     Repeater {
-                        model: chartPanel.selBackRefs.slice(0, 8)
+                        model: chartPanel.selBackRefs
                         Text {
                             required property int modelData
                             readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
                                                        ? chartPanel.rowsData[modelData] : null
-                            width: detailCol.width
+                            width: detailInner.width
                             text: rf ? "帧 " + rf.dispNo + " · POC " + rf.poc + " · " + rf.type : ""
                             color: "#c8cdd4"; font.pixelSize: 10
                             font.family: "Monospace"
                         }
+                        }
                     }
+                }
+
+                // 跳转按钮：固定贴底，不随列表滚动
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 10
+                    anchors.right: parent.right
+                    anchors.rightMargin: 10
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 8
+                    height: 22
+                    radius: 4
+                    color: jumpMa.pressed ? "#2a3f5a" : "#1f2937"
+                    border.color: "#42A5FF"; border.width: 1
                     Text {
-                        visible: chartPanel.selBackRefs.length > 8
-                        text: "+ " + (chartPanel.selBackRefs.length - 8) + " 更多…"
-                        color: "#6a6f76"; font.pixelSize: 10
+                        anchors.centerIn: parent
+                        text: "跳转到此帧"
+                        color: "#7ec8ff"; font.pixelSize: 11
                     }
-                    // 跳转按钮
-                    Rectangle {
-                        width: parent.width
-                        height: 22
-                        radius: 4
-                        color: jumpMa.pressed ? "#2a3f5a" : "#1f2937"
-                        border.color: "#42A5FF"; border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            text: "跳转到此帧"
-                            color: "#7ec8ff"; font.pixelSize: 11
-                        }
-                        MouseArea {
-                            id: jumpMa
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (chartPanel.selFrame)
-                                    StreamBridge.gotoFrame(chartPanel.slot, chartPanel.selFrame.idx)
-                            }
+                    MouseArea {
+                        id: jumpMa
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (chartPanel.selFrame)
+                                StreamBridge.gotoFrame(chartPanel.slot, chartPanel.selFrame.idx)
                         }
                     }
+                }
+                }
                 }
             }
         }
