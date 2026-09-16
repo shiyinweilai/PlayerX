@@ -38,7 +38,7 @@ readonly property int  bitrateChartH: 180  // 面板高度
 // ═════════════════════════════════ anchored lift for hierarchy chart ════
 property bool hierarchyChartOpen: false      // 是否展开
 property bool hierarchyChartFloating: false // true=悬浮；false=挤占（视频上移）
-readonly property int  hierarchyChartH: 200  // 面板高度
+property int  hierarchyChartH: 200  // 面板高度（顶部把手拖拽可调）
     property int currentSlot: 0
     signal switchTab(string tab)
 
@@ -1911,12 +1911,16 @@ readonly property int  hierarchyChartH: 200  // 面板高度
             z: 60
 
             StreamHierarchyChart {
+                id: hierarchyChart
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 slot: streamView.effectiveSlot
                 open: streamView.hierarchyChartOpen
                 floating: streamView.hierarchyChartFloating
+                // 高度双向同步：面板把手拖拽 → 宿主高度 → 视频区让位
+                panelHeight: streamView.hierarchyChartH
+                onPanelHeightChanged: streamView.hierarchyChartH = panelHeight
                 onRequestClose: streamView.hierarchyChartOpen = false
                 onRequestToggleMode: streamView.hierarchyChartFloating = !streamView.hierarchyChartFloating
             }

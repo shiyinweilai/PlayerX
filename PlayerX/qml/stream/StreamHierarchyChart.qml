@@ -28,17 +28,22 @@ Item {
     property int slot: 0
     property bool open: false
     property bool floating: false
+    // 面板高度（唯一数据源）：顶部把手上下拖拽调整，宿主高度绑定它。
+    property int panelHeight: 200
+    readonly property int panelMinH: 120
+    readonly property int panelMaxH: 640
 
     signal requestClose()
     signal requestToggleMode()
 
     // ── 挤占模式容器 ──
     Rectangle {
+        id: dockedBox
         visible: chartRoot.open && !chartRoot.floating
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 200
+        height: chartRoot.panelHeight
         color: "#141418"
         Rectangle {
             anchors.left: parent.left
@@ -56,6 +61,7 @@ Item {
 
     // ── 悬浮模式容器 ──
     Rectangle {
+        id: floatBox
         visible: chartRoot.open && chartRoot.floating
         anchors.left: parent.left
         anchors.leftMargin: 12
@@ -63,7 +69,7 @@ Item {
         anchors.rightMargin: 12
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 4
-        height: 200
+        height: chartRoot.panelHeight
         radius: 8
         color: "#f0121417"
         border.color: "#2a2e33"
@@ -72,6 +78,63 @@ Item {
             anchors.fill: parent
             active: chartRoot.open && chartRoot.floating
             sourceComponent: chartContentComp
+        }
+    }
+
+    // ── 顶部拖拽把手：上下拖动调整面板高度（120~640），双击复位 200 ──
+    // 两种模式共用：把手贴在当前可见容器的顶边（悬浮容器有 12px 侧边距，需内缩）。
+    //
+    // 关键：拖拽必须用「屏幕全局坐标」计算位移。把手自身会随面板高度移动，
+    // 若用 mouse.y（相对把手）算位移，高度变化会反过来改变 mouse.y，形成
+    // 正反馈回路 → 面板抖动、指针脱离分界线。改用 mapToGlobal 后，把手移动
+    // 被抵消，只有鼠标真实移动才产生位移。
+    Rectangle {
+        id: resizeHandle
+        readonly property bool forFloat: chartRoot.floating
+        x: forFloat ? 12 : 0
+        width: forFloat ? (chartRoot.width - 24) : chartRoot.width
+        height: 10
+        y: {
+            const box = forFloat ? floatBox : dockedBox
+            return box.y - 4
+        }
+        visible: chartRoot.open
+        color: resizeMa.pressed ? "#42A5FF"
+                                : (resizeMa.containsMouse ? "#2a3f5a" : "transparent")
+        z: 30
+        // 拖拽中显示的尺寸提示
+        Text {
+            anchors.centerIn: parent
+            visible: resizeMa.pressed
+            text: chartRoot.panelHeight + " px"
+            color: "#42A5FF"; font.pixelSize: 8
+        }
+        MouseArea {
+            id: resizeMa
+            anchors.fill: parent
+            hoverEnabled: true
+            // 拖动中即使指针移出把手也保持抓取，避免中途脱手
+            preventStealing: true
+            cursorShape: pressed ? Qt.SizeVerCursor
+                                 : (containsMouse ? Qt.SizeVerCursor : Qt.ArrowCursor)
+            property real startGlobalY: 0
+            property int startH: 0
+            onPressed: {
+                startGlobalY = mapToGlobal(mouse.x, mouse.y).y
+                startH = chartRoot.panelHeight
+                mouse.accepted = true
+            }
+            onPositionChanged: {
+                if (!pressed) return
+                // 向上拖动（dy<0）= 变高：面板底边固定，顶边随之上移
+                const dy = mapToGlobal(mouse.x, mouse.y).y - startGlobalY
+                // 量化到 2px，减少挤占模式下的重排次数（视频区缩放更稳）
+                let nh = startH - dy
+                nh = Math.round(nh / 2) * 2
+                chartRoot.panelHeight = Math.max(chartRoot.panelMinH,
+                                                 Math.min(chartRoot.panelMaxH, nh))
+            }
+            onDoubleClicked: chartRoot.panelHeight = 200
         }
     }
 
