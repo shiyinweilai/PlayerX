@@ -38,7 +38,10 @@ property int  bitrateChartH: 200  // 面板高度（与层级一致；顶部把�
 // ═════════════════════════════════ anchored lift for hierarchy chart ════
 property bool hierarchyChartOpen: false      // 是否展开
 property bool hierarchyChartFloating: false // true=悬浮；false=挤占（视频上移）
-property int  hierarchyChartH: 200  // 面板高度（顶部把手拖拽可调）
+property int  hierarchyChartH: 200  // 面板高度（顶部把手拖拽可调，不持久化）
+// 码率 + 层级 同时打开时的左右分栏比例（左侧占比，0.2~0.8，双击分隔条复位 0.5）
+// 高度与比例均不持久化：每次启动回到默认（200 / 0.5）
+property real panelSplitRatio: 0.5
     property int currentSlot: 0
     signal switchTab(string tab)
 
@@ -1384,11 +1387,12 @@ property int  hierarchyChartH: 200  // 面板高度（顶部把手拖拽可调�
             anchors.top: parent.top
             anchors.bottom: gopBar.top
             anchors.bottomMargin: {
+                let h = 0
                 if (streamView.hierarchyChartOpen && !streamView.hierarchyChartFloating)
-                    return streamView.hierarchyChartH
+                    h = Math.max(h, streamView.hierarchyChartH)
                 if (streamView.bitrateChartOpen && !streamView.bitrateChartFloating)
-                    return streamView.bitrateChartH
-                return 0
+                    h = Math.max(h, streamView.bitrateChartH)
+                return h
             }
 
             Rectangle { anchors.fill: parent; color: "#0a0a0e" }
@@ -1873,60 +1877,184 @@ property int  hierarchyChartH: 200  // 面板高度（顶部把手拖拽可调�
             }
         }
 
-        // ── 码率曲线 host：GOP 栏正上方、底部总控栏之上的挂载容器 ──
-        // 挤占模式（open && !floating）：高度 180，mainDisplay 已上移让位；
-        // 悬浮模式（open && floating）：高度 0，面板以本容器底边（GOP 栏顶）为
-        // 基线向上悬浮 180px，浮于视频上层（z 高于 mainDisplay 内部层）。
+        // ══════════════ 码率 / 层级 面板宿主（联合分栏）══════════════
+        // 两者都开（且都非悬浮）时：一分为二左右排列，中间竖直分隔条可左右
+        // 拖拽调整宽度比例（panelSplitRatio，不持久化，每次启动默认 0.5）；
+        // 只开一个时该面板占满整宽。高度取两者较大值，视频区按此上移让位。
         Item {
-            id: bitrateChartHost
+            id: panelHost
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: gopBar.top
-            height: (streamView.bitrateChartOpen && !streamView.bitrateChartFloating)
-                    ? streamView.bitrateChartH : 0
             z: 60   // 高于 mainDisplay 内部层（渲染层 z 通常 < 50）
 
+            readonly property bool bOpen: streamView.bitrateChartOpen
+                                          && !streamView.bitrateChartFloating
+            readonly property bool hOpen: streamView.hierarchyChartOpen
+                                          && !streamView.hierarchyChartFloating
+            readonly property bool both: bOpen && hOpen
+            readonly property int boxH: Math.max(bOpen ? streamView.bitrateChartH : 0,
+                                                 hOpen ? streamView.hierarchyChartH : 0)
+            height: (bOpen || hOpen) ? boxH : 0
+
+            // 双开瞬间对齐两栏高度：面板内部拖拽会断开外部绑定，
+            // 故除写 streamView 两个值外，还要通过 id 直接设 panelHeight 覆盖。
+            onBothChanged: {
+                if (!both) return
+                const h = Math.max(streamView.bitrateChartH, streamView.hierarchyChartH)
+                streamView.bitrateChartH = h
+                streamView.hierarchyChartH = h
+                bitrateChart.panelHeight = h
+                hierarchyChart.panelHeight = h
+            }
+
+            // ── 码率面板（左侧）──
+            Item {
+                id: bitrateBox
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                // 未打开时宽度为 0（否则 hierarchyBox 的 left 锚点会把它挤到半宽）
+                width: panelHost.bOpen
+                       ? (panelHost.both ? Math.round(panelHost.width * streamView.panelSplitRatio)
+                                         : panelHost.width)
+                       : 0
+                visible: panelHost.bOpen
+                clip: true
+                StreamBitrateChart {
+                    id: bitrateChart
+                    anchors.fill: parent
+                    slot: streamView.effectiveSlot
+                    open: streamView.bitrateChartOpen
+                    floating: streamView.bitrateChartFloating
+                    // 高度双向同步：面板把手拖拽 → 宿主高度 → 视频区让位
+                    // 双开时的联动由下方 connBitrateH/connHierarchyH 负责：
+                    // 面板内部拖拽会断开这里的外部绑定，故必须直接监听属性强制同步。
+                    panelHeight: streamView.bitrateChartH
+                    onPanelHeightChanged: streamView.bitrateChartH = panelHeight
+                    onRequestClose: streamView.bitrateChartOpen = false
+                    onRequestToggleMode: streamView.bitrateChartFloating = !streamView.bitrateChartFloating
+                }
+            }
+
+            // ── 竖直分隔条：左右拖拽调整两栏宽度比例（双击复位 50/50）──
+            // 同样用屏幕全局坐标，避免面板位移反作用于 mouse.x 造成抖动。
+            Rectangle {
+                id: vSplitter
+                x: bitrateBox.width - 3
+                y: 0
+                width: 6
+                height: panelHost.height
+                visible: panelHost.both
+                color: vMa.pressed ? "#42A5FF" : (vMa.containsMouse ? "#2a3f5a" : "transparent")
+                z: 40
+                MouseArea {
+                    id: vMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    preventStealing: true
+                    cursorShape: pressed ? Qt.SplitHCursor
+                                         : (containsMouse ? Qt.SplitHCursor : Qt.ArrowCursor)
+                    property real startGlobalX: 0
+                    property real startRatio: 0.5
+                    onPressed: {
+                        startGlobalX = mapToGlobal(mouse.x, mouse.y).x
+                        startRatio = streamView.panelSplitRatio
+                        mouse.accepted = true
+                    }
+                    onPositionChanged: {
+                        if (!pressed || panelHost.width <= 0) return
+                        const dx = mapToGlobal(mouse.x, mouse.y).x - startGlobalX
+                        let r = startRatio + dx / panelHost.width
+                        r = Math.max(0.2, Math.min(0.8, r))
+                        streamView.panelSplitRatio = r
+                    }
+                    onDoubleClicked: streamView.panelSplitRatio = 0.5
+                }
+            }
+
+            // ── 层级面板（右侧）──
+            Item {
+                id: hierarchyBox
+                // 码率未开时左锚到父级左边缘（撑满整宽）；双开时锚在码率框右侧
+                anchors.left: panelHost.bOpen ? bitrateBox.right : panelHost.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                visible: panelHost.hOpen
+                clip: true
+                StreamHierarchyChart {
+                    id: hierarchyChart
+                    anchors.fill: parent
+                    slot: streamView.effectiveSlot
+                    open: streamView.hierarchyChartOpen
+                    floating: streamView.hierarchyChartFloating
+                    // 高度双向同步：面板把手拖拽 → 宿主高度 → 视频区让位
+                    // 双开联动同样由下方 Connections 负责（内部拖拽会断开外部绑定）
+                    panelHeight: streamView.hierarchyChartH
+                    onPanelHeightChanged: streamView.hierarchyChartH = panelHeight
+                    onRequestClose: streamView.hierarchyChartOpen = false
+                    onRequestToggleMode: streamView.hierarchyChartFloating = !streamView.hierarchyChartFloating
+                }
+            }
+        }
+
+        // ── 悬浮模式挂载容器：host 高度 0，面板以本容器底边为基线向上悬浮 ──
+        // 悬浮本质是不挤占画面，故不参与左右分栏，两面板各自浮于视频上层。
+        Item {
+            id: floatingHost
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: gopBar.top
+            height: 0
+            z: 61
+
             StreamBitrateChart {
-                id: bitrateChart
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 slot: streamView.effectiveSlot
-                open: streamView.bitrateChartOpen
-                floating: streamView.bitrateChartFloating
-                // 高度双向同步：面板把手拖拽 → 宿主高度 → 视频区让位
+                open: streamView.bitrateChartOpen && streamView.bitrateChartFloating
+                floating: true
                 panelHeight: streamView.bitrateChartH
                 onPanelHeightChanged: streamView.bitrateChartH = panelHeight
                 onRequestClose: streamView.bitrateChartOpen = false
                 onRequestToggleMode: streamView.bitrateChartFloating = !streamView.bitrateChartFloating
             }
-        }
-
-        // ── 参考层级 host：GOP 栏正上方、底部总控栏之上的挂载容器 ──
-        // 与码率 host 相同的双模式约定：挤占模式高度 200；悬浮模式高度 0、
-        // 面板以本容器底边为基线向上悬浮 200px，浮于视频上层。
-        Item {
-            id: hierarchyChartHost
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: gopBar.top
-            height: (streamView.hierarchyChartOpen && !streamView.hierarchyChartFloating)
-                    ? streamView.hierarchyChartH : 0
-            z: 60
-
             StreamHierarchyChart {
-                id: hierarchyChart
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 slot: streamView.effectiveSlot
-                open: streamView.hierarchyChartOpen
-                floating: streamView.hierarchyChartFloating
-                // 高度双向同步：面板把手拖拽 → 宿主高度 → 视频区让位
+                open: streamView.hierarchyChartOpen && streamView.hierarchyChartFloating
+                floating: true
                 panelHeight: streamView.hierarchyChartH
                 onPanelHeightChanged: streamView.hierarchyChartH = panelHeight
                 onRequestClose: streamView.hierarchyChartOpen = false
                 onRequestToggleMode: streamView.hierarchyChartFloating = !streamView.hierarchyChartFloating
+            }
+        }
+
+        // ── 双开高度联动 ──
+        // 面板内部的把手拖拽会直接给自己的 panelHeight 赋值，从而断开外部的
+        // `panelHeight: streamView.xxxChartH` 绑定；此时再写 streamView 的值已无法
+        // 回传到另一个面板。因此这里用 Connections 直接监听属性变化并强制同步对方。
+        Connections {
+            target: bitrateChart
+            enabled: panelHost.both
+            onPanelHeightChanged: {
+                streamView.bitrateChartH = bitrateChart.panelHeight
+                if (hierarchyChart.panelHeight !== bitrateChart.panelHeight)
+                    hierarchyChart.panelHeight = bitrateChart.panelHeight
+            }
+        }
+        Connections {
+            target: hierarchyChart
+            enabled: panelHost.both
+            onPanelHeightChanged: {
+                streamView.hierarchyChartH = hierarchyChart.panelHeight
+                if (bitrateChart.panelHeight !== hierarchyChart.panelHeight)
+                    bitrateChart.panelHeight = hierarchyChart.panelHeight
             }
         }
 
