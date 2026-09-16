@@ -27,17 +27,24 @@ Item {
     property bool open: false      // 是否展开（由 GOP 栏「码率」按钮控制）
     property bool floating: false  // true=悬浮画面上层；false=挤占（视频上移让位）
 
+    // 面板高度（唯一数据源）：顶部把手上下拖拽调整，宿主高度绑定它。
+    // 默认 200，与参考层级面板默认高度一致。
+    property int panelHeight: 200
+    readonly property int panelMinH: 120
+    readonly property int panelMaxH: 640
+
     // 内部交互请求：open/floating 归 StreamView 所有，改状态走信号回调外层
     signal requestClose()
     signal requestToggleMode()
 
-    // ── 挤占模式容器：实底填满 host（host 高度 180，视频已让位）──
+    // ── 挤占模式容器：实底填满 host（host 高度=panelHeight，视频已让位）──
     Rectangle {
+        id: dockedBox
         visible: chartRoot.open && !chartRoot.floating
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 180
+        height: chartRoot.panelHeight
         color: "#141418"
 
         // 顶部分隔线（与 GOP 栏上下呼应）
@@ -58,6 +65,7 @@ Item {
 
     // ── 悬浮模式容器：以 host 底边为基线向上悬浮，圆角半透明 ──
     Rectangle {
+        id: floatBox
         visible: chartRoot.open && chartRoot.floating
         anchors.left: parent.left
         anchors.leftMargin: 12
@@ -65,7 +73,7 @@ Item {
         anchors.rightMargin: 12
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 4
-        height: 180
+        height: chartRoot.panelHeight
         radius: 8
         color: "#f0121417"
         border.color: "#2a2e33"; border.width: 1
@@ -74,6 +82,55 @@ Item {
             anchors.fill: parent
             active: chartRoot.open && chartRoot.floating
             sourceComponent: chartContentComp
+        }
+    }
+
+    // ── 顶部拖拽把手：上下拖动调整面板高度（120~640），双击复位 200 ──
+    // 用「屏幕全局坐标」计算位移：把手自身会随高度移动，若用 mouse.y（局部）
+    // 会形成正反馈回路导致抖动、指针脱手，改用 mapToGlobal 后把手移动被抵消。
+    Rectangle {
+        id: resizeHandle
+        readonly property bool forFloat: chartRoot.floating
+        x: forFloat ? 12 : 0
+        width: forFloat ? (chartRoot.width - 24) : chartRoot.width
+        height: 10
+        y: {
+            const box = forFloat ? floatBox : dockedBox
+            return box.y - 4
+        }
+        visible: chartRoot.open
+        color: resizeMa.pressed ? "#42A5FF"
+                                : (resizeMa.containsMouse ? "#2a3f5a" : "transparent")
+        z: 30
+        Text {
+            anchors.centerIn: parent
+            visible: resizeMa.pressed
+            text: chartRoot.panelHeight + " px"
+            color: "#42A5FF"; font.pixelSize: 8
+        }
+        MouseArea {
+            id: resizeMa
+            anchors.fill: parent
+            hoverEnabled: true
+            preventStealing: true
+            cursorShape: pressed ? Qt.SizeVerCursor
+                                 : (containsMouse ? Qt.SizeVerCursor : Qt.ArrowCursor)
+            property real startGlobalY: 0
+            property int startH: 0
+            onPressed: {
+                startGlobalY = mapToGlobal(mouse.x, mouse.y).y
+                startH = chartRoot.panelHeight
+                mouse.accepted = true
+            }
+            onPositionChanged: {
+                if (!pressed) return
+                // 向上拖动（dy<0）= 变高：面板底边固定，顶边随之上移
+                let nh = startH - (mapToGlobal(mouse.x, mouse.y).y - startGlobalY)
+                nh = Math.round(nh / 2) * 2   // 量化到 2px，减少视频区重排
+                chartRoot.panelHeight = Math.max(chartRoot.panelMinH,
+                                                 Math.min(chartRoot.panelMaxH, nh))
+            }
+            onDoubleClicked: chartRoot.panelHeight = 200
         }
     }
 

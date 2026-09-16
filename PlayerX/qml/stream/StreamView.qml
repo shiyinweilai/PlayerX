@@ -34,7 +34,7 @@ Item {
 // ═════════════════════════════════════ anchored lift for bitrate chart ═══
 property bool bitrateChartOpen: false      // 是否展开
 property bool bitrateChartFloating: false // true=悬浮；false=挤占（视频上移）
-readonly property int  bitrateChartH: 180  // 面板高度
+property int  bitrateChartH: 200  // 面板高度（与层级一致；顶部把手拖拽可调）
 // ═════════════════════════════════ anchored lift for hierarchy chart ════
 property bool hierarchyChartOpen: false      // 是否展开
 property bool hierarchyChartFloating: false // true=悬浮；false=挤占（视频上移）
@@ -1887,12 +1887,16 @@ property int  hierarchyChartH: 200  // 面板高度（顶部把手拖拽可调�
             z: 60   // 高于 mainDisplay 内部层（渲染层 z 通常 < 50）
 
             StreamBitrateChart {
+                id: bitrateChart
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 slot: streamView.effectiveSlot
                 open: streamView.bitrateChartOpen
                 floating: streamView.bitrateChartFloating
+                // 高度双向同步：面板把手拖拽 → 宿主高度 → 视频区让位
+                panelHeight: streamView.bitrateChartH
+                onPanelHeightChanged: streamView.bitrateChartH = panelHeight
                 onRequestClose: streamView.bitrateChartOpen = false
                 onRequestToggleMode: streamView.bitrateChartFloating = !streamView.bitrateChartFloating
             }
