@@ -31,9 +31,10 @@ Rectangle {
         anchors.margins: 8
         spacing: 4
 
-        // 表头
+        // 表头（title 为空时隐藏，不占布局高度）
         Text {
             Layout.fillWidth: true
+            visible: section.title.length > 0
             text: section.title
             color: "#bbbbbb"
             font.pixelSize: 12
@@ -59,6 +60,7 @@ Rectangle {
                     font.family: "Monospace"
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideRight
                 }
             }
         }

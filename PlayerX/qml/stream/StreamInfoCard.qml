@@ -151,6 +151,37 @@ Item {
                 }
                 return { map: groups, order: order }
             }
+            // 整文件平均码率（Mbps）：容器报的 bitrate 为 0（裸 ES 流无容器头）时，
+            // 按 frameList 帧大小总和 / fps 自算，与底部码率曲线同口径。
+            readonly property real fileBitrateMbps: {
+                const _ = panel.ver
+                const br = Number(panel.info.bitrate)
+                if (br > 0) return br / 1e6
+                if (!panel.slotActive || !panel.frameList || panel.frameList.length === 0) return 0
+                let totalBytes = 0
+                const n = panel.frameList.length
+                for (let i = 0; i < n; ++i)
+                    totalBytes += Number(panel.frameList[i].sizeBytes)
+                const fps = Number(panel.info.fps) > 0 ? Number(panel.info.fps) : 30
+                const durSec = n / fps
+                return durSec > 0 ? (totalBytes * 8.0 / durSec / 1e6) : 0
+            }
+            // 当前帧瞬时码率（Mbps）：与底部码率曲线头部读数完全同口径——
+            // 当前帧所在采样桶（≤200 桶）的平均码率，随播放帧变化。
+            readonly property real curFrameBitrateMbps: {
+                const _ = panel.ver
+                if (!panel.slotActive || !panel.frameList || panel.frameList.length === 0) return 0
+                const n = panel.frameList.length
+                const bucket = Math.max(1, Math.floor(n / 200))
+                let sumBytes = 0, cnt = 0
+                for (let j = panel.curFrame; j < Math.min(panel.curFrame + bucket, n); ++j) {
+                    sumBytes += Number(panel.frameList[j].sizeBytes)
+                    ++cnt
+                }
+                const fps = Number(panel.info.fps) > 0 ? Number(panel.info.fps) : 30
+                const sec = cnt / fps
+                return sec > 0 ? (sumBytes * 8.0 / sec / 1e6) : 0
+            }
             // ── 文本面板行数据（原三个 Section 的 rows 原样迁移）──
             readonly property var fileInfoRows: {
                 const _ = panel.ver
@@ -183,7 +214,7 @@ Item {
                     { label: "帧率",          value: Number(inf.fps).toFixed(2) + " fps" },
                     { label: "编码格式",      value: String(inf.codecLong || "—") },
                     { label: "Profile / Level", value: String(inf.profile) + " | Level " + String(inf.level) },
-                    { label: "码率",          value: (Number(inf.bitrate) / 1e6).toFixed(2) + " Mbps" },
+ { label: "平均码率",      value: panel.fileBitrateMbps.toFixed(2) + " Mbps" },
                     { label: "总帧数 / GOP",  value: String(panel.frameList.length) + " · " + String(panel.gopList.length) },
                     { label: "时长",          value: durText },
                     { label: "文件名",        value: String(inf.fileName || "—") }
@@ -215,7 +246,7 @@ Item {
                 return panel.slotActive && panel.currentFrameItem
                     ? [
                         { label: "帧大小",   value: (Number(panel.currentFrameItem.sizeBytes) / 1024).toFixed(1) + " KB" },
-                        { label: "码率",     value: (Number(panel.info.bitrate) / 1e6).toFixed(2) + " Mbps" },
+                        { label: "码率",     value: panel.curFrameBitrateMbps.toFixed(2) + " Mbps" },
                         { label: "QP 均值",  value: panel.blockStats.valid
                                                  ? Number(panel.blockStats.avgQp).toFixed(1) : "—" },
                         { label: "QP 最小 / 最大", value: panel.blockStats.valid
@@ -329,33 +360,34 @@ Item {
                 }
             }
 
-            // ── 上半区内容：当前 Tab 的面板 ──
+            // ── 上半区内容：当前 Tab 的面板（高度=内容自适应，行少不撑满）──
+            // 2026-09-16：原实现 Loader 锚到 syntaxSection.top 且 syntaxSection
+            // 固定占 45%，导致"等分两部分"。现改为：Loader 高度由面板内容决定
+            // （fileInfoRows 仅 8 行），语法区锚到 Loader 实际底边，拿走全部剩余。
             Loader {
                 id: upperLoader
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: mainTabBar.bottom
-                anchors.bottom: syntaxSection.top
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
-                anchors.topMargin: 8
-                anchors.bottomMargin: 8
+                anchors.topMargin: 2
+                // 高度跟随内容（textTabComp 面板的 implicitHeight），不锚 syntaxSection
+                height: item ? item.implicitHeight : 0
+
                 // 行数据由 currentRows 注入（文件 / 帧 / 统计共用文本面板）
                 property var currentRows: panel.mainTab === 0 ? panel.fileInfoRows
                                 : panel.mainTab === 1 ? panel.frameInfoRows
                                 : panel.streamStatsRows
                 sourceComponent: textTabComp
 
-                // 文本面板（文件 / 帧 / 统计共用，可滚动防溢出）
+                // 文本面板（文件 / 帧 / 统计共用；行数不足时不留白，
+                // 高度随内容自适应，面板从 Tab 条下方顶格排布）
                 Component {
                     id: textTabComp
-                    Flickable {
-                        anchors.fill: parent
-                        contentWidth: width
-                        contentHeight: sectCard.implicitHeight
-                        clip: true
-                        boundsBehavior: Flickable.StopAtBounds
-                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    Item {
+                        id: textPanelItem
+                        implicitHeight: sectCard.implicitHeight
                         StreamInfoCardSection {
                             id: sectCard
                             x: 0; y: 0
@@ -367,18 +399,17 @@ Item {
                 }
             }
 
-            // ── 下半区：语法元素（VPS / SPS / PPS，固定占约 45%）──
+            // ── 下半区：语法元素（VPS / SPS / PPS，锚到上半区底边，占满剩余）──
             Item {
                 id: syntaxSection
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
+                anchors.top: upperLoader.bottom
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 anchors.bottomMargin: 8
-                height: Math.max(170, panel.height * 0.45)
-
-                // ── 小标题行 ──
+                anchors.topMargin: 8
                 Row {
                     id: synHeader
                     anchors.left: parent.left
