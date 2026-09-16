@@ -555,78 +555,6 @@ Item {
     // 当前点击选中的块索引（-1 = 未选中），驱动 CU 详情卡片
     property int selectedBlockIndex: -1
 
-    // ── 图2 右侧「帧统计」面板数据源 ──────────────────────────────
-    // 当前帧（来自 slotFrameList）
-    readonly property var curFrameItem: {
-        const _ = streamView.globalVer
-        const list = streamView.slotFrameList
-        return (list && streamView.slotCurrent >= 0 && streamView.slotCurrent < list.length)
-               ? list[streamView.slotCurrent] : ({})
-    }
-    // 全序列聚合统计（一次性遍历 slotFrameList，算出平均/最小/最大）
-    readonly property var seqStats: {
-        const _ = streamView.globalVer
-        const list = streamView.slotFrameList
-        let n = 0, qpSum = 0, sizeSum = 0, qpCount = 0
-        let qpMin = 999, qpMax = -999, sizeMin = 1e18, sizeMax = -1
-        let kbpsMin = 1e18, kbpsMax = -1
-        const fps = Number(streamView.slotInfo.fps) > 0 ? Number(streamView.slotInfo.fps) : 25
-        for (let i = 0; i < (list ? list.length : 0); ++i) {
-            const f = list[i]
-            const qp = Number(f.avgQp)
-            const sz = Number(f.sizeBytes)
-            // ★ 修正：avgQp 可能为 -1（C++ 侧未算出的帧），必须排除，
-            //   否则平均值/最小值会被 -1 污染（此前显示 -1.0 / -1）。
-            if (!isNaN(qp) && qp >= 0) {
-                qpSum += qp
-                if (qp < qpMin) qpMin = qp
-                if (qp > qpMax) qpMax = qp
-                ++qpCount
-            }
-            if (!isNaN(sz)) {
-                sizeSum += sz
-                if (sz < sizeMin) sizeMin = sz
-                if (sz > sizeMax) sizeMax = sz
-                const kb = sz * 8 / 1000 * fps / 1000   // 近似瞬时码率 kbps
-                if (kb < kbpsMin) kbpsMin = kb
-                if (kb > kbpsMax) kbpsMax = kb
-            }
-            ++n
-        }
-        if (n === 0) return ({ avgQp: 0, minQp: 0, maxQp: 0, avgSize: 0, minSize: 0, maxSize: 0,
-                               minKbps: 0, maxKbps: 0, fps: fps })
-        return ({
-            // 平均值只对有效 QP 帧求平均（qpCount 可能 < n）
-            avgQp:  qpCount > 0 ? (qpSum / qpCount) : 0,
-            minQp:  qpMin === 999 ? 0 : qpMin,
-            maxQp:  qpMax === -999 ? 0 : qpMax,
-            avgSize: sizeSum / n,
-            minSize: sizeMin === 1e18 ? 0 : sizeMin,
-            maxSize: sizeMax === -1 ? 0 : sizeMax,
-            minKbps: kbpsMin === 1e18 ? 0 : kbpsMin,
-            maxKbps: kbpsMax === -1 ? 0 : kbpsMax,
-            fps: fps
-        })
-    }
-    // 当前帧的瞬时码率（kbps）与大小（KB）
-    readonly property real  curKbps: {
-        const _ = streamView.globalVer
-        const sz = Number(streamView.curFrameItem.sizeBytes)
-        if (isNaN(sz)) return 0
-        const fps = streamView.seqStats.fps
-        return sz * 8 / 1000 * fps / 1000
-    }
-    readonly property real  curSizeKB: {
-        const _ = streamView.globalVer
-        const sz = Number(streamView.curFrameItem.sizeBytes)
-        return isNaN(sz) ? 0 : sz / 1024
-    }
-    // 当前帧 QP 极差（块级 max-min，来自 slotBlockStats）
-    readonly property int   curQpRange: {
-        const _ = streamView.globalVer
-        const s = streamView.slotBlockStats
-        return s.valid ? (s.maxQp - s.minQp) : 0
-    }
 
     // 全局版本号：任意 slot 的帧变化/打开/关闭都 ++，驱动底部总控栏的"▶/⏸"图标等
     property int globalVer: 0
@@ -1460,7 +1388,7 @@ Item {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                anchors.right: rightStatsPanel.left
+                anchors.right: parent.right
                 anchors.margins: 12
                 visible: streamView.slotActive && streamView.blockSupported
                 fillMode: Image.PreserveAspectFit
@@ -1477,7 +1405,7 @@ Item {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                anchors.right: rightStatsPanel.left
+                anchors.right: parent.right
                 anchors.margins: 12
                 visible: streamView.slotActive && streamView.blockSupported
                 fillMode: Image.PreserveAspectFit
@@ -1510,7 +1438,7 @@ Item {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                anchors.right: rightStatsPanel.left
+                anchors.right: parent.right
                 anchors.margins: 12
                 visible: streamView.slotActive && streamView.blockSupported
 
@@ -1754,105 +1682,6 @@ Item {
                 }
             }
 
-            // ── 图2 右侧「帧统计（当前帧）」面板 ──────────────────
-            // 布局：项目 | 当前帧 | 平均值 | 最小值 | 最大值
-            Rectangle {
-                id: rightStatsPanel
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                width: 260
-                visible: streamView.slotActive
-                color: "#141418"
-                border.color: "#2a2e33"; border.width: 1
-
-                Column {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 6
-
-                    Text {
-                        text: "帧统计（当前帧）"
-                        color: "#e8e8ec"; font.pixelSize: 12; font.bold: true
-                    }
-                    Rectangle { width: parent.width; height: 1; color: "#2a2e33" }
-
-                    // 表头
-                    Row {
-                        spacing: 4
-                        Text { text: "项目"; color: "#9aa0a6"; font.pixelSize: 9; width: 82 }
-                        Text { text: "当前帧"; color: "#9aa0a6"; font.pixelSize: 9; width: 46; horizontalAlignment: Text.AlignRight }
-                        Text { text: "平均值"; color: "#9aa0a6"; font.pixelSize: 9; width: 42; horizontalAlignment: Text.AlignRight }
-                        Text { text: "最小值"; color: "#9aa0a6"; font.pixelSize: 9; width: 36; horizontalAlignment: Text.AlignRight }
-                        Text { text: "最大值"; color: "#9aa0a6"; font.pixelSize: 9; width: 36; horizontalAlignment: Text.AlignRight }
-                    }
-                    Rectangle { width: parent.width; height: 1; color: "#2a2e33" }
-
-                    // 数据行统一构件
-                    component StatRow : Row {
-                        spacing: 4
-                        property string label: ""
-                        property string cur: "—"
-                        property string avg: "—"
-                        property string mn: "—"
-                        property string mx: "—"
-                        property bool   highlight: false
-                        Text { text: label; color: "#9aa0a6"; font.pixelSize: 10; width: 82; elide: Text.ElideRight }
-                        Text { text: cur; color: highlight ? "#f0c040" : "#cccccc"; font.pixelSize: 10
-                               width: 46; horizontalAlignment: Text.AlignRight; font.family: "Monospace" }
-                        Text { text: avg; color: "#cccccc"; font.pixelSize: 10
-                               width: 42; horizontalAlignment: Text.AlignRight; font.family: "Monospace" }
-                        Text { text: mn; color: "#cccccc"; font.pixelSize: 10
-                               width: 36; horizontalAlignment: Text.AlignRight; font.family: "Monospace" }
-                        Text { text: mx; color: "#cccccc"; font.pixelSize: 10
-                               width: 36; horizontalAlignment: Text.AlignRight; font.family: "Monospace" }
-                    }
-
-                    StatRow {
-                        label: "帧类型"
-                        cur: streamView.curFrameItem.type !== undefined ? String(streamView.curFrameItem.type) : "—"
-                    }
-                    StatRow {
-                        label: "POC"
-                        cur: streamView.curFrameItem.poc !== undefined ? String(streamView.curFrameItem.poc) : "—"
-                    }
-                    StatRow {
-                        label: "QP 均值"
-                        highlight: true
-                        cur: streamView.slotBlockStats.valid
-                             ? Number(streamView.slotBlockStats.avgQp).toFixed(1) : "—"
-                        avg: Number(streamView.seqStats.avgQp).toFixed(1)
-                        mn:  String(Math.round(streamView.seqStats.minQp))
-                        mx:  String(Math.round(streamView.seqStats.maxQp))
-                    }
-                    StatRow {
-                        label: "QP 极差"
-                        cur: streamView.slotBlockStats.valid ? String(streamView.curQpRange) : "—"
-                    }
-                    StatRow {
-                        label: "码率 (kbps)"
-                        cur: streamView.curKbps > 0 ? String(Math.round(streamView.curKbps)) : "—"
-                        avg: String(Math.round(streamView.slotInfo.bitrate / 1000))
-                        mn:  String(Math.round(streamView.seqStats.minKbps))
-                        mx:  String(Math.round(streamView.seqStats.maxKbps))
-                    }
-                    StatRow {
-                        label: "大小 (KB)"
-                        cur: streamView.curSizeKB > 0 ? streamView.curSizeKB.toFixed(1) : "—"
-                        avg: (streamView.seqStats.avgSize / 1024).toFixed(1)
-                        mn:  (streamView.seqStats.minSize / 1024).toFixed(1)
-                        mx:  (streamView.seqStats.maxSize / 1024).toFixed(1)
-                    }
-                    StatRow {
-                        label: "时间戳 (ms)"
-                        cur: streamView.curFrameItem.pts !== undefined
-                             ? String(Math.round(Number(streamView.curFrameItem.pts) * 1000)) : "—"
-                    }
-
-                    Rectangle { width: parent.width; height: 1; color: "#2a2e33" }
-
-                }
-            }
         }
 
         // ── 图1 底部：GOP 结构图（IDR 黄 / P 蓝 / B 灰 + GOP 边界） ──
@@ -2004,7 +1833,7 @@ Item {
                     visible: streamView.slotActive
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: streamView.orderMode === 1 ? "编码顺序" : "显示顺序"
+                        text: "编码顺序"
                         color: streamView.orderMapReady ? "#9aa0a6" : "#6a6f76"
                         font.pixelSize: 11
                     }
@@ -2047,7 +1876,7 @@ Item {
                     visible: streamView.slotActive
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: streamView.qpOverlayEnabled ? "画面+CU网格" : "仅画面"
+                        text: "块信息"
                         color: "#9aa0a6"; font.pixelSize: 11
                     }
                     Rectangle {

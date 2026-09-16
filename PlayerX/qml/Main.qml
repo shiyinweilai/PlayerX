@@ -2047,7 +2047,7 @@ ApplicationWindow {
         }
         width: 320
         z: 199
-        visible: root.rightSidebarOpen
+        visible: root.rightSidebarOpen && !root.streamSidebarFloating
         acceptedButtons: Qt.NoButton  // 不拦截任何点击，透传给下方
         onWheel: function(wheel) {
             // 消费滚轮事件，阻止穿透到 ImageView
@@ -2197,11 +2197,16 @@ Component {
     // ── 码流分析面板（StreamInfoCard.qml）────────────────────────
     // 跟随 StreamView.currentSlot 切换查看哪一路的统计。
     // 仅当 currentTab === "stream" 且右侧栏打开时显示。
+    // floating=true 时卡片悬浮在画面上层，StreamView 不腾位（z 更高）；
+    // floating=false 时为腾位栏，StreamView 右缘左移 320px 让出空间。
+    property bool streamSidebarFloating: false
     Component {
         id: streamPanelComp
         StreamInfoCard {
             slot: (typeof streamViewComp !== "undefined" && streamViewComp.effectiveSlot !== undefined)
                   ? streamViewComp.effectiveSlot : 0
+            floating: root.streamSidebarFloating
+            onFloatingChanged: root.streamSidebarFloating = floating
         }
     }
 
@@ -2500,10 +2505,15 @@ Component {
     // 仿 YuvSetupView 的两阶段锚点策略：
     //   · setup 阶段（slotCount === 0）→ 让出左侧导航栏（anchors.left = leftNavBar.right）
     //   · render 阶段（slotCount > 0） → 铺满整个 contentItem（沉浸满屏）
+    // 右侧栏腾位策略（2026-09-16）：
+    //   · stream tab 右侧栏关闭，或悬浮模式（floating）→ 铺满
+    //   · stream tab 右侧栏打开且为腾位模式 → 右缘左移 320px，让出右侧栏空间
     StreamView {
         id: streamViewComp
         anchors.left: (StreamBridge.slotCount > 0) ? parent.left : leftNavBar.right
         anchors.right: parent.right
+        anchors.rightMargin: (root.currentTab === "stream" && root.rightSidebarOpen && !root.streamSidebarFloating)
+                             ? 320 : 0
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         visible: root.currentTab === "stream"
