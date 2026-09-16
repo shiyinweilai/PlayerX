@@ -247,6 +247,7 @@ qt_add_qml_module(PlayerX
         qml/stream/StreamView.qml
         qml/stream/StreamInfoCard.qml
         qml/stream/StreamInfoCardSection.qml
+        qml/stream/StreamBitrateChart.qml
         qml/stream/StreamFlatButton.qml
         # ── 图片分析模块（拆分至独立子目录 qml/image/） ──
         qml/image/ImageView.qml

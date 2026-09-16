@@ -20,8 +20,21 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import PlayerX 1.0
 
+import "."
+
 Item {
     id: streamView
+
+    // ═════════════════════════════════════════════════════════════════════
+    // 底部码率曲线面板（2026-09-16 新增）：
+    //   · 由 GOP 栏左侧「码率」按钮向上展开，宽同 GOP 栏，高 180。
+    //   · floating=false（挤占）：videoHost 高度减 180，视频区整体上移让位。
+    //   · floating=true（悬浮）：videoHost 高度不变，面板圆角浮于视频上层。
+    //   · 独立模块（StreamBitrateChart.qml），不引用右侧栏与主显示区内部状态。
+    // ═════════════════════════════════════ anchored lift for bitrate chart ═══
+    property bool bitrateChartOpen: false      // 是否展开
+    property bool bitrateChartFloating: false // true=悬浮；false=挤占（视频上移）
+    readonly property int  bitrateChartH: 180  // 面板高度
     property int currentSlot: 0
     signal switchTab(string tab)
 
@@ -1343,12 +1356,16 @@ Item {
         visible: StreamBridge.slotCount > 0
 
         // ── 中部：主显示区（CU 网格 + QP 着色，P1 真实渲染） ──
+        // 挤占模式（bitrateChartOpen && !floating）时底部上移 180 让位给码率面板；
+        // 悬浮模式或未展开时贴 GOP 栏，视频区不动。
         Item {
             id: mainDisplay
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: gopBar.top
+            anchors.bottomMargin: (streamView.bitrateChartOpen && !streamView.bitrateChartFloating)
+                                  ? streamView.bitrateChartH : 0
 
             Rectangle { anchors.fill: parent; color: "#0a0a0e" }
 
@@ -1700,9 +1717,32 @@ Item {
                 anchors.leftMargin: 6
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 6
-                Text { text: "GOP结构"; color: "#9aa0a6"; font.pixelSize: 10
-                       anchors.verticalCenter: parent.verticalCenter }
-                // 图例
+                // 「码率」按钮：向上展开码率曲线面板（悬浮/挤占双模式）
+                Rectangle {
+                    width: bitLabel.implicitWidth + 14
+                    height: 18
+                    radius: 3
+                    color: streamView.bitrateChartOpen ? "#2a3f5a" : "#1a1d22"
+                    border.color: streamView.bitrateChartOpen ? "#42A5FF" : "#2a2e33"
+                    border.width: 1
+                    Text {
+                        id: bitLabel
+                        anchors.centerIn: parent
+                        text: "码率"
+                        color: streamView.bitrateChartOpen ? "#e6f0ff" : "#9aa0a6"
+                        font.pixelSize: 10; font.bold: streamView.bitrateChartOpen
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: streamView.bitrateChartOpen = !streamView.bitrateChartOpen
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: streamView.bitrateChartOpen
+                                       ? "收起码率曲线"
+                                       : "展开码率曲线（向上展开，悬浮/挤占双模式）"
+                    }
+                }
                 Rectangle { width: 8; height: 10; color: "#f0c040"; radius: 1
                             anchors.verticalCenter: parent.verticalCenter }
                 Text { text: "I/IDR"; color: "#9aa0a6"; font.pixelSize: 9
@@ -1779,6 +1819,31 @@ Item {
                         }
                     }
                 }
+            }
+        }
+
+        // ── 码率曲线 host：GOP 栏正上方、底部总控栏之上的挂载容器 ──
+        // 挤占模式（open && !floating）：高度 180，mainDisplay 已上移让位；
+        // 悬浮模式（open && floating）：高度 0，面板以本容器底边（GOP 栏顶）为
+        // 基线向上悬浮 180px，浮于视频上层（z 高于 mainDisplay 内部层）。
+        Item {
+            id: bitrateChartHost
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: gopBar.top
+            height: (streamView.bitrateChartOpen && !streamView.bitrateChartFloating)
+                    ? streamView.bitrateChartH : 0
+            z: 60   // 高于 mainDisplay 内部层（渲染层 z 通常 < 50）
+
+            StreamBitrateChart {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                slot: streamView.effectiveSlot
+                open: streamView.bitrateChartOpen
+                floating: streamView.bitrateChartFloating
+                onRequestClose: streamView.bitrateChartOpen = false
+                onRequestToggleMode: streamView.bitrateChartFloating = !streamView.bitrateChartFloating
             }
         }
 

@@ -10,10 +10,10 @@
 //   两种模式内容与数据源完全一致，由内部 Loader 复用同一份内容组件。
 //
 // 内容结构（2026-09-16 二次改造：一分为二 + Tab 化）：
-//   · 上半区：Tab 切换「文件 / 帧 / 统计 / 码率」四个面板（面板名缩短）。
+//   · 上半区：Tab 切换「文件 / 帧 / 统计」三个面板（面板名缩短）。
+//     码率曲线已迁至 StreamView 底部 StreamBitrateChart.qml（GOP 栏「码率」
+//     按钮向上展开，悬浮/挤占双模式），右侧栏不再受宽度限制。
 //   · 下半区：语法元素（VPS / SPS / PPS）固定占约 45% 高度，独立滚动。
-//   · 码率曲线为整文件静态采样（≤200 桶）；播放时叠加当前帧指示线与
-//     实时码率读数，因此随播放可见变化。
 
 import QtQuick
 import QtQuick.Controls
@@ -85,7 +85,7 @@ Item {
             required property int slot
             property int ver: 0
             property int syntaxVer: 0
-            // 上半区选中 Tab：0 文件 / 1 帧 / 2 统计 / 3 码率
+            // 上半区选中 Tab：0 文件 / 1 帧 / 2 统计（码率曲线已迁至底部面板）
             property int mainTab: 0
             // 下半区参数集 Tab 下标（对应 syntaxGroups.order）
             property int syntaxTab: 0
@@ -151,35 +151,6 @@ Item {
                 }
                 return { map: groups, order: order }
             }
-            // 码率采样（Mbps）：整文件每桶平均码率，≤200 桶
-            readonly property var    bitrateSamples: {
-                const _ = ver
-                if (!frameList || frameList.length === 0) return []
-                const out = []
-                const n = frameList.length
-                const bucket = Math.max(1, Math.floor(n / 200))
-                for (let i = 0; i < n; i += bucket) {
-                    let sumBytes = 0, cnt = 0
-                    for (let j = i; j < Math.min(i + bucket, n); ++j) {
-                        sumBytes += Number(frameList[j].sizeBytes)
-                        cnt++
-                    }
-                    const fps = Number(info.fps) > 0 ? Number(info.fps) : 30
-                    const sec = cnt / fps
-                    out.push(sec > 0 ? (sumBytes * 8.0 / sec / 1e6) : 0)
-                }
-                return out
-            }
-            // 当前帧所在采样桶的码率（Mbps）：码率 Tab 实时读数
-            readonly property real   curBucketMbps: {
-                const _ = ver
-                const arr = bitrateSamples
-                if (!arr || arr.length === 0 || !frameList || frameList.length === 0) return 0
-                const bucket = Math.max(1, Math.floor(frameList.length / 200))
-                const idx = Math.min(arr.length - 1, Math.floor(curFrame / bucket))
-                return arr[idx] || 0
-            }
-
             // ── 文本面板行数据（原三个 Section 的 rows 原样迁移）──
             readonly property var fileInfoRows: {
                 const _ = panel.ver
@@ -322,7 +293,7 @@ Item {
                 }
             }
 
-            // ── 上半区 Tab 条：文件 / 帧 / 统计 / 码率 ──
+            // ── 上半区 Tab 条：文件 / 帧 / 统计 ──
             Row {
                 id: mainTabBar
                 anchors.left: parent.left
@@ -334,9 +305,9 @@ Item {
                 spacing: 4
 
                 Repeater {
-                    model: ["文件", "帧", "统计", "码率"]
+                    model: ["文件", "帧", "统计"]
                     delegate: Rectangle {
-                        width: (mainTabBar.width - mainTabBar.spacing * 3) / 4
+                        width: (mainTabBar.width - mainTabBar.spacing * 2) / 3
                         height: 24
                         radius: 4
                         color: index === panel.mainTab ? "#2a3f5a" : "#1a1d22"
@@ -369,11 +340,11 @@ Item {
                 anchors.rightMargin: 8
                 anchors.topMargin: 8
                 anchors.bottomMargin: 8
-                // 文本面板共用一个 Component，行数据由 currentRows 注入
+                // 行数据由 currentRows 注入（文件 / 帧 / 统计共用文本面板）
                 property var currentRows: panel.mainTab === 0 ? panel.fileInfoRows
                                 : panel.mainTab === 1 ? panel.frameInfoRows
                                 : panel.streamStatsRows
-                sourceComponent: panel.mainTab === 3 ? bitrateTabComp : textTabComp
+                sourceComponent: textTabComp
 
                 // 文本面板（文件 / 帧 / 统计共用，可滚动防溢出）
                 Component {
@@ -391,113 +362,6 @@ Item {
                             width: parent.width
                             title: ""
                             rows: upperLoader.currentRows
-                        }
-                    }
-                }
-
-                // 码率曲线面板（填充上半区剩余高度，含当前帧指示线）
-                Component {
-                    id: bitrateTabComp
-                    Column {
-                        anchors.fill: parent
-                        spacing: 6
-
-                        Row {
-                            width: parent.width
-                            height: 18
-                            Text {
-                                text: "码率曲线 (Mbps)"
-                                color: "#bbbbbb"; font.pixelSize: 12; font.bold: true
-                            }
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.right: parent.right
-                                text: {
-                                    const _ = panel.ver
-                                    return panel.slotActive
-                                           ? "当前 " + panel.curBucketMbps.toFixed(2) + " Mbps"
-                                           : "当前 —"
-                                }
-                                color: "#FFC857"; font.pixelSize: 10
-                                font.family: "Monospace"
-                            }
-                        }
-
-                        Canvas {
-                            id: chartCanvas
-                            width: parent.width
-                            height: parent.height - 24
-                            onPaint: {
-                                const ctx = getContext("2d")
-                                ctx.reset()
-                                const w = width, h = height
-                                ctx.fillStyle = "#0a0a0e"
-                                ctx.fillRect(0, 0, w, h)
-                                // 水平网格
-                                ctx.strokeStyle = "#1a1d22"
-                                ctx.lineWidth = 1
-                                for (let g = 0; g <= 4; ++g) {
-                                    const y = (h * g / 4) | 0
-                                    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke()
-                                }
-                                const samples = panel.bitrateSamples
-                                if (!samples || samples.length === 0) {
-                                    ctx.fillStyle = "#6a6f76"
-                                    ctx.font = "11px sans-serif"
-                                    ctx.textAlign = "center"
-                                    ctx.fillText("未加载文件", w / 2, h / 2)
-                                    return
-                                }
-                                // 归一化：max
-                                let mx = 0
-                                for (let i = 0; i < samples.length; ++i) if (samples[i] > mx) mx = samples[i]
-                                if (mx <= 0) mx = 1
-                                // 折线
-                                ctx.strokeStyle = "#42A5FF"
-                                ctx.lineWidth = 1.5
-                                ctx.beginPath()
-                                for (let i = 0; i < samples.length; ++i) {
-                                    const x = (w * i / Math.max(1, samples.length - 1))
-                                    const y = h - (h * 0.9 * (samples[i] / mx)) - 2
-                                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
-                                }
-                                ctx.stroke()
-                                // 渐变填充
-                                const grad = ctx.createLinearGradient(0, 0, 0, h)
-                                grad.addColorStop(0, "rgba(66,165,255,0.30)")
-                                grad.addColorStop(1, "rgba(66,165,255,0.02)")
-                                ctx.fillStyle = grad
-                                ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath(); ctx.fill()
-                                // Y 轴 max / 0 标签
-                                ctx.fillStyle = "#6a6f76"
-                                ctx.font = "9px sans-serif"
-                                ctx.textAlign = "left"
-                                ctx.fillText(mx.toFixed(1), 4, 12)
-                                ctx.fillText("0", 4, h - 4)
-                                // 当前帧指示线 + 顶部三角（播放时移动）
-                                const n = panel.frameList ? panel.frameList.length : 0
-                                if (panel.slotActive && n > 1) {
-                                    const px = w * Math.min(1, Math.max(0, panel.curFrame / (n - 1)))
-                                    ctx.strokeStyle = "#FFC857"
-                                    ctx.lineWidth = 1
-                                    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke()
-                                    ctx.fillStyle = "#FFC857"
-                                    ctx.beginPath()
-                                    ctx.moveTo(px - 4, 0); ctx.lineTo(px + 4, 0); ctx.lineTo(px, 5)
-                                    ctx.closePath(); ctx.fill()
-                                }
-                            }
-                        }
-
-                        // 播放位置 / 数据变化时重绘
-                        Connections {
-                            target: panel
-                            function onVerChanged() { chartCanvas.requestPaint() }
-                        }
-                        Connections {
-                            target: StreamBridge
-                            function onCurrentFrameChanged() { chartCanvas.requestPaint() }
-                            function onFileOpened() { chartCanvas.requestPaint() }
                         }
                     }
                 }
