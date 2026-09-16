@@ -49,6 +49,7 @@ extern "C" {
 }
 
 #include "stream/RBFrameOrderMapper.h"
+#include "stream/RBRefStructureParser.h"
 
 namespace rb {
 class RBDemuxer;
@@ -137,6 +138,16 @@ public:
     Q_INVOKABLE QVariantList syntaxEntries(int slot) const;
     // 语法解析是否就绪（后台完成后为 true）。
     Q_INVOKABLE bool syntaxReady(int slot) const;
+
+    // ── 参考结构（真实层级 + 参考关系，右侧/底部层级面板）──
+    // 数据来自 RBRefStructureParser 对 slice 头的真实解析，按「解码序」存放；
+    // 此处对外统一按「显示序」索引，内部用 orderMap.dispToCode 换算。
+    // 每帧层级：0 最重要（I/IDR），数字越大越不重要；-1=未就绪/不支持。
+    Q_INVOKABLE int frameLayer(int slot, int displayIndex) const;
+    // 该帧参考的帧（元素是显示序索引）；未就绪返回空列表。
+    Q_INVOKABLE QVariantList frameRefs(int slot, int displayIndex) const;
+    // 参考结构是否就绪（真实数据可用；false 时 UI 回退启发式层级）。
+    Q_INVOKABLE bool refStructReady(int slot) const;
 
     // ── GOP 列表（预扫描结果）─────────────────────────────────────
     // 每项：{ startFrameIndex, frameCount, isOpenGop }
@@ -228,6 +239,8 @@ signals:
     void frameOrderMapReadyChanged(int slot);
     // 语法元素解析就绪（右侧栏 Syntax Info 刷新）
     void syntaxReadyChanged(int slot);
+    // 参考结构解析就绪（层级面板刷新为真实层级/参考关系）
+    void refStructReadyChanged(int slot);
 
 private:
     struct Slot {
@@ -268,6 +281,12 @@ private:
         QVariantList syntaxCache;                 // SPS/PPS/VPS 名值对
         bool        syntaxReadyFlag = false;      // 后台解析是否完成
         QFutureWatcher<QVariantList>* syntaxWatcher = nullptr;
+        // ── 参考结构（真实层级 + 参考关系，RBRefStructureParser 后台解析）──
+        // 按「解码序」索引；QML 展示显示序时用 orderMap.dispToCode 换算。
+        // 未就绪（ok=false）时 UI 回退启发式层级，不阻塞秒开。
+        rb::RBRefStructureParser::Result refStruct;
+        bool refStructReadyFlag = false;
+        QFutureWatcher<rb::RBRefStructureParser::Result>* refStructWatcher = nullptr;
         std::vector<long long> frameSizes;        // 每帧字节数（来自 AVPacket.size）
         std::vector<double>  frameAvgQp;          // 每帧平均 QP（未启用补丁：-1）
         long long cpbSizeBits = 0;                // SPS 声明的 CPB 容量（0=未知）
@@ -298,6 +317,9 @@ private:
     // 语法元素面板：打开文件后台一次 CBS 解析 SPS/PPS/VPS，结果缓存。
     void startSyntaxBuild(int slot);     // 启动后台解析
     void onSyntaxBuilt(int slot);        // 后台完成回调（主线程写缓存）
+    // 参考结构：后台一次解析 slice 头，得到真实层级与参考关系。
+    void startRefStructBuild(int slot);  // 启动后台解析
+    void onRefStructBuilt(int slot);     // 后台完成回调（主线程写缓存）
     // 裸流 fallback：当 avformat 解析失败（裸 h264/hevc annexb）时直接读文件，
     // 按 0x000001 / 0x00000001 切 NAL 单元，识别 SPS 拿宽高，按 IDR 切 GOP。
     // 不依赖任何 FFmpeg 容器解析。

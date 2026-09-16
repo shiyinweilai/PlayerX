@@ -97,19 +97,39 @@ Item {
                     panel.syntaxTab = 0
             }
 
-            // ── 数据刷新信号（沿用 ver / syntaxVer 强制重算机制）──
-            // 帧变化不做 slot 过滤：后端 currentFrameChanged 携带的 slot 号
-            // 可能与 UI 的 effectiveSlot 时序对不上，过滤会漏刷导致卡初值。
+            // ── 数据刷新信号（ver / syntaxVer 强制重算机制）──
+            // 2026-09-16 性能修复：信号分级，避免 265 播放时每帧全量重拷 frameList：
+            //   · ver（帧级）：仅游标/当前帧项刷新，轻量
+            //   · structVer（文件级）：frameList / gopList / 码率采样重取
+            // 后端 currentFrameChanged 携带的 slot 号可能与 UI 时序对不上，
+            // 故帧级信号不做 slot 过滤（防漏刷），文件级信号按 slot 过滤。
+            property int structVer: 0
             Connections {
                 target: StreamBridge
                 function onCurrentFrameChanged(changedSlot) { panel.ver++ }
                 function onFileOpened(openedSlot) {
-                    if (openedSlot === panel.slot) panel.ver++
+                    if (openedSlot === panel.slot) { panel.ver++; panel.structVer++ }
                 }
                 function onFileClosed(closedSlot) {
-                    if (closedSlot === panel.slot) panel.ver++
+                    if (closedSlot === panel.slot) { panel.ver++; panel.structVer++ }
                 }
-                function onSlotCountChanged() { panel.ver++ }
+                function onSlotCountChanged() { panel.ver++; panel.structVer++ }
+            }
+            // 帧结构缓存（文件级）：播放中每帧不再重拷 frameList（265 大列表拷贝是
+            // 播放卡顿主因之一）。仅在文件打开/关闭/槽位变化时重取。
+            property var frameCache: []
+            property var gopCache: []
+            onStructVerChanged: {
+                frameCache = panel.slotActive ? StreamBridge.frameList(panel.slot) : []
+                gopCache   = panel.slotActive ? StreamBridge.gopList(panel.slot) : []
+            }
+            // 初始化兜底：structVer 初始为 0 不触发 handler；面板创建时若文件
+            // 已打开（悬浮/腾位切换重建 Loader），主动重取一次。
+            Component.onCompleted: {
+                if (StreamBridge.hasFile(panel.slot)) {
+                    frameCache = StreamBridge.frameList(panel.slot)
+                    gopCache   = StreamBridge.gopList(panel.slot)
+                }
             }
             Connections {
                 target: StreamBridge
@@ -124,18 +144,19 @@ Item {
                 }
             }
 
-            // ── 数据属性（原实现原样保留）──
+            // ── 数据属性 ──
+            // frameList/gopList 为文件级缓存（structVer 变化时重取），播放每帧不重拷
             readonly property bool   slotActive:    { const _ = ver; return StreamBridge.hasFile(slot) }
             readonly property var    info:          { const _ = ver; return slotActive ? StreamBridge.streamInfo(slot) : ({}) }
             readonly property int    curFrame:      { const _ = ver; return slotActive ? StreamBridge.currentFrame(slot) : 0 }
-            readonly property var    frameList:     { const _ = ver; return slotActive ? StreamBridge.frameList(slot) : [] }
+            readonly property var    frameList:     frameCache
             readonly property var    currentFrameItem: {
                 const _ = ver
-                return (slotActive && curFrame >= 0 && curFrame < frameList.length)
-                       ? frameList[curFrame] : null
+                return (slotActive && curFrame >= 0 && curFrame < frameCache.length)
+                       ? frameCache[curFrame] : null
             }
             readonly property var    hrd:           { const _ = ver; return slotActive ? StreamBridge.hrdEstimate(slot) : ({}) }
-            readonly property var    gopList:       { const _ = ver; return slotActive ? StreamBridge.gopList(slot) : [] }
+            readonly property var    gopList:       gopCache
             readonly property var    blockStats:    { const _ = ver; return slotActive ? StreamBridge.blockStats(slot, curFrame) : ({ valid: false }) }
             readonly property bool   syntaxReady:    { const _ = syntaxVer; return StreamBridge.hasFile(slot) && StreamBridge.syntaxReady(slot) }
             readonly property var    syntaxEntries:  { const _ = syntaxVer; return StreamBridge.hasFile(slot) ? StreamBridge.syntaxEntries(slot) : [] }
@@ -152,30 +173,32 @@ Item {
                 return { map: groups, order: order }
             }
             // 整文件平均码率（Mbps）：容器报的 bitrate 为 0（裸 ES 流无容器头）时，
-            // 按 frameList 帧大小总和 / fps 自算，与底部码率曲线同口径。
+            // 按 frameCache 帧大小总和 / fps 自算。仅依赖 structVer（文件级），
+            // 播放中每帧不重算（265 大列表求和是卡顿源之一）。
             readonly property real fileBitrateMbps: {
-                const _ = panel.ver
+                const _ = panel.structVer
                 const br = Number(panel.info.bitrate)
                 if (br > 0) return br / 1e6
-                if (!panel.slotActive || !panel.frameList || panel.frameList.length === 0) return 0
+                if (!panel.slotActive || !panel.frameCache || panel.frameCache.length === 0) return 0
                 let totalBytes = 0
-                const n = panel.frameList.length
+                const n = panel.frameCache.length
                 for (let i = 0; i < n; ++i)
-                    totalBytes += Number(panel.frameList[i].sizeBytes)
+                    totalBytes += Number(panel.frameCache[i].sizeBytes)
                 const fps = Number(panel.info.fps) > 0 ? Number(panel.info.fps) : 30
                 const durSec = n / fps
                 return durSec > 0 ? (totalBytes * 8.0 / durSec / 1e6) : 0
             }
             // 当前帧瞬时码率（Mbps）：与底部码率曲线头部读数完全同口径——
             // 当前帧所在采样桶（≤200 桶）的平均码率，随播放帧变化。
+            // 依赖 frameCache（文件级）+ curFrame（帧级），播放中只算一个桶。
             readonly property real curFrameBitrateMbps: {
                 const _ = panel.ver
-                if (!panel.slotActive || !panel.frameList || panel.frameList.length === 0) return 0
-                const n = panel.frameList.length
+                if (!panel.slotActive || !panel.frameCache || panel.frameCache.length === 0) return 0
+                const n = panel.frameCache.length
                 const bucket = Math.max(1, Math.floor(n / 200))
                 let sumBytes = 0, cnt = 0
                 for (let j = panel.curFrame; j < Math.min(panel.curFrame + bucket, n); ++j) {
-                    sumBytes += Number(panel.frameList[j].sizeBytes)
+                    sumBytes += Number(panel.frameCache[j].sizeBytes)
                     ++cnt
                 }
                 const fps = Number(panel.info.fps) > 0 ? Number(panel.info.fps) : 30

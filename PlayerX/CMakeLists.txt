@@ -119,6 +119,7 @@ src/image/ImageSliderCompareItem.cpp
     src/stream/RBStreamBridge.cpp
     src/stream/RBBlockAnalyzer.cpp
     src/stream/RBFrameOrderMapper.cpp
+    src/stream/RBRefStructureParser.cpp
     src/stream/RBSyntaxAnalyzer.cpp
     # 异步文件下载器（供 QML 测试源下载使用，不阻塞 UI 线程）
     src/qt/FileDownloader.cpp
@@ -247,7 +248,8 @@ qt_add_qml_module(PlayerX
         qml/stream/StreamView.qml
         qml/stream/StreamInfoCard.qml
         qml/stream/StreamInfoCardSection.qml
-        qml/stream/StreamBitrateChart.qml
+qml/stream/StreamBitrateChart.qml
+qml/stream/StreamHierarchyChart.qml
         qml/stream/StreamFlatButton.qml
         # ── 图片分析模块（拆分至独立子目录 qml/image/） ──
         qml/image/ImageView.qml

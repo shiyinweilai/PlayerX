@@ -211,6 +211,8 @@ int RBStreamBridge::openFile(const QString& path) {
     startOrderMapBuild(slot);
     // 后台一次 CBS 解析 SPS/PPS/VPS 名值对（右侧栏 Syntax Info），结果缓存后只读。
     startSyntaxBuild(slot);
+    // 后台一次解析 slice 头得到真实层级与参考关系（层级面板），结果缓存后只读。
+    startRefStructBuild(slot);
     return slot;
 }
 
@@ -397,6 +399,14 @@ void RBStreamBridge::freeSlot(int slot) {
             w->waitForFinished();
         w->deleteLater();
         m_slots[slot].syntaxWatcher = nullptr;
+    }
+    // 参考结构解析同样是纯函数式 worker，watcher 需回收防悬挂。
+    if (auto* w = m_slots[slot].refStructWatcher) {
+        disconnect(w, nullptr, this, nullptr);
+        if (w->isRunning() || w->isStarted())
+            w->waitForFinished();
+        w->deleteLater();
+        m_slots[slot].refStructWatcher = nullptr;
     }
     m_slots[slot] = Slot{};
     --m_slotCount;
@@ -747,6 +757,87 @@ void RBStreamBridge::onSyntaxBuilt(int slot) {
 QVariantList RBStreamBridge::syntaxEntries(int slot) const {
     if (slot < 0 || slot >= MaxSlots) return {};
     return m_slots[slot].syntaxCache;
+}
+
+// ── 参考结构：后台一次解析 slice 头（真实层级 + 参考关系）────────────
+// 与语法面板同一模式：Worker 拷贝路径后台跑，主线程写缓存、发信号。
+// 仅对 hevc 生效；解析失败/不支持时 ok=false，UI 回退启发式，不影响其它功能。
+void RBStreamBridge::startRefStructBuild(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (!s.inUse || s.refStructWatcher) return;      // 已在构建或已完成
+    if (s.codecName != "hevc" && s.codecName != "h265") return;
+
+    const QString path = s.path;
+    QFuture<rb::RBRefStructureParser::Result> future =
+        QtConcurrent::run([path]() {
+            return rb::RBRefStructureParser::parse(path.toStdString(), nullptr);
+        });
+
+    auto* w = new QFutureWatcher<rb::RBRefStructureParser::Result>(this);
+    s.refStructWatcher = w;
+    w->setFuture(future);
+    connect(w, &QFutureWatcher<rb::RBRefStructureParser::Result>::finished,
+            this, [this, slot]() { onRefStructBuilt(slot); });
+}
+
+void RBStreamBridge::onRefStructBuilt(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (auto* w = s.refStructWatcher) {
+        s.refStruct = w->result();
+        w->deleteLater();
+    }
+    s.refStructWatcher = nullptr;
+    s.refStructReadyFlag = true;
+    emit refStructReadyChanged(slot);
+}
+
+// 显示序 → 解码序（用于把解析结果换算到显示序口径）
+static int dispToCodeOf(const rb::RBFrameOrderMapper::Result& om, int d) {
+    if (!om.ok) return -1;
+    if (d < 0 || d >= int(om.dispToCode.size())) return -1;
+    return om.dispToCode[size_t(d)];
+}
+
+static int codeToDispOf(const rb::RBFrameOrderMapper::Result& om, int c) {
+    if (!om.ok) return -1;
+    if (c < 0 || c >= int(om.codeToDisp.size())) return -1;
+    return om.codeToDisp[size_t(c)];
+}
+
+// 参考结构是否就绪（真实数据可用；false 时 UI 回退启发式）。
+// 额外校验帧数与编码序包数一致：容器封装流（mp4 等）不含 Annex-B 起始码，
+// 若误从数据字节匹配出「伪起始码」，帧数会对不上 → 拒绝使用，避免层级错乱。
+bool RBStreamBridge::refStructReady(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return false;
+    const Slot& s = m_slots[slot];
+    if (!s.refStructReadyFlag || !s.refStruct.ok || !s.orderMap.ok) return false;
+    const int packets = int(s.orderMap.codeToDisp.size());
+    const int parsed = int(s.refStruct.frames.size());
+    return packets > 0 && parsed == packets;
+}
+
+int RBStreamBridge::frameLayer(int slot, int displayIndex) const {
+    if (!refStructReady(slot)) return -1;
+    const Slot& s = m_slots[slot];
+    const int c = dispToCodeOf(s.orderMap, displayIndex);
+    if (c < 0 || c >= int(s.refStruct.frames.size())) return -1;
+    return s.refStruct.frames[size_t(c)].layer;
+}
+
+QVariantList RBStreamBridge::frameRefs(int slot, int displayIndex) const {
+    QVariantList out;
+    if (!refStructReady(slot)) return out;
+    const Slot& s = m_slots[slot];
+    const int c = dispToCodeOf(s.orderMap, displayIndex);
+    if (c < 0 || c >= int(s.refStruct.frames.size())) return out;
+    const auto& refs = s.refStruct.frames[size_t(c)].refs;
+    for (size_t k = 0; k < refs.size(); ++k) {
+        const int d = codeToDispOf(s.orderMap, refs[k]);
+        if (d >= 0) out.append(d);                    // 只输出能换算到显示序的参考
+    }
+    return out;
 }
 
 bool RBStreamBridge::syntaxReady(int slot) const {

@@ -31,10 +31,14 @@ Item {
     //   · floating=false（挤占）：videoHost 高度减 180，视频区整体上移让位。
     //   · floating=true（悬浮）：videoHost 高度不变，面板圆角浮于视频上层。
     //   · 独立模块（StreamBitrateChart.qml），不引用右侧栏与主显示区内部状态。
-    // ═════════════════════════════════════ anchored lift for bitrate chart ═══
-    property bool bitrateChartOpen: false      // 是否展开
-    property bool bitrateChartFloating: false // true=悬浮；false=挤占（视频上移）
-    readonly property int  bitrateChartH: 180  // 面板高度
+// ═════════════════════════════════════ anchored lift for bitrate chart ═══
+property bool bitrateChartOpen: false      // 是否展开
+property bool bitrateChartFloating: false // true=悬浮；false=挤占（视频上移）
+readonly property int  bitrateChartH: 180  // 面板高度
+// ═════════════════════════════════ anchored lift for hierarchy chart ════
+property bool hierarchyChartOpen: false      // 是否展开
+property bool hierarchyChartFloating: false // true=悬浮；false=挤占（视频上移）
+readonly property int  hierarchyChartH: 200  // 面板高度
     property int currentSlot: 0
     signal switchTab(string tab)
 
@@ -521,15 +525,31 @@ Item {
         const __ = streamView.orderVer
         return slotActive ? StreamBridge.frameOrderMapReady(effectiveSlot) : false
     }
+    // ── 帧结构缓存（2026-09-16 性能修复，文件级）──
+    // 265 播放卡顿主因：globalVer 每帧 ++ → slotFrameList 绑定重求值 →
+    // StreamBridge.frameList() 全量重拷（QVariantList，万帧级列表）→ GOP 条/
+    // 层级面板等 5 处消费点同步堆积。改为：帧列表只在文件打开/关闭/槽位变化
+    // 时重取一次并缓存（fileVer 驱动），播放每帧零重拷。
+    property int fileVer: 0
+    property var slotFrameCache: []
+    property var slotGopCache: []
+    onFileVerChanged: {
+        slotFrameCache = slotActive ? StreamBridge.frameList(effectiveSlot) : []
+        slotGopCache   = slotActive ? StreamBridge.gopList(effectiveSlot) : []
+    }
+    onEffectiveSlotChanged: fileVer++
+    Connections {
+        target: StreamBridge
+        function onFileOpened(openedSlot)  { streamView.fileVer++ }
+        function onFileClosed(closedSlot)  { streamView.fileVer++ }
+        function onSlotCountChanged()      { streamView.fileVer++ }
+    }
+
     readonly property var    slotFrameList: {
-        const _ = streamView.globalVer
-        const __ = streamView.orderVer
-        return slotActive ? StreamBridge.frameList(effectiveSlot) : []
+        const _ = streamView.orderVer
+        return slotFrameCache
     }
-    readonly property var    slotGopList: {
-        const _ = streamView.globalVer
-        return slotActive ? StreamBridge.gopList(effectiveSlot) : []
-    }
+    readonly property var    slotGopList: slotGopCache
     readonly property var    slotBlocks: {
         const _ = streamView.globalVer
         return slotActive ? StreamBridge.blockInfoAt(effectiveSlot, slotCurrent) : []
@@ -1356,16 +1376,20 @@ Item {
         visible: StreamBridge.slotCount > 0
 
         // ── 中部：主显示区（CU 网格 + QP 着色，P1 真实渲染） ──
-        // 挤占模式（bitrateChartOpen && !floating）时底部上移 180 让位给码率面板；
-        // 悬浮模式或未展开时贴 GOP 栏，视频区不动。
+        // 挤占模式时底部上移让位给码率/层级面板；悬浮模式或未展开时贴 GOP 栏。
         Item {
             id: mainDisplay
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: gopBar.top
-            anchors.bottomMargin: (streamView.bitrateChartOpen && !streamView.bitrateChartFloating)
-                                  ? streamView.bitrateChartH : 0
+            anchors.bottomMargin: {
+                if (streamView.hierarchyChartOpen && !streamView.hierarchyChartFloating)
+                    return streamView.hierarchyChartH
+                if (streamView.bitrateChartOpen && !streamView.bitrateChartFloating)
+                    return streamView.bitrateChartH
+                return 0
+            }
 
             Rectangle { anchors.fill: parent; color: "#0a0a0e" }
 
@@ -1743,6 +1767,32 @@ Item {
                                        : "展开码率曲线（向上展开，悬浮/挤占双模式）"
                     }
                 }
+                // 「层级」按钮：向上展开参考层级面板（悬浮/挤占双模式）
+                Rectangle {
+                    width: hierLabel.implicitWidth + 14
+                    height: 18
+                    radius: 3
+                    color: streamView.hierarchyChartOpen ? "#2a3f5a" : "#1a1d22"
+                    border.color: streamView.hierarchyChartOpen ? "#42A5FF" : "#2a2e33"
+                    border.width: 1
+                    Text {
+                        id: hierLabel
+                        anchors.centerIn: parent
+                        text: "层级"
+                        color: streamView.hierarchyChartOpen ? "#e6f0ff" : "#9aa0a6"
+                        font.pixelSize: 10; font.bold: streamView.hierarchyChartOpen
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: streamView.hierarchyChartOpen = !streamView.hierarchyChartOpen
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: streamView.hierarchyChartOpen
+                                       ? "收起参考层级"
+                                       : "展开参考层级（B 帧双向参考结构，可左右滑动）"
+                    }
+                }
                 Rectangle { width: 8; height: 10; color: "#f0c040"; radius: 1
                             anchors.verticalCenter: parent.verticalCenter }
                 Text { text: "I/IDR"; color: "#9aa0a6"; font.pixelSize: 9
@@ -1761,7 +1811,7 @@ Item {
             Canvas {
                 id: gopCanvas
                 anchors.left: parent.left
-                anchors.leftMargin: 190
+                anchors.leftMargin: 250
                 anchors.right: parent.right
                 anchors.rightMargin: 6
                 anchors.verticalCenter: parent.verticalCenter
@@ -1771,7 +1821,8 @@ Item {
                 onPaint: {
                     const ctx = getContext("2d")
                     ctx.clearRect(0, 0, width, height)
-                    const list = streamView.slotFrameList
+                    // 文件级缓存：播放中每帧不重拷 frameList（265 卡顿修复）
+                    const list = streamView.slotFrameCache
                     const n = list ? list.length : 0
                     if (n === 0) return
 
@@ -1779,7 +1830,7 @@ Item {
                     const bwAct = Math.max(bw, 1)
 
                     // 先画 GOP 边界（每个 GOP 起始处一条竖线）
-                    const gops = streamView.slotGopList
+                    const gops = streamView.slotGopCache
                     ctx.fillStyle = "rgba(240,192,64,0.45)"
                     for (let g = 0; g < (gops ? gops.length : 0); ++g) {
                         const sf = Number(gops[g].startFrameIndex)
@@ -1806,7 +1857,7 @@ Item {
                 Connections {
                     target: streamView
                     function onSlotCurrentChanged() { gopCanvas.requestPaint() }
-                    function onSlotFrameListChanged() { gopCanvas.requestPaint() }
+                    function onSlotFrameCacheChanged() { gopCanvas.requestPaint() }
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -1844,6 +1895,30 @@ Item {
                 floating: streamView.bitrateChartFloating
                 onRequestClose: streamView.bitrateChartOpen = false
                 onRequestToggleMode: streamView.bitrateChartFloating = !streamView.bitrateChartFloating
+            }
+        }
+
+        // ── 参考层级 host：GOP 栏正上方、底部总控栏之上的挂载容器 ──
+        // 与码率 host 相同的双模式约定：挤占模式高度 200；悬浮模式高度 0、
+        // 面板以本容器底边为基线向上悬浮 200px，浮于视频上层。
+        Item {
+            id: hierarchyChartHost
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: gopBar.top
+            height: (streamView.hierarchyChartOpen && !streamView.hierarchyChartFloating)
+                    ? streamView.hierarchyChartH : 0
+            z: 60
+
+            StreamHierarchyChart {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                slot: streamView.effectiveSlot
+                open: streamView.hierarchyChartOpen
+                floating: streamView.hierarchyChartFloating
+                onRequestClose: streamView.hierarchyChartOpen = false
+                onRequestToggleMode: streamView.hierarchyChartFloating = !streamView.hierarchyChartFloating
             }
         }
 

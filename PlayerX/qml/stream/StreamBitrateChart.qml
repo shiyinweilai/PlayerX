@@ -86,35 +86,49 @@ Item {
             property int ver: 0
             slot: chartRoot.slot
 
-            // 数据刷新：帧变化不做 slot 过滤（同 StreamInfoCard，防时序漏刷）
+            // ── 数据刷新信号（2026-09-16 性能修复：信号分级）──
+            // ver（帧级）只驱动画布重绘（游标）；structVer（文件级）才重取
+            // frameList / 重算码率采样。265 播放时每帧不再整文件重采样。
+            property int structVer: 0
             Connections {
                 target: StreamBridge
                 function onCurrentFrameChanged(changedSlot) { chartPanel.ver++ }
                 function onFileOpened(openedSlot) {
-                    if (openedSlot === chartPanel.slot) chartPanel.ver++
+                    if (openedSlot === chartPanel.slot) { chartPanel.ver++; chartPanel.structVer++ }
                 }
                 function onFileClosed(closedSlot) {
-                    if (closedSlot === chartPanel.slot) chartPanel.ver++
+                    if (closedSlot === chartPanel.slot) { chartPanel.ver++; chartPanel.structVer++ }
                 }
-                function onSlotCountChanged() { chartPanel.ver++ }
+                function onSlotCountChanged() { chartPanel.ver++; chartPanel.structVer++ }
             }
 
-            // ── 数据属性（口径与 StreamInfoCard 原实现一致）──
+            // ── 数据属性 ──
             readonly property bool slotActive: { const _ = ver; return StreamBridge.hasFile(slot) }
-            readonly property var  info:      { const _ = ver; return slotActive ? StreamBridge.streamInfo(slot) : ({}) }
+            readonly property var  info:      { const _ = structVer; return slotActive ? StreamBridge.streamInfo(slot) : ({}) }
             readonly property int  curFrame:  { const _ = ver; return slotActive ? StreamBridge.currentFrame(slot) : 0 }
-            readonly property var  frameList: { const _ = ver; return slotActive ? StreamBridge.frameList(slot) : [] }
-            // 码率采样（Mbps）：整文件每桶平均码率，≤200 桶
+            // 帧列表缓存（文件级）：播放中每帧不重拷
+            property var frameCache: []
+            onStructVerChanged: {
+                frameCache = slotActive ? StreamBridge.frameList(slot) : []
+            }
+            // 初始化兜底：面板展开时文件已打开则主动重取一次
+            Component.onCompleted: {
+                if (StreamBridge.hasFile(slot)) {
+                    frameCache = StreamBridge.frameList(slot)
+                }
+            }
+            readonly property var  frameList: frameCache
+            // 码率采样（Mbps）：整文件每桶平均码率，≤200 桶（文件级，播放中不重算）
             readonly property var bitrateSamples: {
-                const _ = ver
-                if (!frameList || frameList.length === 0) return []
+                const _ = chartPanel.structVer
+                if (!frameCache || frameCache.length === 0) return []
                 const out = []
-                const n = frameList.length
+                const n = frameCache.length
                 const bucket = Math.max(1, Math.floor(n / 200))
                 for (let i = 0; i < n; i += bucket) {
                     let sumBytes = 0, cnt = 0
                     for (let j = i; j < Math.min(i + bucket, n); ++j) {
-                        sumBytes += Number(frameList[j].sizeBytes)
+                        sumBytes += Number(frameCache[j].sizeBytes)
                         cnt++
                     }
                     const fps = Number(info.fps) > 0 ? Number(info.fps) : 30
@@ -123,12 +137,12 @@ Item {
                 }
                 return out
             }
-            // 当前帧所在采样桶的码率（Mbps）：头部实时读数
+            // 当前帧所在采样桶的码率（Mbps）：头部实时读数（依赖帧级 curFrame）
             readonly property real curBucketMbps: {
                 const _ = ver
                 const arr = bitrateSamples
-                if (!arr || arr.length === 0 || !frameList || frameList.length === 0) return 0
-                const bucket = Math.max(1, Math.floor(frameList.length / 200))
+                if (!arr || arr.length === 0 || !frameCache || frameCache.length === 0) return 0
+                const bucket = Math.max(1, Math.floor(frameCache.length / 200))
                 const idx = Math.min(arr.length - 1, Math.floor(curFrame / bucket))
                 return arr[idx] || 0
             }
