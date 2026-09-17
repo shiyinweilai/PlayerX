@@ -609,16 +609,23 @@ property real panelSplitRatio: 0.5
         function onFileOpened(openedSlot)            { streamView.stopPlay(); streamView.globalVer++ }
         function onFileClosed(closedSlot)            { streamView.stopPlay(); streamView.globalVer++ }
         function onSlotCountChanged()                { streamView.stopPlay(); streamView.globalVer++ }
-        // 编码顺序切换：刷新模式感知绑定（POC 展示口径）
+        // 编码顺序切换：刷新模式感知绑定（POC 展示口径）。
+        // 不比较 changedSlot === effectiveSlot：fileOpened 的处理链里
+        // effectiveSlot 可能尚未切换到新 slot（绑定重算滞后一拍），
+        // 若做过滤，openFile 恢复的勾选状态会被丢弃 → 开关显示 ON
+        // 但 orderMode 仍是 0（「要重新勾一次才生效」的根因之一）。
+        // frameOrderMode(slot) 每槽独立存储，多 slot 下其它槽的信号
+        // 只会把 orderMode 重设为当前槽的真实值，无副作用。
         function onFrameOrderModeChanged(changedSlot) {
-            if (changedSlot === streamView.effectiveSlot) {
-                streamView.orderMode = StreamBridge.frameOrderMode(streamView.effectiveSlot)
-                streamView.orderVer++
-            }
+            streamView.orderMode = StreamBridge.frameOrderMode(streamView.effectiveSlot)
+            streamView.orderVer++
         }
-        // 映射就绪：刷新帧列表（POC 换成真实值）并放开切换
+        // 映射就绪：刷新帧列表（POC 换成真实值）并放开切换。
+        // 同上不做 changedSlot 过滤：openFile 后映射就绪时 effectiveSlot
+        // 绑定可能尚未指向新 slot，过滤会丢弃这次刷新 → 恢复的勾选
+        // 状态下帧列表 POC 未按编码序重排。
         function onFrameOrderMapReadyChanged(changedSlot) {
-            if (changedSlot === streamView.effectiveSlot) streamView.orderVer++
+            streamView.orderVer++
         }
     }
     // 切换 POC 展示口径（显示顺序 / 编码顺序），仅改展示，不动播放与解码
@@ -697,7 +704,9 @@ property real panelSplitRatio: 0.5
             if (streamView._stepTarget < 0) return
             const t = streamView._stepTarget
             streamView._stepTarget = -1
-            StreamBridge.gotoFrame(streamView.effectiveSlot, t)
+            // 异步跳帧：解码在 Worker 线程，忙时自动合并最新目标，
+            // 主线程零同步解码（4K VVC 大跳不再冻结 UI）。
+            StreamBridge.requestGotoAsync(streamView.effectiveSlot, t)
         }
     }
     function stepFrame(delta) {
@@ -1884,8 +1893,8 @@ property real panelSplitRatio: 0.5
                         const n = streamView.slotFrames
                         if (n > 0) {
                             const idx = Math.floor(mouseX / width * n)
-                            StreamBridge.gotoFrame(streamView.effectiveSlot,
-                                                   Math.max(0, Math.min(n - 1, idx)))
+                            StreamBridge.requestGotoAsync(streamView.effectiveSlot,
+                                                          Math.max(0, Math.min(n - 1, idx)))
                         }
                     }
                 }
@@ -2237,8 +2246,8 @@ property real panelSplitRatio: 0.5
                         MouseArea {
                             id: gSkipBackMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: StreamBridge.gotoFrame(streamView.effectiveSlot,
-                                                              streamView.slotCurrent - 15)
+                            onClicked: StreamBridge.requestGotoAsync(streamView.effectiveSlot,
+                                                                    streamView.slotCurrent - 15)
                         }
                     }
                     // ▶/⏸（主播放按钮，蓝色，真实逐帧播放）
@@ -2268,8 +2277,8 @@ property real panelSplitRatio: 0.5
                         MouseArea {
                             id: gSkipFwdMa; anchors.fill: parent
                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: StreamBridge.gotoFrame(streamView.effectiveSlot,
-                                                              streamView.slotCurrent + 15)
+                            onClicked: StreamBridge.requestGotoAsync(streamView.effectiveSlot,
+                                                                    streamView.slotCurrent + 15)
                         }
                     }
                     // ▶▶（下一帧，帧级步进）

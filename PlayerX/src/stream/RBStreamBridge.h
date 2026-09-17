@@ -244,6 +244,12 @@ public:
     // 保证播放可以慢，但绝不堆积、绝不卡死（4K VVC 单帧可达数十万 CU）。
     Q_INVOKABLE void requestPlayStep(int slot, int frameIndex);
     Q_INVOKABLE bool isPlayBusy(int slot) const;
+    // 异步跳帧（GOP 条 / 码率图 / 层级图点击、快进快退、方向键步进）：
+    // 与 requestPlayStep 同一 Worker 模式——目标帧在 Worker 线程预解码，
+    // 完成后回填 currentFrame；解码期间的新目标自动合并（只追最新）。
+    // 替代 gotoFrame 直改帧号后由 QML 绑定触发的主线程同步解码
+    // （4K VVC 大跳 = 从头顺序解 N 帧，主线程冻结；播放路径早已异步化）。
+    Q_INVOKABLE void requestGotoAsync(int slot, int frameIndex);
 
 signals:
     void slotCountChanged();

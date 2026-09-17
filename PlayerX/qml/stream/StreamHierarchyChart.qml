@@ -622,7 +622,7 @@ Item {
                                     }
                                     chartPanel.selRank = r
                                     chartPanel.detailOn = true
-                                    StreamBridge.gotoFrame(chartPanel.slot, chartPanel.rowsData[r].idx)
+                                    StreamBridge.requestGotoAsync(chartPanel.slot, chartPanel.rowsData[r].idx)
                                 }
 
                             }

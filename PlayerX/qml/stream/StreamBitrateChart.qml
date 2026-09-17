@@ -157,6 +157,14 @@ Item {
                     if (closedSlot === chartPanel.slot) { chartPanel.ver++; chartPanel.structVer++ }
                 }
                 function onSlotCountChanged() { chartPanel.ver++; chartPanel.structVer++ }
+                // 映射就绪 / 顺序模式切换：帧列表的 POC 口径变化，需重取
+                // （未就绪时 POC 是简易递增占位，就绪后是真实显示位置）
+                function onFrameOrderMapReadyChanged(rsSlot) {
+                    if (rsSlot === chartPanel.slot) { chartPanel.ver++; chartPanel.structVer++ }
+                }
+                function onFrameOrderModeChanged(msSlot) {
+                    if (msSlot === chartPanel.slot) { chartPanel.ver++; chartPanel.structVer++ }
+                }
             }
 
             // ── 数据属性 ──
@@ -364,8 +372,8 @@ Item {
                             const n = chartPanel.frameList ? chartPanel.frameList.length : 0
                             if (n > 0) {
                                 const idx = Math.floor(mouseX / width * n)
-                                StreamBridge.gotoFrame(chartPanel.slot,
-                                                       Math.max(0, Math.min(n - 1, idx)))
+                                StreamBridge.requestGotoAsync(chartPanel.slot,
+                                                              Math.max(0, Math.min(n - 1, idx)))
                             }
                         }
                     }
