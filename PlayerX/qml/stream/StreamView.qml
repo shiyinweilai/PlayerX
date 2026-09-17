@@ -1752,6 +1752,7 @@ property real panelSplitRatio: 0.5
             visible: streamView.slotActive && streamView.slotFrames > 0
 
             Row {
+                id: gopLegendRow
                 anchors.left: parent.left
                 anchors.leftMargin: 6
                 anchors.verticalCenter: parent.verticalCenter
@@ -1825,8 +1826,8 @@ property real panelSplitRatio: 0.5
             // GOP 竖条带
             Canvas {
                 id: gopCanvas
-                anchors.left: parent.left
-                anchors.leftMargin: 250
+                anchors.left: gopLegendRow.right
+                anchors.leftMargin: 8
                 anchors.right: parent.right
                 anchors.rightMargin: 6
                 anchors.verticalCenter: parent.verticalCenter

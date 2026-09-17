@@ -692,9 +692,9 @@ Item {
                                     for (let q = 0; q < f.refs.length; ++q) {
                                         const tr = f.refs[q]
                                         if (tr !== sel || tr < 0 || tr >= n) continue
-                                        ctx.setLineDash([3, 3])
+                                        ctx.setLineDash([3, 4])
                                         drawArrow(ctx, xc(tr), rowY(rows[tr].row), xc(r), rowY(f.row),
-                                                  "#e0a33e", 1.5)
+                                                  "#e0a33e", 1.3)
                                         ctx.setLineDash([])
                                     }
                                 }
@@ -767,11 +767,12 @@ Item {
                                 const cr = chartPanel.rankOfIdx[cur]
                                 if (cr >= 0) {
                                     const px = xc(cr)
-                                    // 虚线竖线（顶部三角游标保持实心，便于一眼定位）
+                                    // 虚线竖线：细且淡（仅作位置提示，不抢帧块/箭头视觉），
+                                    // 顶部三角游标保持实心亮色，便于一眼定位。
                                     ctx.save()
-                                    ctx.setLineDash([4, 3])
-                                    ctx.strokeStyle = "#ffffff"
-                                    ctx.lineWidth = 2
+                                    ctx.setLineDash([3, 4])
+                                    ctx.strokeStyle = "rgba(255,255,255,0.34)"
+                                    ctx.lineWidth = 1
                                     ctx.beginPath()
                                     ctx.moveTo(px, 0); ctx.lineTo(px, h)
                                     ctx.stroke()
