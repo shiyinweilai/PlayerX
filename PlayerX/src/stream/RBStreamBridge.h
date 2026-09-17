@@ -130,6 +130,11 @@ public:
     // 0=显示顺序（POC 递增） 1=编码顺序（POC 按 GOP 重排，如 GOP=4 → 0,4,2,1,3）
     Q_INVOKABLE int frameOrderMode(int slot) const;
     Q_INVOKABLE void setFrameOrderMode(int slot, int mode);
+    // 把 UI 侧的帧号换算成「解码器输出序索引」。
+    // 解码器（decodeFrameAt）按输出序（=显示序）计数，而 UI 在编码顺序模式下
+    // 用的是编码序（包序）索引；两者混用会导致画面按播放序渲染、与层级图对不上。
+    // 显示顺序模式下原样返回；映射未就绪时也原样返回（保持旧行为）。
+    Q_INVOKABLE int  decodeIndexOf(int slot, int frameIndex) const;
     // 编码序映射是否就绪（后台解码完成）。未就绪时 UI 保持显示顺序、勾选禁用。
     Q_INVOKABLE bool frameOrderMapReady(int slot) const;
 

@@ -555,7 +555,16 @@ property real panelSplitRatio: 0.5
     readonly property var    slotGopList: slotGopCache
     readonly property var    slotBlocks: {
         const _ = streamView.globalVer
-        return slotActive ? StreamBridge.blockInfoAt(effectiveSlot, slotCurrent) : []
+        const __ = streamView.orderVer
+        // 解码器按输出序（显示序）解码，编码顺序模式下必须换算，
+        // 否则画面按播放序渲染，与层级图的编码序不一致。
+        return slotActive ? StreamBridge.blockInfoAt(effectiveSlot, decodeIndex) : []
+    }
+    // 当前帧对应的「解码器输出序索引」（编码顺序模式下由 C++ 侧映射换算）
+    readonly property int    decodeIndex: {
+        const _ = streamView.globalVer
+        const __ = streamView.orderVer
+        return slotActive ? StreamBridge.decodeIndexOf(effectiveSlot, slotCurrent) : 0
     }
     readonly property bool   blockSupported: slotBlocks && slotBlocks.length > 0
     property bool qpOverlayEnabled: false
@@ -665,8 +674,10 @@ property real panelSplitRatio: 0.5
             streamView.atEnd = true
             return
         }
-        // 异步：忙时由 StreamBridge 丢弃本拍，主线程不阻塞
-        StreamBridge.requestPlayStep(streamView.effectiveSlot, cur + 1)
+        // 异步：忙时由 StreamBridge 丢弃本拍，主线程不阻塞。
+        // 传换算后的解码序索引：编码顺序模式下画面须按编码序推进，
+        // 而非按播放序（否则水印呈 1080-0/1/2 递增，与层级图不符）。
+        StreamBridge.requestPlayStep(streamView.effectiveSlot, decodeIndex + 1)
     }
     // 单帧步进（供 ←/→ 快捷键与按钮共用）：先停播放，再 seek 到相邻帧。
     // 节流：4K VVC 单帧解码+取块是同步的（blockInfoAt 随 slotCurrent 变化即触发），

@@ -35,8 +35,11 @@ extern "C" {
 #include <QDebug>
 #include <cstring>
 
-namespace {
+// 编码序 ↔ 显示序映射换算（定义在文件后部，此处前置声明供前部函数使用）
+static int dispToCodeOf(const rb::RBFrameOrderMapper::Result& om, int d);
+static int codeToDispOf(const rb::RBFrameOrderMapper::Result& om, int c);
 
+namespace {
 // 简易帧类型判定（仅 h264 / hevc）：
 //   h264: nal_unit_type ∈ {5} → IDR；{1..4,6..9} 视同非 IDR（这里用启发：第一个非 IDR 标记 P）
 //   hevc: nal_unit_type ∈ {19,20} → IDR；其余非 IDR 标 P
@@ -642,6 +645,19 @@ int RBStreamBridge::frameOrderMode(int slot) const {
     if (!hasFile(slot)) return 0;
     return m_slots[slot].frameOrderMode;
 }
+// ── UI 帧号 → 解码器输出序索引 ──
+// decodeFrameAt(n) 的语义是「第 n 个输出帧」（=显示序），而 UI 在编码顺序模式下
+// 列表与跳转用的是编码序（包序）。不换算的话画面会一直按播放序渲染
+// （水印 1080-0 → 1080-1 → 1080-2 递增），与层级图的编码序对不上。
+// 显示顺序模式或映射未就绪时原样返回，保持旧行为。
+int RBStreamBridge::decodeIndexOf(int slot, int frameIndex) const {
+    if (!hasFile(slot)) return frameIndex;
+    const Slot& s = m_slots[slot];
+    if (s.frameOrderMode != 1) return frameIndex;   // 显示顺序：同序
+    if (!s.orderMap.ok) return frameIndex;          // 映射未就绪
+    const int d = codeToDispOf(s.orderMap, frameIndex);
+    return (d >= 0) ? d : frameIndex;               // 换算失败退回原值
+}
 void RBStreamBridge::setFrameOrderMode(int slot, int mode) {
     if (!hasFile(slot)) return;
     int& cur = m_slots[slot].frameOrderMode;
@@ -793,7 +809,6 @@ void RBStreamBridge::onRefStructBuilt(int slot) {
     emit refStructReadyChanged(slot);
 }
 
-// 显示序 → 解码序（用于把解析结果换算到显示序口径）
 static int dispToCodeOf(const rb::RBFrameOrderMapper::Result& om, int d) {
     if (!om.ok) return -1;
     if (d < 0 || d >= int(om.dispToCode.size())) return -1;
