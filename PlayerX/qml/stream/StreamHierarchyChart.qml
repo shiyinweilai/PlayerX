@@ -589,16 +589,36 @@ Item {
                             const sel = chartPanel.selRank
                             const hasSel = sel >= 0 && sel < n
 
-                            // 1) 参考箭头：后向（过去）蓝、前向（未来）绿；选中帧相关高亮
+                            // 1) 参考箭头：严格区分「入边 = 我参考谁」与「出边 = 谁参考我」。
+                            //    选中帧自身往往只参考 1~2 帧（入边），但会被多层 B 参考（出边）；
+                            //    此前两类线同色叠加，易被误读成「这一帧引用了 6 帧」。
+                            //    现在：出边先画（橙色虚线，压底层），入边后画（亮实线，浮上层）。
+                            if (hasSel) {
+                                for (let r = first; r <= last; ++r) {
+                                    const f = rows[r]
+                                    if (r === sel) continue
+                                    for (let q = 0; q < f.refs.length; ++q) {
+                                        const tr = f.refs[q]
+                                        if (tr !== sel || tr < 0 || tr >= n) continue
+                                        ctx.setLineDash([3, 3])
+                                        drawArrow(ctx, xc(tr), rowY(rows[tr].row), xc(r), rowY(f.row),
+                                                  "#e0a33e", 1.5)
+                                        ctx.setLineDash([])
+                                    }
+                                }
+                            }
                             for (let r = first; r <= last; ++r) {
                                 const f = rows[r]
                                 for (let q = 0; q < f.refs.length; ++q) {
                                     const tr = f.refs[q]
                                     if (tr < 0 || tr >= n) continue
                                     const isPast = tr < r
+                                    const inEdge = hasSel && (r === sel)
+                                    if (hasSel && tr === sel && !inEdge) continue   // 出边已画
                                     let col, lw = 1
-                                    const hot = hasSel && (r === sel || tr === sel)
-                                    if (hot) {
+                                    if (inEdge) {
+                                        // 入边配色与右侧「参考」列表逐字一致：
+                                        //   后向(←) #7ec8ff 浅蓝 / 前向(→) #8fe6a8 浅绿
                                         lw = 2
                                         col = isPast ? "#7ec8ff" : "#8fe6a8"
                                     } else if (hasSel) {
@@ -845,7 +865,7 @@ Item {
                                                        ? chartPanel.rowsData[modelData] : null
                             width: detailCol.width
                             text: rf ? (modelData < chartPanel.selRank ? "← " : "→ ")
-                                        + "帧 " + rf.dispNo + " · POC " + rf.poc + " · " + rf.type
+                                        + "POC " + rf.poc + " · " + rf.type
                                     : ""
                             color: (rf && modelData < chartPanel.selRank) ? "#7ec8ff" : "#8fe6a8"
                             font.pixelSize: 10
@@ -853,9 +873,10 @@ Item {
                         }
                     }
                     // 被参考列表（谁参考了该帧，全量，区域可滚动）
+                    // 口径：仅统计本 IDR(GOP) 内引用它的帧，不跨 IDR 累积
                     Text {
-                        text: "被参考 (" + chartPanel.selBackRefs.length + ")"
-                        color: "#bbbbbb"; font.pixelSize: 10; font.bold: true
+                        text: "被参考(" + chartPanel.selBackRefs.length + ")·本GOP内"
+                        color: "#e0a33e"; font.pixelSize: 10; font.bold: true
                         visible: chartPanel.selBackRefs.length > 0
                     }
                     Repeater {
@@ -865,8 +886,8 @@ Item {
                             readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
                                                        ? chartPanel.rowsData[modelData] : null
                             width: detailInner.width
-                            text: rf ? "帧 " + rf.dispNo + " · POC " + rf.poc + " · " + rf.type : ""
-                            color: "#c8cdd4"; font.pixelSize: 10
+                            text: rf ? "POC " + rf.poc + " · " + rf.type : ""
+                            color: "#e0a33e"; font.pixelSize: 10
                             font.family: "Monospace"
                         }
                         }

@@ -169,6 +169,7 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
     // 已解析帧：poc → (poc, layer)，用于层级推导
     std::vector<std::pair<int,int>> decoded;      // (poc, layer)
     std::vector<FrameRef> frames;
+    int idrStart = 0;                             // 当前 IDR 在 frames 中的下标
 
     const uint8_t* p = data.data();
     const size_t n = data.size();
@@ -357,7 +358,7 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
         fr.layer = layer;
         fr.bytes = int(nalLen);
         for (size_t r = 0; r < refPocs.size(); ++r) {
-            for (size_t k = 0; k < frames.size(); ++k) {
+            for (size_t k = size_t(idrStart); k < frames.size(); ++k) {
                 if (frames[k].poc == refPocs[r]) { fr.refs.push_back(int(k)); break; }
             }
         }
@@ -366,6 +367,7 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
 
         // IDR 之后 POC 重新计数：历史仅保留本 GOP，避免跨 IDR 误匹配
         if (isIdr) {
+            idrStart = int(frames.size()) - 1;
             decoded.clear();
             decoded.push_back({poc, layer});
         }
