@@ -350,7 +350,18 @@ Item {
                         text: "参考层级 (Hierarchy)"
                         color: "#bbbbbb"; font.pixelSize: 12; font.bold: true
                     }
+                    // 滚动提示：置于标题栏右侧（层级图之上），不再压在画布里
                     Text {
+                        id: dragHint
+                        anchors.right: headerInfoTxt.left
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: flick.contentWidth > flick.width ? "拖动查看更多" : ""
+                        visible: text !== ""
+                        color: "#6a6f76"; font.pixelSize: 9
+                    }
+                    Text {
+                        id: headerInfoTxt
                         anchors.right: followBtn.left
                         anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
@@ -580,8 +591,20 @@ Item {
                             const iw = flick.bodyItemW
                             const cx = flick.contentX
                             const maxR = chartPanel.maxRow
-                            const rowGap = (h - 42) / maxR
-                            const rowY = function(r) { return 18 + r * rowGap }
+                            // 纵向布局：整体下对齐，层间距自动撑满可用高度。
+                            //   顶部 16px 留给 POC 标签，底部 6px 留边距/滚动条；
+                            //   每层一个等高 band，方块在 band 内「下对齐」，
+                            //   于是最底层（I/IDR）紧贴画布底部，不再留大片空白。
+                            const topPad = 16, botPad = 6
+                            const usable = Math.max(24, h - topPad - botPad)
+                            const rowGap = usable / maxR
+                            const bh = Math.max(8, Math.min(18,
+                                           rowGap - Math.min(6, rowGap * 0.3)))
+                            const rowTop = function(r) {
+                                return topPad + r * rowGap + (rowGap - bh)
+                            }
+                            // 箭头连接点取方块垂直中心（原来是方块顶边，视觉上偏高）
+                            const rowY = function(r) { return rowTop(r) + bh / 2 }
                             const xc = function(rank) { return rank * iw - cx + iw / 2 }
                             // 可视范围（前后各 3 帧余量；锚点在窗外时线画向窗外被裁剪）
                             const first = Math.max(0, Math.floor(cx / iw) - 3)
@@ -647,8 +670,7 @@ Item {
                                 const f = rows[r]
                                 const c = chartPanel.typeColor(f.type)
                                 const x = r * iw - cx
-                                const y = rowY(f.row)
-                                const bh = Math.max(8, Math.min(16, rowGap - 6))
+                                const y = rowTop(f.row)
                                 const bw = Math.max(2, iw - 2)
                                 ctx.fillStyle = c
                                 ctx.fillRect(x, y, bw, bh)
@@ -695,17 +717,6 @@ Item {
                                 }
                             }
                         }
-                    }
-
-                    // 滚动提示
-                    Text {
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.topMargin: 2
-                        z: 3
-                        text: flick.contentWidth > flick.width ? "← 拖动查看更多 →" : ""
-                        visible: text !== ""
-                        color: "#6a6f76"; font.pixelSize: 9
                     }
 
                     // 自动跟随：帧变化时滚动（用户手动拖动不抢）
