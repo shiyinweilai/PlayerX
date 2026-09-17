@@ -149,6 +149,7 @@ Item {
             property bool autoFollow: true
             property int selRank: -1     // 选中节点（显示序 rank）
             property int hoverRank: -1
+            property bool detailOn: false // 详情面板是否展开（点帧展开，× 收起）
             property bool detailDocked: true  // 详情面板：true=挤占右侧(等高)，false=悬浮覆盖(等高)
             slot: chartRoot.slot
 
@@ -306,9 +307,19 @@ Item {
                 chartPanel.rowsData = out
                 chartPanel.rankOfIdx = rankOfIdx
                 chartPanel.backRefs = backRefs
-                chartPanel.maxRow = base
+                chartPanel.maxRow = base + 1
                 if (chartPanel.selRank >= n) chartPanel.selRank = -1
                 hierCanvas.requestPaint()
+            }
+
+            // 当前播放帧变化时，若详情面板已展开，则同步选中到该帧（左右键逐帧同样生效）
+            onCurFrameChanged: {
+                if (!chartPanel.detailOn) return
+                const cur = chartPanel.curFrame
+                if (!chartPanel.slotActive || cur < 0) return
+                if (cur >= chartPanel.rankOfIdx.length) return
+                const cr = chartPanel.rankOfIdx[cur]
+                if (cr >= 0 && cr !== chartPanel.selRank) chartPanel.selRank = cr
             }
 
             readonly property var selFrame:
@@ -431,7 +442,7 @@ Item {
                         anchors.bottom: parent.bottom
                         anchors.right: parent.right
                         anchors.rightMargin:
-                            (chartPanel.selFrame !== null && chartPanel.detailDocked)
+                            (chartPanel.detailOn && chartPanel.selFrame !== null && chartPanel.detailDocked)
                             ? (bodyRow.detailW + 6) : 0
 
                     // 背景垫底（画布保持透明，滚动条在 Flickable 内可见）
@@ -450,7 +461,8 @@ Item {
                         flickableDirection: Flickable.HorizontalFlick
                         readonly property real bodyItemW: {
                             const n = chartPanel.rowsData.length
-                            return n > 0 ? Math.max(14, Math.min(40, flick.width / Math.max(1, n))) : 14
+                            // 最小帧宽 18px：保证 POC 数字（≤2 位）有足够横向空间
+                            return n > 0 ? Math.max(18, Math.min(40, flick.width / Math.max(1, n))) : 18
                         }
                         contentWidth: Math.max(width, chartPanel.rowsData.length * bodyItemW)
                         contentHeight: height
@@ -483,7 +495,12 @@ Item {
                                 onClicked: {
                                     const r = rankAt(mouse.x)
                                     if (r < 0) return
-                                    chartPanel.selRank = (chartPanel.selRank === r) ? -1 : r
+                                    if (chartPanel.selRank === r && chartPanel.detailOn) {
+                                        chartPanel.detailOn = false
+                                        return
+                                    }
+                                    chartPanel.selRank = r
+                                    chartPanel.detailOn = true
                                 }
                                 onDoubleClicked: {
                                     const r = rankAt(mouse.x)
@@ -593,9 +610,18 @@ Item {
                                 }
                             }
 
-                            // 2) 节点方块 + 帧号
+                            // 帧号标签：全部显示（不再依赖 hover）。
+                            // 每帧都标 POC（与 VQ 对照口径）；帧宽不足时按步长抽样，
+                            // 保证标签间距 ≥ 单个标签宽度，避免数字叠在一起看不清。
                             const fs = iw >= 34 ? 10 : (iw >= 26 ? 9 : 8)
-                            const showAll = iw >= 20
+                            // 标签所需最小间距：按最大位数（POC 位数）估算，留 2px 间隙
+                            let maxDigits = 1
+                            for (let r = first; r <= last; ++r) {
+                                const d = String(rows[r].poc).length
+                                if (d > maxDigits) maxDigits = d
+                            }
+                            const needW = maxDigits * fs * 0.62 + 2
+                            const step = Math.max(1, Math.ceil(needW / iw))
                             ctx.textAlign = "center"
                             for (let r = first; r <= last; ++r) {
                                 const f = rows[r]
@@ -618,14 +644,12 @@ Item {
                                     ctx.strokeStyle = "#c8cdd4"; ctx.lineWidth = 1
                                     ctx.strokeRect(x - 1, y - 1, bw + 2, bh + 2)
                                 }
-                                // 帧号（显示序口径）：密时只标 I/P 与特殊帧。
-                                // 悬停帧改显 POC（与 VQ 对照口径），用高亮色区分于普通帧号。
-                                if (showAll || f.type !== "B" || r === sel || r === chartPanel.hoverRank) {
-                                    const isHover = (r === chartPanel.hoverRank)
-                                    ctx.fillStyle = isHover ? "#ffd76a" : c
+                                // 帧号：全部帧都标 POC（口径与 VQ 一致），选中帧用高亮色。
+                                // step>1 表示帧太密，按步长抽样标注，避免数字重叠。
+                                if ((r % step === 0) || r === sel) {
+                                    ctx.fillStyle = (r === sel) ? "#ffd76a" : c
                                     ctx.font = fs + "px sans-serif"
-                                    ctx.fillText(isHover ? String(f.poc) : String(f.dispNo),
-                                                 x + bw / 2, y - 4)
+                                    ctx.fillText(String(f.poc), x + bw / 2, y - 4)
                                 }
                             }
 
@@ -635,8 +659,16 @@ Item {
                                 const cr = chartPanel.rankOfIdx[cur]
                                 if (cr >= 0) {
                                     const px = xc(cr)
+                                    // 虚线竖线（顶部三角游标保持实心，便于一眼定位）
+                                    ctx.save()
+                                    ctx.setLineDash([4, 3])
+                                    ctx.strokeStyle = "#ffffff"
+                                    ctx.lineWidth = 2
+                                    ctx.beginPath()
+                                    ctx.moveTo(px, 0); ctx.lineTo(px, h)
+                                    ctx.stroke()
+                                    ctx.restore()
                                     ctx.fillStyle = "#ffffff"
-                                    ctx.fillRect(px - 1, 0, 2, h)
                                     ctx.beginPath()
                                     ctx.moveTo(px - 4, 0); ctx.lineTo(px + 4, 0); ctx.lineTo(px, 5)
                                     ctx.closePath(); ctx.fill()
@@ -684,7 +716,7 @@ Item {
                 // detailDocked=false → 悬浮覆盖在层级图上层
                 Rectangle {
                     id: detailPop
-                    visible: chartPanel.selFrame !== null
+                    visible: chartPanel.detailOn && chartPanel.selFrame !== null
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     anchors.right: parent.right
@@ -772,7 +804,7 @@ Item {
                             MouseArea {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: chartPanel.selRank = -1
+                                onClicked: chartPanel.detailOn = false
                             }
                         }
                     }
