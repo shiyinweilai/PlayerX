@@ -292,6 +292,7 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
 
         int poc = 0;
         std::vector<int> refPocs;                     // 本帧 used 参考的 POC
+        std::vector<int> keptPocs;                    // used=0：仅保留在 DPB 供后续帧使用
 
         if (isIdr) {
             poc = 0;
@@ -315,10 +316,14 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
                 rps = parseStRps(br, spsNumSets, true, spsSets, runSets, spsNumSets);
                 runSets.push_back(rps);
             }
-            for (const auto& pr : rps.neg)
+            for (const auto& pr : rps.neg) {
                 if (pr.second) refPocs.push_back(poc + pr.first);
-            for (const auto& pr : rps.pos)
+                else           keptPocs.push_back(poc + pr.first);
+            }
+            for (const auto& pr : rps.pos) {
                 if (pr.second) refPocs.push_back(poc + pr.first);
+                else           keptPocs.push_back(poc + pr.first);
+            }
         }
 
         if (br.overrun()) break;                      // 位流异常：停止解析，保留已有结果
@@ -364,6 +369,18 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
         for (size_t r = 0; r < refPocs.size(); ++r) {
             for (size_t k = size_t(idrStart); k < frames.size(); ++k) {
                 if (frames[k].poc == refPocs[r]) { fr.refs.push_back(int(k)); break; }
+            }
+        }
+        // DPB 保留条目：本帧不用于预测，但要求解码器继续留着供后续帧用。
+        // 这是 HEVC RPS 的第二个作用（DPB 维护指令），与 refs 互斥。
+        for (size_t r = 0; r < keptPocs.size(); ++r) {
+            bool dup = false;
+            for (size_t q = 0; q < fr.refs.size(); ++q) {
+                if (frames[size_t(fr.refs[q])].poc == keptPocs[r]) { dup = true; break; }
+            }
+            if (dup) continue;
+            for (size_t k = size_t(idrStart); k < frames.size(); ++k) {
+                if (frames[k].poc == keptPocs[r]) { fr.kept.push_back(int(k)); break; }
             }
         }
         // GPB 判定：slice_type=B(type=0) 且参考全部位于过去（无未来帧）。

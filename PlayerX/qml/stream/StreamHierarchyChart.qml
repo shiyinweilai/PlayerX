@@ -251,6 +251,7 @@ Item {
                     f.dispNo = k + 1     // 显示序帧号（右侧栏「帧号」同口径）
                     f.decNo = f.idx + 1  // 解码序（编码顺序）
                     f.refs = []
+                    f.keptRefs = []
 
                     let realLayer = -1
                     if (useReal) realLayer = StreamBridge.frameLayer(chartPanel.slot, k)
@@ -265,6 +266,15 @@ Item {
                         for (let q = 0; q < rr.length; ++q) {
                             const rv = Number(rr[q])
                             if (rv >= 0 && rv < n && f.refs.indexOf(rv) < 0) f.refs.push(rv)
+                        }
+                        // DPB 保留条目（used=0）：本帧不预测，但护送给后续帧
+                        f.keptRefs = []
+                        const kk = StreamBridge.frameKeptRefs(chartPanel.slot, k)
+                        for (let q = 0; q < kk.length; ++q) {
+                            const kv = Number(kk[q])
+                            if (kv >= 0 && kv < n && kv !== k
+                                && f.refs.indexOf(kv) < 0 && f.keptRefs.indexOf(kv) < 0)
+                                f.keptRefs.push(kv)
                         }
                         f.depth = realLayer
                         if (f.type !== "B") lastAnchorRank = k
@@ -936,6 +946,32 @@ Item {
                                     : ""
                             color: (rf && modelData < chartPanel.selRank) ? "#7ec8ff" : "#8fe6a8"
                             font.pixelSize: 10
+                            font.family: "Monospace"
+                        }
+                    }
+                    // DPB 保留（RPS 中 used=0）：本帧不用于预测，但要求解码器继续保留，
+                    // 供解码序后续的帧使用。不画箭头，仅以暗灰列出以示区分。
+                    Text {
+                        text: chartPanel.selFrame
+                              ? "DPB 保留 (" + chartPanel.selFrame.keptRefs.length + ")"
+                              : ""
+                        color: "#8a8a8a"; font.pixelSize: 10; font.bold: true
+                        visible: chartPanel.selFrame
+                                 && chartPanel.selFrame.keptRefs
+                                 && chartPanel.selFrame.keptRefs.length > 0
+                    }
+                    Repeater {
+                        model: (chartPanel.selFrame && chartPanel.selFrame.keptRefs)
+                               ? chartPanel.selFrame.keptRefs : []
+                        Text {
+                            required property int modelData
+                            readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
+                                                       ? chartPanel.rowsData[modelData] : null
+                            width: detailCol.width
+                            text: rf ? (modelData < chartPanel.selRank ? "· " : "· ")
+                                        + "POC " + rf.poc + " · " + chartPanel.typeLabel(rf)
+                                    : ""
+                            color: "#8a8a8a"; font.pixelSize: 10
                             font.family: "Monospace"
                         }
                     }

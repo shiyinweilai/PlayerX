@@ -48,6 +48,7 @@ public:
         int  type = 2;                // 0=B 1=P 2=I（与 AV_PICTURE_TYPE 对齐）
         int  layer = 0;               // 层级：0 最重要（I/IDR），数字越大越不重要
         std::vector<int> refs;        // 本帧使用到的参考帧，元素是「解码序索引」
+        std::vector<int> kept;        // RPS 中 used=0 的条目：不参与本帧预测，但要求保留在 DPB
         int  bytes = 0;               // 该帧所在 NAL 的字节数（近似帧大小）
         bool isIdr = false;           // IDR（nal 19/20）：清空 DPB，closed GOP 边界
         bool isCra = false;           // CRA（nal 21）：不清空 DPB，open GOP 的候选边界

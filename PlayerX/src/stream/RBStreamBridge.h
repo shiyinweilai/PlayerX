@@ -151,6 +151,8 @@ public:
     Q_INVOKABLE int frameLayer(int slot, int displayIndex) const;
     // 该帧参考的帧（元素是显示序索引）；未就绪返回空列表。
     Q_INVOKABLE QVariantList frameRefs(int slot, int displayIndex) const;
+    // RPS 中 used=0 的条目（本帧不预测、但要求保留在 DPB 的帧），返回显示序 rank。
+    Q_INVOKABLE QVariantList frameKeptRefs(int slot, int displayIndex) const;
     // 参考结构是否就绪（真实数据可用；false 时 UI 回退启发式层级）。
     Q_INVOKABLE bool refStructReady(int slot) const;
     // 真实解析得到的 GOP 大小（帧数）；未就绪返回 0。

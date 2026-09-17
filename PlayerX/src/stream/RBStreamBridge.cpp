@@ -856,6 +856,22 @@ QVariantList RBStreamBridge::frameRefs(int slot, int displayIndex) const {
     return out;
 }
 
+// RPS 中 used=0 的条目：本帧不做预测，但要求解码器保留在 DPB 供后续帧使用。
+// 换算口径与 frameRefs 完全一致（解码序 → 显示序）。
+QVariantList RBStreamBridge::frameKeptRefs(int slot, int displayIndex) const {
+    QVariantList out;
+    if (!refStructReady(slot)) return out;
+    const Slot& s = m_slots[slot];
+    const int c = dispToCodeOf(s.orderMap, displayIndex);
+    if (c < 0 || c >= int(s.refStruct.frames.size())) return out;
+    const auto& kept = s.refStruct.frames[size_t(c)].kept;
+    for (size_t k = 0; k < kept.size(); ++k) {
+        const int d = codeToDispOf(s.orderMap, kept[k]);
+        if (d >= 0) out.append(d);
+    }
+    return out;
+}
+
 // 真实解析的 GOP 大小：取出现次数最多的尺寸（众数），
 // 比首/末 GOP 更能代表编码器的标称配置（首尾常因截断而不完整）。
 int RBStreamBridge::refGopSize(int slot) const {
