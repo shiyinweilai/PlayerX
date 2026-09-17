@@ -153,6 +153,10 @@ public:
     Q_INVOKABLE QVariantList frameRefs(int slot, int displayIndex) const;
     // 参考结构是否就绪（真实数据可用；false 时 UI 回退启发式层级）。
     Q_INVOKABLE bool refStructReady(int slot) const;
+    // 真实解析得到的 GOP 大小（帧数）；未就绪返回 0。
+    Q_INVOKABLE int  refGopSize(int slot) const;
+    // 是否 open GOP（CRA + 存在跨边界参考）；未就绪返回 false。
+    Q_INVOKABLE bool refOpenGop(int slot) const;
 
     // ── GOP 列表（预扫描结果）─────────────────────────────────────
     // 每项：{ startFrameIndex, frameCount, isOpenGop }

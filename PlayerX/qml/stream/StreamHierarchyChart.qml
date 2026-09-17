@@ -326,12 +326,54 @@ Item {
             readonly property var selBackRefs:
                 (selFrame !== null && selRank < backRefs.length) ? backRefs[selRank] : []
 
+            // GOP 信息：优先用真实解析（IRAP 边界切分），未就绪时回退预扫描 gopList
+            readonly property int  gopSize: {
+                const _ = chartPanel.ver
+                if (!chartPanel.slotActive) return 0
+                const r = StreamBridge.refGopSize(chartPanel.slot)
+                if (r > 0) return r
+                const gl = StreamBridge.gopList(chartPanel.slot)
+                if (!gl || gl.length === 0) return 0
+                let best = 0, bestCnt = 0
+                const cnt = {}
+                for (let i = 0; i < gl.length; ++i) {
+                    const n = Number(gl[i].frameCount) || 0
+                    cnt[n] = (cnt[n] || 0) + 1
+                    if (cnt[n] > bestCnt) { bestCnt = cnt[n]; best = n }
+                }
+                return best
+            }
+            readonly property int openGop: {
+                const _ = chartPanel.ver
+                if (!chartPanel.slotActive) return -1
+                if (StreamBridge.refStructReady(chartPanel.slot))
+                    return StreamBridge.refOpenGop(chartPanel.slot) ? 1 : 0
+                const gl = StreamBridge.gopList(chartPanel.slot)
+                if (!gl || gl.length === 0) return -1
+                for (let i = 0; i < gl.length; ++i)
+                    if (gl[i].isOpenGop) return 1
+                return 0
+            }
+            // 当前帧所在层级深度（实时随播放/选中变化）
+            readonly property int curDepth: {
+                const _ = chartPanel.ver
+                const r = chartPanel.selRank >= 0 ? chartPanel.selRank
+                        : (chartPanel.slotActive ? chartPanel.rankOfIdx[chartPanel.curFrame] : -1)
+                if (r === undefined || r === null || r < 0) return -1
+                if (r >= chartPanel.rowsData.length) return -1
+                const d = chartPanel.rowsData[r].depth
+                return (d === undefined || d === null) ? -1 : d
+            }
             readonly property string headerInfo: {
                 const _ = chartPanel.ver
-                return chartPanel.slotActive
-                       ? "当前 " + (chartPanel.curFrame + 1) + " / " + chartPanel.frameCache.length
-                         + " · B 深度 " + chartPanel.maxRow
-                       : "当前 —"
+                if (!chartPanel.slotActive) return "当前 —"
+                let t = "当前 " + (chartPanel.curFrame + 1) + " / " + chartPanel.frameCache.length
+                const d = chartPanel.curDepth
+                if (d >= 0) t += " · 深度 " + d
+                if (chartPanel.gopSize > 0) t += " · GOP " + chartPanel.gopSize
+                if (chartPanel.openGop === 0) t += " · Closed"
+                else if (chartPanel.openGop === 1) t += " · Open"
+                return t
             }
 
             Column {

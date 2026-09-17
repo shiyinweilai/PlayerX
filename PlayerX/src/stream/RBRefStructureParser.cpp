@@ -357,6 +357,8 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
         fr.type = (sliceType == 2) ? 2 : (sliceType == 1 ? 1 : 0);
         fr.layer = layer;
         fr.bytes = int(nalLen);
+        fr.isIdr = isIdr;
+        fr.isCra = (nalType == 21);
         for (size_t r = 0; r < refPocs.size(); ++r) {
             for (size_t k = size_t(idrStart); k < frames.size(); ++k) {
                 if (frames[k].poc == refPocs[r]) { fr.refs.push_back(int(k)); break; }
@@ -374,6 +376,45 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
     }
 
     if (frames.empty()) return res;
+
+    // ── GOP 统计：以 IRAP（IDR 19/20 或 CRA 21）为边界切分 ──
+    //    open GOP 判定：出现 CRA，且 CRA 之后存在「跨 GOP 边界」的参考
+    //    （即某帧引用了位于上一个 GOP 内的帧）。IDR 会清空 DPB，
+    //    天然不可能跨边界参考，因此只有 CRA 才可能是 open GOP。
+    {
+        for (size_t k = 0; k < frames.size(); ++k) {
+            if (frames[k].isCra) res.hasCra = true;
+            if (!frames[k].isIdr && !frames[k].isCra) continue;
+            res.gopStarts.push_back(int(k));
+            res.gopSizes.push_back(0);
+        }
+        if (res.gopStarts.empty()) {
+            res.gopStarts.push_back(0);
+            res.gopSizes.push_back(0);
+        }
+        for (size_t g = 0; g < res.gopStarts.size(); ++g) {
+            const int st = res.gopStarts[g];
+            const int en = (g + 1 < res.gopStarts.size())
+                         ? res.gopStarts[g + 1] : int(frames.size());
+            res.gopSizes[g] = en - st;
+        }
+        if (res.hasCra) {
+            for (size_t k = 0; k < frames.size(); ++k) {
+                const int gopOfFrame = [&] {
+                    int g = 0;
+                    for (size_t j = 0; j < res.gopStarts.size(); ++j)
+                        if (int(k) >= res.gopStarts[j]) g = int(j);
+                    return g;
+                }();
+                const int st = res.gopStarts[size_t(gopOfFrame)];
+                for (size_t r = 0; r < frames[k].refs.size(); ++r) {
+                    if (frames[k].refs[r] < st) { res.openGop = true; break; }
+                }
+                if (res.openGop) break;
+            }
+        }
+    }
+
     res.ok = true;
     res.frames = frames;
     res.frameCount = int(frames.size());

@@ -30,6 +30,7 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 }
 
+#include <algorithm>
 #include <QFile>
 #include <QFileInfo>
 #include <QDebug>
@@ -853,6 +854,32 @@ QVariantList RBStreamBridge::frameRefs(int slot, int displayIndex) const {
         if (d >= 0) out.append(d);                    // 只输出能换算到显示序的参考
     }
     return out;
+}
+
+// 真实解析的 GOP 大小：取出现次数最多的尺寸（众数），
+// 比首/末 GOP 更能代表编码器的标称配置（首尾常因截断而不完整）。
+int RBStreamBridge::refGopSize(int slot) const {
+    if (!refStructReady(slot)) return 0;
+    const Slot& s = m_slots[slot];
+    const auto& sizes = s.refStruct.gopSizes;
+    if (sizes.empty()) return 0;
+    std::vector<int> sorted(sizes.begin(), sizes.end());
+    std::sort(sorted.begin(), sorted.end());
+    int best = sorted[0], bestCnt = 1, cur = sorted[0], curCnt = 1;
+    for (size_t k = 1; k < sorted.size(); ++k) {
+        if (sorted[k] == cur) { ++curCnt; }
+        else {
+            if (curCnt >= bestCnt) { bestCnt = curCnt; best = cur; }
+            cur = sorted[k]; curCnt = 1;
+        }
+    }
+    if (curCnt >= bestCnt) best = cur;
+    return best;
+}
+
+bool RBStreamBridge::refOpenGop(int slot) const {
+    if (!refStructReady(slot)) return false;
+    return m_slots[slot].refStruct.openGop;
 }
 
 bool RBStreamBridge::syntaxReady(int slot) const {

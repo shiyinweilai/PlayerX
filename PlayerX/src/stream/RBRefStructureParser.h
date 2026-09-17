@@ -49,12 +49,20 @@ public:
         int  layer = 0;               // 层级：0 最重要（I/IDR），数字越大越不重要
         std::vector<int> refs;        // 本帧使用到的参考帧，元素是「解码序索引」
         int  bytes = 0;               // 该帧所在 NAL 的字节数（近似帧大小）
+        bool isIdr = false;           // IDR（nal 19/20）：清空 DPB，closed GOP 边界
+        bool isCra = false;           // CRA（nal 21）：不清空 DPB，open GOP 的候选边界
     };
 
     struct Result {
         bool ok = false;              // 解析是否成功且有效
         int  frameCount = 0;          // 解析出的帧数（= 首切片个数）
         std::vector<FrameRef> frames; // 按解码序
+
+        // ── GOP 统计（以 IRAP 为边界，按解码序切分）──
+        std::vector<int>   gopSizes;  // 每个 GOP 的帧数
+        std::vector<int>   gopStarts; // 每个 GOP 的首帧「解码序」下标
+        bool hasCra = false;          // 码流中是否出现 CRA（nal 21）
+        bool openGop = false;         // open GOP 判定：CRA 之后存在跨边界反向参考
     };
 
     // 解析整个文件（Annex-B 裸流）。支持 hevc / h265；
