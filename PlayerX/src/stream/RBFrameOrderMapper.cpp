@@ -144,10 +144,25 @@ RBFrameOrderMapper::Result RBFrameOrderMapper::build(const std::string& filePath
     // 收尾：截断到实际数量
     r.dispToCode.resize(disp);
     r.dispPictType.resize(disp);
-    r.codeToDisp.resize(pktIdx);
-    r.codePictType.resize(pktIdx);
     r.frameCount  = disp;
     r.packetCount = pktIdx;
+
+    // ★ 反查表 codeToDisp 必须由 dispToCode 求逆重建，不能直接用 frame->pts 当
+    //   编码序下标。原因：重排延迟下 frame->pts 并不稳定等于该帧源包序号，实测
+    //   直接写 codeToDisp[pts]=disp 会与 dispToCode 不自洽——本流表现为
+    //   codeToDisp=[0,2,1,3,8,...]（缺 POC 4、多帧塌到同一显示位置），
+    //   于是「编码顺序」下 POC 序列变成 0,2,1,3 而非真实的 0,4,2,1,3，
+    //   且 decodeIndexOf 非单射 → 画面出现两个 1080-0、层级图跳转错位。
+    //   dispToCode 已与 ffmpeg trace_headers 交叉验证为正确，故以其求逆为准。
+    r.codeToDisp.assign(size_t(pktIdx), -1);
+    r.codePictType.assign(size_t(pktIdx), -1);
+    for (int d = 0; d < disp; ++d) {
+        const int c = r.dispToCode[d];
+        if (c >= 0 && c < pktIdx) {
+            r.codeToDisp[size_t(c)]   = d;
+            r.codePictType[size_t(c)] = r.dispPictType[size_t(d)];
+        }
+    }
     r.ok = (disp > 0 && pktIdx > 0 && disp == pktIdx);
 
     av_packet_free(&pkt);
