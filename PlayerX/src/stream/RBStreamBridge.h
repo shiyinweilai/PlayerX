@@ -148,6 +148,9 @@ public:
     // 数据来自 RBRefStructureParser 对 slice 头的真实解析，按「解码序」存放；
     // 此处对外统一按「显示序」索引，内部用 orderMap.dispToCode 换算。
     // 每帧层级：0 最重要（I/IDR），数字越大越不重要；-1=未就绪/不支持。
+    // 显示序 → 编码（解码）序下标。层级图「解码序」标注用：
+    // 不能直接用 frameList 数组下标，映射未就绪时它退化成显示序。
+    Q_INVOKABLE int codeIndexOf(int slot, int displayIndex) const;
     Q_INVOKABLE int frameLayer(int slot, int displayIndex) const;
     // 该帧参考的帧（元素是显示序索引）；未就绪返回空列表。
     Q_INVOKABLE QVariantList frameRefs(int slot, int displayIndex) const;
@@ -321,7 +324,8 @@ private:
         int    lastFrameImageFor = -1;           // 该画面对应的帧号（-1=无）
         // ── 异步播放状态（Worker 线程解码画面+块，主线程只发信号）──
         bool   playBusy = false;                 // 上一帧仍在解码中
-        int    playPendingFrame = -1;            // 解码期间新请求的帧号（-1=无）
+        int    playPendingFrame = -1;            // 解码期间新请求的帧号（UI 帧号 = 编码序）
+        int    playPendingOut   = -1;            // 同上，但记的是解码器输出序（仅用于解码）
     };
 
     // 惰性获取/创建该 slot 的块级分析器；失败返回 nullptr

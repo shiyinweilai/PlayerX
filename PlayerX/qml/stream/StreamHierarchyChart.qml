@@ -177,10 +177,36 @@ Item {
                 function onFrameOrderMapReadyChanged(omSlot) {
                     if (omSlot === chartPanel.slot) { chartPanel.ver++; chartPanel.structVer++ }
                 }
+                // 编码顺序切换：只刷新游标口径；不加 structVer → 横轴排列保持不变
+                function onFrameOrderModeChanged(mSlot) {
+                    if (mSlot === chartPanel.slot) chartPanel.ver++
+                }
             }
 
             readonly property bool slotActive: { const _ = ver; return StreamBridge.hasFile(slot) }
             readonly property int curFrame: { const _ = ver; return slotActive ? StreamBridge.currentFrame(slot) : 0 }
+
+            // 编码顺序模式（1=编码序）。只影响游标/选中的帧号口径，
+            // 横轴排列恒为显示序，不随该开关改变（用户明确要求排列不动）。
+            readonly property bool codingOrder: {
+                const _ = ver
+                return slotActive ? (StreamBridge.frameOrderMode(slot) === 1) : false
+            }
+
+            // UI 帧号（currentFrame）→ 横轴 rank（显示序）。
+            // 显示顺序：UI 帧号即显示序，直接返回 cur；
+            // 编码顺序：UI 帧号是编码序，经 decodeIndexOf 换成显示序，
+            //           使游标随画面按 0,4,2,1 跳时落回横轴正确位置。
+            // 原实现一律查 rankOfIdx[cur]，把 UI 帧号当「解码序 idx」用，
+            // 两套序混用 → 游标落点错误（265/266 均如此）。
+            function rankOfUiFrame(cur) {
+                if (!slotActive || cur < 0) return -1
+                if (codingOrder) {
+                    const d = StreamBridge.decodeIndexOf(slot, cur)
+                    return (d >= 0) ? d : cur
+                }
+                return cur
+            }
 
             // ── 帧结构缓存（文件级，播放中不重算）──
             property var frameCache: []
@@ -335,8 +361,8 @@ Item {
                 if (!chartPanel.detailOn) return
                 const cur = chartPanel.curFrame
                 if (!chartPanel.slotActive || cur < 0) return
-                if (cur >= chartPanel.rankOfIdx.length) return
-                const cr = chartPanel.rankOfIdx[cur]
+                const cr = chartPanel.rankOfUiFrame(cur)
+                if (cr < 0 || cr >= chartPanel.rowsData.length) return
                 if (cr >= 0 && cr !== chartPanel.selRank) chartPanel.selRank = cr
             }
 
@@ -379,7 +405,7 @@ Item {
             readonly property int curDepth: {
                 const _ = chartPanel.ver
                 const r = chartPanel.selRank >= 0 ? chartPanel.selRank
-                        : (chartPanel.slotActive ? chartPanel.rankOfIdx[chartPanel.curFrame] : -1)
+                        : (chartPanel.slotActive ? chartPanel.rankOfUiFrame(chartPanel.curFrame) : -1)
                 if (r === undefined || r === null || r < 0) return -1
                 if (r >= chartPanel.rowsData.length) return -1
                 const d = chartPanel.rowsData[r].depth
@@ -763,9 +789,9 @@ Item {
 
                             // 3) 当前帧游标（rank 口径）
                             const cur = chartPanel.curFrame
-                            if (chartPanel.slotActive && cur >= 0 && cur < chartPanel.rankOfIdx.length) {
-                                const cr = chartPanel.rankOfIdx[cur]
-                                if (cr >= 0) {
+                            if (chartPanel.slotActive) {
+                                const cr = chartPanel.rankOfUiFrame(cur)
+                                if (cr >= 0 && cr < chartPanel.rowsData.length) {
                                     const px = xc(cr)
                                     // 虚线竖线：细且淡（仅作位置提示，不抢帧块/箭头视觉），
                                     // 顶部三角游标保持实心亮色，便于一眼定位。
@@ -794,9 +820,9 @@ Item {
                             if (!chartPanel.autoFollow) return
                             const n = chartPanel.rowsData.length
                             const cur = chartPanel.curFrame
-                            if (n === 0 || cur < 0 || cur >= chartPanel.rankOfIdx.length) return
-                            const cr = chartPanel.rankOfIdx[cur]
-                            if (cr < 0) return
+                            if (n === 0 || cur < 0) return
+                            const cr = chartPanel.rankOfUiFrame(cur)
+                            if (cr < 0 || cr >= n) return
                             const iw = flick.bodyItemW
                             const px = cr * iw + iw / 2
                             const viewL = flick.contentX + 40

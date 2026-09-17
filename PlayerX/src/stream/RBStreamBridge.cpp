@@ -783,7 +783,10 @@ void RBStreamBridge::startRefStructBuild(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     Slot& s = m_slots[slot];
     if (!s.inUse || s.refStructWatcher) return;      // 已在构建或已完成
-    if (s.codecName != "hevc" && s.codecName != "h265") return;
+    // hevc / vvc 均可：RBRefStructureParser 内部按 NAL 布局自动分流，
+    // 非这两种编码会在解析内返回 ok=false，UI 自动回退启发式。
+    if (s.codecName != "hevc" && s.codecName != "h265" &&
+        s.codecName != "vvc"  && s.codecName != "h266") return;
 
     const QString path = s.path;
     QFuture<rb::RBRefStructureParser::Result> future =
@@ -832,6 +835,14 @@ bool RBStreamBridge::refStructReady(int slot) const {
     const int packets = int(s.orderMap.codeToDisp.size());
     const int parsed = int(s.refStruct.frames.size());
     return packets > 0 && parsed == packets;
+}
+
+// 显示序 → 编码（解码）序下标；映射未就绪返回 -1（UI 退回 idx+1）。
+// 与 dispToCodeOf 同源，保证层级图「解码序」与顶栏/右侧栏口径一致。
+int RBStreamBridge::codeIndexOf(int slot, int displayIndex) const {
+    if (!refStructReady(slot)) return -1;
+    const Slot& s = m_slots[slot];
+    return dispToCodeOf(s.orderMap, displayIndex);
 }
 
 int RBStreamBridge::frameLayer(int slot, int displayIndex) const {
@@ -1133,23 +1144,36 @@ bool RBStreamBridge::isPlayBusy(int slot) const {
     return m_slots[slot].playBusy;
 }
 
+// 入参 frameIndex 是【UI 帧号】（编码顺序模式下即编码序），不是解码器输出序。
+// 内部统一换算：编码顺序模式下 UI 帧号 c 对应输出序 decodeIndexOf(c)。
+// 此前 QML 直接传输出序、这里又把它当 UI 帧号回填 currentFrame，
+// 导致帧号与画面各按一套序推进（GOP=4 该 0,4,2,1,3 实际 0,1,2,3）。
 void RBStreamBridge::requestPlayStep(int slot, int frameIndex) {
     if (!hasFile(slot) || frameIndex < 0) return;
     Slot& s = m_slots[slot];
+    const int n = frameCount(slot);
+    if (n > 0 && frameIndex >= n) frameIndex = n - 1;
+
+    // UI 帧号 → 解码器输出序（显示顺序模式下恒等）
+    const int outIdx = decodeIndexOf(slot, frameIndex);
 
     // 忙：记录最新目标帧后直接返回（跳过本拍，不堆积）
     if (s.playBusy) {
         s.playPendingFrame = frameIndex;
+        s.playPendingOut   = outIdx;
         return;
     }
 
-    runPlayStepAsync(slot, frameIndex);
+    s.playPendingFrame = frameIndex;
+    s.playPendingOut   = outIdx;
+    runPlayStepAsync(slot, outIdx);
 }
 
 void RBStreamBridge::runPlayStepAsync(int slot, int frameIndex) {
     Slot& s = m_slots[slot];
     s.playBusy = true;
     s.playPendingFrame = -1;
+    s.playPendingOut   = -1;
 
     // Worker 线程：解码目标帧（内部会更新 lastFrameImage / 块缓存由主线程补）
     auto* ba = blockAnalyzerFor(slot);
@@ -1175,8 +1199,11 @@ void RBStreamBridge::onPlayStepFinished(int slot) {
     s.playBusy = false;
 
     // 回到主线程：推进当前帧号并发信号（触发 QML 重新取画面/块）
+    // currentFrame 是 UI 帧号（编码顺序模式下 = 编码序），必须用 UI 帧号回填。
+    // 若误用输出序（playPendingOut），帧号就会按显示序走、与画面脱节。
     const int next = s.playPendingFrame >= 0 ? s.playPendingFrame : s.currentFrame + 1;
     s.playPendingFrame = -1;
+    s.playPendingOut   = -1;
     s.currentFrame = next;
     emit currentFrameChanged(slot);
 }
