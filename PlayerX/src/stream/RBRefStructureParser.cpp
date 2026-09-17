@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cstdint>
 #include "RBRefStructureParser.h"
 
 #include <cstdio>
@@ -364,6 +366,15 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
                 if (frames[k].poc == refPocs[r]) { fr.refs.push_back(int(k)); break; }
             }
         }
+        // GPB 判定：slice_type=B(type=0) 且参考全部位于过去（无未来帧）。
+        // 这类帧虽名为 B，但不依赖未来，可即时解码，不引入重排序延迟。
+        if (fr.type == 0 && !fr.refs.empty()) {
+            bool allPast = true;
+            for (size_t r = 0; r < fr.refs.size(); ++r) {
+                if (frames[size_t(fr.refs[r])].poc > poc) { allPast = false; break; }
+            }
+            fr.isGpb = allPast;
+        }
         frames.push_back(fr);
         decoded.push_back({poc, layer});
 
@@ -384,6 +395,7 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
     {
         for (size_t k = 0; k < frames.size(); ++k) {
             if (frames[k].isCra) res.hasCra = true;
+            if (frames[k].isIdr) res.hasIdr = true;
             if (!frames[k].isIdr && !frames[k].isCra) continue;
             res.gopStarts.push_back(int(k));
             res.gopSizes.push_back(0);
@@ -398,6 +410,42 @@ RBRefStructureParser::Result RBRefStructureParser::parse(const std::string& file
                          ? res.gopStarts[g + 1] : int(frames.size());
             res.gopSizes[g] = en - st;
         }
+        // ── mini-GOP：分层 B 金字塔的基本单元 ──
+        //    IDR 间隔（如 60）内还按固定步长重复分层结构（如 4）。
+        //    取「锚点帧（layer<=1）的 POC 间距」众数作为标称 mini-GOP 大小，
+        //    GOP 末尾的残缺单元会产生 1/2 之类的小间距，被众数自然过滤。
+        {
+            std::vector<int> gaps;
+            for (size_t g = 0; g < res.gopStarts.size(); ++g) {
+                const int st0 = res.gopStarts[g];
+                const int en0 = (g + 1 < res.gopStarts.size())
+                              ? res.gopStarts[g + 1] : int(frames.size());
+                int prevAnchorPoc = -1;
+                for (int k = st0; k < en0; ++k) {
+                    if (frames[size_t(k)].layer > 1) continue;
+                    if (prevAnchorPoc >= 0)
+                        gaps.push_back(frames[size_t(k)].poc - prevAnchorPoc);
+                    prevAnchorPoc = frames[size_t(k)].poc;
+                }
+            }
+            if (!gaps.empty()) {
+                std::sort(gaps.begin(), gaps.end());
+                int best = gaps[0], bestCnt = 1, cur = gaps[0], curCnt = 1;
+                for (size_t k = 1; k < gaps.size(); ++k) {
+                    if (gaps[k] == cur) { ++curCnt; }
+                    else {
+                        if (curCnt >= bestCnt) { bestCnt = curCnt; best = cur; }
+                        cur = gaps[k]; curCnt = 1;
+                    }
+                }
+                if (curCnt >= bestCnt) best = cur;
+                if (best > 0) res.miniGopSize = best;
+            }
+        }
+        // GPB 总数
+        for (size_t k = 0; k < frames.size(); ++k)
+            if (frames[k].isGpb) ++res.gpbCount;
+
         if (res.hasCra) {
             for (size_t k = 0; k < frames.size(); ++k) {
                 const int gopOfFrame = [&] {

@@ -199,6 +199,11 @@ Item {
                 if (t === "P") return "#3a7adf"
                 return "#f0c040"
             }
+            // GPB（低延迟 B）：在 B 的灰基础上偏紫，与真 B 区分
+            function frameColor(f) {
+                if (f && f.isGpb) return "#9b7fd4"
+                return typeColor(f ? f.type : "")
+            }
 
             // 结构预计算：O(n log n) 排序 + O(n) 参考关系（含 P 帧编码序前驱）
             function recomputeStructure() {
@@ -249,6 +254,10 @@ Item {
 
                     let realLayer = -1
                     if (useReal) realLayer = StreamBridge.frameLayer(chartPanel.slot, k)
+                    // GPB：slice_type=B 但参考全在过去（低延迟 B），可即时解码
+                    f.isGpb = useReal && f.type === "B"
+                               && StreamBridge.frameIsGpb(chartPanel.slot, k)
+                    if (f.isGpb) ++chartPanel.gpbSeen
 
                     if (useReal && realLayer >= 0) {
                         // 真实参考关系（显示序 rank）
@@ -354,6 +363,8 @@ Item {
                     if (gl[i].isOpenGop) return 1
                 return 0
             }
+            property int gpbSeen: 0
+
             // 当前帧所在层级深度（实时随播放/选中变化）
             readonly property int curDepth: {
                 const _ = chartPanel.ver
@@ -364,15 +375,38 @@ Item {
                 const d = chartPanel.rowsData[r].depth
                 return (d === undefined || d === null) ? -1 : d
             }
+            readonly property bool hasCra: {
+                const _ = chartPanel.ver
+                return chartPanel.slotActive ? StreamBridge.refHasCra(chartPanel.slot) : false
+            }
+            // 术语：纯 IDR 时边界是 IDR 间隔，只有出现 CRA 才是严格意义的 GOP
+            readonly property string gopLabel: chartPanel.hasCra ? "GOP" : "IDR间隔"
+            readonly property int miniGop: {
+                const _ = chartPanel.ver
+                return chartPanel.slotActive ? StreamBridge.refMiniGop(chartPanel.slot) : 0
+            }
+            readonly property int gpbCount: {
+                const _ = chartPanel.ver
+                return chartPanel.slotActive ? StreamBridge.refGpbCount(chartPanel.slot) : 0
+            }
+            // 帧类型显示：GPB（低延迟 B）单独标注，便于识别可即时解码的帧
+            function typeLabel(f) {
+                if (!f) return ""
+                return (f.isGpb ? "GPB" : f.type)
+            }
             readonly property string headerInfo: {
                 const _ = chartPanel.ver
                 if (!chartPanel.slotActive) return "当前 —"
                 let t = "当前 " + (chartPanel.curFrame + 1) + " / " + chartPanel.frameCache.length
                 const d = chartPanel.curDepth
                 if (d >= 0) t += " · 深度 " + d
-                if (chartPanel.gopSize > 0) t += " · GOP " + chartPanel.gopSize
-                if (chartPanel.openGop === 0) t += " · Closed"
-                else if (chartPanel.openGop === 1) t += " · Open"
+                if (chartPanel.gopSize > 0) t += " · " + chartPanel.gopLabel + " " + chartPanel.gopSize
+                if (chartPanel.miniGop > 0) t += " / mini " + chartPanel.miniGop
+                if (chartPanel.gpbCount > 0) t += " · GPB " + chartPanel.gpbCount
+                if (chartPanel.hasCra) {
+                    if (chartPanel.openGop === 0) t += " · Closed GOP"
+                    else if (chartPanel.openGop === 1) t += " · Open GOP"
+                }
                 return t
             }
 
@@ -693,7 +727,7 @@ Item {
                             ctx.textAlign = "center"
                             for (let r = first; r <= last; ++r) {
                                 const f = rows[r]
-                                const c = chartPanel.typeColor(f.type)
+                                const c = chartPanel.frameColor(f)
                                 const x = r * iw - cx
                                 const y = rowTop(f.row)
                                 const bw = Math.max(2, iw - 2)
@@ -819,7 +853,7 @@ Item {
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
                             text: chartPanel.selFrame
-                                  ? "帧 " + chartPanel.selFrame.dispNo + " · " + chartPanel.selFrame.type
+                                  ? "帧 " + chartPanel.selFrame.dispNo + " · " + chartPanel.typeLabel(chartPanel.selFrame)
                                   : ""
                             color: chartPanel.selFrame ? chartPanel.typeColor(chartPanel.selFrame.type) : "#ffffff"
                             font.pixelSize: 12; font.bold: true
@@ -898,7 +932,7 @@ Item {
                                                        ? chartPanel.rowsData[modelData] : null
                             width: detailCol.width
                             text: rf ? (modelData < chartPanel.selRank ? "← " : "→ ")
-                                        + "POC " + rf.poc + " · " + rf.type
+                                        + "POC " + rf.poc + " · " + chartPanel.typeLabel(rf)
                                     : ""
                             color: (rf && modelData < chartPanel.selRank) ? "#7ec8ff" : "#8fe6a8"
                             font.pixelSize: 10
@@ -919,7 +953,7 @@ Item {
                             readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
                                                        ? chartPanel.rowsData[modelData] : null
                             width: detailInner.width
-                            text: rf ? "POC " + rf.poc + " · " + rf.type : ""
+                            text: rf ? "POC " + rf.poc + " · " + chartPanel.typeLabel(rf) : ""
                             color: "#e0a33e"; font.pixelSize: 10
                             font.family: "Monospace"
                         }

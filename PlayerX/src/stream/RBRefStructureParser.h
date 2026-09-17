@@ -51,6 +51,9 @@ public:
         int  bytes = 0;               // 该帧所在 NAL 的字节数（近似帧大小）
         bool isIdr = false;           // IDR（nal 19/20）：清空 DPB，closed GOP 边界
         bool isCra = false;           // CRA（nal 21）：不清空 DPB，open GOP 的候选边界
+        // GPB（Generalized P/B）：slice_type=B 但所有参考都在过去（无未来参考）。
+        // 低延迟 B，可即时解码，不引入重排序延迟。判定见 cpp 填充处。
+        bool isGpb = false;
     };
 
     struct Result {
@@ -62,7 +65,10 @@ public:
         std::vector<int>   gopSizes;  // 每个 GOP 的帧数
         std::vector<int>   gopStarts; // 每个 GOP 的首帧「解码序」下标
         bool hasCra = false;          // 码流中是否出现 CRA（nal 21）
+        bool hasIdr = false;          // 码流中是否出现 IDR（nal 19/20）
         bool openGop = false;         // open GOP 判定：CRA 之后存在跨边界反向参考
+        int  miniGopSize = 0;         // mini-GOP（分层 B 金字塔单元）大小，取锚点间距众数
+        int  gpbCount = 0;            // GPB 帧总数（低延迟 B）
     };
 
     // 解析整个文件（Annex-B 裸流）。支持 hevc / h265；

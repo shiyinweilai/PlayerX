@@ -157,6 +157,15 @@ public:
     Q_INVOKABLE int  refGopSize(int slot) const;
     // 是否 open GOP（CRA + 存在跨边界参考）；未就绪返回 false。
     Q_INVOKABLE bool refOpenGop(int slot) const;
+    // mini-GOP 大小（分层 B 金字塔单元，如 4）；未就绪返回 0。
+    Q_INVOKABLE int  refMiniGop(int slot) const;
+    // GPB 帧总数（slice_type=B 但参考全在过去）；未就绪返回 0。
+    Q_INVOKABLE int  refGpbCount(int slot) const;
+    // IRAP 构成：是否含 IDR / CRA，用于 UI 选择准确术语
+    Q_INVOKABLE bool refHasIdr(int slot) const;
+    Q_INVOKABLE bool refHasCra(int slot) const;
+    // 指定显示序帧是否为 GPB；未就绪返回 false。
+    Q_INVOKABLE bool frameIsGpb(int slot, int displayIndex) const;
 
     // ── GOP 列表（预扫描结果）─────────────────────────────────────
     // 每项：{ startFrameIndex, frameCount, isOpenGop }

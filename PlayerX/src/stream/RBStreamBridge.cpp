@@ -877,6 +877,34 @@ int RBStreamBridge::refGopSize(int slot) const {
     return best;
 }
 
+int RBStreamBridge::refMiniGop(int slot) const {
+    if (!refStructReady(slot)) return 0;
+    return m_slots[slot].refStruct.miniGopSize;
+}
+
+int RBStreamBridge::refGpbCount(int slot) const {
+    if (!refStructReady(slot)) return 0;
+    return m_slots[slot].refStruct.gpbCount;
+}
+
+bool RBStreamBridge::refHasIdr(int slot) const {
+    if (!refStructReady(slot)) return false;
+    return m_slots[slot].refStruct.hasIdr;
+}
+
+bool RBStreamBridge::refHasCra(int slot) const {
+    if (!refStructReady(slot)) return false;
+    return m_slots[slot].refStruct.hasCra;
+}
+
+bool RBStreamBridge::frameIsGpb(int slot, int displayIndex) const {
+    if (!refStructReady(slot)) return false;
+    const Slot& s = m_slots[slot];
+    const int c = dispToCodeOf(s.orderMap, displayIndex);
+    if (c < 0 || c >= int(s.refStruct.frames.size())) return false;
+    return s.refStruct.frames[size_t(c)].isGpb;
+}
+
 bool RBStreamBridge::refOpenGop(int slot) const {
     if (!refStructReady(slot)) return false;
     return m_slots[slot].refStruct.openGop;
