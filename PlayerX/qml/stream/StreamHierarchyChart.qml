@@ -148,7 +148,6 @@ Item {
             property int structVer: 0    // 文件级：结构重算
             property bool autoFollow: true
             property int selRank: -1     // 选中节点（显示序 rank）
-            property int hoverRank: -1
             property bool detailOn: false // 详情面板是否展开（点帧展开，× 收起）
             property bool detailDocked: true  // 详情面板：true=挤占右侧(等高)，false=悬浮覆盖(等高)
             slot: chartRoot.slot
@@ -208,7 +207,7 @@ Item {
                 if (!fl || fl.length === 0) {
                     chartPanel.rowsData = []; chartPanel.rankOfIdx = []
                     chartPanel.backRefs = []; chartPanel.maxRow = 1
-                    chartPanel.selRank = -1; chartPanel.hoverRank = -1
+                    chartPanel.selRank = -1
                     return
                 }
                 const n = fl.length
@@ -501,8 +500,7 @@ Item {
                                     const r = Math.floor(mx / flick.bodyItemW)
                                     return (r >= 0 && r < n) ? r : -1
                                 }
-                                onPositionChanged: chartPanel.hoverRank = rankAt(mouse.x)
-                                onExited: chartPanel.hoverRank = -1
+                                // 单击 = 选中 + 展开详情 + 直接跳转（不再需要双击）
                                 onClicked: {
                                     const r = rankAt(mouse.x)
                                     if (r < 0) return
@@ -512,24 +510,9 @@ Item {
                                     }
                                     chartPanel.selRank = r
                                     chartPanel.detailOn = true
+                                    StreamBridge.gotoFrame(chartPanel.slot, chartPanel.rowsData[r].idx)
                                 }
-                                onDoubleClicked: {
-                                    const r = rankAt(mouse.x)
-                                    if (r >= 0)
-                                        StreamBridge.gotoFrame(chartPanel.slot, chartPanel.rowsData[r].idx)
-                                }
-                                ToolTip.visible: containsMouse && chartPanel.hoverRank >= 0
-                                ToolTip.delay: 350
-                                ToolTip.text: {
-                                    const r = chartPanel.hoverRank
-                                    if (r < 0 || r >= chartPanel.rowsData.length) return ""
-                                    const f = chartPanel.rowsData[r]
-                                    const rc = f.refs ? f.refs.length : 0
-                                    return "POC " + f.poc + " · 帧 " + f.dispNo + " · " + f.type
-                                           + " · 解码序 " + f.decNo
-                                           + (chartPanel.refReady ? " · L" + f.depth : "")
-                                           + " · 参考 " + rc
-                                }
+
                             }
                         }
                     }
@@ -682,9 +665,6 @@ Item {
                                 } else if (isSelRef) {
                                     ctx.strokeStyle = "#7ec8ff"; ctx.lineWidth = 1.5
                                     ctx.strokeRect(x - 1.5, y - 1.5, bw + 3, bh + 3)
-                                } else if (r === chartPanel.hoverRank) {
-                                    ctx.strokeStyle = "#c8cdd4"; ctx.lineWidth = 1
-                                    ctx.strokeRect(x - 1, y - 1, bw + 2, bh + 2)
                                 }
                                 // 帧号：全部帧都标 POC（口径与 VQ 一致），选中帧用高亮色。
                                 // step>1 表示帧太密，按步长抽样标注，避免数字重叠。
@@ -777,7 +757,7 @@ Item {
                         anchors.right: parent.right
                         anchors.rightMargin: 10
                         anchors.bottom: parent.bottom
-                        anchors.bottomMargin: 38   // 给贴底跳转按钮留位
+                        anchors.bottomMargin: 4
                         contentWidth: width
                         contentHeight: detailInner.height
                         clip: true
@@ -901,34 +881,6 @@ Item {
                             color: "#e0a33e"; font.pixelSize: 10
                             font.family: "Monospace"
                         }
-                        }
-                    }
-                }
-
-                // 跳转按钮：固定贴底，不随列表滚动
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 10
-                    anchors.right: parent.right
-                    anchors.rightMargin: 10
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 8
-                    height: 22
-                    radius: 4
-                    color: jumpMa.pressed ? "#2a3f5a" : "#1f2937"
-                    border.color: "#42A5FF"; border.width: 1
-                    Text {
-                        anchors.centerIn: parent
-                        text: "跳转到此帧"
-                        color: "#7ec8ff"; font.pixelSize: 11
-                    }
-                    MouseArea {
-                        id: jumpMa
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (chartPanel.selFrame)
-                                StreamBridge.gotoFrame(chartPanel.slot, chartPanel.selFrame.idx)
                         }
                     }
                 }
