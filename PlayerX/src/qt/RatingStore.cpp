@@ -38,6 +38,8 @@ constexpr const char* kSettingsUploadUrlKey = "rating/uploadUrl";
 constexpr const char* kSettingsUploadTokKey = "rating/uploadToken";
 constexpr const char* kSettingsUploadTagKey  = "rating/uploadTag";
 constexpr const char* kSettingsUploadGroupKey = "rating/uploadGroup";
+// 已保存账户列表（JSON 数组：[{name,url,token},...]），用户中心多账户持久化。
+constexpr const char* kSettingsAccountsKey    = "rating/accounts";
 
 // 评分模式表：未来加新模式只要在这里追加一项，
 // QML 会通过 modeList 自动拿到所有字段生成 UI。
@@ -98,6 +100,33 @@ static QString folderDisplayName(const QString& filePath, int levels = 3) {
     const QStringList segs = dir.split(QLatin1Char('/'), Qt::SkipEmptyParts);
     const int n = qMin(levels, segs.size());
     return segs.mid(segs.size() - n).join(QLatin1Char('/'));
+}
+
+// ── 账户列表持久化（用户中心多账户）──────────────────────────────────
+// 内部：读 QSettings 的 accounts JSON 为 QVariantList
+static QVariantList loadAccountsList() {
+    QSettings s;
+    const QVariant raw = s.value(kSettingsAccountsKey);
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toString().toUtf8());
+    if (!doc.isArray()) return {};
+    return doc.array().toVariantList();
+}
+
+// 内部：写回 QSettings（JSON 数组）并发通知
+static void storeAccountsList(const QVariantList& list, RatingStore* self) {
+    QSettings s;
+    QJsonArray arr;
+    for (const auto& v : list) {
+        const QVariantMap m = v.toMap();
+        QJsonObject o;
+        o.insert("name",  m.value("name").toString());
+        o.insert("url",   m.value("url").toString());
+        o.insert("token", m.value("token").toString());
+        arr.append(o);
+    }
+    s.setValue(kSettingsAccountsKey, QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+    s.sync();
+    emit self->savedAccountsChanged();
 }
 }  // namespace
 
@@ -180,6 +209,29 @@ RatingStore::RatingStore(QObject* parent) : QObject(parent) {
                               ? QStringLiteral("(token 未设置)")
                               : QStringLiteral("(token 已设置)"));
     }
+
+    // ── 旧数据迁移 ──────────────────────────────────────────────────
+    // 历史版本只有全局 currentUser + uploadUrl/uploadToken，没有账户列表。
+    // 启动时若已登录却不在 accounts 列表里，自动作为账户入账，
+    // 保证用户中心菜单的账户列表能看到当前用户（资料一并带上）。
+    {
+        const QString cur = currentUser();
+        if (!cur.isEmpty()) {
+            QVariantList list = loadAccountsList();
+            bool found = false;
+            for (const auto& v : list) {
+                if (v.toMap().value("name").toString() == cur) { found = true; break; }
+            }
+            if (!found) {
+                QVariantMap m;
+                m["name"]  = cur;
+                m["url"]   = uploadServerUrl();
+                m["token"] = uploadToken();
+                list.prepend(m);
+                storeAccountsList(list, this);
+            }
+        }
+    }
 }
 
 // 按 mode 路由 CSV 文件：
@@ -236,6 +288,165 @@ QString RatingStore::systemUserName() const {
     if (u.isEmpty()) u = qEnvironmentVariable("USERNAME");  // Windows
     if (u.isEmpty()) u = "unknown";
     return u;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 账户管理（用户中心多账户，QSettings JSON 列表持久化）
+// ════════════════════════════════════════════════════════════════════════
+
+bool RatingStore::loginAccount(const QString& name, const QString& url, const QString& token) {
+    const QString n = name.trimmed();
+    if (n.isEmpty()) return false;
+    QVariantList list = loadAccountsList();
+    // 快照：把当前登录账户的全局 url/token 写回其条目（保持各账户资料最新）
+    const QString cur = currentUser();
+    if (!cur.isEmpty() && cur != n) {
+        const QString liveUrl = uploadServerUrl();
+        const QString liveTok = uploadToken();
+        for (auto& v : list) {
+            QVariantMap m = v.toMap();
+            if (m.value("name").toString() == cur) {
+                m["url"]   = liveUrl;
+                m["token"] = liveTok;
+                v = m;
+                break;
+            }
+        }
+    }
+    // 同名覆盖：先删旧条目再插到头部（最新登录的账户排最前）
+    for (int i = list.size() - 1; i >= 0; --i) {
+        if (list[i].toMap().value("name").toString() == n)
+            list.removeAt(i);
+    }
+    QVariantMap m;
+    m["name"]  = n;
+    m["url"]   = url.trimmed();
+    m["token"] = token;
+    list.prepend(m);
+    storeAccountsList(list, this);
+
+    // 同步全局身份与上传配置
+    setCurrentUser(n);
+    setUploadServerUrl(url.trimmed());
+    setUploadToken(token);
+    return true;
+}
+
+bool RatingStore::updateAccount(const QString& oldName, const QString& name,
+                                const QString& url, const QString& token) {
+    const QString on = oldName.trimmed();
+    const QString n  = name.trimmed();
+    if (on.isEmpty() || n.isEmpty()) return false;
+    QVariantList list = loadAccountsList();
+
+    // 定位被编辑账户条目（修改资料的作用对象 = 详情面板展开的那个账户）
+    int idx = -1;
+    for (int i = 0; i < list.size(); ++i) {
+        if (list[i].toMap().value("name").toString() == on) { idx = i; break; }
+    }
+    if (idx < 0) return false;   // 未找到（列表已外部变动）→ 安静失败不误写
+
+    QVariantMap m = list[idx].toMap();
+    m["name"]  = n;
+    m["url"]   = url.trimmed();
+    m["token"] = token;
+    list[idx] = m;
+    // 改名撞上其他同名账户：被编辑的账户优先，移除另一条
+    for (int i = list.size() - 1; i >= 0; --i) {
+        if (i != idx && list[i].toMap().value("name").toString() == n)
+            list.removeAt(i);
+    }
+    storeAccountsList(list, this);
+
+    // 被编辑的是当前登录账户 → 同步全局身份与上传配置
+    if (currentUser() == on) {
+        setCurrentUser(n);
+        setUploadServerUrl(url.trimmed());
+        setUploadToken(token);
+    }
+    return true;
+}
+
+bool RatingStore::switchAccount(const QString& name) {
+    const QString n = name.trimmed();
+    if (n.isEmpty()) return false;
+    QVariantList list = loadAccountsList();
+    // 快照：当前账户的全局 url/token 写回其条目，避免切换后资料过期
+    const QString cur = currentUser();
+    if (!cur.isEmpty() && cur != n) {
+        const QString liveUrl = uploadServerUrl();
+        const QString liveTok = uploadToken();
+        for (auto& v : list) {
+            QVariantMap m = v.toMap();
+            if (m.value("name").toString() == cur) {
+                if (m.value("url").toString() != liveUrl ||
+                    m.value("token").toString() != liveTok) {
+                    m["url"]   = liveUrl;
+                    m["token"] = liveTok;
+                    v = m;
+                    storeAccountsList(list, this);
+                }
+                break;
+            }
+        }
+    }
+    for (const auto& v : list) {
+        const QVariantMap m = v.toMap();
+        if (m.value("name").toString() == n) {
+            // 恢复该账户的 url/token 到全局配置，再切 currentUser
+            setUploadServerUrl(m.value("url").toString());
+            setUploadToken(m.value("token").toString());
+            setCurrentUser(n);
+            return true;
+        }
+    }
+    return false;
+}
+
+void RatingStore::logoutAccount() {
+    QVariantList list = loadAccountsList();
+    const QString cur = currentUser();
+    if (!cur.isEmpty()) {
+        const QString liveUrl = uploadServerUrl();
+        const QString liveTok = uploadToken();
+        bool changed = false;
+        for (auto& v : list) {
+            QVariantMap m = v.toMap();
+            if (m.value("name").toString() == cur) {
+                if (m.value("url").toString()   != liveUrl ||
+                    m.value("token").toString() != liveTok) {
+                    m["url"]   = liveUrl;
+                    m["token"] = liveTok;
+                    v = m;
+                    changed = true;
+                }
+                break;
+            }
+        }
+        if (changed) storeAccountsList(list, this);
+    }
+    setCurrentUser("");
+}
+
+bool RatingStore::removeAccount(const QString& name) {
+    const QString n = name.trimmed();
+    if (n.isEmpty()) return false;
+    QVariantList list = loadAccountsList();
+    bool removed = false;
+    for (int i = list.size() - 1; i >= 0; --i) {
+        if (list[i].toMap().value("name").toString() == n) {
+            list.removeAt(i);
+            removed = true;
+        }
+    }
+    // 删的是当前账户 → 同时登出
+    if (removed && currentUser() == n) setCurrentUser("");
+    if (removed) storeAccountsList(list, this);
+    return removed;
+}
+
+QVariantList RatingStore::savedAccounts() const {
+    return loadAccountsList();
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1452,6 +1663,77 @@ void RatingStore::uploadArchiveBatchToCloud(const QString& mode,
     const QString fileNameTag = QStringLiteral("%1__%2").arg(modeNow, batchName);
     // 与当前 Tab 上传一致：先做 HEAD 探活，避免后端没启时用户等 30s 才知道。
     probeServerThenPost(modeNow, csvBytes, fileNameTag, force);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 服务器在线状态探测（登录面板展示用，与上传链路完全独立）
+// ════════════════════════════════════════════════════════════════════════
+//
+// 设计要点：
+//   1) 与 probeServerThenPost 的探活判定完全同源：任何 HTTP 状态码（含 404/405）
+//      都算在线——只确认"服务进程在监听"，不要求路由匹配。
+//   2) 结果只写 m_serverOnline 并发 serverOnlineChanged；不碰 m_uploading，
+//      不发 uploadStarted/uploadFinished，对上传 UI 零干扰。
+//   3) 探测中重复调用直接忽略（m_probeReply 去抖）；面板每次打开时调用一次。
+//   4) URL 未配置时置 "unset"，QML 显示"未配置"而非误导性的"离线"。
+//   5) 3s 超时：面板展示场景比上传前探活更轻量，等太久没有意义。
+void RatingStore::probeServerOnline() {
+    // URL 未配置：直接进入 unset 态，不发请求。
+    const QString urlRaw = uploadServerUrl().trimmed();
+    if (urlRaw.isEmpty()) {
+        if (m_serverOnline != QStringLiteral("unset")) {
+            m_serverOnline = QStringLiteral("unset");
+            emit serverOnlineChanged();
+        }
+        return;
+    }
+
+    // 在途探测去抖：面板重复 open / 信号重入时忽略。
+    if (m_probeReply) return;
+
+    QUrl u(urlRaw);
+    {
+        QString path = u.path();
+        if (path.isEmpty() || path == "/") {
+            u.setPath("/upload");
+        } else if (path.size() > 1 && path.endsWith('/')) {
+            u.setPath(path.left(path.size() - 1));
+        }
+    }
+
+    if (!m_nam) m_nam = new QNetworkAccessManager(this);
+
+    QNetworkRequest req(u);
+    req.setRawHeader("User-Agent", "PlayerX-Uploader/1.0 (probe)");
+    const QString tok = uploadToken();
+    if (!tok.isEmpty()) req.setRawHeader("X-Token", tok.toUtf8());
+    req.setTransferTimeout(3 * 1000);
+
+    m_serverOnline = QStringLiteral("probing");
+    emit serverOnlineChanged();
+
+    QNetworkReply* probe = m_nam->head(req);
+    m_probeReply = probe;
+
+    QObject::connect(probe, &QNetworkReply::finished, this, [this, probe]() {
+        probe->deleteLater();
+        if (m_probeReply == probe) m_probeReply = nullptr;
+
+        const int httpCode =
+            probe->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        // 与上传前探活同源判定：拿到任何 HTTP 状态码即在线。
+        const QString next = (httpCode > 0) ? QStringLiteral("online")
+                                            : QStringLiteral("offline");
+        if (m_serverOnline != next) {
+            m_serverOnline = next;
+            emit serverOnlineChanged();
+        }
+    });
+
+    // 安全网：reply 异常销毁（进程退出等）时清掉在途指针，避免悬空。
+    QObject::connect(probe, &QObject::destroyed, this, [this, probe]() {
+        if (m_probeReply == probe) m_probeReply = nullptr;
+    });
 }
 
 // ════════════════════════════════════════════════════════════════════════

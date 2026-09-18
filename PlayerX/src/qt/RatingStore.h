@@ -75,6 +75,13 @@ class RatingStore : public QObject {
     Q_PROPERTY(QString uploadGroup     READ uploadGroup     WRITE setUploadGroup     NOTIFY uploadConfigChanged)
     // 上传过程状态：QML 按钮可以用它进行 disable / loading 反馈。
     Q_PROPERTY(bool uploading READ uploading NOTIFY uploadingChanged)
+    // 服务器在线状态（登录面板展示）：online/offline/probing/unset。
+    // probeServerOnline() 用 HEAD 探活（3s 超时，不真实上传），面板打开时调用。
+    Q_PROPERTY(QString serverOnline READ serverOnline NOTIFY serverOnlineChanged)
+    // 已保存账户列表（QVariantList of QVariantMap：name/url/token），
+    // 持久化在 QSettings "rating/accounts" 下（JSON 数组）。
+    // 用户中心下拉面板用它渲染"所有已登录账户"，支持点击直接切换。
+    Q_PROPERTY(QVariantList savedAccounts READ savedAccounts NOTIFY savedAccountsChanged)
 
 public:
     explicit RatingStore(QObject* parent = nullptr);
@@ -82,6 +89,26 @@ public:
     // 评分人（持久化在 QSettings 的 "rating/user" 下）
     QString currentUser() const;
     void    setCurrentUser(const QString& name);
+
+    // ── 账户管理（用户中心多账户）─────────────────────────────────────
+    // 登录并保存账户（name+url+token 落 QSettings 列表，currentUser 同步切换）。
+    // 同名账户直接覆盖更新（保留最新 url/token）。返回 false 表示 name 为空。
+    Q_INVOKABLE bool loginAccount(const QString& name, const QString& url, const QString& token);
+    // 修改资料：更新指定账户（oldName 定位条目）的 name/url/token，支持改名。
+    // 改名与其他账户重名时保留被编辑账户、移除同名旧条目。
+    // 被编辑账户是当前登录账户时才同步全局身份与上传配置。
+    Q_INVOKABLE bool updateAccount(const QString& oldName, const QString& name,
+                                   const QString& url, const QString& token);
+    // 切换到已保存的账户：恢复其 url/token 并设为 currentUser。未知名静默失败。
+    Q_INVOKABLE bool switchAccount(const QString& name);
+    // 退出登录但保留账户：把当前账户的全局 url/token 快照回列表条目
+    // （资料持久化不丢），然后 currentUser 置空。无当前账户时仅置空。
+    Q_INVOKABLE void logoutAccount();
+    // 从已保存列表删除账户；若删的是当前账户则同时登出（currentUser 置空）。
+    Q_INVOKABLE bool removeAccount(const QString& name);
+    // 已保存账户列表（QVariantMap: name/url/token）。
+    QVariantList savedAccounts() const;
+
 
     // 当前评分模式（QSettings 持久化在 "rating/mode" 下，默认 "subjective"）
     QString currentMode() const;
@@ -319,6 +346,17 @@ public slots:
     void    setUploadGroup(const QString& group);
     bool    uploading() const { return m_uploading; }
 
+    // ──服务器在线状态（登录面板展示）────────────────────────
+    // online  : 探测通过（端口有 HTTP 响应，含 404/405）
+    // offline : 探测失败（连接拒绝 / DNS / 超时 / TLS）
+    // probing : 正在探测
+    // unset   : 尚未配置 URL 或从未探测
+    // Q_PROPERTY 在文件顶部属性区声明；probeServerOnline() 用 HEAD 探活
+    // （不真实上传），结果经 serverOnlineChanged 通知 UI 刷新。
+    QString serverOnline() const { return m_serverOnline; }
+    // 发起一次在线探测；重复调用自动去抖（探测中直接忽略）。
+    Q_INVOKABLE void probeServerOnline();
+
     // 上传一份“精简 CSV”到 uploadServerUrl（与 exportToFile 写出的完全一致：
     //   updated_at,rater,file_name,stars，不含 file_path / quick_hash）。
     //   · 导出时 rater 列**强制使用** currentUser（若为空则取系统用户名），
@@ -358,6 +396,7 @@ public slots:
 
 signals:
     void currentUserChanged();
+    void savedAccountsChanged();
     void currentModeChanged(); // mode 切换：dataFilePath / maxStars / totalCount 都会跟着变
     void changed();   // 任何写入/清空都会触发，QML 表格可绑定刷新
 
@@ -370,6 +409,9 @@ signals:
     // 服务端返回 409 (needConfirm) 时触发；message 是后端给的人话，QML 据此弹“是否覆盖”确认
     // 用户确认后再调用 uploadToCloud(true) 强制覆盖。
     void uploadConflict(const QString& message);
+
+    // 服务器在线状态变化（"online" / "offline" / "probing" / "unset"）
+    void serverOnlineChanged();
 private:
     // 把 vector<map> 整体重写到 CSV（覆盖式）
     bool writeAll(const QList<QVariantMap>& rows) const;
@@ -458,6 +500,13 @@ private:
     // QNetworkAccessManager 懒初始化：不走上传的运行不产生任何网络资源。
     mutable QNetworkAccessManager* m_nam = nullptr;
     bool m_uploading = false;
+
+    // ──服务器在线状态（登录面板展示）──
+    // m_serverOnline: "online"/"offline"/"probing"/"unset"；仅 UI 展示用，
+    //                 与上传链路完全独立，探测失败不影响任何上传行为。
+    // m_probeReply  : 在途探测请求；探测中再触发 probeServerOnline() 会被忽略去抖。
+    QString          m_serverOnline = QStringLiteral("unset");
+    QNetworkReply*   m_probeReply = nullptr;
 
     // ── 导出/上传时的 checklist 白名单过滤状态 ──
     // 见 setExportChecklistWhitelist 注释。默认关闭（保持旧行为）。

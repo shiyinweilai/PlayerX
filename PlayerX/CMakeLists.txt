@@ -220,6 +220,9 @@ qt_add_qml_module(PlayerX
         # ── 从 Main.qml 拆分的窗口级组件 / 对话框 ──
         qml/AppMenuBar.qml
         qml/LoginDialog.qml
+        # 用户面板行内编辑/删除自绘线稿图标（独立文件，qmlcachegen 不支持 inline component）
+        qml/PencilIcon.qml
+        qml/TrashIcon.qml
         qml/UpdateDialog.qml
         qml/UpdateToast.qml
         qml/playback/TaskUpdateDismissArea.qml
