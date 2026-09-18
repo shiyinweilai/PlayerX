@@ -2363,58 +2363,32 @@ Component {
         //   对话框接手展示。
         onQuickUploadFinished: function(ok, message, archivedBatch) {
             if (ok) {
-                // archivedBatch 非空 → 上传成功后已自动归档，一并告知用户
-                quickUploadResultDialog.showSuccess(message, archivedBatch)
+                quickUploadConfirmDialog.onSuccess(message, archivedBatch)
             } else {
-                // 一般性失败（服务端 400/500 等）：也用同一个"结果对话框"展示
-                quickUploadResultDialog.showFailure(message)
+                quickUploadConfirmDialog.onFailure(message)
             }
         }
         onQuickUploadConflict: function(message) {
-            quickUploadOverwriteDialog.showConflict(message)
+            quickUploadConfirmDialog.onConflict(message)
         }
         onQuickUploadNetError: function(message) {
-            quickUploadResultDialog.showFailure(message)
+            quickUploadConfirmDialog.onFailure(message)
         }
     }
 
-    // ─── 快速上传二次确认对话框 ────────────────────────────────────
-    // 触发点：工具栏「📤 评分数据」按钮（所有评分完成后浮现的入口）。
-    // 交互流程：
-    //   点按钮 → openWithPreview() → 从 RatingsDialog.previewCurrentUpload()
-    //   拉取"当前正在评分"的预览信息（模式、评分人、tag、文件夹清单、评分条数、
-    //   有无未评完/校验不通过）→ 用户在本对话框上看到摘要 →
-    //     · 点"☁ 确认上传"：调用 ratingsDialog.triggerQuickUploadForCurrentTab()
-    //       复用面板内的上传主流程（含 tagMismatch / uploadConfig / uploadSuccess 弹窗）；
-    //     · 点"✏️ 去修改"：仍打开完整的评分数据面板供用户手动调整。
-    // 设计动机：让"评分完 → 一键上传"路径减少一次多余的面板打开操作，
-    //   同时保留人工核对/修改的机会（防止误上传半成品或误 tag）。
+    // ─── 快速上传·单一面板（确认 / 冲突 / 上传中 / 成功 / 失败 全部就地切换）──
     QuickUploadConfirmDialog {
         id: quickUploadConfirmDialog
         root: root
         ratingsDialog: ratingsDialog
     }
 
-    // ─── 快速上传·结果反馈对话框（成功 / 失败共用一个） ─────────────
-    // 作为"外部一键上传"（不打开评分数据面板）时的顶层反馈对话框：
-    //   · 上传成功：绿色标题、"✅ 上传成功" + 附带模式/评分人/tag/文件夹列表
-    //   · 上传失败：红色标题、"❌ 上传失败" + 服务端错误信息
-    // 之所以放在主窗顶层：评分数据面板是独立 Window，未打开时其内部 Popup
-    // 弹不出来；放主窗层次能保证任何时刻都能显示。
-    QuickUploadResultDialog {
-        id: quickUploadResultDialog
-        root: root
-        quickUploadConfirmDialog: quickUploadConfirmDialog
-    }
-
-    // ─── 快速上传·覆盖确认对话框 ────────────────────────────────
-    // 服务端返回 409（同 rater+tag 已存在同名上传）时，让用户确认是否覆盖。
-    // 确认 → 调 Rating.uploadToCloud(true, folderPaths) 携带 force=1 重发；
-    // 取消 → 什么都不做，用户可以自己去改 tag 后再点上传。
-    QuickUploadOverwriteDialog {
-        id: quickUploadOverwriteDialog
-        root: root
-        ratingsDialog: ratingsDialog
+    // 把 Rating.cloudRecordChecked 信号转发给面板（面板打开时的云端预检结果）
+    Connections {
+        target: (typeof Rating !== "undefined") ? Rating : null
+        function onCloudRecordChecked(hasRecord, message) {
+            quickUploadConfirmDialog.onCloudRecordChecked(hasRecord, message)
+        }
     }
 
     // 全局进度条已移除：多路场景下各路独立播放控制，全局进度条语义

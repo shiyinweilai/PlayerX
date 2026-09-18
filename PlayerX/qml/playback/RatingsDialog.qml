@@ -1128,9 +1128,22 @@ Window {
     // 注意：本函数假设 previewCurrentUpload().canUpload === true。若外部
     // 越过预览直接调用，遇到评分人/tag 缺失，_performUpload 内部的
     // _rejectUpload / rejectDialog 会兜底提示，不会真的把脏数据上传出去。
-    function triggerQuickUploadForCurrentTab() {
+    function triggerQuickUploadForCurrentTab(force) {
         root._quickUploadInProgress = true
-        _performUpload()
+        if (force === true) {
+            // 已确认覆盖，直接走 force=true 路径
+            var folders = root._lastUploadFolders || []
+            if (root._lastUploadKind === "archive") {
+                Rating.uploadArchiveBatchToCloud(
+                    root._lastUploadArchiveMode || root._selectedMode,
+                    root._lastUploadArchiveBatch,
+                    true, folders)
+            } else {
+                Rating.uploadToCloud(true, folders)
+            }
+        } else {
+            _performUpload()
+        }
     }
 
 
@@ -1329,12 +1342,15 @@ Window {
         // ── 上传前必填校验：评分人 + 备注 tag ───────────────────
         // 外部一键上传入口（面板未打开）时，userField/tagField 仍存在
         // （Dialog 一加载就实例化），所以照旧读它们的 text。
-        var raterText = (typeof userField !== "undefined") ? userField.text.trim() : ""
+        // 账号系统（Rating.currentUser）是权威来源，始终优先；
+        // userField.text 仅在 currentUser 为空时作为兜底。
+        // 不能反过来用 UI 输入框残值覆写 currentUser，否则切换账号后
+        // 输入框旧值会把账号改回去。
+        var raterText = (typeof Rating !== "undefined" && Rating.currentUser)
+                        ? String(Rating.currentUser).trim() : ""
+        if (raterText.length === 0 && typeof userField !== "undefined")
+            raterText = userField.text.trim()
         var tagText   = (typeof tagField  !== "undefined") ? tagField.text.trim()  : ""
-        // 兜底：如果 UI 输入框还没被填过（例如首次进入直接从外部一键上传），
-        // 就退回 Rating.currentUser / Rating.uploadTag（真数据源）。
-        if (raterText.length === 0 && Rating.currentUser)
-            raterText = String(Rating.currentUser).trim()
         if (tagText.length === 0 && Rating.uploadTag)
             tagText = String(Rating.uploadTag).trim()
         console.log("[QuickUpload] rater=", raterText, "tag=", tagText)
@@ -1645,6 +1661,12 @@ Window {
             if (!root.visible) {
                 root._selectedMode = Rating.currentMode
                 root._refresh()
+            }
+        }
+        // 账号切换时同步评分人输入框，避免旧值残留反向覆写 currentUser。
+        function onCurrentUserChanged() {
+            if (typeof Rating !== "undefined") {
+                root._userBuffer = String(Rating.currentUser || "")
             }
         }
     }

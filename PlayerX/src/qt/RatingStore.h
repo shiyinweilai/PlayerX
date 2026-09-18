@@ -378,7 +378,15 @@ public slots:
     // 发起一次在线探测；重复调用自动去抖（探测中直接忽略）。
     Q_INVOKABLE void probeServerOnline();
 
-    // 上传一份“精简 CSV”到 uploadServerUrl（与 exportToFile 写出的完全一致：
+    // 异步查询云端是否已存在同 (user, tag, mode) 的上传记录。
+    // 结果通过 cloudRecordChecked(hasRecord, message) 信号返回：
+    //   hasRecord=true  → 已有记录，message 为人话描述（含记录数/时间）
+    //   hasRecord=false → 无记录或查询失败（网络错误时静默认为无记录）
+    Q_INVOKABLE void checkCloudRecord(const QString& user,
+                                      const QString& tag,
+                                      const QString& mode);
+
+    // 上传一份"精简 CSV"到 uploadServerUrl（与 exportToFile 写出的完全一致：
     //   updated_at,rater,file_name,stars，不含 file_path / quick_hash）。
     //   · 导出时 rater 列**强制使用** currentUser（若为空则取系统用户名），
     //     不再沿用 CSV 里历史写入的旧 rater——避免用户改名后“名义不一致”。
@@ -427,9 +435,12 @@ signals:
     void uploadStarted();
     // ok=true 时 message 为后端返回的文件名或简要信息；ok=false 时 message 为错误描述。
     void uploadFinished(bool ok, const QString& message);
-    // 服务端返回 409 (needConfirm) 时触发；message 是后端给的人话，QML 据此弹“是否覆盖”确认
+    // 服务端返回 409 (needConfirm) 时触发；message 是后端给的人话，QML 据此弹"是否覆盖"确认
     // 用户确认后再调用 uploadToCloud(true) 强制覆盖。
     void uploadConflict(const QString& message);
+
+    // checkCloudRecord() 的异步结果：hasRecord=true 时 message 含描述（评分人/tag/记录数/时间）
+    void cloudRecordChecked(bool hasRecord, const QString& message);
 
     // 服务器在线状态变化（"online" / "offline" / "probing" / "unset"）
     void serverOnlineChanged();

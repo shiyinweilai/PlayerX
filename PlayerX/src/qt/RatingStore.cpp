@@ -26,6 +26,7 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QUrl>
+#include <QUrlQuery>
 
 namespace rbqt {
 
@@ -1905,6 +1906,98 @@ void RatingStore::probeServerOnline() {
     // 安全网：reply 异常销毁（进程退出等）时清掉在途指针，避免悬空。
     QObject::connect(probe, &QObject::destroyed, this, [this, probe]() {
         if (m_probeReply == probe) m_probeReply = nullptr;
+    });
+}
+
+// ── checkCloudRecord ────────────────────────────────────────────────────────
+// GET /list?mode=<mode> → 过滤 user+tag 是否有记录
+// 成功且有记录 → emit cloudRecordChecked(true, humanMsg)
+// 无记录或失败 → emit cloudRecordChecked(false, "")
+void RatingStore::checkCloudRecord(const QString& user,
+                                   const QString& tag,
+                                   const QString& mode)
+{
+    const QString urlRaw = uploadServerUrl().trimmed();
+    if (urlRaw.isEmpty()) { emit cloudRecordChecked(false, {}); return; }
+
+    QUrl u(urlRaw);
+    {
+        QString path = u.path();
+        if (path.isEmpty() || path == "/") {
+            u.setPath("/list");
+        } else {
+            // 如果用户填的是 /upload 结尾，换成 /list
+            QString p = path;
+            if (p.size() > 1 && p.endsWith('/')) p = p.left(p.size() - 1);
+            if (p.endsWith("/upload")) p = p.left(p.size() - 7) + "/list";
+            else if (!p.endsWith("/list")) p = p.left(p.lastIndexOf('/') + 1) + "list";
+            u.setPath(p);
+        }
+    }
+    // 带 mode 参数缩小服务端返回范围
+    if (!mode.isEmpty()) {
+        QUrlQuery q;
+        q.addQueryItem(QStringLiteral("mode"), mode);
+        u.setQuery(q);
+    }
+
+    if (!m_nam) m_nam = new QNetworkAccessManager(this);
+
+    QNetworkRequest req(u);
+    req.setRawHeader("User-Agent", "PlayerX-Uploader/1.0 (check)");
+    const QString tok = uploadToken();
+    if (!tok.isEmpty()) req.setRawHeader("X-Token", tok.toUtf8());
+    req.setTransferTimeout(5 * 1000);
+
+    QNetworkReply* reply = m_nam->get(req);
+
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, user, tag, mode]() {
+        reply->deleteLater();
+        const int httpCode =
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (httpCode != 200 || reply->error() != QNetworkReply::NoError) {
+            emit cloudRecordChecked(false, {});
+            return;
+        }
+        const QByteArray body = reply->readAll();
+        QJsonParseError perr{};
+        const auto doc = QJsonDocument::fromJson(body, &perr);
+        if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+            emit cloudRecordChecked(false, {});
+            return;
+        }
+        const auto items = doc.object().value(QStringLiteral("items")).toArray();
+        // 过滤 user + tag 匹配的记录
+        QJsonArray matched;
+        for (const auto& v : items) {
+            const auto obj = v.toObject();
+            const QString u2   = obj.value(QStringLiteral("user")).toString().trimmed();
+            const QString t2   = obj.value(QStringLiteral("tag")).toString().trimmed();
+            const QString m2   = obj.value(QStringLiteral("mode")).toString().trimmed();
+            const bool modeOk  = mode.isEmpty() || m2 == mode || m2.isEmpty();
+            if (u2 == user.trimmed() && t2 == tag.trimmed() && modeOk) {
+                matched.append(obj);
+            }
+        }
+        if (matched.isEmpty()) {
+            emit cloudRecordChecked(false, {});
+            return;
+        }
+        // 取最近一次时间
+        QString lastTime;
+        const auto first = matched.first().toObject();
+        const QString iso = first.value(QStringLiteral("mtime")).toString();
+        const QDateTime dt = QDateTime::fromString(iso, Qt::ISODate);
+        if (dt.isValid())  lastTime = dt.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+        else               lastTime = iso;
+
+        QString msg = tr("评分人：%1    标签：%2\n已有 %3 份记录")
+                          .arg(user.trimmed())
+                          .arg(tag.trimmed())
+                          .arg(matched.size());
+        if (!lastTime.isEmpty())
+            msg += tr("，最近一次：%1").arg(lastTime);
+        emit cloudRecordChecked(true, msg);
     });
 }
 

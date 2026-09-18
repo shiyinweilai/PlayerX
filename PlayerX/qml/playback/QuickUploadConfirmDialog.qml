@@ -6,19 +6,27 @@ import QtQuick.Window
 import PlayerX 1.0
 
 Dialog {
-    id: quickUploadConfirmDialog
+    id: dlg
     property var root: null
     property var ratingsDialog: null
     modal: true
     anchors.centerIn: parent
     standardButtons: Dialog.NoButton
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    implicitWidth: 620
+    implicitWidth: 500
 
     Overlay.modal: Rectangle { color: "#cc000000" }
 
-    // ── 预览数据（openWithPreview 填充；关闭后不清空，方便调试）──
-    property string _mode: ""
+    // ─── 状态机 ───────────────────────────────────────────────
+    // checking    → 正在查云端记录（打开面板时自动触发）
+    // confirm     → 无旧记录，正常上传
+    // confirm_ow  → 有旧记录，按钮改为"覆盖上传"
+    // uploading   → 上传进行中
+    // done_ok     → 上传成功（原面板保留，底部加绿色提示）
+    // done_fail   → 上传失败（原面板保留，底部加红色提示）
+    property string _phase: "confirm"
+
+    // ─── 数据 ─────────────────────────────────────────────────
     property string _modeLabel: ""
     property string _rater: ""
     property string _tag: ""
@@ -27,399 +35,407 @@ Dialog {
     property bool   _canUpload: false
     property string _blockReason: ""
     property string _fromArchiveBatch: ""
-    property string _sourceLabel: ""
+    property bool   _wasOverwrite: false   // 记录本次是否是覆盖上传，done_ok 时展示
+
+    // conflict 填充
+    property string _conflictHint: ""
+
+    // done_ok / done_fail 填充
+    property string _viewUrl: ""
+    property string _archivedBatch: ""
+    property string _failMsg: ""
+
+    // ─── 公开接口 ─────────────────────────────────────────────
 
     function openWithPreview() {
-        console.log("[QuickUpload] openWithPreview() start")
-        _mode = ""; _modeLabel = ""; _rater = ""; _tag = ""
+        _phase = "checking"
+        _modeLabel = ""; _rater = ""; _tag = ""
         _folders = []; _recordCount = 0
         _canUpload = false; _blockReason = ""
-        _fromArchiveBatch = ""
-        _sourceLabel = ""
+        _fromArchiveBatch = ""; _conflictHint = ""
+        _viewUrl = ""; _archivedBatch = ""; _failMsg = ""
+        _wasOverwrite = false
 
         try {
-            if (typeof ratingsDialog !== "undefined"
-                    && typeof ratingsDialog.previewCurrentUpload === "function") {
+            if (ratingsDialog && typeof ratingsDialog.previewCurrentUpload === "function") {
                 var p = ratingsDialog.previewCurrentUpload() || {}
-                _mode        = p.mode        || ""
-                _modeLabel   = p.modeLabel   || _mode
-                _rater       = p.rater       || ""
-                _tag         = p.tag         || ""
-                _folders     = p.folders     || []
-                _recordCount = p.recordCount || 0
-                _canUpload   = !!p.canUpload
-                _blockReason = p.blockReason || ""
+                _modeLabel        = p.modeLabel   || p.mode || ""
+                _rater            = p.rater        || ""
+                _tag              = p.tag          || ""
+                _folders          = p.folders      || []
+                _recordCount      = p.recordCount  || 0
+                _canUpload        = !!p.canUpload
+                _blockReason      = p.blockReason  || ""
                 _fromArchiveBatch = p.fromArchiveBatch || ""
-                _sourceLabel = p.sourceLabel || ""
-                console.log("[QuickUpload] preview ok:",
-                            "mode=", _mode, "rater=", _rater, "tag=", _tag,
-                            "folders=", _folders.length, "canUpload=", _canUpload)
             } else {
                 _blockReason = qsTr("评分数据面板尚未就绪，请点「去修改」打开面板")
-                console.log("[QuickUpload] ratingsDialog or preview fn missing")
+                _phase = "confirm"
+                open()
+                return
             }
         } catch (e) {
             _canUpload = false
             _blockReason = qsTr("预览失败：") + String(e)
-            console.log("[QuickUpload] preview threw:", e)
+            _phase = "confirm"
+            open()
+            return
         }
-        console.log("[QuickUpload] calling open()...")
+
         open()
+
+        if (!_canUpload) {
+            _phase = "confirm"
+            return
+        }
+
+        if (_rater.length > 0 && _tag.length > 0 && typeof Rating !== "undefined") {
+            Rating.checkCloudRecord(_rater, _tag,
+                ratingsDialog ? (ratingsDialog._selectedMode || "") : "")
+        } else {
+            _phase = "confirm"
+        }
     }
 
-    // ── 背景 ───────────────────────────────────────────────────
+    function onCloudRecordChecked(hasRecord, message) {
+        if (_phase !== "checking") return
+        if (hasRecord) {
+            _conflictHint = message
+            _phase = "confirm_ow"
+        } else {
+            _phase = "confirm"
+        }
+    }
+
+    function onConflict(message) {
+        _conflictHint = message || qsTr("同 (评分人, tag) 已存在上传记录")
+        _phase = "confirm_ow"
+    }
+
+    function onSuccess(message, archivedBatch) {
+        _archivedBatch = archivedBatch || ""
+        var srvBase = (typeof Rating !== "undefined" && Rating.uploadServerUrl)
+                      ? String(Rating.uploadServerUrl).trim() : ""
+        var m = srvBase.match(/^(https?:\/\/[^\/]+)/)
+        _viewUrl = m ? m[1] + "/#results" : ""
+        _phase = "done_ok"
+        _autoClose.restart()
+    }
+
+    function onFailure(message) {
+        _failMsg = message || qsTr("上传失败，请稍后重试")
+        _phase = "done_fail"
+    }
+
+    // ─── 自动关闭（成功后 2s）────────────────────────────────
+    Timer {
+        id: _autoClose
+        interval: 2000; repeat: false
+        onTriggered: {
+            if (dlg._phase !== "done_ok") return
+            var url = dlg._viewUrl
+            dlg.close()
+            if (url) Qt.openUrlExternally(url)
+        }
+    }
+    onClosed: _autoClose.stop()
+
+    // ─── 背景 ─────────────────────────────────────────────────
     background: Rectangle {
         color: "#1a1a1f"
-        border.color: "#44444e"
+        radius: 8
         border.width: 1
-        radius: 8
+        border.color: dlg._phase === "confirm_ow" ? "#5a4a20" : "#38383e"
+        Behavior on border.color { ColorAnimation { duration: 180 } }
     }
 
-    // ── 标题栏 ─────────────────────────────────────────────────
+    // ─── 标题 ─────────────────────────────────────────────────
     header: Rectangle {
-        color: "#22222a"
-        implicitHeight: 52
-        radius: 8
-        // 只上圆角
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: parent.radius; color: parent.color
-        }
+        color: "transparent"
+        implicitHeight: 48
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 18; anchors.rightMargin: 18
-            spacing: 10
-            Text {
-                text: "☁"
-                font.pixelSize: 18
-                color: "#4fc3f7"
-            }
-            Text {
-                text: qsTr("上传评分数据到云端")
-                color: "#f0f0f4"
-                font.pixelSize: 15
-                font.bold: true
-                Layout.fillWidth: true
-            }
-        }
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1; color: "#33333c"
-        }
-    }
-
-    // ── 内容区 ─────────────────────────────────────────────────
-    contentItem: ColumnLayout {
-        spacing: 0
-
-        // ── 摘要信息块（2×2 网格：评分模式/评分人/备注tag/评分记录）──
-        // 用 Item+anchors 实现，规避 AOT 下 Layout.preferredWidth 兼容问题
-        Item {
-            id: summaryBlock
-            Layout.fillWidth: true
-            Layout.topMargin: 4
-            implicitHeight: gridBg.implicitHeight
-
-            Rectangle {
-                id: gridBg
-                anchors.fill: parent
-                color: "#1f1f26"
-                radius: 6
-                implicitHeight: Math.max(cellTL.implicitHeight, cellTR.implicitHeight)
-                              + Math.max(cellBL.implicitHeight, cellBR.implicitHeight)
-                              + 52   // 上下边距 + 行间距
-            }
-
-            // 竖分隔线
-            Rectangle {
-                id: vDivider
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.topMargin: 12; anchors.bottomMargin: 12
-                width: 1; color: "#2a2a34"
-            }
-            // 横分隔线
-            Rectangle {
-                id: hDivider
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.topMargin: parent.implicitHeight / 2
-                anchors.leftMargin: 16; anchors.rightMargin: 16
-                height: 1; color: "#2a2a34"
-            }
-
-            // 左上：评分模式
-            Column {
-                id: cellTL
-                anchors.left: parent.left
-                anchors.right: vDivider.left
-                anchors.top: parent.top
-                anchors.leftMargin: 18; anchors.rightMargin: 14
-                anchors.topMargin: 18
-                spacing: 5
-                Text {
-                    text: qsTr("评分模式")
-                    color: "#585e68"; font.pixelSize: 11
-                }
-                    Text {
-                        width: parent.width
-                        text: quickUploadConfirmDialog._modeLabel || "—"
-                        color: "#ffd27a"
-                        font.pixelSize: 17
-                        elide: Text.ElideRight
-                    }
-            }
-
-            // 右上：评分人
-            Column {
-                id: cellTR
-                anchors.left: vDivider.right
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.leftMargin: 14; anchors.rightMargin: 18
-                anchors.topMargin: 18
-                spacing: 5
-                Text {
-                    text: qsTr("评分人")
-                    color: "#585e68"; font.pixelSize: 11
-                }
-                Text {
-                    width: parent.width
-                    text: quickUploadConfirmDialog._rater.length > 0
-                          ? quickUploadConfirmDialog._rater
-                          : qsTr("（未填写）")
-                    color: quickUploadConfirmDialog._rater.length > 0 ? "#ffd27a" : "#e07070"
-                    font.pixelSize: 20
-                    font.bold: true
-                    elide: Text.ElideRight
-                }
-            }
-
-            // 左下：备注 tag
-            Column {
-                id: cellBL
-                anchors.left: parent.left
-                anchors.right: vDivider.left
-                anchors.bottom: parent.bottom
-                anchors.leftMargin: 18; anchors.rightMargin: 14
-                anchors.bottomMargin: 18
-                spacing: 5
-                Text {
-                    text: qsTr("备注 tag")
-                    color: "#585e68"; font.pixelSize: 11
-                }
-                Text {
-                    width: parent.width
-                    text: quickUploadConfirmDialog._tag.length > 0
-                          ? quickUploadConfirmDialog._tag
-                          : qsTr("（未填写）")
-                    color: quickUploadConfirmDialog._tag.length > 0 ? "#ffd27a" : "#e07070"
-                    font.pixelSize: 20
-                    font.bold: true
-                    elide: Text.ElideRight
-                }
-            }
-
-            // 右下：评分记录
-            Column {
-                id: cellBR
-                anchors.left: vDivider.right
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.leftMargin: 14; anchors.rightMargin: 18
-                anchors.bottomMargin: 18
-                spacing: 5
-                Text {
-                    text: qsTr("评分记录")
-                    color: "#585e68"; font.pixelSize: 11
-                }
-                Text {
-                    width: parent.width
-                    text: quickUploadConfirmDialog._folders.length + qsTr(" 个文件夹  ·  ") +
-                          quickUploadConfirmDialog._recordCount + qsTr(" 条评分")
-                    color: "#ffd27a"
-                    font.pixelSize: 20
-                    font.bold: true
-                    elide: Text.ElideRight
-                }
-            }
-        }
-
-        // ── 校验失败 banner ─────────────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.topMargin: 10
-            visible: !quickUploadConfirmDialog._canUpload
-                     && quickUploadConfirmDialog._blockReason.length > 0
-            color: "#2e1a1a"
-            border.color: "#6a3030"; border.width: 1
-            radius: 6
-            implicitHeight: blockText.implicitHeight + 18
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
-                Text {
-                    text: "⚠"
-                    color: "#ff8080"
-                    font.pixelSize: 14
-                    verticalAlignment: Text.AlignTop
-                }
-                Text {
-                    id: blockText
-                    Layout.fillWidth: true
-                    text: quickUploadConfirmDialog._blockReason
-                    color: "#f0a0a0"
-                    font.pixelSize: 12
-                    wrapMode: Text.WordWrap
-                    lineHeight: 1.4
-                }
-            }
-        }
-
-        // ── 脚注说明 ────────────────────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.topMargin: 10
-            visible: footNoteText.text.length > 0
-            color: "#0d2140"
-            border.color: "#1976d2"
-            border.width: 1
-            radius: 6
-            implicitHeight: footNoteText.implicitHeight + 16
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
-                Text {
-                    text: "📂"
-                    font.pixelSize: 13
-                    color: "#4fc3f7"
-                    verticalAlignment: Text.AlignVCenter
-                }
-                Text {
-                    id: footNoteText
-                    Layout.fillWidth: true
-                    text: quickUploadConfirmDialog._fromArchiveBatch.length > 0
-                          ? qsTr("已归档在 归档/%1 目录，上传后不会重复归档。")
-                            .arg(quickUploadConfirmDialog._tag)
-                          : (quickUploadConfirmDialog._canUpload
-                             ? qsTr("上传成功后自动归档到 归档/%1 目录。")
-                               .arg(quickUploadConfirmDialog._tag)
-                             : "")
-                    color: "#90caf9"
-                    font.pixelSize: 12
-                    wrapMode: Text.WordWrap
-                    lineHeight: 1.4
-                }
-            }
-        }
-
-        Item { implicitHeight: 4 }
-    }
-
-    // ── 底部按钮 ───────────────────────────────────────────────
-    footer: Rectangle {
-        color: "#1e1e26"
-        implicitHeight: 58
-        radius: 8
-        // 只下圆角
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.top: parent.top
-            height: parent.radius; color: parent.color
-        }
-        Rectangle {
-            anchors.left: parent.left; anchors.right: parent.right
-            anchors.top: parent.top
-            height: 1; color: "#33333c"
-        }
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 16; anchors.rightMargin: 16
-            anchors.topMargin: 12; anchors.bottomMargin: 12
+            anchors.leftMargin: 18; anchors.rightMargin: 14
             spacing: 8
+            Text {
+                text: dlg._phase === "confirm_ow" ? "⚠" : "☁"
+                font.pixelSize: 16
+                color: dlg._phase === "confirm_ow" ? "#ffc060" : "#4fc3f7"
+                Behavior on color { ColorAnimation { duration: 180 } }
+            }
+            Text {
+                Layout.fillWidth: true
+                text: dlg._phase === "confirm_ow"
+                      ? qsTr("上传评分数据到云端（将覆盖旧记录）")
+                      : qsTr("上传评分数据到云端")
+                color: dlg._phase === "confirm_ow" ? "#ffc060" : "#e8e8ec"
+                font.pixelSize: 14; font.bold: true
+                Behavior on color { ColorAnimation { duration: 180 } }
+            }
+        }
+        Rectangle {
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 1; color: "#2e2e36"
+        }
+    }
+
+    // ─── 内容区 ───────────────────────────────────────────────
+    contentItem: ColumnLayout {
+        spacing: 10
+
+        // ── 摘要格（全阶段都显示）────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            color: "#1f1f27"; radius: 6
+            implicitHeight: summaryGrid.implicitHeight + 24
+
+            GridLayout {
+                id: summaryGrid
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                anchors.margins: 14
+                columns: 4; columnSpacing: 16; rowSpacing: 8
+
+                Text { text: qsTr("评分模式"); color: "#5a6070"; font.pixelSize: 11 }
+                Text { text: qsTr("评分人");   color: "#5a6070"; font.pixelSize: 11 }
+                Text { text: qsTr("备注 tag"); color: "#5a6070"; font.pixelSize: 11 }
+                Text { text: qsTr("评分记录"); color: "#5a6070"; font.pixelSize: 11 }
+
+                Text {
+                    text: dlg._modeLabel || "—"
+                    color: "#ffd27a"; font.pixelSize: 15; elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                Text {
+                    text: dlg._rater.length > 0 ? dlg._rater : qsTr("未填写")
+                    color: dlg._rater.length > 0 ? "#ffd27a" : "#e07070"
+                    font.pixelSize: 15; font.bold: dlg._rater.length > 0; elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                Text {
+                    text: dlg._tag.length > 0 ? dlg._tag : qsTr("未填写")
+                    color: dlg._tag.length > 0 ? "#ffd27a" : "#e07070"
+                    font.pixelSize: 15; font.bold: dlg._tag.length > 0; elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+                Text {
+                    text: dlg._folders.length + qsTr("个文件夹 · ") + dlg._recordCount + qsTr("条")
+                    color: "#ffd27a"; font.pixelSize: 14; elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+            }
+        }
+
+        // ── 云端检测中 loading ────────────────────────────────
+        RowLayout {
+            Layout.fillWidth: true
+            visible: dlg._phase === "checking"
+            spacing: 8
+            BusyIndicator { running: dlg._phase === "checking"; implicitWidth: 18; implicitHeight: 18 }
+            Text { text: qsTr("正在检测云端记录…"); color: "#7a8090"; font.pixelSize: 12 }
+        }
+
+        // ── 冲突提示（confirm_ow）────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            visible: dlg._phase === "confirm_ow"
+            color: "#2a1e08"; border.color: "#6a4e18"; border.width: 1; radius: 5
+            implicitHeight: owText.implicitHeight + 16
+            Text {
+                id: owText
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                anchors.margins: 10
+                text: dlg._conflictHint + "\n" + qsTr("点击「覆盖上传」将替换旧记录（旧数据由服务端自动备份，可追回）。")
+                color: "#ffd090"; font.pixelSize: 12
+                wrapMode: Text.WordWrap; lineHeight: 1.4
+            }
+        }
+
+        // ── 校验失败提示 ──────────────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            visible: (dlg._phase === "confirm" || dlg._phase === "confirm_ow")
+                     && !dlg._canUpload && dlg._blockReason.length > 0
+            color: "#2a1212"; border.color: "#6a2020"; border.width: 1; radius: 5
+            implicitHeight: blockText.implicitHeight + 16
+            Text {
+                id: blockText
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                anchors.margins: 10
+                text: "⚠  " + dlg._blockReason
+                color: "#f0a0a0"; font.pixelSize: 12
+                wrapMode: Text.WordWrap; lineHeight: 1.4
+            }
+        }
+
+        // ── 归档提示（confirm / confirm_ow，可上传时）────────
+        Rectangle {
+            Layout.fillWidth: true
+            visible: (dlg._phase === "confirm" || dlg._phase === "confirm_ow")
+                     && dlg._canUpload
+            color: "#0c1c30"; border.color: "#1a4a70"; border.width: 1; radius: 5
+            implicitHeight: archText.implicitHeight + 14
+            Text {
+                id: archText
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                anchors.margins: 9
+                text: dlg._fromArchiveBatch.length > 0
+                      ? qsTr("📂  已归档在 归档/%1，上传后不重复归档。").arg(dlg._tag)
+                      : qsTr("📂  上传成功后自动归档到 归档/%1。").arg(dlg._tag)
+                color: "#80b8e0"; font.pixelSize: 12; wrapMode: Text.WordWrap
+            }
+        }
+
+        // ── 上传中 loading ────────────────────────────────────
+        RowLayout {
+            Layout.fillWidth: true
+            visible: dlg._phase === "uploading"
+            spacing: 10
+            BusyIndicator { running: dlg._phase === "uploading"; implicitWidth: 22; implicitHeight: 22 }
+            Text { text: qsTr("正在上传，请稍候…"); color: "#9aa0a6"; font.pixelSize: 13 }
+        }
+
+        // ── 成功提示条（done_ok）──────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            visible: dlg._phase === "done_ok"
+            color: "#0d2218"; border.color: "#2a6640"; border.width: 1; radius: 5
+            implicitHeight: doneOkCol.implicitHeight + 16
+            Column {
+                id: doneOkCol
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                anchors.margins: 11
+                spacing: 4
+                RowLayout {
+                    spacing: 6
+                    Text { text: "✅"; font.pixelSize: 13 }
+                    Text {
+                        text: qsTr("上传成功")
+                              + (dlg._wasOverwrite ? qsTr("（已覆盖旧记录）") : "")
+                        color: "#7ce495"; font.pixelSize: 13; font.bold: true
+                    }
+                }
+                Text {
+                    visible: dlg._archivedBatch.length > 0
+                    width: doneOkCol.width
+                    text: qsTr("已归档到 归档/%1").arg(dlg._archivedBatch)
+                    color: "#80d8ff"; font.pixelSize: 12
+                }
+                Text {
+                    visible: dlg._viewUrl.length > 0
+                    width: doneOkCol.width
+                    text: qsTr("即将跳转到结果页…")
+                    color: "#6a8090"; font.pixelSize: 11
+                }
+            }
+        }
+
+        // ── 失败提示条（done_fail）────────────────────────────
+        Rectangle {
+            Layout.fillWidth: true
+            visible: dlg._phase === "done_fail"
+            color: "#251010"; border.color: "#602020"; border.width: 1; radius: 5
+            implicitHeight: failText.implicitHeight + 16
+            Text {
+                id: failText
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                anchors.margins: 10
+                text: "❌  " + dlg._failMsg
+                color: "#ffb0b0"; font.pixelSize: 12; wrapMode: Text.WordWrap; lineHeight: 1.4
+            }
+        }
+
+        Item { implicitHeight: 2 }
+    }
+
+    // ─── 底部按钮 ─────────────────────────────────────────────
+    footer: Rectangle {
+        color: "transparent"
+        implicitHeight: 54
+        Rectangle {
+            anchors.left: parent.left; anchors.right: parent.right
+            anchors.top: parent.top; height: 1; color: "#2a2a34"
+        }
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 14; anchors.rightMargin: 14
+            anchors.topMargin: 11; anchors.bottomMargin: 11
+            spacing: 8
+
+            // 取消（checking / confirm / confirm_ow）
+            FlatButton {
+                visible: dlg._phase === "checking"
+                         || dlg._phase === "confirm"
+                         || dlg._phase === "confirm_ow"
+                implicitWidth: 72; implicitHeight: 30
+                text: qsTr("取消")
+                onClicked: dlg.close()
+            }
+
+            // 去修改（confirm / confirm_ow）
+            FlatButton {
+                visible: dlg._phase === "confirm" || dlg._phase === "confirm_ow"
+                implicitWidth: 96; implicitHeight: 30
+                text: qsTr("去修改")
+                textColor: "#c0c4cc"
+                onClicked: { dlg.close(); ratingsDialog.open() }
+            }
+
+            // 关闭（done_ok / done_fail）
+            FlatButton {
+                visible: dlg._phase === "done_ok" || dlg._phase === "done_fail"
+                implicitWidth: 72; implicitHeight: 30
+                text: qsTr("关闭")
+                onClicked: dlg.close()
+            }
 
             Item { Layout.fillWidth: true }
 
-            // 取消
-            FlatButton {
-                implicitWidth: 80
-                implicitHeight: 32
-                text: qsTr("取消")
-                onClicked: quickUploadConfirmDialog.close()
-            }
-
-            // 去修改
-            FlatButton {
-                implicitWidth: 108
-                implicitHeight: 32
-                text: qsTr("✏️ 去修改")
-                textColor: "#d0d4dc"
-                ToolTip.visible: hovered
-                ToolTip.delay: 400
-                ToolTip.text: qsTr("打开评分数据面板，人工核对/修改后再上传")
-                onClicked: {
-                    quickUploadConfirmDialog.close()
-                    ratingsDialog.open()
-                }
-            }
-
-            // 确认上传
+            // ── 主操作按钮 ────────────────────────────────────
             Rectangle {
-                implicitWidth: 120
-                implicitHeight: 32
+                visible: dlg._phase === "checking"
+                         || dlg._phase === "confirm"
+                         || dlg._phase === "confirm_ow"
+                implicitWidth: dlg._phase === "checking" ? 100 : 112
+                implicitHeight: 30
                 radius: 5
-                color: quickUploadConfirmDialog._canUpload
-                       ? (confirmUploadBtn.pressed ? "#1565a8" : confirmUploadBtn.hovered ? "#1a7acc" : "#1976d2")
-                       : "#2a2a32"
-                border.color: quickUploadConfirmDialog._canUpload ? "transparent" : "#3a3a44"
-                border.width: 1
 
+                property bool _active: dlg._canUpload
+                                       && (dlg._phase === "confirm" || dlg._phase === "confirm_ow")
+                color: {
+                    if (!_active) return "#28282e"
+                    if (dlg._phase === "confirm_ow") return mainBtn.pressed ? "#5a3c00" : mainBtn.hovered ? "#7a5200" : "#6a4800"
+                    return mainBtn.pressed ? "#1256a0" : mainBtn.hovered ? "#1769c4" : "#1976d2"
+                }
+                border.width: _active ? 0 : 1
+                border.color: "#38383e"
                 Behavior on color { ColorAnimation { duration: 120 } }
 
                 MouseArea {
-                    id: confirmUploadBtn
+                    id: mainBtn
                     anchors.fill: parent
-                    enabled: quickUploadConfirmDialog._canUpload
+                    enabled: parent._active
                     hoverEnabled: true
-                    property bool hovered: false
-                    property bool pressed: false
-                    onEntered: hovered = true
-                    onExited:  hovered = false
-                    onPressed: pressed = true
-                    onReleased: pressed = false
+                    property bool hovered: false; property bool pressed: false
+                    onEntered: hovered = true; onExited: hovered = false
+                    onPressed: pressed = true; onReleased: pressed = false
                     cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                     onClicked: {
-                        quickUploadConfirmDialog.close()
-                        if (typeof ratingsDialog !== "undefined"
-                                && typeof ratingsDialog.triggerQuickUploadForCurrentTab === "function") {
-                            ratingsDialog.triggerQuickUploadForCurrentTab()
+                        var isForce = (dlg._phase === "confirm_ow")
+                        dlg._wasOverwrite = isForce
+                        dlg._phase = "uploading"
+                        if (ratingsDialog && typeof ratingsDialog.triggerQuickUploadForCurrentTab === "function") {
+                            ratingsDialog.triggerQuickUploadForCurrentTab(isForce)
                         }
                     }
-
-                    ToolTip.visible: hovered && !quickUploadConfirmDialog._canUpload
-                    ToolTip.delay: 400
-                    ToolTip.text: quickUploadConfirmDialog._blockReason
                 }
                 RowLayout {
-                    anchors.centerIn: parent
-                    spacing: 5
+                    anchors.centerIn: parent; spacing: 5
                     Text {
-                        text: "☁"
-                        font.pixelSize: 14
-                        color: quickUploadConfirmDialog._canUpload ? "#ffffff" : "#50505a"
-                    }
-                    Text {
-                        text: qsTr("确认上传")
-                        font.pixelSize: 13
-                        font.bold: true
-                        color: quickUploadConfirmDialog._canUpload ? "#ffffff" : "#50505a"
+                        text: dlg._phase === "checking"    ? qsTr("检测中…")
+                              : dlg._phase === "confirm_ow" ? "☁  " + qsTr("覆盖上传")
+                              : "☁  " + qsTr("确认上传")
+                        font.pixelSize: 13; font.bold: true
+                        color: parent.parent._active ? "#ffffff" : "#484850"
                     }
                 }
             }
