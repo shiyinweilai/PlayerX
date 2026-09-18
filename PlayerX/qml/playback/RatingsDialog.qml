@@ -141,6 +141,14 @@ Window {
     // 并把本标志置 false，避免下一次弹窗被错误路由。
     property bool _quickUploadInProgress: false
 
+    // 延迟归档标记：面板打开期间上传成功后不立即归档，
+    // 而是记录 pending 状态，等面板关闭时统一触发一次归档。
+    // 这样用户在同一面板内可以反复修改评分、反复上传，主 CSV 不会被提前搬走。
+    property bool   _pendingArchive: false
+    property string _pendingArchiveTag: ""
+    property var    _pendingArchiveFolders: []
+    property string _pendingArchiveMode: ""
+
     // 外部一键上传的结果信号：Main.qml 会连上这些信号，用自己的对话框展示。
     // archivedBatch：上传成功后自动归档产生的批次名；为空表示未自动归档。
     // 一键上传（📤 上传数据）也走这个信号，主窗结果对话框据此显示"已自动归档"。
@@ -1207,56 +1215,81 @@ Window {
         return t
     }
 
+    // 上传成功后不立即归档，只记录 pending 状态。
+    // 面板打开期间用户可以继续修改评分再次上传，主 CSV 不会被提前搬走。
+    // 面板关闭时 onVisibleChanged 会调用 _flushPendingArchive() 真正执行归档。
     function _autoArchiveAfterUpload() {
-        // 无论数据来源是"当前 Tab"还是"归档批次"，上传成功都触发归档。
-        //
-        // 归档来源也归档的原因：重复上传前用户可能改过内容（重新评过分），
-        // 需要把最新内容刷新回归档快照，而不是让归档停留在旧版本。
-        //
-        // 批次名固定 = tag（不再用时间戳），配合 overwrite=true 覆盖写，
-        // 因此同一 tag 永远只有一个归档目录，重复上传只刷新它、不堆新目录。
+        if (root._lastUploadKind === "archive") {
+            // 数据本就来自归档，不需要再归档，直接返回批次名即可
+            return root._lastUploadArchiveBatch
+        }
         var tagName = root._currentUploadTag()
         if (tagName.length === 0) {
-            console.warn("[Upload] tag 为空 → 跳过自动归档（无法唯一定位归档文件）")
+            console.warn("[Upload] tag 为空 → 跳过延迟归档登记")
             return ""
         }
-
         var picked = root._lastUploadFolders
         if (!picked || picked.length === 0) {
-            console.warn("[Upload] 上传成功，但无勾选文件夹 → 跳过自动归档")
+            console.warn("[Upload] 上传成功，但无勾选文件夹 → 跳过延迟归档登记")
             return ""
         }
-        // 批次名 = tag，overwrite=true → 覆盖写该 tag 对应的唯一归档快照
-        var batch = root._archiveFolders(picked, tagName, true)
+        // 记录 pending 状态，合并最新上传的文件夹（多次上传取并集）
+        root._pendingArchive = true
+        root._pendingArchiveTag = tagName
+        root._pendingArchiveMode = root._selectedMode
+        var merged = root._pendingArchiveFolders.slice()
+        for (var pi = 0; pi < picked.length; ++pi) {
+            if (merged.indexOf(picked[pi]) < 0) merged.push(picked[pi])
+        }
+        root._pendingArchiveFolders = merged
+        console.log("[Upload] 上传成功 → 登记延迟归档，关闭面板时执行。tag=", tagName,
+                    "folders=", merged.length)
+        // 返回 tag 名让成功弹窗显示"将在关闭面板后归档"
+        return tagName
+    }
 
-        // 幂等兜底：纯重复上传（数据来自归档、主 CSV 里这批已被移走）时，
-        // archiveByFolders 从主 CSV 捞不到记录会返回 ""。此时该 tag 的归档
-        // 快照内容就是刚上传的内容，已是最新，无需重写，直接沿用即可。
-        if ((!batch || batch.length === 0) && root._lastUploadKind === "archive") {
+    // 面板关闭时执行真正的归档（消费 pending 状态）
+    function _flushPendingArchive() {
+        if (!root._pendingArchive) return
+        root._pendingArchive = false
+        var tagName = root._pendingArchiveTag
+        var picked  = root._pendingArchiveFolders
+        var mode    = root._pendingArchiveMode
+        root._pendingArchiveTag     = ""
+        root._pendingArchiveFolders = []
+        root._pendingArchiveMode    = ""
+
+        if (tagName.length === 0 || !picked || picked.length === 0) {
+            console.warn("[Archive] pending 数据不完整，跳过归档")
+            return
+        }
+        // 临时切换 mode 上下文执行归档（归档 helper 依赖 _selectedMode）
+        var savedMode = root._selectedMode
+        root._selectedMode = mode
+        var batch = root._archiveFolders(picked, tagName, true)
+        root._selectedMode = savedMode
+
+        // 幂等兜底：纯重复上传时主 CSV 里可能已无数据，归档已是最新快照
+        if ((!batch || batch.length === 0)) {
             try {
-                var bl = Rating.listArchiveBatches(root._selectedMode) || []
+                var bl = Rating.listArchiveBatches(mode) || []
                 for (var i = 0; i < bl.length; ++i) {
                     if (String((bl[i] || {})["name"] || "") === tagName) {
-                        console.log("[Upload] 归档已是最新快照，跳过重写:", tagName)
                         batch = tagName
                         break
                     }
                 }
-            } catch (e) {}
+            } catch(e) {}
         }
 
         if (batch && batch.length > 0) {
-            root._lastArchivedMode  = root._selectedMode
+            root._lastArchivedMode  = mode
             root._lastArchivedBatch = batch
             root._refreshArchiveList(false)
-            // 归档移走了主 CSV 记录，当前表格必须重刷，
-            // 否则关掉弹窗后仍看到已被归档走的旧数据
-            root._refresh()
-            console.log("[Upload] 上传成功 → 已自动归档批次:", batch)
+            console.log("[Archive] 面板关闭 → 已完成延迟归档，批次:", batch)
         } else {
-            console.warn("[Upload] 上传成功，但自动归档失败（数据仍在当前列表）")
+            console.warn("[Archive] 面板关闭 → 延迟归档未找到可归档的数据")
         }
-        return batch || ""
     }
 
     function _performUpload() {
@@ -1569,6 +1602,9 @@ Window {
             // "（无归档批次）"，必须切一次 Tab 或评一次分才刷出来。
             _refreshArchiveList(true)
             _refresh()
+        } else {
+            // 面板关闭：执行延迟归档（消费上传成功后登记的 pending 状态）
+            _flushPendingArchive()
         }
     }
 

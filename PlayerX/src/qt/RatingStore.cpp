@@ -1634,7 +1634,107 @@ void RatingStore::uploadToCloud(bool force, const QStringList& folderPaths) {
         return;
     }
 
-    const QByteArray csvBytes = buildExportCsvBytes(folderPaths);
+    // ── 构建上传 CSV：如果同 tag 对应的归档批次已存在，
+    //    说明用户是"接着评分只改了部分视频"，主 CSV 只有改动行。
+    //    此时需要 merge：归档历史行 ∪ 主 CSV 新行（主 CSV 优先），
+    //    保证云端收到完整评分集合，而不是只有被改过的那几条。
+    // ────────────────────────────────────────────────────────────────
+    const QString tagForMerge = uploadTag().trimmed();
+    QByteArray csvBytes;
+    bool mergedWithArchive = false;
+    if (!tagForMerge.isEmpty() && !folderPaths.isEmpty()) {
+        // 检查同 tag 归档批次是否存在（用 loadArchiveBatch 成员函数，
+        // 绕过定义在后面的自由函数 archiveBatchCsvIn / readBatchCsv）
+        const QVariantList archiveVarRows = loadArchiveBatch(modeNow, tagForMerge);
+        if (!archiveVarRows.isEmpty()) {
+            QList<QVariantMap> archiveRows;
+            archiveRows.reserve(archiveVarRows.size());
+            for (const QVariant& v : archiveVarRows)
+                archiveRows.push_back(v.toMap());
+
+            // 读主 CSV 里指定文件夹的新行
+            QSet<QString> allow;
+            for (const QString& p : folderPaths) {
+                const QString k = normalizeFolderForMatch(p);
+                if (!k.isEmpty()) allow.insert(k);
+            }
+            const QList<QVariantMap> allMainRows = readAll();
+            QList<QVariantMap> mainRows;
+            QSet<QString> mainFps;
+            for (const auto& r : allMainRows) {
+                const QString fp = r.value("file_path").toString();
+                if (fp.isEmpty()) continue;
+                const QString dir = QDir::cleanPath(QFileInfo(fp).absolutePath());
+                if (!allow.contains(dir)) continue;
+                mainRows.push_back(r);
+                mainFps.insert(fp);
+            }
+            // merge：主 CSV 新行优先，归档中没被改过的行补充
+            QList<QVariantMap> merged = mainRows;
+            for (const auto& r : archiveRows) {
+                if (!mainFps.contains(r.value("file_path").toString()))
+                    merged.push_back(r);
+            }
+            // 用 merge 后的行构建上传 CSV
+            QByteArray mergeBuf;
+            QTextStream mts(&mergeBuf, QIODevice::WriteOnly);
+            mts.setEncoding(QStringConverter::Utf8);
+            mts.setGenerateByteOrderMark(true);
+            mts << "updated_at,rater,folder,file_name,stars,slide_type,checklist\n";
+            auto stripPrefix = [](const QString& name) -> QString {
+                int i = 0;
+                while (i < name.size() && i < 3 && name.at(i).isDigit()) ++i;
+                if (i > 0 && i < name.size() && name.at(i) == QLatin1Char('_'))
+                    return name.mid(i + 1);
+                return name;
+            };
+            for (const auto& r : merged) {
+                const QString fp     = r.value("file_path").toString();
+                const QString rawTs  = r.value("updated_at").toString();
+                QDateTime dt = QDateTime::fromString(rawTs, Qt::ISODateWithMs);
+                if (!dt.isValid()) dt = QDateTime::fromString(rawTs, Qt::ISODate);
+                const QString prettyTs = dt.isValid()
+                    ? dt.toString("yyyy-MM-dd HH:mm:ss") : rawTs;
+                const QString folder   = folderDisplayName(fp);
+                const QString fileName = stripPrefix(r.value("file_name").toString());
+                // checklist：主 CSV 行读 QSettings 最新值，归档行用存储值
+                QString ckCell;
+                if (mainFps.contains(fp)) {
+                    QSettings s;
+                    const QString raw2 = s.value(QStringLiteral("checklist:") + fp).toString();
+                    QStringList keys;
+                    if (!raw2.isEmpty()) {
+                        QJsonParseError je{};
+                        const QJsonDocument doc = QJsonDocument::fromJson(raw2.toUtf8(), &je);
+                        if (je.error == QJsonParseError::NoError && doc.isArray()) {
+                            for (const auto& v2 : doc.array()) {
+                                const QString k = v2.toString();
+                                if (!k.isEmpty()) keys.push_back(k);
+                            }
+                        }
+                    }
+                    ckCell = filterChecklistKeysForExport(keys);
+                } else {
+                    ckCell = r.value("checklist").toString();
+                }
+                mts << csvEscape(prettyTs)                         << ","
+                    << csvEscape(rater)                            << ","
+                    << csvEscape(folder)                           << ","
+                    << csvEscape(fileName)                         << ","
+                    << r.value("stars").toInt()                    << ","
+                    << csvEscape(r.value("slide_type").toString()) << ","
+                    << csvEscape(ckCell)                           << "\n";
+            }
+            mts.flush();
+            csvBytes = mergeBuf;
+            mergedWithArchive = true;
+        }
+    }
+    if (!mergedWithArchive) {
+        csvBytes = buildExportCsvBytes(folderPaths);
+    }
+
+
     // 仅有表头一行 → 视为空结果。
     // 区分两种空：完全没有评分 vs 过滤后没命中（白名单挑了空文件夹）。
     bool csvEmpty = csvBytes.isEmpty();
@@ -2426,14 +2526,23 @@ bool RatingStore::archiveByFolders(const QStringList& folderPaths,
             // 覆盖模式：批次目录名固定为 batchName（不追加 _N 序号）。
             // 用于"重复上传同一 tag 的评分 → 刷新同一个归档快照"，
             // 避免每次上传都堆出一个 test_20260903_180000 之类的新目录。
-            // 先清掉该目录下旧的归档 CSV，保证同名快照唯一、不残留旧数据。
+            // 注意：不直接清旧 CSV——而是先把旧归档行读进来，
+            // 后面 merge 时以主 CSV 新行优先（同 file_path 覆盖），
+            // 旧归档里没被本次改过的行保留。这样"接着评分只改一条"
+            // 触发的归档不会丢掉其余历史记录。
             const QString oldDir = QDir(modeDir).filePath(batch);
             if (QFileInfo::exists(oldDir)) {
                 QDir od(oldDir);
-                const QStringList oldCsv =
+                const QStringList oldCsvFiles =
                     od.entryList({QStringLiteral("playerx_*.csv"),
                                   QStringLiteral("ratings.csv")}, QDir::Files);
-                for (const QString& f : oldCsv) od.remove(f);
+                // 读旧归档行（只读，稍后 merge 时用）
+                for (const QString& f : oldCsvFiles) {
+                    // 先读出来，后面 merge 写新 CSV 时再清
+                    Q_UNUSED(f)
+                }
+                // 实际读取：用 readBatchCsv 走规范路径
+                // （archiveBatchCsvIn 会按 playerx_*.csv 优先查找）
             }
         } else {
             QString candidate = batch;
@@ -2454,8 +2563,38 @@ bool RatingStore::archiveByFolders(const QStringList& folderPaths,
     const QString archivePath = QDir(batchDir).filePath(
         archiveCsvFileNameFor(currentUser(), modeNow, batch, uploadGroup()));
 
+    // ── Merge：旧归档行 ∪ 主 CSV 新行（主 CSV 优先）────────────────
+    // 场景：上传后自动归档，若用户只改了部分视频的评分（接着评分），
+    // 主 CSV 里只有被改过的那几行；旧归档里有完整历史。
+    // merge 策略：同 file_path 取主 CSV 新值，旧归档里其余行补充，
+    // 确保归档快照始终是完整最新版，不因"只改一条"而丢掉其余历史。
+    QList<QVariantMap> mergedPicked = picked;  // 先放主 CSV 新行（优先）
+    {
+        const QList<QVariantMap> oldRows = readBatchCsv(archivePath);
+        if (!oldRows.isEmpty()) {
+            QSet<QString> newFps;
+            for (const auto& r : picked)
+                newFps.insert(r.value("file_path").toString());
+            for (const auto& r : oldRows) {
+                if (!newFps.contains(r.value("file_path").toString()))
+                    mergedPicked.push_back(r);  // 旧归档里没被改过的行补进来
+            }
+        }
+    }
+
     // 先写归档（先成功，后再删主 CSV，保证失败不破坏数据）
-    if (!writeBatchCsv(archivePath, picked)) return false;
+    // 写前清掉旧归档 CSV（同名快照唯一，不残留旧文件）
+    {
+        const QString existingOldDir = QDir(archiveModeDirIn(m_baseDir, modeNow)).filePath(batch);
+        if (QFileInfo::exists(existingOldDir)) {
+            QDir od(existingOldDir);
+            const QStringList oldCsvList =
+                od.entryList({QStringLiteral("playerx_*.csv"),
+                              QStringLiteral("ratings.csv")}, QDir::Files);
+            for (const QString& f : oldCsvList) od.remove(f);
+        }
+    }
+    if (!writeBatchCsv(archivePath, mergedPicked)) return false;
 
     // 回写主 CSV（按 modeNow 对应的文件）：失败时尝试删除已生成的归档文件，
     // 避免出现"数据双份在两个文件"的歧义
