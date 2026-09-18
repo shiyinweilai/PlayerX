@@ -834,6 +834,28 @@ Window {
     // 只要勾选的文件夹在任意一组中未评完，都应拦截上传。
     function _collectCheckedIncomplete() {
         var out = []
+
+        // ── 归档感知预加载 ────────────────────────────────────────────
+        // 场景：用户上传后关闭评分面板 → 延迟归档执行 → 主 CSV 被搬走；
+        //       下次打开面板时主 CSV 里只剩部分（或全部被清空），但同 tag 的
+        //       归档批次里已有完整记录。C++ uploadToCloud 会自动 merge 归档，
+        //       所以 QML 完整性拦截不应把"归档已覆盖"的文件夹报为 incomplete。
+        // 此处预先按文件夹路径统计归档覆盖数：archiveCoverMap[folderPath] = 行数
+        var archiveCoverMap = {}
+        try {
+            var tagForCheck = (typeof Rating !== "undefined" && Rating.uploadTag)
+                              ? String(Rating.uploadTag).trim() : ""
+            if (tagForCheck.length > 0 && typeof Rating !== "undefined") {
+                var archRows = Rating.loadArchiveBatch(root._selectedMode, tagForCheck) || []
+                for (var ai = 0; ai < archRows.length; ++ai) {
+                    var afp = String((archRows[ai] || {})["file_path"] || "")
+                    if (!afp) continue
+                    var adir = afp.substring(0, afp.lastIndexOf("/"))
+                    archiveCoverMap[adir] = (archiveCoverMap[adir] || 0) + 1
+                }
+            }
+        } catch(e) {}
+
         // 辅助：检查单个文件夹列表
         function _checkList(list) {
             for (var i = 0; i < list.length; ++i) {
@@ -847,6 +869,10 @@ Window {
                 var starIncomplete = (total > 0 && rated < total)
                 var ckIncomplete = (ckMiss > 0)
                 if (starIncomplete || ckIncomplete) {
+                    // 归档感知：若归档已完整覆盖该文件夹（条数 ≥ totalVideos），
+                    // 则 uploadToCloud 会 merge 归档，云端会收到完整数据，不应拦截
+                    var archCount = archiveCoverMap[d.path] || 0
+                    if (archCount >= total) continue
                     out.push({
                         name: d.name,
                         path: d.path,
