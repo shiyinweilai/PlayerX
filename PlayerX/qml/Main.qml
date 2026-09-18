@@ -2355,6 +2355,8 @@ Component {
         slideDimKey: (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""
         // 当前模式的 checklist 配置：用于"文件夹是否评完"判定；空数组时完全不启用。
         reviewChecklist: root.reviewChecklist
+        // 远程任务列表：供上传前的用户权限校验（防止串账号上传）。
+        remoteTaskList: root._remoteAllConfigs
 
         // ── 外部"一键上传"的结果路由 ──
         // 目的：让"评分数据"按钮 → 二次确认 → 直接上传，全程不需要打开评分数据面板。

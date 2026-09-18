@@ -205,6 +205,10 @@ Window {
     // 当前模式的 checklist 配置（items 数组：[{key, label, definition, ...}]）。
     // 由 Main.qml 注入。空数组 = 该模式没有 checklist，本 Dialog 完全不做 checklist 校验。
     property var reviewChecklist: []
+    // 远程任务列表（由 Main.qml 注入 _remoteAllConfigs）。
+    // 上传前检测：若当前 tag 对应的远程任务存在 testSource.groups 限制，
+    // 且 currentUser 不在其中，则拦截上传（防止串账号写入垃圾数据）。
+    property var remoteTaskList: []
 
     // 从 file_path 中提取所属目录（兼容 / 与 \）
     function _dirOf(fp) {
@@ -1087,6 +1091,52 @@ Window {
         } else if (incomplete.length > 0) {
             canUpload = false
             blockReason = qsTr("有 %1 个文件夹尚未评完，无法上传。").arg(incomplete.length)
+        } else {
+            // 远程任务用户权限检测：
+            // 若该 tag 对应的远程任务配置了 testSource.groups（指定评分人白名单），
+            // 且当前账号（currentUser）不在其中，则拒绝上传，防止串账号污染数据。
+            var tasks = Array.isArray(root.remoteTaskList) ? root.remoteTaskList : []
+            for (var ti = 0; ti < tasks.length; ++ti) {
+                var task = tasks[ti] || {}
+                var taskObj = task.obj || {}
+                var taskTag = String(taskObj.tag || "").trim()
+                // 按 tag + mode 匹配（tag 匹配即可，mode 可能为空时跳过 mode 校验）
+                var modeMatch = (!task.mode || task.mode === root._selectedMode)
+                if (taskTag.length > 0 && taskTag === tagText && modeMatch) {
+                    var ts = taskObj.testSource
+                    if (ts && typeof ts === "object") {
+                        // 新格式：{ groupName: [rater, ...] }
+                        var gs = ts.groups
+                        var hitUser = false
+                        if (gs && typeof gs === "object" && !Array.isArray(gs)) {
+                            for (var gk in gs) {
+                                var arr = gs[gk]
+                                if (Array.isArray(arr) && arr.indexOf(raterText) >= 0) {
+                                    hitUser = true; break
+                                }
+                            }
+                        }
+                        // 旧格式：groupMap 字符串 "rater1:groupA\nrater2:groupB"
+                        if (!hitUser) {
+                            var raw = String(ts.groupMap || "").trim()
+                            if (raw.length > 0) {
+                                var entries = raw.split(/[,，;；\n]+/)
+                                for (var ei = 0; ei < entries.length; ++ei) {
+                                    var kv = entries[ei].split(/[:：]/)
+                                    if (kv.length >= 2 && kv[0].trim() === raterText) {
+                                        hitUser = true; break
+                                    }
+                                }
+                            }
+                        }
+                        if (!hitUser) {
+                            canUpload = false
+                            blockReason = qsTr("当前账号「%1」没有该任务（tag: %2）的上传权限。\n请切换到正确的账号后再上传，或联系管理员确认任务分配。").arg(raterText).arg(tagText)
+                            break
+                        }
+                    }
+                }
+            }
         }
 
         // 数据源显示文案：用于确认弹窗的只读"数据源"行。
