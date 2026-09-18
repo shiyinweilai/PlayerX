@@ -1873,12 +1873,25 @@ ApplicationWindow {
             if (!lj.folderPath || lj.folderPath.length === 0) continue
             folders.push(lj.folderPath)
         }
-        // ② 调 RatingStore 物理删除当前模式下这些文件夹的评分记录
+        // ② 调 RatingStore 物理删除评分记录
         //    Rating 单例 + removeByFolders 在 RatingsDialog 中已是稳定接口；
         //    返回值仅用于日志，不影响后续进度归零（即使没有任何记录命中也继续走）。
+        //    【重置修复】旧实现 removeByFolders 只删主 CSV：
+        //      a) off 模式被直接拒绝（星星残留）；
+        //      b) 即使删了主 CSV，ratingFor 的【归档回落】会从归档快照里
+        //         把星星"复活"（用户看到的就是"重置了星星还在"）。
+        //    现统一改走 markFoldersReset：
+        //      · 显式传当前模式 → 仅该模式删主 CSV + 写重置时间戳屏蔽归档回落
+        //        （与弹窗文案"仅作用于当前模式"承诺一致）；
+        //      · off / 未启用评分 → C++ 侧遍历全部模式清除 + 全模式时间戳
+        //        （符合"未启用评分"下重置 = "全部旧评分消失"的预期）。
+        //      归档目录物理数据不动（历史账本不销毁），重置后重新评分再归档的
+        //      新记录因 updated_at 晚于时间戳，回落恢复照常生效。
         if (folders.length > 0 && typeof Rating !== "undefined"
-                && typeof Rating.removeByFolders === "function") {
-            try { Rating.removeByFolders(folders) } catch (e) { /* 安全降级 */ }
+                && typeof Rating.markFoldersReset === "function") {
+            var modeNow = (typeof Rating.currentMode === "string")
+                            ? Rating.currentMode : "off"
+            try { Rating.markFoldersReset(folders, modeNow) } catch (e) { /* 安全降级 */ }
         }
         // ③ 同步清空每个文件对应的 checklist 勾选记录（saveString 写空串即为清除）
         //    checklist key 格式：「checklist:<filePath>」，由 VideoCellDelegate 写入。

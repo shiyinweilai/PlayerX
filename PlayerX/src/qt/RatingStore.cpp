@@ -40,6 +40,10 @@ constexpr const char* kSettingsUploadTagKey  = "rating/uploadTag";
 constexpr const char* kSettingsUploadGroupKey = "rating/uploadGroup";
 // 已保存账户列表（JSON 数组：[{name,url,token},...]），用户中心多账户持久化。
 constexpr const char* kSettingsAccountsKey    = "rating/accounts";
+// 「重置进度」时间戳表（JSON 对象：{ 归一化文件夹路径 → epoch ms }）。
+// 作用：ratingFor / recordsFor 的归档回落逻辑据此屏蔽"重置前"的归档记录，
+// 避免用户重置进度后星星从归档快照里"复活"。归档物理数据不删。
+constexpr const char* kSettingsResetStampKey  = "rating/resetStamps";
 
 // 评分模式表：未来加新模式只要在这里追加一项，
 // QML 会通过 modeList 自动拿到所有字段生成 UI。
@@ -127,6 +131,50 @@ static void storeAccountsList(const QVariantList& list, RatingStore* self) {
     s.setValue(kSettingsAccountsKey, QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
     s.sync();
     emit self->savedAccountsChanged();
+}
+
+// ──「重置进度」时间戳表（JSON 对象：{"<mode>::<folder>" → epoch ms}）─────
+// 读：返回 "<mode>::<folder>" 复合键 → epoch ms 的映射（无效条目跳过）。
+//     mode 作用域：重置"主观评分"不应屏蔽"多维评分"的归档回落（反之亦然），
+//     与 removeByFolders 的"仅作用于当前模式"语义对齐。
+static QHash<QString, qint64> loadResetStamps() {
+    QHash<QString, qint64> out;
+    QSettings s;
+    const QVariant raw = s.value(kSettingsResetStampKey);
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toString().toUtf8());
+    if (!doc.isObject()) return out;
+    const QStringList keys = doc.object().keys();
+    for (const QString& k : keys) {
+        const qint64 v = doc.object().value(k).toVariant().toLongLong();
+        if (v > 0) out.insert(k, v);
+    }
+    return out;
+}
+// 写：整表写回 QSettings。
+static void storeResetStamps(const QHash<QString, qint64>& stamps) {
+    QJsonObject obj;
+    for (auto it = stamps.cbegin(); it != stamps.cend(); ++it)
+        obj.insert(it.key(), double(it.value()));
+    QSettings s;
+    s.setValue(kSettingsResetStampKey,
+               QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    s.sync();
+}
+// 内部：归档回落中判断"该行是否已被重置进度屏蔽"。
+// 复合键 = "<当前查询的 mode>::<行所在目录>"；命中且行 updated_at 早于
+// 重置时刻 → 返回 true（该行视为已被重置，跳过不回填）。
+// 与 removeByFolders 的目录匹配规则同源：normalizeFolderForMatch 后精确比对。
+static bool folderResetAfter(const QHash<QString, qint64>& stamps,
+                             const QString& mode,
+                             const QString& filePath,
+                             const QString& rowUpdatedAt) {
+    if (stamps.isEmpty()) return false;
+    const QString dir = QDir::cleanPath(QFileInfo(filePath).absolutePath());
+    const auto it = stamps.constFind(mode + QStringLiteral("::") + dir);
+    if (it == stamps.constEnd()) return false;
+    // 归档行的 updated_at（ISO8601 含毫秒）早于重置时刻 → 视为已被重置。
+    const QDateTime rowDt = QDateTime::fromString(rowUpdatedAt, Qt::ISODateWithMs);
+    return !rowDt.isValid() || rowDt.toMSecsSinceEpoch() < it.value();
 }
 }  // namespace
 
@@ -982,11 +1030,19 @@ int RatingStore::ratingFor(const QString& filePath) const {
         }
     }
     // 【归档感知】主 CSV 无命中 → 回落归档快照（记录可能已被上传归档移走）
+    // 【重置屏蔽】归档行 updated_at 早于该文件夹的「重置进度」时刻 → 跳过，
+    //             防止用户重置后星星从归档里"复活"（归档物理数据不删，仅读取屏蔽）。
     {
+        const QHash<QString, qint64> stamps = loadResetStamps();
+        const QString modeNow = currentMode();
         const QList<QVariantMap> arch = archiveRecordsFor(filePath, rater);
         if (!arch.isEmpty()) {
             int best = -1;
             for (const auto& r : arch) {
+                // 重置屏蔽：命中且行时间早于重置时刻 → 该行视为已被重置
+                if (folderResetAfter(stamps, modeNow, filePath,
+                                     r.value("updated_at").toString()))
+                    continue;
                 int v = r.value(QStringLiteral("stars")).toInt();
                 if (v < 0) v = 0;
                 const bool isMultiDim = r.value(QStringLiteral("slide_type")).toString()
@@ -1051,9 +1107,18 @@ QVariantList RatingStore::recordsFor(const QString& filePath) const {
     //   评分 → 上传 → 自动归档会把记录从主 CSV 移走，导致下次启动
     //   星星回填全空（checklist 走独立缓存故仍在）。这里补上归档查询，
     //   保证"评过并归档"的历史星级照常显示。
+    // 【重置屏蔽】归档行 updated_at 早于该文件夹的「重置进度」时刻 → 跳过，
+    //             与 ratingFor 的屏蔽规则保持一致。
     if (hits.isEmpty()) {
+        const QHash<QString, qint64> stamps = loadResetStamps();
+        const QString modeNow = currentMode();
         const QList<QVariantMap> arch = archiveRecordsFor(filePath, rater);
-        hits = arch;
+        for (const auto& r : arch) {
+            if (folderResetAfter(stamps, modeNow, filePath,
+                                 r.value(QStringLiteral("updated_at")).toString()))
+                continue;
+            hits.push_back(r);
+        }
     }
     // 按 updated_at 倒序（新的在前）
     std::sort(hits.begin(), hits.end(), [](const QVariantMap& a, const QVariantMap& b) {
@@ -1092,12 +1157,19 @@ int RatingStore::ratingFor(const QString& filePath, const QString& slideType) co
     // 【归档感知】主 CSV 无命中 → 回落归档快照。
     //   多维星级回填（slide_type = "multi_<维度名>"）走的就是这个重载，
     //   评分被上传归档移走主 CSV 后，这里必须能查到，否则星星全空。
+    // 【重置屏蔽】归档行 updated_at 早于该文件夹的「重置进度」时刻 → 跳过，
+    //             防止重置后多维星级从归档"复活"。
     {
+        const QHash<QString, qint64> stamps = loadResetStamps();
+        const QString modeNow = currentMode();
         const QList<QVariantMap> arch = archiveRecordsFor(filePath, rater);
         if (!arch.isEmpty()) {
             const bool isMultiDim = slideType.startsWith(QStringLiteral("multi_"));
             int best = -1;
             for (const auto& r : arch) {
+                if (folderResetAfter(stamps, modeNow, filePath,
+                                     r.value(QStringLiteral("updated_at")).toString()))
+                    continue;
                 if (r.value(QStringLiteral("slide_type")).toString() != slideType) continue;
                 int v = r.value(QStringLiteral("stars")).toInt();
                 if (v < 0) v = 0;
@@ -2105,6 +2177,64 @@ bool RatingStore::removeByFolders(const QStringList& folderPaths,
     if (!writeBatchCsv(mainCsv, kept)) return false;
     emit changed();
     return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 【重置进度·增强】跨模式/按模式删除主 CSV + 写重置时间戳
+// ════════════════════════════════════════════════════════════════════════
+//
+// 调用方：MultiGroupDialog._resetSelectedLanesProgress()（「重置进度」按钮）。
+// 语义：用户明确要求"这些文件夹的旧评分彻底消失"，因此：
+//   1) mode 空/off → 遍历全部非 off 模式逐一 removeByFolders；
+//      mode 显式   → 仅该模式 removeByFolders（不影响其它模式）；
+//   2) 对每个作用的模式写 "<mode>::<folder> → now" 时间戳，
+//      ratingFor / recordsFor 的归档回落据此屏蔽"重置前"的归档行。
+// 归档目录物理数据一律不动（历史账本不因"重置进度"销毁）。
+// 时序：先删主 CSV 再写时间戳；QML 侧重置后必然触发 _rebuildCellRatingsFromCsv，
+//       随后的读取都会命中时间戳屏蔽，最终 UI 状态一致。
+void RatingStore::markFoldersReset(const QStringList& folderPaths,
+                                   const QString& mode) {
+    // 规整化 + 去空 + 去重
+    QSet<QString> allow;
+    for (const QString& p : folderPaths) {
+        const QString k = normalizeFolderForMatch(p);
+        if (k.isEmpty()) continue;
+        allow.insert(k);
+    }
+    if (allow.isEmpty()) return;
+
+    // 确定作用的模式集合：off/空 → 全部非 off 模式；显式 → 仅该模式。
+    QStringList modeIds;
+    const QString m = mode.trimmed();
+    if (m.isEmpty() || m == QStringLiteral("off")) {
+        const QVariantList modes = modeList();
+        for (const QVariant& mv : modes) {
+            const QString mid = mv.toMap().value("id").toString();
+            if (mid.isEmpty() || mid == QStringLiteral("off")) continue;
+            modeIds.push_back(mid);
+        }
+    } else {
+        modeIds.push_back(m);
+    }
+
+    const QStringList folders = allow.values();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QHash<QString, qint64> stamps = loadResetStamps();
+    bool touched = false;
+
+    for (const QString& mid : modeIds) {
+        // ① 删除该模式主 CSV 中的记录（removeByFolders 内部发 changed()）
+        removeByFolders(folders, mid);
+        // ② 写该模式的重置时间戳
+        for (const QString& f : folders) {
+            stamps.insert(mid + QStringLiteral("::") + f, now);
+        }
+        touched = true;
+    }
+
+    if (touched) storeResetStamps(stamps);
+    // checklist 独立缓存清空在 QML 侧已完成（saveString 写空串），
+    // 此处无需重复；归档目录物理数据保持原样。
 }
 
 // ════════════════════════════════════════════════════════════════════════

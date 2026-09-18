@@ -216,6 +216,27 @@ public slots:
     Q_INVOKABLE bool removeByFolders(const QStringList& folderPaths,
                                      const QString& mode = {});
 
+    // 【重置进度·增强】配合 MultiGroupDialog 的「重置进度」按钮：
+    //   旧实现的两个缺口：
+    //   a) off 模式下 removeByFolders 直接被拒（C++ 保护），主 CSV 记录没删；
+    //   b) 即使删了主 CSV，ratingFor / recordsFor 的【归档回落】会从归档快照里
+    //      把星星"复活"（评分→上传→归档移走主 CSV 后靠回落显示的历史星级）。
+    //
+    // 行为（mode 作用域）：
+    //   1) mode 为空或 "off"：遍历 modeList 全部非 off 模式，逐个 removeByFolders
+    //      （跨模式彻底清除，符合"未启用评分"下重置="全部消失"的预期）；
+    //      时间戳也写全部模式；
+    //   2) mode 显式指定（如 multi_dim）：仅对该模式 removeByFolders + 写该模式
+    //      时间戳，与弹窗文案"仅作用于当前模式、不影响其它模式"的承诺一致。
+    //   3) 时间戳（"<mode>::<folder> → epoch ms"）持久化在 QSettings；
+    //      归档回落命中归档行时检查：行 updated_at 早于重置时刻 → 视为已被重置，
+    //      不再回填。归档目录物理数据不动（历史账本不因重置销毁）；
+    //      重置后重新评分再归档的行 updated_at 晚于时间戳，回落恢复生效。
+    //
+    // 主 CSV 删干净 + 归档回落被时间戳屏蔽 → 星级真正归零。
+    Q_INVOKABLE void markFoldersReset(const QStringList& folderPaths,
+                                      const QString& mode = {});
+
     // 按文件夹批量归档：与 removeByFolders 命中规则完全一致，但行会先被**搬出**到
     //   <AppData>/PlayerX/archive/<mode>/<batchName>/ratings.csv
     // 然后才从主 CSV 删除；表头与主 CSV 一致，方便日后人工合并/审计。
