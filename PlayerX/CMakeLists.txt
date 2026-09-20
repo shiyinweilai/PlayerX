@@ -273,11 +273,11 @@ target_include_directories(PlayerX PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/stream
     ${CMAKE_CURRENT_SOURCE_DIR}/src/image
     ${CMAKE_CURRENT_SOURCE_DIR}/src/simd
-    ${FFMPEG_INSTALL_DIR}/include
-    # 内嵌 FFmpeg 源码（仅头文件）：RBSyntaxAnalyzer 需要 libavcodec/cbs.h
-    # （CBS 公开头含 CodedBitstreamContext 完整定义与 trace 回调类型，
-    #  未随 make install 安装到 FFMPEG_INSTALL_DIR/include）
+    # 源码树头必须排在 install/include 前：install 是 6.x，源码树是 7.x，
+    # 同名 guard（如 AVUTIL_PIXFMT_H）若被旧版头先触发，7.x 新增类型（AVAlphaMode 等）
+    # 永远进不来，导致 codec_par.h 报 "ISO C++ forbids forward references to enum"。
     ${CMAKE_CURRENT_SOURCE_DIR}/../ffmpeg
+    ${FFMPEG_INSTALL_DIR}/include
 )
 
 # ─── 链接目录 ─────────────────────────────────────────────────────────────────
