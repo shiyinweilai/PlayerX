@@ -334,6 +334,9 @@ if(APPLE)
         -liconv
         -lz
         -lbz2
+        # 新版 FFmpeg（7.x）默认启用 libcurl，avformat 的 http/https/tls
+        # 协议目标文件被静态链入，必须显式补上系统 libcurl
+        -lcurl
     )
 elseif(WIN32)
     # 注意：MinGW 的 GUI 子系统下，libmingw32 必须排在 Qt6EntryPoint 之前。
