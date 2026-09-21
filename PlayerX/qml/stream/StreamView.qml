@@ -1918,6 +1918,15 @@ property real panelSplitRatio: 0.5
             anchors.bottom: gopBar.top
             z: 60   // 高于 mainDisplay 内部层（渲染层 z 通常 < 50）
 
+            // 背景事件拦截：防止面板区域内的点击穿透到下方 gopBar 触发帧跳转
+            MouseArea {
+                anchors.fill: parent
+                onClicked: mouse.accepted = true
+                onPressed: mouse.accepted = true
+                onReleased: mouse.accepted = true
+                onWheel: wheel.accepted = false   // 滚轮允许穿透（面板内部 Flickable 自行消费）
+            }
+
             readonly property bool bOpen: streamView.bitrateChartOpen
                                           && !streamView.bitrateChartFloating
             readonly property bool hOpen: streamView.hierarchyChartOpen
@@ -2036,7 +2045,15 @@ property real panelSplitRatio: 0.5
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: gopBar.top
-            height: 0
+            // 高度必须覆盖实际面板区域，否则溢出父容器边界的子元素不接收点击事件（穿透）
+            height: {
+                let h = 0
+                if (streamView.bitrateChartOpen && streamView.bitrateChartFloating)
+                    h = Math.max(h, streamView.bitrateChartH)
+                if (streamView.hierarchyChartOpen && streamView.hierarchyChartFloating)
+                    h = Math.max(h, streamView.hierarchyChartH)
+                return h
+            }
             z: 61
 
             StreamBitrateChart {

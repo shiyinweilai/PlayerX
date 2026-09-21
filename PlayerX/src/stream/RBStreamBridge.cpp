@@ -1248,6 +1248,7 @@ void RBStreamBridge::cancelPlayAsync(int slot) {
     w->deleteLater();
     m_playWatchers[slot] = nullptr;
     m_slots[slot].playBusy = false;
+    m_slots[slot].playActiveFrame = -1;
     m_slots[slot].playPendingFrame = -1;
 }
 
@@ -1276,8 +1277,11 @@ void RBStreamBridge::requestPlayStep(int slot, int frameIndex) {
         return;
     }
 
-    s.playPendingFrame = frameIndex;
-    s.playPendingOut   = outIdx;
+    // 空闲：本拍目标记入 playActiveFrame（pending 只留给忙时合并的新目标），
+    // 完成后由 onPlayStepFinished 回填 currentFrame = playActiveFrame。
+    s.playActiveFrame  = frameIndex;
+    s.playPendingFrame = -1;
+    s.playPendingOut   = -1;
     runPlayStepAsync(slot, outIdx);
 }
 
@@ -1302,16 +1306,21 @@ void RBStreamBridge::requestGotoAsync(int slot, int frameIndex) {
         s.playPendingOut   = outIdx;
         return;
     }
-    s.playPendingFrame = frameIndex;
-    s.playPendingOut   = outIdx;
+    // 空闲：本拍目标记入 playActiveFrame（pending 只留给忙时合并的新目标），
+    // 完成后由 onPlayStepFinished 回填 currentFrame = playActiveFrame。
+    s.playActiveFrame  = frameIndex;
+    s.playPendingFrame = -1;
+    s.playPendingOut   = -1;
     runPlayStepAsync(slot, outIdx);
 }
 
 void RBStreamBridge::runPlayStepAsync(int slot, int frameIndex) {
     Slot& s = m_slots[slot];
     s.playBusy = true;
-    s.playPendingFrame = -1;
-    s.playPendingOut   = -1;
+    // 注意：不再清空 playPendingFrame/playPendingOut。
+    // 旧实现在这里清 pending，导致 onPlayStepFinished 永远走 currentFrame+1
+    // 分支（「下一帧」），任意 goto 跳转完成后帧号都被改成旧帧+1。
+    // 本拍目标由调用方写入 playActiveFrame；pending 只表示忙时合并的新目标。
 
     // Worker 线程：解码目标帧（内部会更新 lastFrameImage / 块缓存由主线程补）
     auto* ba = blockAnalyzerFor(slot);
@@ -1336,14 +1345,26 @@ void RBStreamBridge::onPlayStepFinished(int slot) {
     Slot& s = m_slots[slot];
     s.playBusy = false;
 
-    // 回到主线程：推进当前帧号并发信号（触发 QML 重新取画面/块）
+    // 回到主线程：回填本拍目标帧号并发信号（触发 QML 重新取画面/块）
     // currentFrame 是 UI 帧号（编码顺序模式下 = 编码序），必须用 UI 帧号回填。
-    // 若误用输出序（playPendingOut），帧号就会按显示序走、与画面脱节。
-    const int next = s.playPendingFrame >= 0 ? s.playPendingFrame : s.currentFrame + 1;
-    s.playPendingFrame = -1;
-    s.playPendingOut   = -1;
-    s.currentFrame = next;
+    // 旧逻辑在 pending 被 runPlayStepAsync 清空后恒走 currentFrame+1 分支，
+    // 任意跳转完成后帧号都被改成「旧当前帧+1」——即点击层级图块时
+    // 「跳到目标帧后立马又跳到下一帧」的根因。
+    if (s.playActiveFrame >= 0) {
+        s.currentFrame = s.playActiveFrame;
+        s.playActiveFrame = -1;
+    }
     emit currentFrameChanged(slot);
+
+    // 解码期间来了新目标（pending 合并）：继续追，只解最终目标帧
+    if (s.playPendingFrame >= 0) {
+        const int pf = s.playPendingFrame;
+        const int po = s.playPendingOut;
+        s.playPendingFrame = -1;
+        s.playPendingOut   = -1;
+        s.playActiveFrame  = pf;
+        runPlayStepAsync(slot, po);
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════

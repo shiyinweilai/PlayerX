@@ -330,6 +330,7 @@ private:
         int    lastFrameImageFor = -1;           // 该画面对应的帧号（-1=无）
         // ── 异步播放状态（Worker 线程解码画面+块，主线程只发信号）──
         bool   playBusy = false;                 // 上一帧仍在解码中
+        int    playActiveFrame  = -1;            // 本拍 Worker 的目标帧（UI 帧号），完成后回填 currentFrame
         int    playPendingFrame = -1;            // 解码期间新请求的帧号（UI 帧号 = 编码序）
         int    playPendingOut   = -1;            // 同上，但记的是解码器输出序（仅用于解码）
     };

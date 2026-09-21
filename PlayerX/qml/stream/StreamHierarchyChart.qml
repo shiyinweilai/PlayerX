@@ -574,6 +574,21 @@ Item {
                         z: 0
                     }
 
+                    // 垫底事件拦截：吃掉整个图表区域内的所有鼠标事件，
+                    // 防止穿透到下方 gopBar 或视频层触发帧跳转。
+                    // z=1，在背景 Rectangle(z=0) 之上、Flickable(z=2) 之下，
+                    // 只拦截未被上层（hitMa 等）消费的事件。
+                    MouseArea {
+                        anchors.fill: parent
+                        z: 1
+                        acceptedButtons: Qt.AllButtons
+                        onClicked: { mouse.accepted = true }
+                        onPressed: { mouse.accepted = true }
+                        onReleased: { mouse.accepted = true }
+                        onDoubleClicked: { mouse.accepted = true }
+                        onWheel: { wheel.accepted = false }  // 滚轮放行给 Flickable
+                    }
+
                     Flickable {
                         id: flick
                         anchors.fill: parent
@@ -606,15 +621,33 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                function rankAt(mx) {
+
+                                // 与 hierCanvas 绘制一致的方块几何（contentItem 坐标，cx=0）。
+                                // 只有点击落在「方块矩形本体」内才算命中：点空白处不跳转。
+                                function rankHit(mx, my) {
                                     const n = chartPanel.rowsData.length
                                     if (n === 0) return -1
                                     const r = Math.floor(mx / flick.bodyItemW)
-                                    return (r >= 0 && r < n) ? r : -1
+                                    if (r < 0 || r >= n) return -1
+                                    // x 方向：列内右侧 2px 间隙不算命中
+                                    const bw = Math.max(2, flick.bodyItemW - 2)
+                                    if (mx - r * flick.bodyItemW > bw) return -1
+                                    // y 方向：必须与绘制时 rowTop/bh 完全一致
+                                    const topPad = 16, botPad = 6
+                                    const maxR = chartPanel.maxRow
+                                    const usable = Math.max(24, height - topPad - botPad)
+                                    const rowGap = usable / maxR
+                                    const bh = Math.max(8, Math.min(18,
+                                            rowGap - Math.min(6, rowGap * 0.3)))
+                                    const row = chartPanel.rowsData[r].row
+                                    const yTop = topPad + row * rowGap + (rowGap - bh)
+                                    if (my < yTop || my > yTop + bh) return -1
+                                    return r
                                 }
-                                // 单击 = 选中 + 展开详情 + 直接跳转（不再需要双击）
-                                onClicked: {
-                                    const r = rankAt(mouse.x)
+
+                                // 单击方块 = 选中 + 展开详情 + 跳转；点空白处仅消费事件不跳转
+                                onClicked: (mouse) => {
+                                    const r = rankHit(mouse.x, mouse.y)
                                     if (r < 0) return
                                     if (chartPanel.selRank === r && chartPanel.detailOn) {
                                         chartPanel.detailOn = false
@@ -622,9 +655,11 @@ Item {
                                     }
                                     chartPanel.selRank = r
                                     chartPanel.detailOn = true
-                                    StreamBridge.requestGotoAsync(chartPanel.slot, chartPanel.rowsData[r].idx)
+                                    // requestGotoAsync 入参是 UI 帧号：
+                                    //   编码顺序模式 = 编码序(rowsData[r].idx)，显示顺序模式 = 显示序(rank)
+                                    const uiFrame = chartPanel.codingOrder ? chartPanel.rowsData[r].idx : r
+                                    StreamBridge.requestGotoAsync(chartPanel.slot, uiFrame)
                                 }
-
                             }
                         }
                     }
@@ -642,7 +677,6 @@ Item {
                         }
                         Connections {
                             target: chartPanel
-                            function onHoverRankChanged() { hierCanvas.requestPaint() }
                             function onSelRankChanged() { hierCanvas.requestPaint() }
                         }
 
