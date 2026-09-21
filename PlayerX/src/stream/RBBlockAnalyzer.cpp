@@ -121,6 +121,7 @@ bool RBBlockAnalyzer::openDecoder() {
 bool RBBlockAnalyzer::rbOpen(const std::string& filePath) {
     rbClose();
 
+    m_filePath = filePath;
     if (avformat_open_input(&m_fmt, filePath.c_str(), nullptr, nullptr) < 0) {
         m_fmt = nullptr;
         return false;
@@ -145,14 +146,18 @@ bool RBBlockAnalyzer::rbOpen(const std::string& filePath) {
     }
 
     m_opened     = true;
-    m_cursorFrame = -1;
-    // 暂不启用后台顺序解码线程：它与主线程 decodeFrameAt 并发访问
-    // FFmpeg（且共用非线程安全的 m_sws），会触发解码内部 abort（SIGABRT）。
-    // 播放流畅性改由"顺序前进复用游标"保证（见 decodeFrameAt）。
+    // 启动后台预解码线程：它是唯一持有解码权的线程，从头顺序解码整片，
+    // 沿途把每帧块数据（及可选 RGB）入库。主线程/Worker 的 rbBlockInfoAt
+    // 只查库 + 条件等待，永不触碰解码器，从根上消除并发崩溃。
+    startPrefetch();
     return true;
 }
 
 void RBBlockAnalyzer::rbClose() {
+    // ★ 必须先停后台线程，再释放它正在使用的解码器/格式上下文，
+    //   否则线程仍在 avcodec_receive_frame 中而 ctx 被 free → 野指针崩溃。
+    stopPrefetch();
+
     if (m_codecCtx) {
         avcodec_free_context(&m_codecCtx);
         m_codecCtx = nullptr;
@@ -164,17 +169,26 @@ void RBBlockAnalyzer::rbClose() {
     m_opened = false;
     m_blockSupport = false;
     m_videoStream = -1;
-    m_cursorFrame = -1;
     if (m_sws) {
         sws_freeContext(m_sws);
         m_sws = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lk(m_onDemandMutex);
+        if (m_onDemandSws) {
+            sws_freeContext(m_onDemandSws);
+            m_onDemandSws = nullptr;
+        }
     }
     rbClearCache();
 }
 
 void RBBlockAnalyzer::rbClearCache() {
-    m_cacheMap.clear();
-    m_cacheList.clear();
+    std::lock_guard<std::mutex> lk(m_storeMutex);
+    m_store.clear();
+    m_rgbLru.clear();
+    m_decodedUpTo = -1;
+    m_prefetchDone = false;
 }
 
 void RBBlockAnalyzer::releaseFrame(AVFrame*& frame) {
@@ -182,127 +196,6 @@ void RBBlockAnalyzer::releaseFrame(AVFrame*& frame) {
         av_frame_free(&frame);
         frame = nullptr;
     }
-}
-
-AVFrame* RBBlockAnalyzer::decodeFrameAt(int frameIndex) {
-    if (!m_opened || !m_codecCtx) return nullptr;
-
-
-    // 游标优化：仅当目标帧恰为"上一帧 +1"时继续顺序解码（不 seek）。
-    // 不可放宽为 frameIndex > m_cursorFrame：VVC/HEVC 帧间有参考依赖，
-    // 跳过中间包不解码会丢失参考帧，导致后续帧解不出（画面全黑）。
-    bool needSeek = true;
-    if (m_cursorFrame >= 0 && frameIndex == m_cursorFrame + 1) {
-        needSeek = false;
-    }
-
-    if (needSeek) {
-        avcodec_flush_buffers(m_codecCtx);
-        // 裸流（VVC .266 / HEVC .265）duration<=0 且无时间戳：
-        // av_seek_frame 在其上会直接触发 FFmpeg 内部崩溃（Abort trap 6）。
-        // 因此完全不用 av_seek_frame，改用底层 avio_seek 回到数据起点。
-        if (m_fmt->pb) {
-            avio_seek(m_fmt->pb, 0, SEEK_SET);
-        }
-        m_cursorFrame = -1;
-    }
-
-    AVPacket* pkt = av_packet_alloc();
-    AVFrame*  frame = av_frame_alloc();
-    AVFrame*  result = nullptr;
-    int       decodedCount = 0;
-    const int baseCount = (m_cursorFrame >= 0) ? (m_cursorFrame + 1) : 0;
-
-    // 从文件头顺序读包。
-    // ⚠️ 不可"跳过前面的包不解码"：VVC/HEVC 帧间有参考依赖，
-    // 被跳过的帧正是后续帧的参考帧，不解码会导致解码器参考丢失，
-    // 表现为从某帧起画面全黑（实测 21 帧后全黑）。
-    // 正确做法：每一帧都必须送进解码器，仅丢弃不需要的输出帧。
-    while (av_read_frame(m_fmt, pkt) >= 0) {
-        if (pkt->stream_index != m_videoStream) {
-            av_packet_unref(pkt);
-            continue;
-        }
-        // ★ EAGAIN 修复：B 帧重排序时一个 packet 可能一次释放多帧，
-        //   若只 receive 一帧就退出，解码器内部 buffer_pkt/buffer_frame 仍满，
-        //   下一次 send_packet 会返回 EAGAIN（-35）。
-        //   旧写法把 EAGAIN 当致命错误直接丢包 → 后续所有包全部 EAGAIN
-        //   → 从该帧起全部解不出（表现为黑帧/块级数据不可用）。
-        //   FFmpeg 契约：send 返回 EAGAIN 时必须先 receive 排空，再重发同一包。
-        int ret = avcodec_send_packet(m_codecCtx, pkt);
-        if (ret == AVERROR(EAGAIN)) {
-            // 先排空内部缓冲帧，再重发当前包（pkt 尚未被消费，不能 unref）
-            while (true) {
-                ret = avcodec_receive_frame(m_codecCtx, frame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-                if (ret < 0) break;
-                const int cur = baseCount + decodedCount;
-                if (cur == frameIndex) {
-                    result = av_frame_alloc();
-                    av_frame_ref(result, frame);
-                    m_cursorFrame = frameIndex;
-                    av_frame_unref(frame);
-                    break;
-                }
-                if (cur > frameIndex) { av_frame_unref(frame); break; }
-                ++decodedCount;
-                av_frame_unref(frame);
-            }
-            if (result) break;
-            ret = avcodec_send_packet(m_codecCtx, pkt);   // 重发同一包
-        }
-        av_packet_unref(pkt);
-        if (ret < 0) continue;
-
-        while (true) {
-            ret = avcodec_receive_frame(m_codecCtx, frame);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-            if (ret < 0) break;
-
-            const int cur = baseCount + decodedCount;
-            if (cur == frameIndex) {
-                result = av_frame_alloc();
-                av_frame_ref(result, frame);
-                m_cursorFrame = frameIndex;
-                av_frame_unref(frame);
-                break;
-            }
-            if (cur > frameIndex) {
-                av_frame_unref(frame);
-                break;
-            }
-            ++decodedCount;
-            av_frame_unref(frame);
-        }
-        if (result) break;
-    }
-
-    // ★ 关键修复：VVC/HEVC 解码器有帧延迟（B 帧重排序缓冲），
-    //   读完所有 packet 后解码器内仍压着约 20 帧未输出。
-    //   若不排空（flush），末尾若干帧（实测 280/299）永远解不出来 → 卡在 281/282。
-    if (!result) {
-        avcodec_send_packet(m_codecCtx, nullptr);  // 触发排空
-        while (true) {
-            int ret = avcodec_receive_frame(m_codecCtx, frame);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-            if (ret < 0) break;
-            const int cur = baseCount + decodedCount;
-            if (cur == frameIndex) {
-                result = av_frame_alloc();
-                av_frame_ref(result, frame);
-                m_cursorFrame = frameIndex;
-                av_frame_unref(frame);
-                break;
-            }
-            if (cur > frameIndex) { av_frame_unref(frame); break; }
-            ++decodedCount;
-            av_frame_unref(frame);
-        }
-    }
-
-    av_packet_free(&pkt);
-    av_frame_free(&frame);
-    return result;
 }
 
 bool RBBlockAnalyzer::extractH264(AVFrame* frame, RBFrameBlocks& out) {
@@ -539,42 +432,95 @@ bool RBBlockAnalyzer::extractBlocks(AVFrame* frame, RBFrameBlocks& out) {
 }
 
 const RBFrameBlocks& RBBlockAnalyzer::rbBlockInfoAt(int frameIndex) {
-    // 缓存命中：移到 LRU 头部
-    auto it = m_cacheMap.find(frameIndex);
-    if (it != m_cacheMap.end()) {
-        m_cacheList.splice(m_cacheList.begin(), m_cacheList, it->second);
-        return it->second->second;
+    if (!m_opened || !m_blockSupport || frameIndex < 0) {
+        m_emptyResult = RBFrameBlocks{};
+        m_emptyResult.frameIndex = frameIndex;
+        return m_emptyResult;
     }
 
-    // 未命中：解码 + 提取
-    RBFrameBlocks result;
-    result.frameIndex = frameIndex;
+    std::unique_lock<std::mutex> lk(m_storeMutex);
 
-    if (m_opened && m_blockSupport && frameIndex >= 0) {
-        // 解码器非线程安全，需加锁
-        std::lock_guard<std::mutex> lk(m_codecMutex);
-        AVFrame* frame = decodeFrameAt(frameIndex);
-        if (frame) {
-            extractBlocks(frame, result);
-            // 需要底层原始画面时，顺带转成 RGB24 缓存（CU 网格叠加在真实画面上）
-            if (m_wantFrameImage)
-                convertToRgb(frame, result);
-            releaseFrame(frame);
+    // 命中直接返回；否则等后台解码进度追上该帧（或解码结束/停止）。
+    // 后台是顺序解码，UI 无论正序还是编码序跳帧，等的都是"进度到达"，
+    // 一次性开销；翻回已解过的帧全部即时命中。
+    m_cv.wait(lk, [&]{
+        return m_stop
+            || m_prefetchDone
+            || m_store.find(frameIndex) != m_store.end();
+    });
+
+    auto it = m_store.find(frameIndex);
+    if (it == m_store.end() || !it->second) {
+        // 解码已结束仍无此帧（越界 / 解不出）→ 返回空结果。
+        m_emptyResult = RBFrameBlocks{};
+        m_emptyResult.frameIndex = frameIndex;
+        return m_emptyResult;
+    }
+
+    std::shared_ptr<RBFrameBlocks> fb = it->second;
+
+    // 需要画面但该帧尚无 RGB：从缓存 YUV 按需转（只转当前帧，几毫秒）。
+    // 后台不再批量转 RGB，播放到哪帧才转哪帧，避免整片 RGB 拖慢后台+爆内存。
+    if (m_wantFrameImage && !fb->hasRgb && fb->hasYuv) {
+        lk.unlock();                 // 转换耗时，不占 m_storeMutex
+        ensureRgbFromYuv(*fb);       // 内部用 m_onDemandMutex 串行化
+        lk.lock();
+    }
+
+    // 命中：把该帧 RGB 提到 LRU 头部，避免正在查看的帧 RGB 被水位淘汰。
+    if (fb->hasRgb) {
+        m_rgbLru.remove(frameIndex);
+        m_rgbLru.push_front(frameIndex);
+        // 淘汰超水位的旧 RGB（YUV 保留，随时可重转）。
+        while (static_cast<int>(m_rgbLru.size()) > m_cacheMax) {
+            int victim = m_rgbLru.back();
+            m_rgbLru.pop_back();
+            auto vit = m_store.find(victim);
+            if (vit != m_store.end() && vit->second && vit->second->frameIndex != frameIndex) {
+                vit->second->rgb.clear();
+                vit->second->rgb.shrink_to_fit();
+                vit->second->hasRgb = false;
+            }
         }
     }
 
-    // 写入 LRU
-    m_cacheList.push_front(std::make_pair(frameIndex, std::move(result)));
-    m_cacheMap[frameIndex] = m_cacheList.begin();
+    // shared_ptr 常驻 m_store，解引用得到的引用在本对象生命周期内稳定。
+    return *fb;
+}
 
-    // 淘汰超出容量的最久未用项
-    while (static_cast<int>(m_cacheList.size()) > m_cacheMax) {
-        auto last = std::prev(m_cacheList.end());
-        m_cacheMap.erase(last->first);
-        m_cacheList.pop_back();
+// 从 out 已保存的 YUV 平面按需转出 RGB24（任意线程，独立 sws + 独立锁）。
+bool RBBlockAnalyzer::ensureRgbFromYuv(RBFrameBlocks& out) {
+    if (!out.hasYuv || out.yuvW <= 0 || out.yuvH <= 0) return false;
+    std::lock_guard<std::mutex> lk(m_onDemandMutex);
+    if (out.hasRgb) return true;    // 期间被别的线程转好了
+
+    const int w = out.yuvW, h = out.yuvH;
+    m_onDemandSws = sws_getCachedContext(
+        m_onDemandSws,
+        w, h, static_cast<AVPixelFormat>(out.yuvFmt),
+        w, h, AV_PIX_FMT_RGB24,
+        SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (!m_onDemandSws) return false;
+
+    const uint8_t* srcData[4] = {nullptr,nullptr,nullptr,nullptr};
+    int            srcStride[4] = {0,0,0,0};
+    for (int p = 0; p < out.yuvNumPlanes && p < 4; ++p) {
+        srcData[p]   = out.yuv.data() + out.yuvPlaneOff[p];
+        srcStride[p] = out.yuvLinesize[p];
     }
 
-    return m_cacheList.begin()->second;
+    std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+    uint8_t* dstData[4]   = { rgb.data(), nullptr, nullptr, nullptr };
+    int      dstStride[4] = { w * 3, 0, 0, 0 };
+
+    const int ret = sws_scale(m_onDemandSws, srcData, srcStride, 0, h, dstData, dstStride);
+    if (ret <= 0) return false;
+
+    out.rgb       = std::move(rgb);
+    out.rgbWidth  = w;
+    out.rgbHeight = h;
+    out.hasRgb    = true;
+    return true;
 }
 
 bool RBBlockAnalyzer::convertToRgb(AVFrame* frame, RBFrameBlocks& out) {
@@ -610,6 +556,200 @@ bool RBBlockAnalyzer::convertToRgb(AVFrame* frame, RBFrameBlocks& out) {
     out.rgbHeight = h;
     out.hasRgb    = true;
     return true;
+}
+
+// 把 AVFrame 的 YUV 平面紧凑保存到 out.yuv（后台线程用，仅 memcpy，无缩放/转换）。
+// 保存后可由 ensureRgbFromYuv 在任意时刻按需转 RGB，不依赖原 AVFrame。
+bool RBBlockAnalyzer::saveYuv(AVFrame* frame, RBFrameBlocks& out) {
+    if (!frame || frame->width <= 0 || frame->height <= 0) return false;
+    if (frame->format == AV_PIX_FMT_NONE) return false;
+
+    const int w = frame->width;
+    const int h = frame->height;
+    const AVPixelFormat fmt = static_cast<AVPixelFormat>(frame->format);
+
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(fmt);
+    if (!desc) return false;
+
+    // 平面数：取非零 linesize 的平面。
+    int nb = 0;
+    for (int p = 0; p < 4; ++p) if (frame->data[p] && frame->linesize[p]) ++nb;
+    if (nb <= 0) return false;
+
+    // 每个平面按其实际宽字节 * 高（考虑色度下采样）紧凑拷贝，行距=平面宽字节。
+    int planeH[4]   = {0,0,0,0};
+    int planeBpl[4] = {0,0,0,0};   // bytes per line（紧凑后）
+    size_t total = 0;
+    for (int p = 0; p < nb; ++p) {
+        int compH = h;
+        int compW = w;
+        if (p == 1 || p == 2) {      // 色度平面按 log2 下采样
+            compH = (h + (1 << desc->log2_chroma_h) - 1) >> desc->log2_chroma_h;
+            compW = (w + (1 << desc->log2_chroma_w) - 1) >> desc->log2_chroma_w;
+        }
+        // 用 av_image_get_linesize 求该平面每行有效字节数（含高位深 *2）。
+        int bpl = av_image_get_linesize(fmt, w, p);
+        if (bpl <= 0) bpl = compW;
+        planeH[p]   = compH;
+        planeBpl[p] = bpl;
+        out.yuvPlaneOff[p]  = static_cast<int>(total);
+        out.yuvLinesize[p]  = bpl;
+        total += static_cast<size_t>(bpl) * compH;
+    }
+
+    out.yuv.resize(total);
+    for (int p = 0; p < nb; ++p) {
+        const uint8_t* src = frame->data[p];
+        uint8_t* dst = out.yuv.data() + out.yuvPlaneOff[p];
+        const int srcStride = frame->linesize[p];
+        const int bpl = planeBpl[p];
+        for (int y = 0; y < planeH[p]; ++y)
+            memcpy(dst + static_cast<size_t>(bpl) * y,
+                   src + static_cast<size_t>(srcStride) * y, bpl);
+    }
+
+    out.yuvW = w;
+    out.yuvH = h;
+    out.yuvFmt = static_cast<int>(fmt);
+    out.yuvNumPlanes = nb;
+    out.hasYuv = true;
+    return true;
+}
+
+void RBBlockAnalyzer::startPrefetch() {
+    m_stop = false;
+    {
+        std::lock_guard<std::mutex> lk(m_storeMutex);
+        m_decodedUpTo  = -1;
+        m_prefetchDone = false;
+    }
+    if (m_blockSupport)
+        m_prefetchThread = std::thread([this]{ prefetchLoop(); });
+    else {
+        // 不支持块级：直接标记完成，rbBlockInfoAt 会立即返回空结果。
+        std::lock_guard<std::mutex> lk(m_storeMutex);
+        m_prefetchDone = true;
+        m_cv.notify_all();
+    }
+}
+
+void RBBlockAnalyzer::stopPrefetch() {
+    m_stop = true;
+    m_cv.notify_all();
+    if (m_prefetchThread.joinable())
+        m_prefetchThread.join();
+}
+
+void RBBlockAnalyzer::prefetchLoop() {
+    if (!m_fmt || !m_codecCtx) {
+        std::lock_guard<std::mutex> lk(m_storeMutex);
+        m_prefetchDone = true;
+        m_cv.notify_all();
+        return;
+    }
+
+    // 从数据起点开始顺序解码。
+    // ★ 根因修复：裸流没有索引，rbOpen 的 avformat_find_stream_info 已消耗
+    //   文件开头若干包，avio_seek(pb,0) 无法精确回到显示序 0（实测会从前
+    //   8 帧之后开始解，m_store 帧号整体偏移，跨 GOP 时画面跳回新 GOP 起点）。
+    //   改为重新打开文件，拿全新 demuxer 从显示序 0 开始解码。
+    avcodec_flush_buffers(m_codecCtx);
+    avformat_close_input(&m_fmt);
+    m_fmt = nullptr;
+    if (avformat_open_input(&m_fmt, m_filePath.c_str(), nullptr, nullptr) < 0) {
+        std::lock_guard<std::mutex> lk(m_storeMutex);
+        m_prefetchDone = true;
+        m_cv.notify_all();
+        return;
+    }
+    // 重新定位视频流（同一文件索引不变，但重新查更稳）；
+    // 无需再 find_stream_info：codec ctx 已建好且参数不变，直接 read_frame 即可。
+    m_videoStream = av_find_best_stream(m_fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (m_videoStream < 0) {
+        std::lock_guard<std::mutex> lk(m_storeMutex);
+        m_prefetchDone = true;
+        m_cv.notify_all();
+        return;
+    }
+
+    AVPacket* pkt   = av_packet_alloc();
+    AVFrame*  frame = av_frame_alloc();
+    int       outIndex = 0;   // 已输出帧计数（= 下一帧的输出序号）
+
+    // 把一帧解码结果提取块数据 + 保存 YUV，入库并唤醒等待者。
+    // 不在此批量转 RGB：整片转 RGB 既拖慢后台又爆内存，且绝大多数帧不会被看。
+    // RGB 由 rbBlockInfoAt 命中当前帧时从 YUV 按需转（只转要显示的那一帧）。
+    auto commitFrame = [&](AVFrame* f) {
+        auto fb = std::make_shared<RBFrameBlocks>();
+        fb->frameIndex = outIndex;
+        extractBlocks(f, *fb);
+        if (m_wantFrameImage)
+            saveYuv(f, *fb);        // 零转换开销，仅平面 memcpy
+        {
+            std::lock_guard<std::mutex> lk(m_storeMutex);
+            m_store[outIndex] = fb;
+            m_decodedUpTo = outIndex;
+        }
+        m_cv.notify_all();
+        ++outIndex;
+    };
+
+    // 送一个包，排空其产出的所有帧。
+    auto drainAfterSend = [&](AVPacket* p) -> bool {
+        int ret = avcodec_send_packet(m_codecCtx, p);
+        if (ret == AVERROR(EAGAIN)) {
+            // 先排空再重发同一包（FFmpeg 契约，B 帧重排序常见）。
+            while (!m_stop) {
+                ret = avcodec_receive_frame(m_codecCtx, frame);
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
+                if (ret < 0) break;
+                commitFrame(frame);
+                av_frame_unref(frame);
+            }
+            ret = avcodec_send_packet(m_codecCtx, p);
+        }
+        if (ret < 0 && ret != AVERROR(EAGAIN)) return false;
+        while (!m_stop) {
+            ret = avcodec_receive_frame(m_codecCtx, frame);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
+            if (ret < 0) break;
+            commitFrame(frame);
+            av_frame_unref(frame);
+        }
+        return true;
+    };
+
+    while (!m_stop && av_read_frame(m_fmt, pkt) >= 0) {
+        if (pkt->stream_index != m_videoStream) {
+            av_packet_unref(pkt);
+            continue;
+        }
+        drainAfterSend(pkt);
+        av_packet_unref(pkt);
+    }
+
+    // 排空解码器缓冲的延迟帧（B 帧重排序，末尾约 20 帧压在里面）。
+    if (!m_stop) {
+        avcodec_send_packet(m_codecCtx, nullptr);
+        while (!m_stop) {
+            int ret = avcodec_receive_frame(m_codecCtx, frame);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
+            if (ret < 0) break;
+            commitFrame(frame);
+            av_frame_unref(frame);
+        }
+    }
+
+    av_packet_free(&pkt);
+    av_frame_free(&frame);
+
+    {
+        std::lock_guard<std::mutex> lk(m_storeMutex);
+        // 用真实解码出的帧数校正总帧数（估算值常有偏差）。
+        if (outIndex > 0) m_frameCount = outIndex;
+        m_prefetchDone = true;
+    }
+    m_cv.notify_all();
 }
 
 } // namespace rb

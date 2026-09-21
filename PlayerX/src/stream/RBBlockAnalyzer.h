@@ -29,7 +29,11 @@
 #include <vector>
 #include <list>
 #include <unordered_map>
+#include <memory>
 #include <mutex>
+#include <thread>
+#include <atomic>
+#include <condition_variable>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -71,6 +75,17 @@ struct RBFrameBlocks {
     int                    rgbWidth = 0;
     int                    rgbHeight = 0;
     bool                   hasRgb = false;
+
+    // ── 原始 YUV（解码器原生输出，紧凑打包）────────────────────
+    // 后台解码时顺带保存，供 rbBlockInfoAt 命中时按需转 RGB（只转当前帧）。
+    // 相比 RGB 更省内存（约一半），且随时可重转任意帧，不受 RGB LRU 淘汰影响。
+    std::vector<uint8_t>   yuv;             // 各平面紧凑拼接
+    int                    yuvW = 0, yuvH = 0;
+    int                    yuvFmt = -1;     // AVPixelFormat
+    int                    yuvLinesize[4] = {0,0,0,0};   // 紧凑后的行距
+    int                    yuvPlaneOff[4] = {0,0,0,0};    // 各平面在 yuv 中的偏移
+    int                    yuvNumPlanes = 0;
+    bool                   hasYuv = false;
 };
 
 class RBBlockAnalyzer {
@@ -110,8 +125,17 @@ public:
 private:
     // 把 AVFrame 转成 RGB24 写入 out（需要 swscale）
     bool convertToRgb(AVFrame* frame, RBFrameBlocks& out);
-    // 解码到指定帧（内部 seek + 顺序解码），成功返回该帧的 AVFrame
-    AVFrame* decodeFrameAt(int frameIndex);
+    // 把 AVFrame 的 YUV 平面紧凑保存到 out.yuv（后台线程调用，零转换开销）
+    bool saveYuv(AVFrame* frame, RBFrameBlocks& out);
+    // 从 out 已保存的 YUV 按需转出 RGB24（任意线程，用独立 sws 上下文 + 独立锁）。
+    // 命中帧缺 RGB 时调用，只转这一帧，几毫秒；转完写回 out.rgb。
+    bool ensureRgbFromYuv(RBFrameBlocks& out);
+    // 后台预解码线程入口：从头到尾顺序解码整个码流，沿途把每帧块数据
+    // （及可选 RGB）填入 m_store，解一帧唤醒一次等待者。是唯一持有解码权
+    // 的线程——m_fmt / m_codecCtx / m_sws 只在此线程访问，杜绝并发崩溃。
+    void prefetchLoop();
+    void startPrefetch();
+    void stopPrefetch();
     // 从 AVFrame 的 side data 提取块级信息
     bool extractBlocks(AVFrame* frame, RBFrameBlocks& out);
     // H.264：从 AVVideoEncParams（AV_VIDEO_ENC_PARAMS_H264）提取逐宏块
@@ -126,6 +150,7 @@ private:
     AVFormatContext* m_fmt{nullptr};
     AVCodecContext*  m_codecCtx{nullptr};
     int              m_videoStream{-1};
+    std::string      m_filePath;   // prefetchLoop 重新打开文件用（裸流 seek 不可靠）
     bool             m_opened{false};
     bool             m_blockSupport{false};
     std::string      m_granularity;
@@ -133,22 +158,38 @@ private:
     int              m_frameCount{0};
     AVCodecID        m_codecId{AV_CODEC_ID_NONE};
 
-    // LRU 缓存：frameIndex -> RBFrameBlocks
-    std::list<std::pair<int, RBFrameBlocks>>                m_cacheList;
-    std::unordered_map<int, decltype(m_cacheList)::iterator> m_cacheMap;
-    int                                                     m_cacheMax{8};
-    // 解码器互斥锁：AVCodecContext 非线程安全。
-    // 异步播放（Worker 线程）与主线程统计/取块可能同时解码，
-    // 并发 avcodec_send/receive 会踩坏解码器内部状态导致崩溃（pred_regular 空指针）。
-    mutable std::mutex                                      m_codecMutex;
+    // ── 帧存储（后台线程写，任意线程读）────────────────────────
+    // 块数据用 shared_ptr 常驻：一旦解出永不失效，rbBlockInfoAt 返回的引用
+    // 始终稳定（调用方会拿着引用读 blocks/rgb，不能被淘汰移动）。
+    // 块数据体积小（每帧几十 KB），全量常驻可接受。
+    std::unordered_map<int, std::shared_ptr<RBFrameBlocks>>  m_store;
+    // RGB 内存水位：4K RGB24 约 24MB/帧，不能全量常驻。
+    // 只保留最近访问的若干帧 RGB（LRU），淘汰时把该帧 shared 的 rgb 清空
+    // （块数据仍在）。m_cacheMax 复用为 RGB 保留帧数上限。
+    std::list<int>                                           m_rgbLru;   // 头=最近
+    int                                                      m_cacheMax{12};
+    // 保护 m_store / m_rgbLru / m_decodedUpTo / m_prefetchDone 的锁。
+    mutable std::mutex                                       m_storeMutex;
+    // 后台解码进度：已成功解码并入库的最大帧号（-1 表示尚无）。
+    int                                                      m_decodedUpTo{-1};
+    // 后台预解码线程 + 同步。
+    std::thread                                              m_prefetchThread;
+    std::condition_variable                                  m_cv;       // 配 m_storeMutex
+    std::atomic<bool>                                        m_stop{false};
+    bool                                                     m_prefetchDone{false};
 
-    // 顺序解码游标：多数场景下用户是连续翻帧，缓存游标可避免重复 seek
-    int              m_cursorFrame{-1};
+    // 空结果哨兵：帧取不到时返回它的引用（valid=false）。
+    RBFrameBlocks    m_emptyResult;
 
     // 是否需要在解析块级信息时顺带导出原始画面（RGB24）
     bool             m_wantFrameImage{false};
 
-    struct SwsContext* m_sws{nullptr};      // 复用的 swscale 上下文
+    struct SwsContext* m_sws{nullptr};      // 复用的 swscale 上下文（仅后台线程用）
+
+    // 按需转 RGB 专用 swscale 上下文（rbBlockInfoAt 命中缺 RGB 时用），
+    // 与后台 m_sws 完全分离；可能被多个读线程调用，用独立锁串行化。
+    struct SwsContext* m_onDemandSws{nullptr};
+    std::mutex         m_onDemandMutex;
 };
 
 } // namespace rb

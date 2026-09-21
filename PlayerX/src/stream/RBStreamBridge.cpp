@@ -34,6 +34,9 @@ extern "C" {
 #include <QFile>
 #include <QFileInfo>
 #include <QDebug>
+#include <QPainter>
+#include <QFont>
+#include <QColor>
 #include <cstring>
 
 // 编码序 ↔ 显示序映射换算（定义在文件后部，此处前置声明供前部函数使用）
@@ -1066,15 +1069,19 @@ rb::RBBlockAnalyzer* RBStreamBridge::blockAnalyzerFor(int slot) const {
 
     s.blockAnalyzerTried = true;
     s.blockAnalyzer = std::make_unique<rb::RBBlockAnalyzer>();
+    // ★ 必须在 rbOpen 之前配置：rbOpen 会立即启动后台预解码线程，
+    //   若晚于 rbOpen 设置，后台线程已按 m_wantFrameImage=false 跑起来，
+    //   整片预解码不产出 RGB → 画面永远停在首帧不更新。
+    // 开启底层原始画面导出：UI 需要在真实渲染图上叠加 CU 划分网格
+    s.blockAnalyzer->rbEnableFrameImage(true);
+    // RGB 保留帧数：RGB 由 YUV 按需转（只转当前显示帧），无需全量常驻，
+    // 只保留最近 16 帧滑动窗口即可；全量常驻的是更省的 YUV（后台顺带存）。
+    s.blockAnalyzer->rbSetCacheSize(16);
     if (!s.blockAnalyzer->rbOpen(s.path.toStdString())) {
         qWarning() << "[StreamBridge] block analyzer open failed:" << s.path;
         s.blockAnalyzer.reset();
         return nullptr;
     }
-    // 开启底层原始画面导出：UI 需要在真实渲染图上叠加 CU 划分网格
-    s.blockAnalyzer->rbEnableFrameImage(true);
-    // LRU 容量：4K RGB24 约 24MB/帧，取 12 兼顾翻帧命中率与内存占用
-    s.blockAnalyzer->rbSetCacheSize(12);
     qInfo() << "[StreamBridge] block analyzer ready:" << s.path
             << "granularity=" << QString::fromStdString(s.blockAnalyzer->rbBlockGranularity());
     return s.blockAnalyzer.get();
@@ -1140,9 +1147,26 @@ QImage RBStreamBridge::FrameImageProvider::requestImage(const QString& id,
                                                         QSize* size,
                                                         const QSize& requestedSize) {
     Q_UNUSED(requestedSize)
-    // id 形如 "<slot>_<frame>_<version>"，只需 slot
-    const int slot = id.section('_', 0, 0).toInt();
+    // id 形如 "<slot>_<uiFrame>_<version>_<refreshKey>"。
+    // ★ 必须按 URL 里的帧号取图，不能返回被任意 blockInfoAt 调用覆写的
+    //   lastFrameImage —— 否则播放到第 N 帧时，若别的绑定用旧帧号调过
+    //   blockInfoAt，画面会被拽回旧帧（现象：底部帧号 70 但画面是 16）。
+    const int slot    = id.section('_', 0, 0).toInt();
+    const int uiFrame = id.section('_', 1, 1).toInt();
     if (m_bridge && slot >= 0 && slot < MaxSlots) {
+        auto* ba = m_bridge->blockAnalyzerFor(slot);
+        if (ba && ba->rbBlockSupport() && uiFrame >= 0) {
+            // UI 帧号（编码序模式下）→ 解码器输出序。
+            const int outIdx = m_bridge->decodeIndexOf(slot, uiFrame);
+            const rb::RBFrameBlocks& fb = ba->rbBlockInfoAt(outIdx);
+            if (fb.hasRgb && !fb.rgb.empty() && fb.rgbWidth > 0 && fb.rgbHeight > 0) {
+                QImage img(fb.rgb.data(), fb.rgbWidth, fb.rgbHeight,
+                           fb.rgbWidth * 3, QImage::Format_RGB888);
+                if (size) *size = img.size();
+                return img.copy();   // 深拷贝，脱离 fb 内存
+            }
+        }
+        // 回退：analyzer 尚未就绪时用最后一帧兜底，避免全黑。
         const Slot& s = m_bridge->m_slots[slot];
         if (!s.lastFrameImage.isNull()) {
             if (size) *size = s.lastFrameImage.size();
