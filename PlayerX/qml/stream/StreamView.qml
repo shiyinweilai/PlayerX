@@ -1582,8 +1582,10 @@ property real panelSplitRatio: 0.5
                         ctx.strokeRect(offX + b.x * scale, offY + b.y * scaleY,
                                        b.w * scale, b.h * scaleY)
                     }
-                    drawHi(hi, 1.5)
-                    drawHi(si, 2)
+                    if (streamView.qpOverlayEnabled) {
+                        drawHi(hi, 1.5)
+                        drawHi(si, 2)
+                    }
 
                     // 记录映射参数供命中测试复用
                     blockCanvas._scale = scale
@@ -1639,26 +1641,25 @@ property real panelSplitRatio: 0.5
                             blockCanvas.hoverIndex = idx
                             blockCanvas.requestPaint()
                         }
+                        // hover 驱动面板（仅在块信息开启时生效）
+                        if (streamView.qpOverlayEnabled)
+                            streamView.selectedBlockIndex = idx
                     }
                     onExited: {
                         if (blockCanvas.hoverIndex !== -1) {
                             blockCanvas.hoverIndex = -1
                             blockCanvas.requestPaint()
                         }
-                    }
-                    onClicked: {
-                        const idx = blockCanvas.hitTest(mouseX, mouseY)
-                        blockCanvas.selectedIndex = idx
-                        streamView.selectedBlockIndex = idx
-                        blockCanvas.requestPaint()
+                        streamView.selectedBlockIndex = -1
                     }
                 }
             }
 
-            // ── CU 详情卡片（点击块后弹出，跟随选中块、自适应避让）──
+            // ── CU 详情卡片（hover 块时跟随显示，需勾选「块信息」开关）──
             Rectangle {
                 id: blockDetailCard
-                visible: streamView.selectedBlockIndex >= 0
+                visible: streamView.qpOverlayEnabled
+                         && streamView.selectedBlockIndex >= 0
                          && streamView.selectedBlockIndex < streamView.slotBlocks.length
 
                 // 被选中块在视图中的屏幕矩形（与 hitTest 同一坐标系）
