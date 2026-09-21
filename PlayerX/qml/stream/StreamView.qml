@@ -1655,17 +1655,55 @@ property real panelSplitRatio: 0.5
                 }
             }
 
-            // ── CU 详情卡片（点击块后弹出，跟随点击点）──
+            // ── CU 详情卡片（点击块后弹出，跟随选中块、自适应避让）──
             Rectangle {
                 id: blockDetailCard
                 visible: streamView.selectedBlockIndex >= 0
                          && streamView.selectedBlockIndex < streamView.slotBlocks.length
+
+                // 被选中块在视图中的屏幕矩形（与 hitTest 同一坐标系）
+                readonly property var blk: (streamView.selectedBlockIndex >= 0
+                                            && streamView.selectedBlockIndex < streamView.slotBlocks.length)
+                                           ? streamView.slotBlocks[streamView.selectedBlockIndex] : null
+                readonly property real bx: blk ? (blockCanvas._offX + blk.x * blockCanvas._scale) : 0
+                readonly property real by: blk ? (blockCanvas._offY + blk.y * blockCanvas._scaleY) : 0
+                readonly property real bw: blk ? (blk.w * blockCanvas._scale) : 0
+                readonly property real bh: blk ? (blk.h * blockCanvas._scaleY) : 0
+
                 width: 200; height: 132
                 radius: 5
                 color: "#cc1a1a1f"
                 border.color: "#2a2e33"; border.width: 1
-                x: 16
-                y: 16
+
+                // 容器可用范围（卡片父容器即该矩形区域）
+                readonly property real cw: parent.width
+                readonly property real ch: parent.height
+                readonly property real gap: 8
+
+                // 优先放块右侧，放不下依次尝试左侧、下方、上方，最后夹回容器内
+                x: {
+                    if (!blk) return 16
+                    // 右侧
+                    if (bx + bw + gap + width <= cw) return bx + bw + gap
+                    // 左侧
+                    if (bx - gap - width >= 0) return bx - gap - width
+                    // 水平夹紧：尽量水平居中对齐块中心
+                    const cx = bx + bw / 2 - width / 2
+                    return Math.max(gap, Math.min(cx, cw - width - gap))
+                }
+                y: {
+                    if (!blk) return 16
+                    const verticalCenter = by + bh / 2 - height / 2
+                    // 左右放置时：垂直与块居中
+                    const placedHoriz = (x === bx + bw + gap) || (x === bx - gap - width)
+                    if (placedHoriz)
+                        return Math.max(gap, Math.min(verticalCenter, ch - height - gap))
+                    // 上下放置：优先下方
+                    if (by + bh + gap + height <= ch) return by + bh + gap
+                    // 上方
+                    if (by - gap - height >= 0) return by - gap - height
+                    return Math.max(gap, Math.min(verticalCenter, ch - height - gap))
+                }
 
                 Column {
                     anchors.fill: parent
