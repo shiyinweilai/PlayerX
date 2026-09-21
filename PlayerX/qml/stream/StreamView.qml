@@ -1671,7 +1671,7 @@ property real panelSplitRatio: 0.5
                 readonly property real bw: blk ? (blk.w * blockCanvas._scale) : 0
                 readonly property real bh: blk ? (blk.h * blockCanvas._scaleY) : 0
 
-                width: 200; height: 132
+                width: 200; height: 72
                 radius: 5
                 color: "#cc1a1a1f"
                 border.color: "#2a2e33"; border.width: 1
@@ -1741,43 +1741,10 @@ property real panelSplitRatio: 0.5
                         }
                     }
                     // MV
-                    Row {
-                        spacing: 8
-                        Text { text: "MV"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
-                        Text {
-                            text: "(" + (parent.parent.b.mvx ? parent.parent.b.mvx.toFixed(0) : "0")
-                                  + "," + (parent.parent.b.mvy ? parent.parent.b.mvy.toFixed(0) : "0") + ")"
-                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
-                        }
-                    }
                     // 参考索引
-                    Row {
-                        spacing: 8
-                        Text { text: "参考索引"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
-                        Text {
-                            text: parent.parent.b.refIdx !== undefined ? String(parent.parent.b.refIdx) : "0"
-                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
-                        }
-                    }
                     // 预测模式
-                    Row {
-                        spacing: 8
-                        Text { text: "预测模式"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
-                        Text {
-                            readonly property int pm: parent.parent.b.predMode !== undefined ? parent.parent.b.predMode : 0
-                            text: pm === 0 ? "Intra" : (pm === 1 ? "P_L0" : (pm === 2 ? "B_L0L1" : "—"))
-                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
-                        }
-                    }
                     // 残差信息
-                    Row {
-                        spacing: 8
-                        Text { text: "残差信息"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
-                        Text {
-                            text: (parent.parent.b.hasResidual !== undefined && parent.parent.b.hasResidual) ? "有" : "无"
-                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
-                        }
-                    }
+                    // （以上字段对码流块划分分析意义有限，已隐藏）
                 }
                 MouseArea {
                     anchors.fill: parent

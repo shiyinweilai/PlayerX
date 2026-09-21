@@ -140,6 +140,8 @@ private:
     bool extractBlocks(AVFrame* frame, RBFrameBlocks& out);
     // H.264：从 AVVideoEncParams（AV_VIDEO_ENC_PARAMS_H264）提取逐宏块
     bool extractH264(AVFrame* frame, RBFrameBlocks& out);
+    // VVC：从 AV_FRAME_DATA_CODEC_BLOCK_INFO 提取真实逐块 QP / pred_mode
+    bool extractVvc(AVFrame* frame, RBFrameBlocks& out);
     // 从 AV_FRAME_DATA_MOTION_VECTORS 填充每个块的 MV / 参考索引（图2 需要）
     void fillMotionVectors(AVFrame* frame, RBFrameBlocks& out);
     // HEVC 降级：CTU 级 QP（来自 qp_y_tab，需补丁；一期若取不到则返回 false）

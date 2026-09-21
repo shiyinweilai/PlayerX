@@ -20,6 +20,7 @@
 extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
+#include <libavutil/codec_block_info.h>
 }
 
 namespace rb {
@@ -410,6 +411,60 @@ void RBBlockAnalyzer::fillMotionVectors(AVFrame* frame, RBFrameBlocks& out) {
     }
 }
 
+bool RBBlockAnalyzer::extractVvc(AVFrame* frame, RBFrameBlocks& out) {
+    // VVC：读取 PlayerX 定制 side data AV_FRAME_DATA_CODEC_BLOCK_INFO
+    // 包含真实逐块 QP（Qp''Y）、预测模式、skip_flag
+    const AVFrameSideData* sd =
+        av_frame_get_side_data(frame, AV_FRAME_DATA_CODEC_BLOCK_INFO);
+    if (!sd || sd->size < (int)sizeof(AVCodecBlockInfo)) {
+        // 补丁未生效，降级用 enc_params（QP 精度差）
+        return extractH264(frame, out);
+    }
+
+    const int nb = (int)(sd->size / sizeof(AVCodecBlockInfo));
+    const AVCodecBlockInfo* cbi = reinterpret_cast<const AVCodecBlockInfo*>(sd->data);
+
+    out.blocks.clear();
+    out.blocks.reserve(nb);
+
+    double qpSum = 0.0;
+    int    qpMin = kQpMax, qpMax = kQpMin;
+
+    for (int i = 0; i < nb; ++i) {
+        const AVCodecBlockInfo& c = cbi[i];
+        RBBlockInfo bi;
+        bi.x = c.x; bi.y = c.y;
+        bi.w = c.w ? c.w : 64;
+        bi.h = c.h ? c.h : 64;
+        bi.qp = std::clamp((int)(uint8_t)c.qp, kQpMin, kQpMax);
+
+        // pred_mode: 0=Inter,1=Intra,2=Skip,3=PLT,4=IBC
+        bi.isIntra = (c.pred_mode == AV_CB_PRED_INTRA);
+        bi.isSkip  = (c.pred_mode == AV_CB_PRED_SKIP);
+        bi.mvx = bi.mvy = 0.f;
+        bi.refIdx = -1;
+        bi.predMode = (int)c.pred_mode;
+        bi.hasResidual = !bi.isSkip;
+
+        out.blocks.push_back(bi);
+
+        qpSum += bi.qp;
+        qpMin = std::min(qpMin, bi.qp);
+        qpMax = std::max(qpMax, bi.qp);
+    }
+
+    if (out.blocks.empty()) return false;
+
+    m_granularity = "CU 真实划分";
+    out.width  = frame->width;
+    out.height = frame->height;
+    out.avgQp  = qpSum / (double)out.blocks.size();
+    out.minQp  = qpMin;
+    out.maxQp  = qpMax;
+    out.valid  = true;
+    return true;
+}
+
 bool RBBlockAnalyzer::extractBlocks(AVFrame* frame, RBFrameBlocks& out) {
     if (!frame) return false;
 
@@ -419,10 +474,7 @@ bool RBBlockAnalyzer::extractBlocks(AVFrame* frame, RBFrameBlocks& out) {
     else if (m_codecId == AV_CODEC_ID_HEVC)
         ok = extractHevcCtu(frame, out);
     else if (m_codecId == AV_CODEC_ID_VVC)
-        // VVC 补丁导出的 side data 与 H.264 完全同构
-        // （AV_FRAME_DATA_VIDEO_ENC_PARAMS + AVVideoBlockParams），
-        // 且块坐标/尺寸已是真实 CU，直接复用同一提取函数。
-        ok = extractH264(frame, out);
+        ok = extractVvc(frame, out);
 
     if (!ok) return false;
 
