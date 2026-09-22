@@ -2016,9 +2016,11 @@ ApplicationWindow {
             if (root.currentTab === "stream") return 36
             return 0
         }
-        // 宽度策略：固定 320，与参考侧栏（refSidebarUserWidth）保持视觉对齐，
+        // 宽度策略：
+        //   · stream tab：读 root.streamSidebarUserWidth（左边缘可拖拽调整、双击复位 320）；
+        //   · 其他 tab ：固定 320，与参考侧栏（refSidebarUserWidth）保持视觉对齐；
         // 不随窗口剩余宽度变化，避免挤压视频内容。
-        width: 320
+        width: root.streamSidebarEffectiveW
         visible: root.rightSidebarOpen
         z: 200
         sourceComponent: {
@@ -2045,13 +2047,103 @@ ApplicationWindow {
             if (root.currentTab === "stream") return 36
             return 0
         }
-        width: 320
+        width: root.streamSidebarEffectiveW
         z: 199
         visible: root.rightSidebarOpen && !root.streamSidebarFloating
         acceptedButtons: Qt.NoButton  // 不拦截任何点击，透传给下方
         onWheel: function(wheel) {
             // 消费滚轮事件，阻止穿透到 ImageView
             wheel.accepted = true
+        }
+    }
+
+    // ─── 码流分析右侧栏 · 左边缘水平拖拽调整宽度（仅 stream tab）───────
+    // 设计要点：
+    //   · 参照底栏 StreamHierarchyChart 的把手：拖拽用「屏幕全局坐标」计算位移，
+    //     避免把手随 sidebar 宽度变化后 mouse.x 反馈引起抖动。
+    //   · 6px 宽命中区居中在 sidebar 左边缘上（视觉上 sidebar 左缘约 3px 左侧、3px 右侧）；
+    //     水平方向再各扩 2px 命中区，方便鼠标抓取。
+    //   · 双击复位到 320。宽度限制 [streamSidebarMinW, streamSidebarMaxW]。
+    //   · 仅腾位模式显示（悬浮模式下 sidebar 覆盖视频，不适合原地拖拽）。
+    //   · z: 201 位于 sidebar(200) 之上，保证鼠标始终能命中。
+    Rectangle {
+        id: streamSidebarHSplitter
+        anchors.top: rightSidebarLoader.top
+        anchors.bottom: rightSidebarLoader.bottom
+        // 命中区中心与 sidebar 左边缘对齐
+        x: rightSidebarLoader.x - 3
+        width: 6
+        visible: root.currentTab === "stream"
+                 && root.rightSidebarOpen
+                 && !root.streamSidebarFloating
+        z: 201
+        color: streamSidebarSplitterMA.pressed
+               ? "#42A5FF"
+               : (streamSidebarSplitterMA.containsMouse ? "#2a3f5a" : "transparent")
+
+        // 中线小提示（3 个圆点），仅在命中/拖拽时提示视觉锚点
+        Column {
+            anchors.centerIn: parent
+            spacing: 4
+            visible: streamSidebarSplitterMA.containsMouse || streamSidebarSplitterMA.pressed
+            Repeater {
+                model: 3
+                Rectangle { width: 3; height: 3; radius: 1.5; color: "#5a5a66" }
+            }
+        }
+
+        // 拖拽中显示的实时宽度提示
+        Rectangle {
+            visible: streamSidebarSplitterMA.pressed
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 12
+            width: hintText.implicitWidth + 12
+            height: hintText.implicitHeight + 6
+            radius: 3
+            color: "#1a1d22"
+            border.color: "#42A5FF"
+            border.width: 1
+            Text {
+                id: hintText
+                anchors.centerIn: parent
+                text: root.streamSidebarUserWidth + " px"
+                color: "#42A5FF"
+                font.pixelSize: 10
+            }
+        }
+
+        MouseArea {
+            id: streamSidebarSplitterMA
+            anchors.fill: parent
+            // 命中区左右各扩 2px，方便抓取
+            anchors.leftMargin: -2
+            anchors.rightMargin: -2
+            hoverEnabled: true
+            preventStealing: true
+            cursorShape: Qt.SplitHCursor
+
+            property real startGlobalX: 0
+            property int startW: 0
+            onPressed: function(mouse) {
+                startGlobalX = mapToGlobal(mouse.x, mouse.y).x
+                startW = root.streamSidebarUserWidth
+                mouse.accepted = true
+            }
+            onPositionChanged: function(mouse) {
+                if (!pressed) return
+                // sidebar 锚右边缘：向左拖（dx<0）= 变宽
+                const dx = mapToGlobal(mouse.x, mouse.y).x - startGlobalX
+                let nw = startW - dx
+                // 量化到 2px，减少重排次数
+                nw = Math.round(nw / 2) * 2
+                // 上限还需保证视频区最小可视宽度（至少 400px）
+                const maxByWin = Math.max(root.streamSidebarMinW, root.width - 400)
+                const maxW = Math.min(root.streamSidebarMaxW, maxByWin)
+                root.streamSidebarUserWidth =
+                    Math.max(root.streamSidebarMinW, Math.min(maxW, nw))
+            }
+            onDoubleClicked: root.streamSidebarUserWidth = 320
         }
     }
 
@@ -2198,8 +2290,16 @@ Component {
     // 跟随 StreamView.currentSlot 切换查看哪一路的统计。
     // 仅当 currentTab === "stream" 且右侧栏打开时显示。
     // floating=true 时卡片悬浮在画面上层，StreamView 不腾位（z 更高）；
-    // floating=false 时为腾位栏，StreamView 右缘左移 320px 让出空间。
+    // floating=false 时为腾位栏，StreamView 右缘左移 streamSidebarUserWidth 让出空间。
     property bool streamSidebarFloating: false
+    // ── 码流分析右侧栏宽度（唯一数据源，仅 stream tab 使用）────────
+    // 左边缘拖拽调整；限制 [260, 640]：太窄语法元素列展示不下，太宽挤压视频区。
+    // 双击左边缘分隔条复位到 320。当前不做持久化（与底部栏 hierarchy 面板一致）。
+    property int streamSidebarUserWidth: 320
+    readonly property int streamSidebarMinW: 260
+    readonly property int streamSidebarMaxW: 640
+    readonly property int streamSidebarEffectiveW:
+        (root.currentTab === "stream") ? streamSidebarUserWidth : 320
     Component {
         id: streamPanelComp
         StreamInfoCard {
@@ -2483,13 +2583,13 @@ Component {
     //   · render 阶段（slotCount > 0） → 铺满整个 contentItem（沉浸满屏）
     // 右侧栏腾位策略（2026-09-16）：
     //   · stream tab 右侧栏关闭，或悬浮模式（floating）→ 铺满
-    //   · stream tab 右侧栏打开且为腾位模式 → 右缘左移 320px，让出右侧栏空间
+    //   · stream tab 右侧栏打开且为腾位模式 → 右缘左移 streamSidebarUserWidth，让出右侧栏空间
     StreamView {
         id: streamViewComp
         anchors.left: (StreamBridge.slotCount > 0) ? parent.left : leftNavBar.right
         anchors.right: parent.right
         anchors.rightMargin: (root.currentTab === "stream" && root.rightSidebarOpen && !root.streamSidebarFloating)
-                             ? 320 : 0
+                             ? root.streamSidebarUserWidth : 0
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         visible: root.currentTab === "stream"

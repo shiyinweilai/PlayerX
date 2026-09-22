@@ -89,7 +89,26 @@ Item {
             property int mainTab: 0
             // 下半区参数集 Tab 下标（对应 syntaxGroups.order）
             property int syntaxTab: 0
+            // 语法元素搜索文本（大小写不敏感，name/value 任一命中即保留）
+            property string syntaxFilter: ""
             slot: cardRoot.slot
+
+            // ── 剪贴板辅助（隐藏 TextEdit + 一次性写入方法）────────────
+            // Qt Quick 需要一个真实的 TextEdit 承载 selectAll()/copy()，
+            // 见 YuvWindow.qml 的 copyMatrixToClipboard 同款套路。
+            TextEdit {
+                id: clipHelper
+                visible: false
+                width: 0; height: 0
+            }
+            function copyToClipboard(text) {
+                if (text === undefined || text === null) text = ""
+                clipHelper.text = String(text)
+                clipHelper.selectAll()
+                clipHelper.copy()
+                clipHelper.deselect()
+                clipHelper.text = ""
+            }
 
             // 参数集组数变化（换文件 / 重新解析）后 Tab 复位到第一个
             onSyntaxVerChanged: {
@@ -433,27 +452,140 @@ Item {
                 anchors.rightMargin: 8
                 anchors.bottomMargin: 8
                 anchors.topMargin: 8
-                Row {
+                // 标题行（单行紧凑布局）：
+                //   [语法元素]  [🔍 搜索框（stretch）]  [N/M 项]
+                // 搜索框只在解析出语法项后显示，未加载/解析中时该处留空，
+                // 让标题+计数保持原有的极简观感。
+                Item {
                     id: synHeader
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    height: 18
+                    height: 22
+
                     Text {
+                        id: synTitle
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
                         text: "语法元素"
                         color: "#bbbbbb"; font.pixelSize: 12; font.bold: true
                     }
+
                     Text {
+                        id: synCount
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.right: parent.right
                         text: {
                             const _ = panel.syntaxVer
                             if (!StreamBridge.hasFile(panel.slot)) return "—"
                             if (!panel.syntaxReady) return "解析中…"
-                            return panel.syntaxEntries.length + " 项"
+                            const total = panel.syntaxEntries.length
+                            // 未过滤 → 只显示总数；过滤 → 显示 matched / total
+                            if (!panel.syntaxFilter || panel.syntaxFilter.length === 0)
+                                return total + " 项"
+                            // 全量过滤（跨所有分组）以让计数直观反映筛选结果
+                            const kw = panel.syntaxFilter.toLowerCase()
+                            let hit = 0
+                            for (let i = 0; i < panel.syntaxEntries.length; ++i) {
+                                const e = panel.syntaxEntries[i]
+                                const nm = String(e.name || "").toLowerCase()
+                                const vl = String(e.value || "").toLowerCase()
+                                if (nm.indexOf(kw) >= 0 || vl.indexOf(kw) >= 0) ++hit
+                            }
+                            return hit + " / " + total + " 项"
                         }
-                        color: "#9aa0a6"; font.pixelSize: 10
+                        color: (panel.syntaxFilter && panel.syntaxFilter.length > 0)
+                               ? "#42A5FF" : "#9aa0a6"
+                        font.pixelSize: 10
                         font.family: "Monospace"
+                    }
+
+                    // 搜索框（子串筛选，name/value 任一命中即保留），紧凑塞在标题与计数之间
+                    Rectangle {
+                        id: synSearchBox
+                        anchors.left: synTitle.right
+                        anchors.leftMargin: 8
+                        anchors.right: synCount.left
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 20
+                        visible: panel.syntaxReady && panel.syntaxEntries.length > 0
+                        radius: 3
+                        color: "#0e1013"
+                        border.color: synFilterField.activeFocus ? "#42A5FF" : "#1f2329"
+                        border.width: 1
+
+                        // 前缀图标（放大镜）
+                        Text {
+                            id: searchIcon
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left
+                            anchors.leftMargin: 5
+                            text: "🔍"
+                            color: "#6a6f76"; font.pixelSize: 9
+                        }
+
+                        TextField {
+                            id: synFilterField
+                            anchors.left: searchIcon.right
+                            anchors.leftMargin: 3
+                            anchors.right: clearBtn.visible ? clearBtn.left : parent.right
+                            anchors.rightMargin: 3
+                            anchors.verticalCenter: parent.verticalCenter
+                            height: 18
+                            placeholderText: "搜索"
+                            placeholderTextColor: "#5a5f66"
+                            color: "#e6e6e6"
+                            selectionColor: "#2a5fc0"
+                            selectedTextColor: "#ffffff"
+                            font.pixelSize: 10
+                            font.family: "Monospace"
+                            selectByMouse: true
+                            // 去掉 QtQuick.Controls 默认 background 的白底/边框（不同 style
+                            // 对 background:null 支持不一，用一个透明矩形更稳），
+                            // 与外层 Rectangle 视觉合一。
+                            background: Rectangle { color: "transparent" }
+                            padding: 0
+                            leftPadding: 0; rightPadding: 0
+                            topPadding: 0; bottomPadding: 0
+                            text: panel.syntaxFilter
+                            onTextChanged: {
+                                if (panel.syntaxFilter !== text) panel.syntaxFilter = text
+                            }
+                            // Esc 快捷清空
+                            Keys.onEscapePressed: {
+                                panel.syntaxFilter = ""
+                                text = ""
+                            }
+                        }
+
+                        // 清空按钮（有输入时才显示）
+                        Rectangle {
+                            id: clearBtn
+                            visible: panel.syntaxFilter && panel.syntaxFilter.length > 0
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.right: parent.right
+                            anchors.rightMargin: 3
+                            width: 14; height: 14
+                            radius: 7
+                            color: clearMa.containsMouse ? "#2a2e33" : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "✕"
+                                color: "#9aa0a6"; font.pixelSize: 8
+                            }
+                            MouseArea {
+                                id: clearMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    panel.syntaxFilter = ""
+                                    synFilterField.text = ""
+                                    synFilterField.forceActiveFocus()
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -534,6 +666,8 @@ Item {
                         }
 
                         // 当前 Tab 的名值对表（占满剩余高度，区域内滚动）
+                        // 过滤策略：syntaxFilter 非空时，name / value 任一命中子串（大小写不敏感）即保留。
+                        // 空结果时显示"无匹配项"提示，避免用户以为面板炸了。
                         ListView {
                             id: syntaxList
                             width: parent.width
@@ -543,43 +677,235 @@ Item {
                             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                             onModelChanged: positionViewAtBeginning()
 
+                            // 复制反馈：记录最近一次拷贝的 index + 一个短暂 flash 时间戳
+                            property int flashIndex: -1
+                            Timer {
+                                id: flashTimer
+                                interval: 900
+                                onTriggered: syntaxList.flashIndex = -1
+                            }
+                            function flashRow(i) {
+                                syntaxList.flashIndex = i
+                                flashTimer.restart()
+                            }
+
                             model: {
                                 const _ = panel.syntaxVer
                                 if (!panel.syntaxReady) return []
                                 const order = panel.syntaxGroups.order
                                 if (panel.syntaxTab < 0 || panel.syntaxTab >= order.length)
                                     return []
-                                return panel.syntaxGroups.map[order[panel.syntaxTab]] || []
+                                const src = panel.syntaxGroups.map[order[panel.syntaxTab]] || []
+                                const kw = (panel.syntaxFilter || "").toLowerCase()
+                                if (kw.length === 0) return src
+                                const out = []
+                                for (let i = 0; i < src.length; ++i) {
+                                    const nm = String(src[i].name || "").toLowerCase()
+                                    const vl = String(src[i].value || "").toLowerCase()
+                                    if (nm.indexOf(kw) >= 0 || vl.indexOf(kw) >= 0)
+                                        out.push(src[i])
+                                }
+                                return out
                             }
 
-                            delegate: Row {
+                            // 空提示（过滤后无命中）
+                            Text {
+                                anchors.centerIn: parent
+                                visible: syntaxList.count === 0
+                                         && panel.syntaxFilter && panel.syntaxFilter.length > 0
+                                text: "无匹配项：\"" + panel.syntaxFilter + "\""
+                                color: "#6a6f76"; font.pixelSize: 10
+                            }
+
+                            delegate: Item {
+                                id: synRow
                                 width: syntaxList.width
                                 height: 18
-                                spacing: 6
+                                property bool isFlash: syntaxList.flashIndex === index
+                                required property int index
+                                required property var modelData
+
+                                // 底层背景：hover / flash / 右键菜单打开时高亮
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: -2
+                                    anchors.rightMargin: -2
+                                    radius: 2
+                                    color: synRow.isFlash
+                                           ? "#2a5fc0"
+                                           : (rowMa.containsMouse || rowMenu.visible ? "#1a1d22" : "transparent")
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                }
+
+                                // 名称列（左，尽量占满，右对齐值列 78px）
                                 Text {
-                                    width: parent.width - 84
+                                    id: nameText
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 2
+                                    anchors.right: valueText.left
+                                    anchors.rightMargin: 6
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: String(modelData.name)
-                                    color: "#9aa0a6"; font.pixelSize: 10
+                                    text: String(synRow.modelData.name)
+                                    color: synRow.isFlash ? "#e6f0ff" : "#9aa0a6"
+                                    font.pixelSize: 10
                                     font.family: "Monospace"
                                     elide: Text.ElideRight
-                                    ToolTip.visible: hovNameMa.containsMouse
-                                    ToolTip.text: String(modelData.name)
-                                    MouseArea {
-                                        id: hovNameMa
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        acceptedButtons: Qt.NoButton
-                                    }
                                 }
+
+                                // 数值列（右）
                                 Text {
+                                    id: valueText
                                     width: 78
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 2
                                     anchors.verticalCenter: parent.verticalCenter
                                     horizontalAlignment: Text.AlignRight
-                                    text: String(modelData.value)
-                                    color: "#cccccc"; font.pixelSize: 10
+                                    text: String(synRow.modelData.value)
+                                    color: synRow.isFlash ? "#ffffff" : "#cccccc"
+                                    font.pixelSize: 10
                                     font.family: "Monospace"
                                     elide: Text.ElideLeft
+                                }
+
+                                // 行覆盖 MouseArea：
+                                //   · 左键单击 → 复制 "name = value" + 短暂高亮反馈
+                                //   · 右键 → 弹出上下文菜单（复制名称 / 数值 / name=value）
+                                //   · 悬停 → 显示 tooltip（完整 name = value，兜底长文本被 elide 情况）
+                                MouseArea {
+                                    id: rowMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    onClicked: function(mouse) {
+                                        if (mouse.button === Qt.RightButton) {
+                                            rowMenu.popup()
+                                            return
+                                        }
+                                        // 左键：快速复制 name = value
+                                        panel.copyToClipboard(
+                                            String(synRow.modelData.name) + " = "
+                                            + String(synRow.modelData.value))
+                                        syntaxList.flashRow(synRow.index)
+                                    }
+                                    ToolTip.visible: containsMouse && !rowMenu.visible
+                                    ToolTip.delay: 500
+                                    ToolTip.text: String(synRow.modelData.name)
+                                                  + " = " + String(synRow.modelData.value)
+                                                  + "\n（左键复制 · 右键菜单）"
+                                }
+
+                                // 右键上下文菜单（暗色风格，与 StreamView.qml 排序菜单一致）
+                                // 默认 Qt Quick Controls Menu 是浅色（白底），需覆盖
+                                // background / MenuItem.contentItem+background 实现暗色。
+                                Menu {
+                                    id: rowMenu
+                                    width: 200
+                                    topPadding: 6; bottomPadding: 6
+                                    leftPadding: 4; rightPadding: 4
+
+                                    background: Rectangle {
+                                        implicitWidth: 200
+                                        implicitHeight: 32
+                                        color: "#cc1a1a1f"
+                                        border.color: "#33ffffff"
+                                        border.width: 1
+                                        radius: 6
+                                    }
+
+                                    // 复制名称
+                                    MenuItem {
+                                        text: "复制名称"
+                                        height: 28
+                                        contentItem: Text {
+                                            text: parent.text
+                                            color: "#e8e8ec"
+                                            font.pixelSize: 12
+                                            leftPadding: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                                            radius: 4
+                                        }
+                                        onTriggered: {
+                                            panel.copyToClipboard(String(synRow.modelData.name))
+                                            syntaxList.flashRow(synRow.index)
+                                        }
+                                    }
+                                    // 复制数值
+                                    MenuItem {
+                                        text: "复制数值"
+                                        height: 28
+                                        contentItem: Text {
+                                            text: parent.text
+                                            color: "#e8e8ec"
+                                            font.pixelSize: 12
+                                            leftPadding: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                                            radius: 4
+                                        }
+                                        onTriggered: {
+                                            panel.copyToClipboard(String(synRow.modelData.value))
+                                            syntaxList.flashRow(synRow.index)
+                                        }
+                                    }
+                                    // 复制 name = value
+                                    MenuItem {
+                                        text: "复制 name = value"
+                                        height: 28
+                                        contentItem: Text {
+                                            text: parent.text
+                                            color: "#e8e8ec"
+                                            font.pixelSize: 12
+                                            leftPadding: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                                            radius: 4
+                                        }
+                                        onTriggered: {
+                                            panel.copyToClipboard(
+                                                String(synRow.modelData.name) + " = "
+                                                + String(synRow.modelData.value))
+                                            syntaxList.flashRow(synRow.index)
+                                        }
+                                    }
+                                    MenuSeparator {
+                                        height: 1; topPadding: 4; bottomPadding: 4
+                                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                                        background: Rectangle { color: "transparent" }
+                                    }
+                                    // 复制当前分组（TSV）
+                                    MenuItem {
+                                        text: "复制当前分组（TSV）"
+                                        height: 28
+                                        contentItem: Text {
+                                            text: parent.text
+                                            color: "#e8e8ec"
+                                            font.pixelSize: 12
+                                            leftPadding: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                                            radius: 4
+                                        }
+                                        onTriggered: {
+                                            // 复制当前 ListView 可见（已过滤）的全部行
+                                            // 每行 "name<TAB>value"，可粘贴到 Excel/Numbers 自动分列
+                                            const m = syntaxList.model
+                                            let lines = []
+                                            for (let i = 0; i < m.length; ++i)
+                                                lines.push(String(m[i].name) + "\t" + String(m[i].value))
+                                            panel.copyToClipboard(lines.join("\n"))
+                                            syntaxList.flashRow(synRow.index)
+                                        }
+                                    }
                                 }
                             }
                         }
