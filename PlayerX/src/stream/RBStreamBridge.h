@@ -34,6 +34,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QByteArray>
+#include <QHash>
 #include <QSettings>
 #include <QImage>
 #include <QQuickImageProvider>
@@ -138,8 +139,8 @@ public:
     // 编码序映射是否就绪（后台解码完成）。未就绪时 UI 保持显示顺序、勾选禁用。
     Q_INVOKABLE bool frameOrderMapReady(int slot) const;
 
-    // ── 语法元素面板（SPS/PPS/VPS 名值对，右侧栏 Syntax Info）──
-    // 后台一次 CBS 解析，结果缓存；QML 只读。每项 { set, name, value }。
+    // ── 语法元素面板（SPS/PPS/VPS + 当前帧 SLICE，右侧栏 Syntax Info）──
+    // 后台 CBS 解析，结果缓存；QML 只读。每项 { set, name, value }。
     Q_INVOKABLE QVariantList syntaxEntries(int slot) const;
     // 语法解析是否就绪（后台完成后为 true）。
     Q_INVOKABLE bool syntaxReady(int slot) const;
@@ -304,12 +305,18 @@ private:
         QFutureWatcher<void>* orderMapWatcher = nullptr;
         int orderMapBuilding = 0;                 // 1=后台解码中
         std::shared_ptr<std::atomic_bool> orderMapCancel = nullptr;  // 协作式取消
-        // ── 语法元素面板（SPS/PPS/VPS 名值对，右侧栏 Syntax Info）──
-        // 打开文件后台一次 CBS 解析（RBSyntaxAnalyzer），结果缓存；QML 只读。
+        // ── 语法元素面板（SPS/PPS/VPS + 当前帧 SLICE）──
+        // 打开文件后台一次 CBS 解析参数集和第一幅图；切帧后再补该图 SLICE。
         QByteArray  extradataCopy;                // 容器参数集拷贝（供 CBS 解析）
-        QVariantList syntaxCache;                 // SPS/PPS/VPS 名值对
+        QVariantList syntaxParamCache;            // VPS/SPS/PPS 等，切帧不改
+        QVariantList syntaxCache;                 // 参数集 + 当前 SLICE
         bool        syntaxReadyFlag = false;      // 后台解析是否完成
         QFutureWatcher<QVariantList>* syntaxWatcher = nullptr;
+        QFutureWatcher<QVariantList>* sliceWatcher = nullptr;
+        int         syntaxSlicePic = -1;          // 当前 cache 里 SLICE 对应的解码序图号
+        int         pendingSlicePic = -1;         // 解析进行中时最新请求
+        int         sliceBuildingPic = -1;        // 正在后台解析的图号
+        QHash<int, QVariantList> sliceSyntaxByPic;
         // ── 参考结构（真实层级 + 参考关系，RBRefStructureParser 后台解析）──
         // 按「解码序」索引；QML 展示显示序时用 orderMap.dispToCode 换算。
         // 未就绪（ok=false）时 UI 回退启发式层级，不阻塞秒开。
@@ -345,9 +352,12 @@ private:
     void startOrderMapBuild(int slot);   // 启动后台构建
     void onOrderMapBuilt(int slot);      // 后台完成回调（主线程）
     void cancelOrderMap(int slot);       // 取消并回收（freeSlot/换文件时）
-    // 语法元素面板：打开文件后台一次 CBS 解析 SPS/PPS/VPS，结果缓存。
+    // 语法元素面板：打开文件后台一次 CBS 解析 SPS/PPS/VPS + 首图 SLICE。
     void startSyntaxBuild(int slot);     // 启动后台解析
     void onSyntaxBuilt(int slot);        // 后台完成回调（主线程写缓存）
+    void requestSliceSyntax(int slot);   // 按当前帧换 SLICE（解码序）
+    void startSliceSyntaxBuild(int slot, int pictureIndex);
+    void onSliceSyntaxBuilt(int slot);
     // 参考结构：后台一次解析 slice 头，得到真实层级与参考关系。
     void startRefStructBuild(int slot);  // 启动后台解析
     void onRefStructBuilt(int slot);     // 后台完成回调（主线程写缓存）

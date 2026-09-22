@@ -483,6 +483,13 @@ void RBStreamBridge::freeSlot(int slot) {
         w->deleteLater();
         m_slots[slot].syntaxWatcher = nullptr;
     }
+    if (auto* w = m_slots[slot].sliceWatcher) {
+        disconnect(w, nullptr, this, nullptr);
+        if (w->isRunning() || w->isStarted())
+            w->waitForFinished();
+        w->deleteLater();
+        m_slots[slot].sliceWatcher = nullptr;
+    }
     // 参考结构解析同样是纯函数式 worker，watcher 需回收防悬挂。
     if (auto* w = m_slots[slot].refStructWatcher) {
         disconnect(w, nullptr, this, nullptr);
@@ -608,6 +615,7 @@ void RBStreamBridge::gotoFrame(int slot, int frame) {
     if (m_slots[slot].currentFrame != frame) {
         m_slots[slot].currentFrame = frame;
         emit currentFrameChanged(slot);
+        requestSliceSyntax(slot);
     }
 }
 void RBStreamBridge::nextFrame(int slot) { gotoFrame(slot, currentFrame(slot) + 1); }
@@ -751,6 +759,7 @@ void RBStreamBridge::setFrameOrderMode(int slot, int mode) {
             settings.setValue("frameOrderMode", next);
         }
         emit frameOrderModeChanged(slot);
+        requestSliceSyntax(slot);
     }
 }
 
@@ -795,6 +804,7 @@ void RBStreamBridge::onOrderMapBuilt(int slot) {
     }
     s.orderMapBuilding = 0;
     emit frameOrderMapReadyChanged(slot);
+    requestSliceSyntax(slot);
 }
 
 // 取消并回收映射构建（freeSlot / 换文件时）：先置协作式取消标志（worker 每包检查，
@@ -835,7 +845,7 @@ void RBStreamBridge::startSyntaxBuild(int slot) {
             codec,
             reinterpret_cast<const uint8_t*>(extra.constData()),
             extra.size(),
-            extra.size() > 0 ? QString() : path);   // 有 extradata 用容器数据，否则裸流
+            path);   // 始终带文件路径：vvcC 里 PPS 常被截断，AnnexB 整包才完整
         return rb::RBSyntaxAnalyzer::toVariantList(result);
     });
 
@@ -846,6 +856,32 @@ void RBStreamBridge::startSyntaxBuild(int slot) {
             this, [this, slot]() { onSyntaxBuilt(slot); });
 }
 
+namespace {
+
+QVariantList syntaxEntriesOfSet(const QVariantList& all, const QString& set)
+{
+    QVariantList out;
+    for (const auto& v : all) {
+        if (v.toMap().value(QStringLiteral("set")).toString() == set)
+            out.append(v);
+    }
+    return out;
+}
+
+QVariantList mergeSyntaxSlice(const QVariantList& all, const QVariantList& slice)
+{
+    QVariantList out;
+    for (const auto& v : all) {
+        if (v.toMap().value(QStringLiteral("set")).toString() != QLatin1String("SLICE"))
+            out.append(v);
+    }
+    for (const auto& v : slice)
+        out.append(v);
+    return out;
+}
+
+} // namespace
+
 void RBStreamBridge::onSyntaxBuilt(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     Slot& s = m_slots[slot];
@@ -855,12 +891,119 @@ void RBStreamBridge::onSyntaxBuilt(int slot) {
     }
     s.syntaxWatcher = nullptr;
     s.syntaxReadyFlag = true;
+    s.syntaxParamCache = QVariantList();
+    for (const auto& v : s.syntaxCache) {
+        if (v.toMap().value(QStringLiteral("set")).toString() != QLatin1String("SLICE"))
+            s.syntaxParamCache.append(v);
+    }
+    const QVariantList firstSlice = syntaxEntriesOfSet(s.syntaxCache, QStringLiteral("SLICE"));
+    if (!firstSlice.isEmpty()) {
+        s.sliceSyntaxByPic.insert(0, firstSlice);
+        s.syntaxSlicePic = 0;
+    }
+    s.syntaxCache = mergeSyntaxSlice(s.syntaxParamCache, firstSlice);
     emit syntaxReadyChanged(slot);
+    requestSliceSyntax(slot);
 }
 
 QVariantList RBStreamBridge::syntaxEntries(int slot) const {
     if (slot < 0 || slot >= MaxSlots) return {};
     return m_slots[slot].syntaxCache;
+}
+
+void RBStreamBridge::requestSliceSyntax(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (!s.inUse || !s.syntaxReadyFlag) return;
+
+    int pic = s.currentFrame;
+    if (pic < 0) pic = 0;
+    if (s.frameOrderMode != 1 && s.orderMap.ok) {
+        const int d = s.currentFrame;
+        if (d >= 0 && d < int(s.orderMap.dispToCode.size()))
+            pic = s.orderMap.dispToCode[size_t(d)];
+    }
+    if (pic < 0) pic = 0;
+
+    if (s.sliceSyntaxByPic.contains(pic)) {
+        if (s.syntaxSlicePic != pic) {
+            s.syntaxCache = mergeSyntaxSlice(s.syntaxParamCache, s.sliceSyntaxByPic.value(pic));
+            s.syntaxSlicePic = pic;
+            emit syntaxReadyChanged(slot);
+        }
+        return;
+    }
+    if (s.sliceWatcher) {
+        s.pendingSlicePic = pic;
+        return;
+    }
+    startSliceSyntaxBuild(slot, pic);
+}
+
+void RBStreamBridge::startSliceSyntaxBuild(int slot, int pictureIndex) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    if (!s.inUse || s.sliceWatcher) return;
+
+    const QString path = s.path;
+    const QString codec = s.codecName;
+    const QByteArray extra = s.extradataCopy;
+    const int pic = pictureIndex;
+
+    QFuture<QVariantList> future = QtConcurrent::run([path, codec, extra, pic]() {
+        std::vector<rb::RBSyntaxEntry> result = rb::RBSyntaxAnalyzer::analyzePicture(
+            codec,
+            reinterpret_cast<const uint8_t*>(extra.constData()),
+            extra.size(),
+            path,
+            pic);
+        return rb::RBSyntaxAnalyzer::toVariantList(result);
+    });
+
+    auto* watcher = new QFutureWatcher<QVariantList>(this);
+    s.sliceWatcher = watcher;
+    s.sliceBuildingPic = pic;
+    watcher->setFuture(future);
+    connect(watcher, &QFutureWatcher<QVariantList>::finished,
+            this, [this, slot]() { onSliceSyntaxBuilt(slot); });
+}
+
+void RBStreamBridge::onSliceSyntaxBuilt(int slot) {
+    if (slot < 0 || slot >= MaxSlots) return;
+    Slot& s = m_slots[slot];
+    QVariantList slice;
+    if (auto* w = s.sliceWatcher) {
+        slice = w->result();
+        w->deleteLater();
+    }
+    s.sliceWatcher = nullptr;
+    const int donePic = s.sliceBuildingPic;
+    s.sliceBuildingPic = -1;
+
+    if (!slice.isEmpty() && donePic >= 0) {
+        const QVariantList only = syntaxEntriesOfSet(slice, QStringLiteral("SLICE"));
+        const QVariantList use = only.isEmpty() ? slice : only;
+        s.sliceSyntaxByPic.insert(donePic, use);
+
+        int wantPic = s.currentFrame;
+        if (s.frameOrderMode != 1 && s.orderMap.ok) {
+            const int d = s.currentFrame;
+            if (d >= 0 && d < int(s.orderMap.dispToCode.size()))
+                wantPic = s.orderMap.dispToCode[size_t(d)];
+        }
+        if (s.pendingSlicePic >= 0)
+            wantPic = s.pendingSlicePic;
+        if (wantPic == donePic) {
+            s.syntaxCache = mergeSyntaxSlice(s.syntaxParamCache, use);
+            s.syntaxSlicePic = donePic;
+            emit syntaxReadyChanged(slot);
+        }
+    }
+
+    const int pending = s.pendingSlicePic;
+    s.pendingSlicePic = -1;
+    if (pending >= 0)
+        requestSliceSyntax(slot);
 }
 
 // ── 参考结构：后台一次解析 slice 头（真实层级 + 参考关系）────────────
@@ -958,6 +1101,7 @@ void RBStreamBridge::onRefStructBuilt(int slot) {
         if (!fastDone)
             startOrderMapBuild(slot);
     }
+    requestSliceSyntax(slot);
 }
 
 static int dispToCodeOf(const rb::RBFrameOrderMapper::Result& om, int d) {
