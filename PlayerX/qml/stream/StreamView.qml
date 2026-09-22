@@ -540,12 +540,15 @@ property real panelSplitRatio: 0.5
         slotFrameCache = slotActive ? StreamBridge.frameList(effectiveSlot) : []
         slotGopCache   = slotActive ? StreamBridge.gopList(effectiveSlot) : []
     }
-    onEffectiveSlotChanged: fileVer++
+    onEffectiveSlotChanged: {
+        fileVer++
+        streamView.resetViewZoom()
+    }
     Connections {
         target: StreamBridge
         function onFileOpened(openedSlot)  { streamView.fileVer++ }
-        function onFileClosed(closedSlot)  { streamView.fileVer++ }
-        function onSlotCountChanged()      { streamView.fileVer++ }
+        function onFileClosed(closedSlot)  { streamView.fileVer++; streamView.resetViewZoom() }
+        function onSlotCountChanged()      { streamView.fileVer++; streamView.resetViewZoom() }
     }
 
     readonly property var    slotFrameList: {
@@ -573,6 +576,54 @@ property real panelSplitRatio: 0.5
     // side data 缺失）画面也应正常显示，不受 blockSupported 连坐。
     property bool frameHasImage: false
     property bool qpOverlayEnabled: false
+
+    // ── 播放窗口缩放（画面 + CU 网格同一层，保证对齐）──────────────
+    // viewZoom=1 / pan=0 为适应窗口；滚轮对着指针缩放，双击或「复位」恢复。
+    property real viewZoom: 1.0
+    property real viewPanX: 0
+    property real viewPanY: 0
+    readonly property real viewZoomMin: 0.25
+    readonly property real viewZoomMax: 16.0
+    readonly property bool viewZoomed: Math.abs(viewZoom - 1.0) > 0.001
+    property real _zoomWheelAccum: 0
+
+    function resetViewZoom() {
+        viewZoom = 1.0
+        viewPanX = 0
+        viewPanY = 0
+        _zoomWheelAccum = 0
+    }
+    function clampViewPan() {
+        if (!viewZoomed) {
+            viewPanX = 0
+            viewPanY = 0
+            return
+        }
+        const vw = viewport.width
+        const vh = viewport.height
+        if (vw <= 0 || vh <= 0) return
+        const zw = vw * viewZoom
+        const zh = vh * viewZoom
+        // 小于窗口：居中，避免缩到角落。大于窗口：夹紧使画面仍有重叠。
+        if (zw <= vw) viewPanX = (vw - zw) / 2
+        else viewPanX = Math.min(0, Math.max(vw - zw, viewPanX))
+        if (zh <= vh) viewPanY = (vh - zh) / 2
+        else viewPanY = Math.min(0, Math.max(vh - zh, viewPanY))
+    }
+    // cx/cy：viewport 本地坐标。缩放后让该点仍停在指针下。
+    function zoomViewAt(factor, cx, cy) {
+        const oldZ = viewZoom
+        const newZ = Math.max(viewZoomMin, Math.min(viewZoomMax, oldZ * factor))
+        if (Math.abs(newZ - oldZ) < 1e-6) return
+        const r = newZ / oldZ
+        viewPanX = cx - r * (cx - viewPanX)
+        viewPanY = cy - r * (cy - viewPanY)
+        viewZoom = newZ
+        if (!viewZoomed)
+            resetViewZoom()
+        else
+            clampViewPan()
+    }
     // P1：块级精度描述（如"宏块级 (16×16)"），由 C++ 侧 blockGranularity 提供
     readonly property string blockGranularityText: {
         const _ = streamView.globalVer
@@ -1455,71 +1506,71 @@ property real panelSplitRatio: 0.5
                     color: "#9aa0a6"; font.pixelSize: 12 }
             }
 
-            // ── 前一帧保持层（消除播放闪屏）──
-            // frameUnderlay 用 cache:false + asynchronous:true 且 URL 每帧变化，
-            // 重载期间 status != Ready 会露出空白底 → 4K 下肉眼可见闪屏。
-            // 本层始终保留"上一张已加载完成的图"，新图 Ready 前遮住空白。
-            Image {
-                id: prevUnderlay
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.right: parent.right
+            // ── 视口：画面 + CU 网格同一层缩放（滚轮 / 拖拽平移 / 双击复位）──
+            // clip 避免放大后盖住 GOP 栏；zoomLayer 用 TopLeft + pan，网格与画面同步。
+            Item {
+                id: viewport
+                anchors.fill: parent
                 anchors.margins: 12
-                // ★ 与 frameUnderlay 一致，画面保持层不依赖块信息
+                clip: true
                 visible: streamView.slotActive
-                fillMode: Image.PreserveAspectFit
-                asynchronous: true
-                cache: true
-                source: ""
-                z: frameUnderlay.z + 1
-            }
+                onWidthChanged: streamView.clampViewPan()
+                onHeightChanged: streamView.clampViewPan()
 
-            // ── 底层：当前帧真实解码画面（CU 网格叠加在它上面）──
-            // source 里的版本号变化时强制刷新，帧切换即重新取图。
-            Image {
-                id: frameUnderlay
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.right: parent.right
-                anchors.margins: 12
-                // ★ 画面与块信息解耦：只要 slot 活跃就显示，不依赖 blockSupported。
-                //   块信息为空的帧（如 B 帧首帧）画面数据依然存在，必须正常显示。
-                visible: streamView.slotActive
-                fillMode: Image.PreserveAspectFit
-                asynchronous: true
-                cache: false
-                source: "image://streamframe/" + streamView.effectiveSlot
-                        + "_" + streamView.slotCurrent
-                        + "_" + streamView.frameImageVersion
-                        + "_" + frameUnderlay.refreshKey
-                // URL 必须每次不同才会触发重新加载，故追加自增 key
-                property int refreshKey: 0
-                // 与画布保持完全一致的几何，保证网格与画面对齐
-                // 加载中(status != Ready) → 显示保持层遮住空白；就绪 → 隐藏保持层
-                onStatusChanged: {
-                    // 维护"是否有画面"标志：Ready 即有画面（与块信息无关）
-                    streamView.frameHasImage = (status === Image.Ready)
-                    prevUnderlay.visible = (status !== Image.Ready)
-                                           && streamView.slotActive
-                    if (status === Image.Ready) {
-                        prevUnderlay.source = frameUnderlay.source
-                        blockCanvas.requestPaint()
+                Item {
+                    id: zoomLayer
+                    width: parent.width
+                    height: parent.height
+                    x: streamView.viewPanX
+                    y: streamView.viewPanY
+                    scale: streamView.viewZoom
+                    transformOrigin: Item.TopLeft
+
+                    // ── 前一帧保持层（消除播放闪屏）──
+                    // frameUnderlay 用 cache:false + asynchronous:true 且 URL 每帧变化，
+                    // 重载期间 status != Ready 会露出空白底 → 4K 下肉眼可见闪屏。
+                    // 本层始终保留"上一张已加载完成的图"，新图 Ready 前遮住空白。
+                    Image {
+                        id: prevUnderlay
+                        anchors.fill: parent
+                        visible: streamView.slotActive
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: true
+                        cache: true
+                        source: ""
+                        z: frameUnderlay.z + 1
                     }
-                }
-            }
+
+                    // ── 底层：当前帧真实解码画面（CU 网格叠加在它上面）──
+                    Image {
+                        id: frameUnderlay
+                        anchors.fill: parent
+                        visible: streamView.slotActive
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: true
+                        cache: false
+                        source: "image://streamframe/" + streamView.effectiveSlot
+                                + "_" + streamView.slotCurrent
+                                + "_" + streamView.frameImageVersion
+                                + "_" + frameUnderlay.refreshKey
+                        property int refreshKey: 0
+                        onStatusChanged: {
+                            streamView.frameHasImage = (status === Image.Ready)
+                            prevUnderlay.visible = (status !== Image.Ready)
+                                                   && streamView.slotActive
+                            if (status === Image.Ready) {
+                                prevUnderlay.source = frameUnderlay.source
+                                blockCanvas.requestPaint()
+                            }
+                        }
+                    }
 
             // ── CU 网格 + QP 着色画布 ──
             // 透明底：只画网格线 / QP 半透明色块 / 选中高亮，
             // 真实画面由下方 frameUnderlay 提供。
             Canvas {
                 id: blockCanvas
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.right: parent.right
-                anchors.margins: 12
+                anchors.fill: parent
                 visible: streamView.slotActive && streamView.blockSupported
 
                 // 悬停高亮的块索引（-1 表示无）
@@ -1643,29 +1694,121 @@ property real panelSplitRatio: 0.5
                     return -1
                 }
 
+                }
+                } // zoomLayer
+
+                // 交互层：坐标在 viewport，命中时换算到 zoomLayer 本地（与 Canvas 一致）
                 MouseArea {
+                    id: viewInput
                     anchors.fill: parent
                     hoverEnabled: true
-                    acceptedButtons: Qt.LeftButton
-                    onPositionChanged: {
-                        const idx = blockCanvas.hitTest(mouseX, mouseY)
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    preventStealing: true
+                    cursorShape: streamView.viewZoom > 1
+                                 ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
+                                 : Qt.ArrowCursor
+
+                    property real _lastX: 0
+                    property real _lastY: 0
+                    property bool _panning: false
+
+                    function mapToLayer(mx, my) {
+                        const z = Math.max(streamView.viewZoom, 1e-6)
+                        return Qt.point((mx - streamView.viewPanX) / z,
+                                        (my - streamView.viewPanY) / z)
+                    }
+                    function hoverAt(mx, my) {
+                        const p = mapToLayer(mx, my)
+                        const idx = blockCanvas.hitTest(p.x, p.y)
                         if (idx !== blockCanvas.hoverIndex) {
                             blockCanvas.hoverIndex = idx
                             blockCanvas.requestPaint()
                         }
-                        // hover 驱动面板（仅在块信息开启时生效）
                         if (streamView.qpOverlayEnabled)
                             streamView.selectedBlockIndex = idx
                     }
+
+                    onPressed: function(mouse) {
+                        if (streamView.viewZoom > 1) {
+                            _panning = true
+                            _lastX = mouse.x
+                            _lastY = mouse.y
+                        }
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (_panning && pressed) {
+                            streamView.viewPanX += mouse.x - _lastX
+                            streamView.viewPanY += mouse.y - _lastY
+                            _lastX = mouse.x
+                            _lastY = mouse.y
+                            streamView.clampViewPan()
+                        } else {
+                            hoverAt(mouse.x, mouse.y)
+                        }
+                    }
+                    onReleased: _panning = false
                     onExited: {
+                        _panning = false
                         if (blockCanvas.hoverIndex !== -1) {
                             blockCanvas.hoverIndex = -1
                             blockCanvas.requestPaint()
                         }
                         streamView.selectedBlockIndex = -1
                     }
+                    onDoubleClicked: streamView.resetViewZoom()
+                    onWheel: function(wheel) {
+                        streamView._zoomWheelAccum += wheel.angleDelta.y
+                        let dir = 0
+                        if (streamView._zoomWheelAccum >= 120) {
+                            dir = 1
+                            streamView._zoomWheelAccum -= 120
+                        } else if (streamView._zoomWheelAccum <= -120) {
+                            dir = -1
+                            streamView._zoomWheelAccum += 120
+                        }
+                        if (dir !== 0)
+                            streamView.zoomViewAt(dir > 0 ? 1.15 : (1 / 1.15),
+                                                  wheel.x, wheel.y)
+                        wheel.accepted = true
+                    }
                 }
-            }
+
+                // 放大后显示倍率，点击复位
+                Rectangle {
+                    visible: streamView.viewZoomed
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 8
+                    width: zoomBadgeRow.implicitWidth + 16
+                    height: 22
+                    radius: 4
+                    color: "#cc1a1a1f"
+                    border.color: "#2a2e33"
+                    border.width: 1
+                    z: 5
+                    Row {
+                        id: zoomBadgeRow
+                        anchors.centerIn: parent
+                        spacing: 8
+                        Text {
+                            text: Math.round(streamView.viewZoom * 100) + "%"
+                            color: "#e8e8ec"; font.pixelSize: 10; font.family: "Monospace"
+                        }
+                        Text {
+                            text: "复位"
+                            color: zoomBadgeMa.containsMouse ? "#42A5FF" : "#9aa0a6"
+                            font.pixelSize: 10
+                        }
+                    }
+                    MouseArea {
+                        id: zoomBadgeMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: streamView.resetViewZoom()
+                    }
+                }
+            } // viewport
 
             // ── CU 详情卡片（hover 块时跟随显示，需勾选「块信息」开关）──
             Rectangle {
@@ -1678,10 +1821,17 @@ property real panelSplitRatio: 0.5
                 readonly property var blk: (streamView.selectedBlockIndex >= 0
                                             && streamView.selectedBlockIndex < streamView.slotBlocks.length)
                                            ? streamView.slotBlocks[streamView.selectedBlockIndex] : null
-                readonly property real bx: blk ? (blockCanvas._offX + blk.x * blockCanvas._scale) : 0
-                readonly property real by: blk ? (blockCanvas._offY + blk.y * blockCanvas._scaleY) : 0
-                readonly property real bw: blk ? (blk.w * blockCanvas._scale) : 0
-                readonly property real bh: blk ? (blk.h * blockCanvas._scaleY) : 0
+                // 块矩形：zoomLayer 本地 → 乘缩放加平移 → 再加 viewport 在 mainDisplay 的偏移
+                readonly property real bx: blk
+                    ? (viewport.x + streamView.viewPanX
+                       + (blockCanvas._offX + blk.x * blockCanvas._scale) * streamView.viewZoom)
+                    : 0
+                readonly property real by: blk
+                    ? (viewport.y + streamView.viewPanY
+                       + (blockCanvas._offY + blk.y * blockCanvas._scaleY) * streamView.viewZoom)
+                    : 0
+                readonly property real bw: blk ? (blk.w * blockCanvas._scale * streamView.viewZoom) : 0
+                readonly property real bh: blk ? (blk.h * blockCanvas._scaleY * streamView.viewZoom) : 0
 
                 width: cardCol.implicitWidth + 16
                 height: cardCol.implicitHeight + 16
