@@ -1122,9 +1122,11 @@ QVariantList RBStreamBridge::blockInfoAt(int slot, int frameIndex) const {
     if (!ba || !ba->rbBlockSupport() || frameIndex < 0) return out;
 
     const rb::RBFrameBlocks& fb = ba->rbBlockInfoAt(frameIndex);
-    if (!fb.valid) return out;
 
     // ── 同步底层原始画面：把解码出的 RGB 缓存为 QImage，供 CU 网格叠加 ──
+    // ★ 画面必须与块信息解耦：只要有 RGB 就同步画面并递增版本号，
+    //   即使该帧块信息为空（如 B 帧首帧 side data 缺失）。否则画面被块信息
+    //   连坐隐藏 → 黑屏。此段务必在 fb.valid 门禁之前执行。
     // blockInfoAt 是 const，这里需要修改缓存，故做 const_cast（逻辑上是缓存更新）
     Slot& s = const_cast<Slot&>(m_slots[slot]);
     if (fb.hasRgb && !fb.rgb.empty() && fb.rgbWidth > 0 && fb.rgbHeight > 0) {
@@ -1136,6 +1138,9 @@ QVariantList RBStreamBridge::blockInfoAt(int slot, int frameIndex) const {
         // blockInfoAt 是 const，发信号需去掉 const（逻辑上仍是本对象）
         const_cast<RBStreamBridge*>(this)->frameImageChanged(slot);
     }
+
+    // 块信息列表：无有效块时返回空（画面已在上方独立同步，不受影响）
+    if (!fb.valid) return out;
 
     out.reserve(static_cast<int>(fb.blocks.size()));
     for (const auto& bi : fb.blocks)

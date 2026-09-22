@@ -567,6 +567,11 @@ property real panelSplitRatio: 0.5
         return slotActive ? StreamBridge.decodeIndexOf(effectiveSlot, slotCurrent) : 0
     }
     readonly property bool   blockSupported: slotBlocks && slotBlocks.length > 0
+    // 画面是否已成功解码可显示：与块信息完全解耦。
+    // 由 frameUnderlay.onStatusChanged 维护，Ready 时置 true。
+    // 画面数据（YUV/RGB）始终随帧解码产出，即使该帧块信息为空（如 B 帧首帧
+    // side data 缺失）画面也应正常显示，不受 blockSupported 连坐。
+    property bool frameHasImage: false
     property bool qpOverlayEnabled: false
     // P1：块级精度描述（如"宏块级 (16×16)"），由 C++ 侧 blockGranularity 提供
     readonly property string blockGranularityText: {
@@ -1432,10 +1437,13 @@ property real panelSplitRatio: 0.5
             }
 
             // 已加载：块级 CU 网格 + QP 着色叠加层
+            // ★ 仅当"既无画面又无块信息"时才显示占位提示，避免有画面的帧
+            //   （块信息为空，如 B 帧首帧）被提示文字盖住而看不到画面。
             ColumnLayout {
                 anchors.centerIn: parent
                 spacing: 10
                 visible: streamView.slotActive && !streamView.blockSupported
+                         && !streamView.frameHasImage
                 Text { Layout.alignment: Qt.AlignHCenter; text: "🎞"; font.pixelSize: 56 }
                 Text { Layout.alignment: Qt.AlignHCenter
                     text: "帧级信息已加载"
@@ -1458,7 +1466,8 @@ property real panelSplitRatio: 0.5
                 anchors.bottom: parent.bottom
                 anchors.right: parent.right
                 anchors.margins: 12
-                visible: streamView.slotActive && streamView.blockSupported
+                // ★ 与 frameUnderlay 一致，画面保持层不依赖块信息
+                visible: streamView.slotActive
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 cache: true
@@ -1475,7 +1484,9 @@ property real panelSplitRatio: 0.5
                 anchors.bottom: parent.bottom
                 anchors.right: parent.right
                 anchors.margins: 12
-                visible: streamView.slotActive && streamView.blockSupported
+                // ★ 画面与块信息解耦：只要 slot 活跃就显示，不依赖 blockSupported。
+                //   块信息为空的帧（如 B 帧首帧）画面数据依然存在，必须正常显示。
+                visible: streamView.slotActive
                 fillMode: Image.PreserveAspectFit
                 asynchronous: true
                 cache: false
@@ -1488,9 +1499,10 @@ property real panelSplitRatio: 0.5
                 // 与画布保持完全一致的几何，保证网格与画面对齐
                 // 加载中(status != Ready) → 显示保持层遮住空白；就绪 → 隐藏保持层
                 onStatusChanged: {
+                    // 维护"是否有画面"标志：Ready 即有画面（与块信息无关）
+                    streamView.frameHasImage = (status === Image.Ready)
                     prevUnderlay.visible = (status !== Image.Ready)
                                            && streamView.slotActive
-                                           && streamView.blockSupported
                     if (status === Image.Ready) {
                         prevUnderlay.source = frameUnderlay.source
                         blockCanvas.requestPaint()
