@@ -95,12 +95,82 @@ QString parameterSetLabel(int codec, int nalType) {
     return QString();
 }
 
+// CBS 模板把数组名写成 dpb_max_…[i]，trace 回调同时给出数值下标。
+// 官方 trace_read_log 是「替换」方括号里的占位符，不是再拼一层。
+// 旧实现追加成 [i][0]，既不符合 H.266 7.3 的写法，也让 RPL 对不上。
+QString formatSyntaxName(const char* str, const int* subscripts)
+{
+    const int subs = (subscripts && subscripts[0] > 0) ? subscripts[0] : 0;
+    QString out;
+    out.reserve(int(strlen(str)) + subs * 4);
+    int n = 0;
+    for (int i = 0; str[i];) {
+        if (str[i] == '[') {
+            if (n < subs) {
+                ++n;
+                out += QLatin1Char('[');
+                out += QString::number(subscripts[n]);
+                ++i;
+                while (str[i] && str[i] != ']') ++i;
+                if (str[i] == ']') {
+                    out += QLatin1Char(']');
+                    ++i;
+                }
+            } else {
+                while (str[i] && str[i] != ']')
+                    out += QLatin1Char(str[i++]);
+                if (str[i] == ']')
+                    out += QLatin1Char(str[i++]);
+            }
+        } else {
+            out += QLatin1Char(str[i++]);
+        }
+    }
+    return out;
+}
+
+int firstSubscript(const int* subscripts)
+{
+    return (subscripts && subscripts[0] > 0) ? subscripts[1] : 0;
+}
+
+bool syntaxBaseEquals(const char* name, const char* base)
+{
+    const size_t n = strlen(base);
+    return std::strncmp(name, base, n) == 0 && (name[n] == '\0' || name[n] == '[');
+}
+
+// 把 listIdx / rplsIdx 插到已替换过的入口下标前面：
+//   abs_delta_poc_st[3] → abs_delta_poc_st[0][5][3]
+//   ltrp_in_header_flag → ltrp_in_header_flag[0][5]
+QString insertRplOuterIndices(const QString& name, int listIdx, int rplsIdx)
+{
+    const int br = name.indexOf(QLatin1Char('['));
+    const QString prefix = QStringLiteral("[%1][%2]").arg(listIdx).arg(rplsIdx);
+    if (br < 0)
+        return name + prefix;
+    return name.left(br) + prefix + name.mid(br);
+}
+
 } // namespace
 
 // ── trace 收集器 ────────────────────────────────────────────────
 struct RBSyntaxAnalyzer::Collector {
     std::vector<RBSyntaxEntry>* out = nullptr;
     QString currentSet;
+    // VVC ref_pic_list_struct(listIdx, rplsIdx) 的外层下标：CBS 对
+    // num_ref_entries / abs_delta_poc_st 等只 trace 入口 i，不带 list/rpls。
+    int rplListIdx = 0;
+    int rplRplsIdx = -1;
+    bool rplFromSpsLists = false;
+    int spsNumRefPicLists[2] = {0, 0};
+
+    void beginSet(const QString& set) {
+        currentSet = set;
+        rplListIdx = 0;
+        rplRplsIdx = -1;
+        rplFromSpsLists = false;
+    }
 };
 
 void RBSyntaxAnalyzer::collectReadCb(void* traceContext, GetBitContext* gbc,
@@ -111,16 +181,41 @@ void RBSyntaxAnalyzer::collectReadCb(void* traceContext, GetBitContext* gbc,
     Q_UNUSED(startPosition)
     Collector* c = static_cast<Collector*>(traceContext);
     if (!c || !name) return;
-    // 数组字段（如 sps_qp_table_start_minus26[0]）展开下标
-    QString fieldName = QString::fromUtf8(name);
-    if (subscripts && subscripts[0] > 0) {
-        fieldName += QStringLiteral("[");
-        for (int i = 1; i <= subscripts[0]; ++i) {
-            if (i > 1) fieldName += QStringLiteral(",");
-            fieldName += QString::number(subscripts[i]);
+
+    QString fieldName = formatSyntaxName(name, subscripts);
+
+    // H.266 7.3.10 / 7.3.2.4：RPL 字段带 [listIdx][rplsIdx][i]。
+    if (syntaxBaseEquals(name, "sps_num_ref_pic_lists")) {
+        c->rplListIdx = firstSubscript(subscripts);
+        c->rplRplsIdx = -1;
+        c->rplFromSpsLists = true;
+        if (c->rplListIdx >= 0 && c->rplListIdx < 2)
+            c->spsNumRefPicLists[c->rplListIdx] = int(value);
+    } else if (syntaxBaseEquals(name, "rpl_sps_flag")
+               || syntaxBaseEquals(name, "rpl_idx")) {
+        c->rplListIdx = firstSubscript(subscripts);
+        c->rplFromSpsLists = false;
+        c->rplRplsIdx = -1;
+    } else if (syntaxBaseEquals(name, "num_ref_entries")) {
+        if (c->rplFromSpsLists) {
+            ++c->rplRplsIdx;
+        } else {
+            const int list = (c->rplListIdx >= 0 && c->rplListIdx < 2) ? c->rplListIdx : 0;
+            c->rplRplsIdx = c->spsNumRefPicLists[list];
         }
-        fieldName += QStringLiteral("]");
+        fieldName = QStringLiteral("num_ref_entries[%1][%2]")
+                        .arg(c->rplListIdx).arg(c->rplRplsIdx);
+    } else if (syntaxBaseEquals(name, "abs_delta_poc_st")
+               || syntaxBaseEquals(name, "strp_entry_sign_flag")
+               || syntaxBaseEquals(name, "inter_layer_ref_pic_flag")
+               || syntaxBaseEquals(name, "st_ref_pic_flag")
+               || syntaxBaseEquals(name, "ltrp_in_header_flag")
+               || syntaxBaseEquals(name, "rpls_poc_lsb_lt")
+               || syntaxBaseEquals(name, "ilrp_idx")) {
+        if (c->rplRplsIdx >= 0)
+            fieldName = insertRplOuterIndices(fieldName, c->rplListIdx, c->rplRplsIdx);
     }
+
     RBSyntaxEntry e;
     e.set = c->currentSet;
     e.name = fieldName;
@@ -209,7 +304,7 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
                 for (const auto& ps : paramSets) {
                     const QString label = parameterSetLabel(codecIdx, ps.first);
                     if (label.isEmpty()) continue;
-                    collector.currentSet = label;
+                    collector.beginSet(label);
                     AVPacket* pkt = av_packet_alloc();
                     pkt->data = reinterpret_cast<uint8_t*>(const_cast<char*>(ps.second.constData()));
                     pkt->size = int(ps.second.size());
@@ -260,7 +355,7 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
                 if (nalType >= 0 && nalType < 32 && typeSeen[nalType]) continue;
                 if (nalType >= 0 && nalType < 32) typeSeen[nalType] = true;
 
-                collector.currentSet = label;   // trace 回调据此打组标签
+                collector.beginSet(label);   // trace 回调据此打组标签
                 AVPacket* pkt = av_packet_alloc();
                 pkt->data = const_cast<uint8_t*>(data + scOff);
                 pkt->size = int(nal.second);
