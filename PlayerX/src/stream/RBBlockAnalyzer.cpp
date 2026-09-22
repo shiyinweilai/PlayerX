@@ -438,13 +438,24 @@ bool RBBlockAnalyzer::extractVvc(AVFrame* frame, RBFrameBlocks& out) {
         bi.h = c.h ? c.h : 64;
         bi.qp = std::clamp((int)(uint8_t)c.qp, kQpMin, kQpMax);
 
-        // pred_mode: 0=Inter,1=Intra,2=Skip,3=PLT,4=IBC
+        // pred_mode: 0=Inter,1=Intra,2=Skip,3=PLT,4=IBC（与 VVC PredMode 对齐）
         bi.isIntra = (c.pred_mode == AV_CB_PRED_INTRA);
-        bi.isSkip  = (c.pred_mode == AV_CB_PRED_SKIP);
-        bi.mvx = bi.mvy = 0.f;
-        bi.refIdx = -1;
+        bi.isSkip  = (c.skip_flag != 0) || (c.pred_mode == AV_CB_PRED_SKIP);
         bi.predMode = (int)c.pred_mode;
+        bi.predFlag = (int)c.pred_flag;
+        bi.refIdx   = (int)c.ref_idx[0];
+        bi.refIdxL1 = (int)c.ref_idx[1];
         bi.hasResidual = !bi.isSkip;
+        // MV：1/16 像素 → 像素。优先 L0，否则 L1（Bi 时详情卡展示 L0，参考行标 Bi）。
+        if (c.pred_flag & AV_CB_PF_L0) {
+            bi.mvx = float(c.mv[0][0]) / 16.f;
+            bi.mvy = float(c.mv[0][1]) / 16.f;
+        } else if (c.pred_flag & AV_CB_PF_L1) {
+            bi.mvx = float(c.mv[1][0]) / 16.f;
+            bi.mvy = float(c.mv[1][1]) / 16.f;
+        } else {
+            bi.mvx = bi.mvy = 0.f;
+        }
 
         out.blocks.push_back(bi);
 
@@ -478,8 +489,10 @@ bool RBBlockAnalyzer::extractBlocks(AVFrame* frame, RBFrameBlocks& out) {
 
     if (!ok) return false;
 
-    // 块级 QP/CU 拿到后，再补充 MV / 参考索引 / 预测模式（图2 详情需要）
-    fillMotionVectors(frame, out);
+    // VVC 已从 CODEC_BLOCK_INFO 拿到真实 pred/skip/MV，不再用运动矢量 side data 覆盖。
+    // H.264 / HEVC 的 enc_params 不含 MV，再补 AV_FRAME_DATA_MOTION_VECTORS。
+    if (m_codecId != AV_CODEC_ID_VVC)
+        fillMotionVectors(frame, out);
     return true;
 }
 

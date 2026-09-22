@@ -157,6 +157,62 @@ int peekNalTypeHevcAvcc(const uint8_t* data, int size, int lengthSize) {
     return (data[lengthSize] & 0x7E) >> 1;
 }
 
+// 语法缓存里按字段名取整数值。CBS 字段名可能带数组下标，用精确匹配。
+int syntaxFieldInt(const QVariantList& cache, const QString& name, bool* found) {
+    for (const QVariant& v : cache) {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("name")).toString() == name) {
+            if (found) *found = true;
+            return m.value(QStringLiteral("value")).toInt();
+        }
+    }
+    if (found) *found = false;
+    return 0;
+}
+
+// 按编解码语法取 CtbSizeY / 宏块边长：
+//   VVC  : CtbSizeY = 1 << (sps_log2_ctu_size_minus5 + 5)   ∈ {32,64,128}
+//   HEVC : CtbSizeY = 1 << (log2_min_luma_cb + 3 + log2_diff_max_min) ∈ {16,32,64}
+//   H.264: 宏块固定 16
+int ctuSizeFromSyntax(const QString& codec, const QVariantList& syntax) {
+    bool found = false;
+    if (codec == QLatin1String("vvc") || codec == QLatin1String("h266")) {
+        const int v = syntaxFieldInt(syntax, QStringLiteral("sps_log2_ctu_size_minus5"), &found);
+        if (found) {
+            const int sz = 1 << (v + 5);
+            if (sz >= 32 && sz <= 128) return sz;
+        }
+        return 128;
+    }
+    if (codec == QLatin1String("hevc") || codec == QLatin1String("h265")) {
+        bool fMin = false, fDiff = false;
+        const int min3 = syntaxFieldInt(syntax,
+            QStringLiteral("log2_min_luma_coding_block_size_minus3"), &fMin);
+        const int diff = syntaxFieldInt(syntax,
+            QStringLiteral("log2_diff_max_min_luma_coding_block_size"), &fDiff);
+        if (fMin && fDiff) {
+            const int log2 = min3 + 3 + diff;
+            if (log2 >= 4 && log2 <= 6) return 1 << log2;
+        }
+        return 64;
+    }
+    return 16;   // H.264 宏块
+}
+
+// QT 划分深度：每做一次四叉树分裂 depth + 1。
+// 例：CTU 128 → 64×64 为 depth 1；128 → 32×32 为 depth 2。
+// 非方形（VVC BT/TT）按较长边对齐到 2 的幂，对应 QT 深度（MTT 不再加层）。
+int qtSplitDepth(int ctu, int w, int h) {
+    if (ctu <= 1 || w <= 0 || h <= 0) return 0;
+    int side = std::max(w, h);
+    int p2 = 1;
+    while (p2 < side) p2 <<= 1;
+    if (p2 > ctu) p2 = ctu;
+    int d = 0;
+    for (int s = ctu; s > p2; s >>= 1) ++d;
+    return d;
+}
+
 } // namespace
 
 RBStreamBridge::RBStreamBridge(QObject* parent)
@@ -1100,7 +1156,9 @@ QVariantMap RBStreamBridge::blockInfoToMap(const rb::RBBlockInfo& bi) {
     m["mvy"]     = double(bi.mvy);
     // ── 图2 详情卡片扩展字段 ──
     m["refIdx"]      = bi.refIdx;
+    m["refIdxL1"]    = bi.refIdxL1;
     m["predMode"]    = bi.predMode;
+    m["predFlag"]    = bi.predFlag;
     m["hasResidual"] = bi.hasResidual;
     return m;
 }
@@ -1142,9 +1200,14 @@ QVariantList RBStreamBridge::blockInfoAt(int slot, int frameIndex) const {
     // 块信息列表：无有效块时返回空（画面已在上方独立同步，不受影响）
     if (!fb.valid) return out;
 
+    const int ctu = ctuSizeFromSyntax(s.codecName, s.syntaxCache);
     out.reserve(static_cast<int>(fb.blocks.size()));
-    for (const auto& bi : fb.blocks)
-        out.push_back(blockInfoToMap(bi));
+    for (const auto& bi : fb.blocks) {
+        QVariantMap m = blockInfoToMap(bi);
+        m[QStringLiteral("ctuSize")] = ctu;
+        m[QStringLiteral("depth")]   = qtSplitDepth(ctu, bi.w, bi.h);
+        out.push_back(std::move(m));
+    }
     return out;
 }
 

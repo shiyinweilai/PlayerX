@@ -56,7 +56,9 @@ struct RBBlockInfo {
     float mvx = 0.f, mvy = 0.f;        // 帧间块运动矢量（帧内块为 0）
     // ── 图2 详情卡片扩展字段 ──
     int   refIdx = 0;                   // 参考索引（L0）
-    int   predMode = 0;                 // 预测模式枚举：0=Intra,1=P_L0,2=B_L0L1...
+    int   refIdxL1 = -1;                // 参考索引（L1），未用为 -1
+    int   predMode = 0;                 // 预测模式：VVC 对齐 PredMode；H.264 为 0=Intra/1=P/2=B
+    int   predFlag = 0;                 // 参考方向：0=Intra,1=L0,2=L1,3=Bi（VVC PredFlag）
     bool  hasResidual = false;          // 是否有残差（coded_block_flag 类信息）
 };
 

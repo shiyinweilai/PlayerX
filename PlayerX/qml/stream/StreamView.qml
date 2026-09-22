@@ -1683,7 +1683,8 @@ property real panelSplitRatio: 0.5
                 readonly property real bw: blk ? (blk.w * blockCanvas._scale) : 0
                 readonly property real bh: blk ? (blk.h * blockCanvas._scaleY) : 0
 
-                width: 200; height: 72
+                width: cardCol.implicitWidth + 16
+                height: cardCol.implicitHeight + 16
                 radius: 5
                 color: "#cc1a1a1f"
                 border.color: "#2a2e33"; border.width: 1
@@ -1719,44 +1720,118 @@ property real panelSplitRatio: 0.5
                 }
 
                 Column {
-                    anchors.fill: parent
-                    anchors.margins: 8
+                    id: cardCol
+                    x: 8; y: 8
                     spacing: 3
+                    // 不左右锚满父级：implicitWidth 跟内容走，卡片右侧不再留空。
+                    readonly property int labelW: 32
+                    readonly property var b: streamView.slotBlocks[streamView.selectedBlockIndex] || ({})
+
+                    // 类型：Skip / Intra / Inter / IBC / Palette。先看 flag，再看 VVC predMode。
+                    function predLabel(b) {
+                        if (!b) return "—"
+                        if (b.isSkip) return "Skip"
+                        if (b.isIntra) return "Intra"
+                        const pm = Number(b.predMode)
+                        if (pm === 3) return "Palette"
+                        if (pm === 4) return "IBC"
+                        return "Inter"
+                    }
+                    function refLabel(b) {
+                        if (!b || b.isIntra || b.isSkip) return ""
+                        const pf = Number(b.predFlag !== undefined ? b.predFlag : 0)
+                        if (pf === 3) return "Bi"
+                        if (pf === 2) return "L1"
+                        if (pf === 1) return "L0"
+                        if (b.refIdx === 1) return "L1"
+                        if (b.refIdx === 0) return "L0"
+                        return ""
+                    }
+                    function mvLabel(b) {
+                        if (!b || b.isIntra || b.isSkip) return ""
+                        const x = Number(b.mvx), y = Number(b.mvy)
+                        if (!(x === x) || !(y === y)) return ""
+                        return "(" + x.toFixed(1) + ", " + y.toFixed(1) + ")"
+                    }
+
                     Text {
-                        readonly property var b: streamView.slotBlocks[streamView.selectedBlockIndex] || ({})
-                        text: "CU  x:" + (b.x !== undefined ? b.x : 0)
-                              + " y:" + (b.y !== undefined ? b.y : 0)
-                              + "  " + (b.w !== undefined ? b.w : 0) + "×" + (b.h !== undefined ? b.h : 0)
+                        id: titleLine
+                        text: {
+                            const b = cardCol.b
+                            const x = b.x !== undefined ? b.x : 0
+                            const y = b.y !== undefined ? b.y : 0
+                            const w = b.w !== undefined ? b.w : 0
+                            const h = b.h !== undefined ? b.h : 0
+                            return "CU (" + x + ", " + y + ") " + w + "×" + h
+                        }
                         color: "#e8e8ec"; font.pixelSize: 11; font.bold: true
                         font.family: "Monospace"
                     }
-                    Rectangle { width: parent.width; height: 1; color: "#2a2e33" }
+                    Rectangle {
+                        width: Math.max(titleLine.implicitWidth,
+                                        depthRow.implicitWidth,
+                                        qpRow.implicitWidth,
+                                        typeRow.implicitWidth,
+                                        mvRow.implicitWidth,
+                                        refRow.implicitWidth)
+                        height: 1
+                        color: "#2a2e33"
+                    }
 
-                    readonly property var b: streamView.slotBlocks[streamView.selectedBlockIndex] || ({})
-
-                    // QP
+                    // 划分深度（QT）：CTU 128 → 64×64 = depth 1，按 CtbSizeY 语法计算
                     Row {
-                        spacing: 8
-                        Text { text: "QP"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
+                        id: depthRow
+                        spacing: 6
+                        Text { text: "深度"; color: "#9aa0a6"; font.pixelSize: 10; width: cardCol.labelW }
                         Text {
-                            text: parent.parent.b.qp !== undefined ? String(parent.parent.b.qp) : "—"
+                            text: {
+                                const b = cardCol.b
+                                if (b.depth === undefined) return "—"
+                                const ctu = Number(b.ctuSize)
+                                return String(b.depth) + (ctu > 0 ? (" · CTU " + ctu) : "")
+                            }
                             color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
                         }
                     }
-                    // 类型
                     Row {
-                        spacing: 8
-                        Text { text: "类型"; color: "#9aa0a6"; font.pixelSize: 10; width: 58 }
+                        id: qpRow
+                        spacing: 6
+                        Text { text: "QP"; color: "#9aa0a6"; font.pixelSize: 10; width: cardCol.labelW }
                         Text {
-                            text: parent.parent.b.isIntra ? "Intra" : "Inter"
+                            text: cardCol.b.qp !== undefined ? String(cardCol.b.qp) : "—"
                             color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
                         }
                     }
-                    // MV
-                    // 参考索引
-                    // 预测模式
-                    // 残差信息
-                    // （以上字段对码流块划分分析意义有限，已隐藏）
+                    Row {
+                        id: typeRow
+                        spacing: 6
+                        Text { text: "类型"; color: "#9aa0a6"; font.pixelSize: 10; width: cardCol.labelW }
+                        Text {
+                            text: cardCol.predLabel(cardCol.b)
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
+                    // 帧间块才显示 MV / 参考（帧内 / Skip 无意义）
+                    Row {
+                        id: mvRow
+                        visible: cardCol.mvLabel(cardCol.b).length > 0
+                        spacing: 6
+                        Text { text: "MV"; color: "#9aa0a6"; font.pixelSize: 10; width: cardCol.labelW }
+                        Text {
+                            text: cardCol.mvLabel(cardCol.b)
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
+                    Row {
+                        id: refRow
+                        visible: cardCol.refLabel(cardCol.b).length > 0
+                        spacing: 6
+                        Text { text: "参考"; color: "#9aa0a6"; font.pixelSize: 10; width: cardCol.labelW }
+                        Text {
+                            text: cardCol.refLabel(cardCol.b)
+                            color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
+                        }
+                    }
                 }
                 MouseArea {
                     anchors.fill: parent
