@@ -1304,6 +1304,12 @@ QVariantMap RBStreamBridge::blockInfoToMap(const rb::RBBlockInfo& bi) {
     m["predMode"]    = bi.predMode;
     m["predFlag"]    = bi.predFlag;
     m["hasResidual"] = bi.hasResidual;
+    m["mvxL0"]       = double(bi.mvxL0);
+    m["mvyL0"]       = double(bi.mvyL0);
+    m["mvxL1"]       = double(bi.mvxL1);
+    m["mvyL1"]       = double(bi.mvyL1);
+    m["treeType"]    = bi.treeType;
+    m["cqtDepth"]    = bi.cqtDepth;
     return m;
 }
 

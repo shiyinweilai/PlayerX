@@ -653,8 +653,25 @@ property real panelSplitRatio: 0.5
         return slotActive ? StreamBridge.blockStats(effectiveSlot, slotCurrent)
                           : ({ valid: false, avgQp: 0, minQp: 0, maxQp: 0, blockCount: 0 })
     }
-    // 当前点击选中的块索引（-1 = 未选中），驱动 CU 详情卡片
+    // 当前 hover 块（驱动跟随卡片）；钉住块只在点击时写，给右侧「块」页用
     property int selectedBlockIndex: -1
+    property var pinnedBlock: null
+    function pinBlock(idx) {
+        const blocks = streamView.slotBlocks
+        if (idx < 0 || !blocks || idx >= blocks.length) {
+            streamView.pinnedBlock = null
+            return
+        }
+        if (streamView.pinnedBlock
+                && streamView.pinnedBlock.x === blocks[idx].x
+                && streamView.pinnedBlock.y === blocks[idx].y
+                && streamView.pinnedBlock.w === blocks[idx].w
+                && streamView.pinnedBlock.h === blocks[idx].h) {
+            streamView.pinnedBlock = null
+            return
+        }
+        streamView.pinnedBlock = blocks[idx]
+    }
 
 
     // 全局版本号：任意 slot 的帧变化/打开/关闭都 ++，驱动底部总控栏的"▶/⏸"图标等
@@ -1683,8 +1700,10 @@ property real panelSplitRatio: 0.5
                     function onSlotCurrentChanged() {
                         blockCanvas.selectedIndex = -1
                         streamView.selectedBlockIndex = -1
+                        streamView.pinnedBlock = null
                         blockCanvas.requestPaint()
                     }
+                    function onPinnedBlockChanged() { blockCanvas.requestPaint() }
                 }
 
                 // 命中测试：屏幕坐标 → 块索引
@@ -1719,6 +1738,7 @@ property real panelSplitRatio: 0.5
                     property real _lastX: 0
                     property real _lastY: 0
                     property bool _panning: false
+                    property bool _dragged: false
 
                     function mapToLayer(mx, my) {
                         const z = Math.max(streamView.viewZoom, 1e-6)
@@ -1738,13 +1758,16 @@ property real panelSplitRatio: 0.5
 
                     onPressed: function(mouse) {
                         streamView.forceActiveFocus()
-                        if (streamView.viewZoom > 1) {
+                        _dragged = false
+                        _lastX = mouse.x
+                        _lastY = mouse.y
+                        if (streamView.viewZoom > 1)
                             _panning = true
-                            _lastX = mouse.x
-                            _lastY = mouse.y
-                        }
                     }
                     onPositionChanged: function(mouse) {
+                        if (pressed && (Math.abs(mouse.x - _lastX) > 3
+                                        || Math.abs(mouse.y - _lastY) > 3))
+                            _dragged = true
                         if (_panning && pressed) {
                             streamView.viewPanX += mouse.x - _lastX
                             streamView.viewPanY += mouse.y - _lastY
@@ -1755,7 +1778,16 @@ property real panelSplitRatio: 0.5
                             hoverAt(mouse.x, mouse.y)
                         }
                     }
-                    onReleased: _panning = false
+                    onReleased: function(mouse) {
+                        _panning = false
+                        if (!_dragged && mouse.button === Qt.LeftButton) {
+                            const p = mapToLayer(mouse.x, mouse.y)
+                            const idx = blockCanvas.hitTest(p.x, p.y)
+                            streamView.pinBlock(idx)
+                            blockCanvas.selectedIndex = (streamView.pinnedBlock && idx >= 0) ? idx : -1
+                            blockCanvas.requestPaint()
+                        }
+                    }
                     onExited: {
                         _panning = false
                         if (blockCanvas.hoverIndex !== -1) {

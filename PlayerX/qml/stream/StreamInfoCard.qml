@@ -27,6 +27,8 @@ Item {
     property int ver: 0
     // 布局模式开关：true=悬浮卡（浮在画面上层）；false=腾位栏（画面左移让位）
     property bool floating: false
+    // 点选钉住的 CU 快照（不含整帧块列表）
+    property var pinnedBlock: null
     // 模式切换：通知外层（Main.qml onFloatingChanged 处理画面让位）
     function toggleFloating() { cardRoot.floating = !cardRoot.floating }
 
@@ -91,7 +93,114 @@ Item {
             property int syntaxTab: 0
             // 语法元素搜索文本（大小写不敏感，name/value 任一命中即保留）
             property string syntaxFilter: ""
+            // 独立于 syntaxTab：打开时盖住参数集列表，不改 Repeater/model
+            property bool cuPageOpen: false
             slot: cardRoot.slot
+
+            Connections {
+                target: cardRoot
+                function onPinnedBlockChanged() {
+                    if (cardRoot.pinnedBlock)
+                        panel.cuPageOpen = true
+                }
+            }
+
+            function predModeName(pm) {
+                const n = Number(pm)
+                if (n === 1) return "MODE_INTRA"
+                if (n === 2) return "MODE_SKIP"
+                if (n === 3) return "MODE_PLT"
+                if (n === 4) return "MODE_IBC"
+                return "MODE_INTER"
+            }
+            function predFlagName(pf) {
+                const n = Number(pf)
+                if (n === 3) return "PF_BI"
+                if (n === 2) return "PF_L1"
+                if (n === 1) return "PF_L0"
+                if (n === 5) return "PF_IBC"
+                return "PF_INTRA"
+            }
+            function treeTypeName(t) {
+                const n = Number(t)
+                if (n === 1) return "DUAL_TREE_LUMA"
+                if (n === 2) return "DUAL_TREE_CHROMA"
+                return "SINGLE_TREE"
+            }
+            function log2i(v) {
+                const n = Number(v)
+                if (!(n > 0)) return "—"
+                return Math.round(Math.log2(n))
+            }
+            function mvPair(x, y) {
+                const a = Number(x), b = Number(y)
+                if (!(a === a) || !(b === b)) return "—"
+                return "(" + a.toFixed(2) + ", " + b.toFixed(2) + ")"
+            }
+            readonly property var cuSyntaxRows: {
+                const b = cardRoot.pinnedBlock
+                if (!b) return []
+                const rows = []
+                const add = function(name, value) {
+                    rows.push({ name: name, value: String(value) })
+                }
+                const w = Number(b.w) || 0
+                const h = Number(b.h) || 0
+                const pm = Number(b.predMode)
+                const pf = Number(b.predFlag !== undefined ? b.predFlag : 0)
+                const intra = !!b.isIntra || pm === 1
+                const skip = !!b.isSkip || pm === 2
+                const ibc = pm === 4 || pf === 5
+                const plt = pm === 3
+                const dec = Number(b.cqtDepth)
+                const cqt = (b.cqtDepth !== undefined && dec >= 0)
+                            ? dec
+                            : (b.depth !== undefined ? b.depth : "—")
+                add("coding_unit", w + "×" + h)
+                add("  x0", Number(b.x) || 0)
+                add("  y0", Number(b.y) || 0)
+                add("  cb_width", w)
+                add("  cb_height", h)
+                add("  log2_cb_width", panel.log2i(w))
+                add("  log2_cb_height", panel.log2i(h))
+                add("  cqt_depth", cqt !== undefined ? cqt : "—")
+                add("  ctb_size_y", Number(b.ctuSize) > 0 ? b.ctuSize : "—")
+                add("  tree_type", panel.treeTypeName(b.treeType))
+                add("pred", "")
+                add("  cu_skip_flag", skip ? 1 : 0)
+                add("  pred_mode", panel.predModeName(pm))
+                add("  pred_mode_flag", intra ? 1 : 0)
+                add("  pred_mode_ibc_flag", ibc ? 1 : 0)
+                add("  pred_mode_plt_flag", plt ? 1 : 0)
+                add("  pred_flag", panel.predFlagName(pf))
+                add("  is_intra", intra ? 1 : 0)
+                if (!intra && !skip) {
+                    add("inter", "")
+                    add("  ref_idx_l0", b.refIdx !== undefined ? b.refIdx : "—")
+                    add("  ref_idx_l1", (b.refIdxL1 !== undefined && Number(b.refIdxL1) >= 0) ? b.refIdxL1 : "—")
+                    add("  mv_l0", panel.mvPair(b.mvxL0 !== undefined ? b.mvxL0 : b.mvx,
+                                                b.mvyL0 !== undefined ? b.mvyL0 : b.mvy))
+                    add("  mv_l1", panel.mvPair(b.mvxL1, b.mvyL1))
+                }
+                add("residual", "")
+                add("  cu_coded_flag", skip ? 0 : 1)
+                add("  cbf", b.hasResidual ? 1 : 0)
+                add("  qp_y", b.qp !== undefined ? b.qp : "—")
+                return rows
+            }
+            readonly property var cuSyntaxView: {
+                const src = panel.cuSyntaxRows
+                const kw = (panel.syntaxFilter || "").toLowerCase()
+                if (kw.length === 0) return src
+                const out = []
+                for (let i = 0; i < src.length; ++i) {
+                    const nm = String(src[i].name || "").toLowerCase()
+                    const vl = String(src[i].value || "").toLowerCase()
+                    if (nm.indexOf(kw) >= 0 || vl.indexOf(kw) >= 0)
+                        out.push(src[i])
+                }
+                return out
+            }
 
             // ── 剪贴板辅助（隐藏 TextEdit + 一次性写入方法）────────────
             // Qt Quick 需要一个真实的 TextEdit 承载 selectAll()/copy()，
@@ -318,28 +427,48 @@ Item {
 
             // ═════════════════ 布局 ═════════════════
 
-            // ── 标题栏 ──
+            // ── 上半区 Tab 条：文件 / 帧 / 统计 + 悬浮切换 ──
             Row {
-                id: headerRow
+                id: mainTabBar
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
-                anchors.topMargin: 12
-                height: 24
+                anchors.topMargin: 8
+                spacing: 4
+                readonly property int modeBtnW: 22
+                readonly property real tabW:
+                    (width - spacing * 3 - modeBtnW) / 3
 
-                Text {
-                    text: "码流信息"
-                    color: "#bbbbbb"; font.pixelSize: 14; font.bold: true
+                Repeater {
+                    model: ["文件", "帧", "统计"]
+                    delegate: Rectangle {
+                        width: mainTabBar.tabW
+                        height: 24
+                        radius: 4
+                        color: index === panel.mainTab ? "#2a3f5a" : "#1a1d22"
+                        border.color: index === panel.mainTab ? "#42A5FF" : "#2a2e33"
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData
+                            color: index === panel.mainTab ? "#e6f0ff" : "#9aa0a6"
+                            font.pixelSize: 11
+                            font.bold: index === panel.mainTab
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: panel.mainTab = index
+                        }
+                    }
                 }
-                // 模式切换按钮：悬浮 ⇄ 腾位
                 Rectangle {
                     id: modeSwitchBtn
+                    width: mainTabBar.modeBtnW
+                    height: 22
                     anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: frameCountText.left
-                    anchors.rightMargin: 8
-                    width: 22; height: 22
                     radius: 4
                     color: modeMa.pressed ? "#2a3f5a" : "#1a1d22"
                     border.color: "#2a2e33"; border.width: 1
@@ -358,55 +487,6 @@ Item {
                         ToolTip.text: cardRoot.floating
                                        ? "切换为腾位模式（画面左移让出空间）"
                                        : "切换为悬浮模式（卡片浮于画面上层）"
-                    }
-                }
-                Text {
-                    id: frameCountText
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    text: {
-                        const _ = panel.ver
-                        return panel.slotActive
-                               ? (panel.curFrame + 1) + " / " + panel.frameList.length
-                               : "—"
-                    }
-                    color: "#9aa0a6"; font.pixelSize: 11
-                    font.family: "Monospace"
-                }
-            }
-
-            // ── 上半区 Tab 条：文件 / 帧 / 统计 ──
-            Row {
-                id: mainTabBar
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: headerRow.bottom
-                anchors.leftMargin: 8
-                anchors.rightMargin: 8
-                anchors.topMargin: 8
-                spacing: 4
-
-                Repeater {
-                    model: ["文件", "帧", "统计"]
-                    delegate: Rectangle {
-                        width: (mainTabBar.width - mainTabBar.spacing * 2) / 3
-                        height: 24
-                        radius: 4
-                        color: index === panel.mainTab ? "#2a3f5a" : "#1a1d22"
-                        border.color: index === panel.mainTab ? "#42A5FF" : "#2a2e33"
-                        border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            text: modelData
-                            color: index === panel.mainTab ? "#e6f0ff" : "#9aa0a6"
-                            font.pixelSize: 11
-                            font.bold: index === panel.mainTab
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: panel.mainTab = index
-                        }
                     }
                 }
             }
@@ -485,6 +565,13 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.right: parent.right
                         text: {
+                            if (panel.cuPageOpen) {
+                                const n = panel.cuSyntaxRows.length
+                                if (n === 0) return "点选 CU"
+                                if (!panel.syntaxFilter || panel.syntaxFilter.length === 0)
+                                    return n + " 项"
+                                return panel.cuSyntaxView.length + " / " + n + " 项"
+                            }
                             const _ = panel.syntaxVer
                             const tab = panel.syntaxTab
                             if (!StreamBridge.hasFile(panel.slot)) return "—"
@@ -665,22 +752,46 @@ Item {
                                         width: synTabLabel.implicitWidth + 18
                                         height: 24
                                         radius: 4
-                                        color: (index === panel.syntaxTab) ? "#2a3f5a" : "#1a1d22"
-                                        border.color: (index === panel.syntaxTab) ? "#42A5FF" : "#2a2e33"
+                                        color: (!panel.cuPageOpen && index === panel.syntaxTab) ? "#2a3f5a" : "#1a1d22"
+                                        border.color: (!panel.cuPageOpen && index === panel.syntaxTab) ? "#42A5FF" : "#2a2e33"
                                         border.width: 1
                                         Text {
                                             id: synTabLabel
                                             anchors.centerIn: parent
                                             text: modelData
-                                            color: (index === panel.syntaxTab) ? "#e6f0ff" : "#9aa0a6"
+                                            color: (!panel.cuPageOpen && index === panel.syntaxTab) ? "#e6f0ff" : "#9aa0a6"
                                             font.pixelSize: 11
-                                            font.bold: (index === panel.syntaxTab)
+                                            font.bold: (!panel.cuPageOpen && index === panel.syntaxTab)
                                         }
                                         MouseArea {
                                             anchors.fill: parent
                                             cursorShape: Qt.PointingHandCursor
-                                            onClicked: panel.syntaxTab = index
+                                            onClicked: {
+                                                panel.syntaxTab = index
+                                                panel.cuPageOpen = false
+                                            }
                                         }
+                                    }
+                                }
+                                Rectangle {
+                                    width: cuTabLabel.implicitWidth + 18
+                                    height: 24
+                                    radius: 4
+                                    color: panel.cuPageOpen ? "#2a3f5a" : "#1a1d22"
+                                    border.color: panel.cuPageOpen ? "#42A5FF" : "#2a2e33"
+                                    border.width: 1
+                                    Text {
+                                        id: cuTabLabel
+                                        anchors.centerIn: parent
+                                        text: "CU"
+                                        color: panel.cuPageOpen ? "#e6f0ff" : "#9aa0a6"
+                                        font.pixelSize: 11
+                                        font.bold: panel.cuPageOpen
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: panel.cuPageOpen = true
                                     }
                                 }
                             }
@@ -691,6 +802,7 @@ Item {
                         // 空结果时显示"无匹配项"提示，避免用户以为面板炸了。
                         ListView {
                             id: syntaxList
+                            visible: !panel.cuPageOpen
                             width: parent.width
                             height: parent.height - synTabFlick.height - parent.spacing
                             clip: true
@@ -925,6 +1037,200 @@ Item {
                                                 lines.push(String(m[i].name) + "\t" + String(m[i].value))
                                             panel.copyToClipboard(lines.join("\n"))
                                             syntaxList.flashRow(synRow.index)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ListView {
+                            id: cuSyntaxList
+                            visible: panel.cuPageOpen
+                            width: parent.width
+                            height: parent.height - synTabFlick.height - parent.spacing
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                            onModelChanged: positionViewAtBeginning()
+                            model: panel.cuSyntaxView
+
+                            property int flashIndex: -1
+                            Timer {
+                                id: cuFlashTimer
+                                interval: 900
+                                onTriggered: cuSyntaxList.flashIndex = -1
+                            }
+                            function flashRow(i) {
+                                cuSyntaxList.flashIndex = i
+                                cuFlashTimer.restart()
+                            }
+
+                            Text {
+                                anchors.centerIn: parent
+                                visible: cuSyntaxList.count === 0
+                                width: parent.width - 16
+                                wrapMode: Text.WordWrap
+                                horizontalAlignment: Text.AlignHCenter
+                                text: cardRoot.pinnedBlock
+                                      ? "该块暂无可展示字段"
+                                      : "点击画面中的 CU 查看语法"
+                                color: "#6a6f76"; font.pixelSize: 10
+                            }
+                            delegate: Item {
+                                id: cuRow
+                                width: cuSyntaxList.width
+                                height: 18
+                                property bool isFlash: cuSyntaxList.flashIndex === index
+                                required property int index
+                                required property var modelData
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: -2
+                                    anchors.rightMargin: -2
+                                    radius: 2
+                                    color: cuRow.isFlash
+                                           ? "#2a5fc0"
+                                           : (cuRowMa.containsMouse || cuRowMenu.visible ? "#1a1d22" : "transparent")
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                }
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 2
+                                    anchors.right: cuVal.left
+                                    anchors.rightMargin: 6
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: String(cuRow.modelData.name)
+                                    color: cuRow.isFlash ? "#e6f0ff" : "#9aa0a6"
+                                    font.pixelSize: 10
+                                    font.family: "Monospace"
+                                    elide: Text.ElideRight
+                                }
+                                Text {
+                                    id: cuVal
+                                    width: 78
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    horizontalAlignment: Text.AlignRight
+                                    text: String(cuRow.modelData.value)
+                                    color: cuRow.isFlash ? "#ffffff" : "#cccccc"
+                                    font.pixelSize: 10
+                                    font.family: "Monospace"
+                                    elide: Text.ElideLeft
+                                }
+                                MouseArea {
+                                    id: cuRowMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    onClicked: function(mouse) {
+                                        if (mouse.button === Qt.RightButton) {
+                                            cuRowMenu.popup()
+                                            return
+                                        }
+                                        panel.copyToClipboard(
+                                            String(cuRow.modelData.name) + " = "
+                                            + String(cuRow.modelData.value))
+                                        cuSyntaxList.flashRow(cuRow.index)
+                                    }
+                                    ToolTip.visible: containsMouse && !cuRowMenu.visible
+                                    ToolTip.delay: 500
+                                    ToolTip.text: String(cuRow.modelData.name)
+                                                  + " = " + String(cuRow.modelData.value)
+                                                  + "\n（左键复制 · 右键菜单）"
+                                }
+                                Menu {
+                                    id: cuRowMenu
+                                    width: 200
+                                    topPadding: 6; bottomPadding: 6
+                                    leftPadding: 4; rightPadding: 4
+                                    background: Rectangle {
+                                        implicitWidth: 200
+                                        implicitHeight: 32
+                                        color: "#cc1a1a1f"
+                                        border.color: "#33ffffff"
+                                        border.width: 1
+                                        radius: 6
+                                    }
+                                    MenuItem {
+                                        text: "复制名称"
+                                        height: 28
+                                        contentItem: Text {
+                                            text: parent.text; color: "#e8e8ec"
+                                            font.pixelSize: 12; leftPadding: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                                            radius: 4
+                                        }
+                                        onTriggered: {
+                                            panel.copyToClipboard(String(cuRow.modelData.name))
+                                            cuSyntaxList.flashRow(cuRow.index)
+                                        }
+                                    }
+                                    MenuItem {
+                                        text: "复制数值"
+                                        height: 28
+                                        contentItem: Text {
+                                            text: parent.text; color: "#e8e8ec"
+                                            font.pixelSize: 12; leftPadding: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                                            radius: 4
+                                        }
+                                        onTriggered: {
+                                            panel.copyToClipboard(String(cuRow.modelData.value))
+                                            cuSyntaxList.flashRow(cuRow.index)
+                                        }
+                                    }
+                                    MenuItem {
+                                        text: "复制 name = value"
+                                        height: 28
+                                        contentItem: Text {
+                                            text: parent.text; color: "#e8e8ec"
+                                            font.pixelSize: 12; leftPadding: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                                            radius: 4
+                                        }
+                                        onTriggered: {
+                                            panel.copyToClipboard(
+                                                String(cuRow.modelData.name) + " = "
+                                                + String(cuRow.modelData.value))
+                                            cuSyntaxList.flashRow(cuRow.index)
+                                        }
+                                    }
+                                    MenuSeparator {
+                                        height: 1; topPadding: 4; bottomPadding: 4
+                                        contentItem: Rectangle { color: "#33ffffff"; implicitHeight: 1 }
+                                        background: Rectangle { color: "transparent" }
+                                    }
+                                    MenuItem {
+                                        text: "复制当前分组（TSV）"
+                                        height: 28
+                                        contentItem: Text {
+                                            text: parent.text; color: "#e8e8ec"
+                                            font.pixelSize: 12; leftPadding: 12
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            color: parent.hovered ? "#803a3a3d" : "transparent"
+                                            radius: 4
+                                        }
+                                        onTriggered: {
+                                            const m = cuSyntaxList.model
+                                            let lines = []
+                                            for (let i = 0; i < m.length; ++i)
+                                                lines.push(String(m[i].name) + "\t" + String(m[i].value))
+                                            panel.copyToClipboard(lines.join("\n"))
+                                            cuSyntaxList.flashRow(cuRow.index)
                                         }
                                     }
                                 }

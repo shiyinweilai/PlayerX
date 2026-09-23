@@ -446,13 +446,19 @@ bool RBBlockAnalyzer::extractVvc(AVFrame* frame, RBFrameBlocks& out) {
         bi.refIdx   = (int)c.ref_idx[0];
         bi.refIdxL1 = (int)c.ref_idx[1];
         bi.hasResidual = !bi.isSkip;
-        // MV：1/16 像素 → 像素。优先 L0，否则 L1（Bi 时详情卡展示 L0，参考行标 Bi）。
+        bi.mvxL0 = float(c.mv[0][0]) / 16.f;
+        bi.mvyL0 = float(c.mv[0][1]) / 16.f;
+        bi.mvxL1 = float(c.mv[1][0]) / 16.f;
+        bi.mvyL1 = float(c.mv[1][1]) / 16.f;
+        bi.treeType = (int)c.tree_type;
+        bi.cqtDepth = (int)c.qt_depth;
+        // 主 MV：优先 L0，否则 L1（hover 卡仍用这一对）
         if (c.pred_flag & AV_CB_PF_L0) {
-            bi.mvx = float(c.mv[0][0]) / 16.f;
-            bi.mvy = float(c.mv[0][1]) / 16.f;
+            bi.mvx = bi.mvxL0;
+            bi.mvy = bi.mvyL0;
         } else if (c.pred_flag & AV_CB_PF_L1) {
-            bi.mvx = float(c.mv[1][0]) / 16.f;
-            bi.mvy = float(c.mv[1][1]) / 16.f;
+            bi.mvx = bi.mvxL1;
+            bi.mvy = bi.mvyL1;
         } else {
             bi.mvx = bi.mvy = 0.f;
         }

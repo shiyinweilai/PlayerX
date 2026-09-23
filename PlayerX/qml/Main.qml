@@ -2305,6 +2305,7 @@ Component {
         StreamInfoCard {
             slot: (typeof streamViewComp !== "undefined" && streamViewComp.effectiveSlot !== undefined)
                   ? streamViewComp.effectiveSlot : 0
+            pinnedBlock: (typeof streamViewComp !== "undefined") ? streamViewComp.pinnedBlock : null
             floating: root.streamSidebarFloating
             onFloatingChanged: root.streamSidebarFloating = floating
         }

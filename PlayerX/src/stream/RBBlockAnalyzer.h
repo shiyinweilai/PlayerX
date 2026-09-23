@@ -60,6 +60,10 @@ struct RBBlockInfo {
     int   predMode = 0;                 // 预测模式：VVC 对齐 PredMode；H.264 为 0=Intra/1=P/2=B
     int   predFlag = 0;                 // 参考方向：0=Intra,1=L0,2=L1,3=Bi（VVC PredFlag）
     bool  hasResidual = false;          // 是否有残差（coded_block_flag 类信息）
+    float mvxL0 = 0.f, mvyL0 = 0.f;    // L0，像素
+    float mvxL1 = 0.f, mvyL1 = 0.f;    // L1，像素
+    int   treeType = 0;                 // 0=SINGLE 1=DUAL_LUMA 2=DUAL_CHROMA
+    int   cqtDepth = -1;                // 解码器记录的 QT 深度；-1=未导出
 };
 
 // 一帧的块级分析结果
