@@ -2568,7 +2568,7 @@ property real panelSplitRatio: 0.5
                     }
                 }
 
-                // 右侧：清空（仅关闭所有 slot 回到 setup 阶段，不删除 pendingFiles 记录）
+                // 右侧：返回（仅关闭所有 slot 回到 setup 阶段，不删除 pendingFiles 记录）
                 // pendingFiles 始终保留在 QSettings 中，用户回到 setup 阶段仍可看到历史文件。
                 Row {
                     spacing: 6
@@ -2580,7 +2580,7 @@ property real panelSplitRatio: 0.5
                         color: clearMa.containsMouse ? "#80c87070" : "#80b85a5a"
                         Text {
                             anchors.centerIn: parent
-                            text: "清空"; color: "#fff"; font.pixelSize: 11
+                            text: "返回"; color: "#fff"; font.pixelSize: 11
                         }
                         MouseArea {
                             id: clearMa; anchors.fill: parent
