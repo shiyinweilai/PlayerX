@@ -336,6 +336,103 @@ QString insertRplOuterIndices(const QString& name, int listIdx, int rplsIdx)
     return name.left(br) + prefix + name.mid(br);
 }
 
+QString insertStRpsIndex(const QString& name, int stRpsIdx)
+{
+    const int br = name.indexOf(QLatin1Char('['));
+    const QString prefix = QStringLiteral("[%1]").arg(stRpsIdx);
+    if (br < 0)
+        return name + prefix;
+    return name.left(br) + prefix + name.mid(br);
+}
+
+int syntaxInt(const std::vector<RBSyntaxEntry>& v, const QString& set,
+              const QString& name, bool* ok)
+{
+    for (const auto& e : v) {
+        if (e.set == set && e.name == name) {
+            if (ok) *ok = true;
+            return e.value.toInt();
+        }
+    }
+    if (ok) *ok = false;
+    return 0;
+}
+
+void appendHevcDerived(std::vector<RBSyntaxEntry>& entries)
+{
+    bool okW = false, okH = false, okMin = false, okDiff = false;
+    const QString sps = QStringLiteral("SPS");
+    const int w = syntaxInt(entries, sps, QStringLiteral("pic_width_in_luma_samples"), &okW);
+    const int h = syntaxInt(entries, sps, QStringLiteral("pic_height_in_luma_samples"), &okH);
+    const int log2Min = syntaxInt(entries, sps,
+        QStringLiteral("log2_min_luma_coding_block_size_minus3"), &okMin);
+    const int log2Diff = syntaxInt(entries, sps,
+        QStringLiteral("log2_diff_max_min_luma_coding_block_size"), &okDiff);
+    if (!okW || !okH || !okMin || !okDiff || w <= 0 || h <= 0)
+        return;
+
+    const int MinCbLog2SizeY = log2Min + 3;
+    const int CtbLog2SizeY = MinCbLog2SizeY + log2Diff;
+    if (MinCbLog2SizeY < 3 || CtbLog2SizeY > 6)
+        return;
+    const int MinCbSizeY = 1 << MinCbLog2SizeY;
+    const int CtbSizeY = 1 << CtbLog2SizeY;
+    const int PicWidthInMinCbsY = w / MinCbSizeY;
+    const int PicHeightInMinCbsY = h / MinCbSizeY;
+    const int PicWidthInCtbsY = (w + CtbSizeY - 1) / CtbSizeY;
+    const int PicHeightInCtbsY = (h + CtbSizeY - 1) / CtbSizeY;
+
+    bool okTbMin = false, okTbDiff = false, okBdY = false, okBdC = false;
+    const int tbMin = syntaxInt(entries, sps,
+        QStringLiteral("log2_min_luma_transform_block_size_minus2"), &okTbMin);
+    const int tbDiff = syntaxInt(entries, sps,
+        QStringLiteral("log2_diff_max_min_luma_transform_block_size"), &okTbDiff);
+    const int bdY = syntaxInt(entries, sps, QStringLiteral("bit_depth_luma_minus8"), &okBdY);
+    const int bdC = syntaxInt(entries, sps, QStringLiteral("bit_depth_chroma_minus8"), &okBdC);
+
+    std::vector<RBSyntaxEntry> extra;
+    extra.reserve(20);
+    auto add = [&](const char* n, int val) {
+        RBSyntaxEntry e;
+        e.set = sps;
+        e.name = QString::fromLatin1(n);
+        e.value = QString::number(val);
+        extra.push_back(std::move(e));
+    };
+    add("MinCbLog2SizeY", MinCbLog2SizeY);
+    add("CtbLog2SizeY", CtbLog2SizeY);
+    add("MinCbSizeY", MinCbSizeY);
+    add("CtbSizeY", CtbSizeY);
+    add("PicWidthInMinCbsY", PicWidthInMinCbsY);
+    add("PicHeightInMinCbsY", PicHeightInMinCbsY);
+    add("PicWidthInCtbsY", PicWidthInCtbsY);
+    add("PicHeightInCtbsY", PicHeightInCtbsY);
+    add("PicSizeInMinCbsY", PicWidthInMinCbsY * PicHeightInMinCbsY);
+    add("PicSizeInCtbsY", PicWidthInCtbsY * PicHeightInCtbsY);
+    add("PicSizeInSamplesY", w * h);
+    if (okTbMin && okTbDiff) {
+        const int MinTbLog2SizeY = tbMin + 2;
+        const int MaxTbLog2SizeY = MinTbLog2SizeY + tbDiff;
+        add("MinTbLog2SizeY", MinTbLog2SizeY);
+        add("MaxTbLog2SizeY", MaxTbLog2SizeY);
+        add("MinTbSizeY", 1 << MinTbLog2SizeY);
+        add("MaxTbSizeY", 1 << MaxTbLog2SizeY);
+    }
+    if (okBdY) {
+        add("BitDepthY", bdY + 8);
+        add("QpBdOffsetY", 6 * bdY);
+    }
+    if (okBdC)
+        add("BitDepthC", bdC + 8);
+
+    auto lastSps = entries.end();
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
+        if (it->set == sps)
+            lastSps = it + 1;
+    }
+    entries.insert(lastSps, extra.begin(), extra.end());
+}
+
 } // namespace
 
 // ── trace 收集器 ────────────────────────────────────────────────
@@ -350,6 +447,8 @@ struct RBSyntaxAnalyzer::Collector {
     bool rplFromSpsLists = false;
     bool inlineRplSeen = false;
     int spsNumRefPicLists[2] = {0, 0};
+    // H.265 7.3.6.1 short_term_ref_pic_set(stRpsIdx)：CBS 只 trace 入口 i
+    int hevcStRpsIdx = -1;
 
     void beginSet(const QString& set) {
         currentSet = set;
@@ -357,6 +456,7 @@ struct RBSyntaxAnalyzer::Collector {
         rplRplsIdx = -1;
         rplFromSpsLists = false;
         inlineRplSeen = false;
+        hevcStRpsIdx = -1;
     }
 };
 
@@ -406,6 +506,25 @@ void RBSyntaxAnalyzer::collectReadCb(void* traceContext, GetBitContext* gbc,
                || syntaxBaseEquals(name, "ilrp_idx")) {
         if (c->rplRplsIdx >= 0)
             fieldName = insertRplOuterIndices(fieldName, c->rplListIdx, c->rplRplsIdx);
+    } else if (syntaxBaseEquals(name, "num_short_term_ref_pic_sets")) {
+        c->hevcStRpsIdx = -1;
+    } else if (syntaxBaseEquals(name, "inter_ref_pic_set_prediction_flag")) {
+        ++c->hevcStRpsIdx;
+        fieldName = QStringLiteral("inter_ref_pic_set_prediction_flag[%1]")
+                        .arg(c->hevcStRpsIdx);
+    } else if (syntaxBaseEquals(name, "delta_idx_minus1")
+               || syntaxBaseEquals(name, "delta_rps_sign")
+               || syntaxBaseEquals(name, "abs_delta_rps_minus1")
+               || syntaxBaseEquals(name, "used_by_curr_pic_flag")
+               || syntaxBaseEquals(name, "use_delta_flag")
+               || syntaxBaseEquals(name, "num_negative_pics")
+               || syntaxBaseEquals(name, "num_positive_pics")
+               || syntaxBaseEquals(name, "delta_poc_s0_minus1")
+               || syntaxBaseEquals(name, "used_by_curr_pic_s0_flag")
+               || syntaxBaseEquals(name, "delta_poc_s1_minus1")
+               || syntaxBaseEquals(name, "used_by_curr_pic_s1_flag")) {
+        if (c->hevcStRpsIdx >= 0)
+            fieldName = insertStRpsIndex(fieldName, c->hevcStRpsIdx);
     }
 
     if (!c->emitEntries || !c->out) return;
@@ -467,13 +586,15 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
     // VPS/SPS/DCI 各留一份；PPS/APS 全部留下（vvcC 里第一份 PPS 常是截断的）。
     auto collectAnnexbPackets = [&](const uint8_t* data, int64_t size) {
         std::vector<std::pair<int, QByteArray>> packets;
-        bool typeSeen[32] = { false };
+        bool typeSeen[64] = { false };
         int ppsCount = 0, apsCount = 0;
         for (const auto& nal : scanNals(data, size, codecIdx)) {
             if (parameterSetLabel(codecIdx, nal.nalType).isEmpty()) continue;
             const bool multi = isPpsNal(codecIdx, nal.nalType)
                             || isApsNal(codecIdx, nal.nalType);
-            if (!multi && nal.nalType >= 0 && nal.nalType < 32) {
+            // HEVC VPS/SPS 是 32/33，必须用到 64；原先 <32 导致裸 265
+            // 每遇到一次参数集就重复收集。
+            if (!multi && nal.nalType >= 0 && nal.nalType < 64) {
                 if (typeSeen[nal.nalType]) continue;
                 typeSeen[nal.nalType] = true;
             }
@@ -728,6 +849,61 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
         }
     }
 
+    // 裸 265：extradata 为空或只解析出 PPS 时，VPS/SPS 已进 paramPackets
+    // 却从未开 trace。这里补一遍发出去。
+    {
+        auto hasSet = [&](const QString& set) {
+            for (const auto& e : paramEntries)
+                if (e.set == set) return true;
+            return false;
+        };
+        const bool missVps = !hasSet(QStringLiteral("VPS"));
+        const bool missSps = !hasSet(QStringLiteral("SPS"));
+        if (missVps || missSps) {
+            std::vector<std::pair<int, QByteArray>> need;
+            auto takeNeed = [&](const std::vector<std::pair<int, QByteArray>>& src) {
+                for (const auto& p : src) {
+                    const QString lab = parameterSetLabel(codecIdx, p.first);
+                    if ((missVps && lab == QLatin1String("VPS"))
+                        || (missSps && lab == QLatin1String("SPS")))
+                        need.push_back(p);
+                }
+            };
+            takeNeed(paramPackets);
+            if (need.empty()) {
+                takeNeed(inbandPackets);
+                paramPackets.insert(paramPackets.end(), need.begin(), need.end());
+            }
+            if (!need.empty()) {
+                CodedBitstreamContext* ctxFill = nullptr;
+                if (ff_cbs_init(&ctxFill, codecId, nullptr) >= 0 && ctxFill) {
+                    ctxFill->trace_enable = 1;
+                    ctxFill->trace_read_callback = &RBSyntaxAnalyzer::collectReadCb;
+                    ctxFill->trace_context = &collector;
+                    std::vector<RBSyntaxEntry> filled;
+                    collector.out = &filled;
+                    parsePackets(ctxFill, need);
+                    ff_cbs_close(&ctxFill);
+                    collector.out = &paramEntries;
+                    if (missVps) {
+                        auto only = takeSet(filled, QStringLiteral("VPS"));
+                        paramEntries.insert(paramEntries.begin(),
+                                            only.begin(), only.end());
+                    }
+                    if (missSps) {
+                        auto only = takeSet(filled, QStringLiteral("SPS"));
+                        size_t ins = 0;
+                        for (size_t i = 0; i < paramEntries.size(); ++i)
+                            if (paramEntries[i].set == QLatin1String("VPS"))
+                                ins = i + 1;
+                        paramEntries.insert(paramEntries.begin() + int(ins),
+                                            only.begin(), only.end());
+                    }
+                }
+            }
+        }
+    }
+
     // 4) 第一幅图的 PH + 首 slice header。写入独立列表，绝不覆盖参数集。
     std::vector<RBSyntaxEntry> sliceEntries;
     if (!annexbBlob.isEmpty() && !paramPackets.empty()) {
@@ -750,6 +926,8 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
 
     entries = std::move(paramEntries);
     entries.insert(entries.end(), sliceEntries.begin(), sliceEntries.end());
+    if (codecIdx == 1)
+        appendHevcDerived(entries);
     return entries;
 }
 
