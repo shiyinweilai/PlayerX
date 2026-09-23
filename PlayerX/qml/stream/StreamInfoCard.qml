@@ -133,6 +133,15 @@ Item {
                     if (closedSlot === panel.slot) { panel.ver++; panel.structVer++ }
                 }
                 function onSlotCountChanged() { panel.ver++; panel.structVer++ }
+                // 映射就绪 / 切显示·编码序：frameList 的 POC 会换成真实值，必须重取。
+                // 漏掉时侧栏一直停在打开瞬间的占位 POC（IDR 后从 0 递增），
+                // 与层级详情里的 POC 32 / 16 对不上。
+                function onFrameOrderMapReadyChanged(omSlot) {
+                    if (omSlot === panel.slot) { panel.ver++; panel.structVer++ }
+                }
+                function onFrameOrderModeChanged(mSlot) {
+                    if (mSlot === panel.slot) { panel.ver++; panel.structVer++ }
+                }
             }
             // 帧结构缓存（文件级）：播放中每帧不再重拷 frameList（265 大列表拷贝是
             // 播放卡顿主因之一）。仅在文件打开/关闭/槽位变化时重取。
@@ -266,7 +275,7 @@ Item {
                 const _ = panel.ver
                 return panel.slotActive && panel.currentFrameItem
                     ? [
-                        { label: "帧号 / POC",      value: String(panel.curFrame + 1) + " / " + String(panel.currentFrameItem.poc) },
+                        { label: "POC",             value: String(panel.currentFrameItem.poc) },
                         { label: "帧类型",          value: String(panel.currentFrameItem.type) },
                         { label: "参考帧",          value: panel.curFrame === 0 ? "1" : "1" },
                         { label: "显示顺序",        value: String(panel.curFrame + 1) },
@@ -275,7 +284,7 @@ Item {
                           value: (Number(panel.currentFrameItem.pts)).toFixed(3) }
                       ]
                     : [
-                        { label: "帧号 / POC",  value: "—" },
+                        { label: "POC",         value: "—" },
                         { label: "帧类型",      value: "—" },
                         { label: "参考帧",      value: "—" },
                         { label: "显示顺序",    value: "—" },
