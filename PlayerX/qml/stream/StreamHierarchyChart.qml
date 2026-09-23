@@ -554,9 +554,8 @@ Item {
                     id: bodyRow
                     width: parent.width
                     height: parent.height - 26
-                    // 详情面板宽度：与层级图等高，宽度自适应但不小于 150
-                    readonly property real detailW:
-                        Math.min(300, Math.max(150, bodyRow.width * 0.34))
+                    // 窄侧栏：参考项用折行芯片，固定 168 避免占掉 1/3 画布
+                    readonly property real detailW: 168
 
                     // 层级图：挤占模式右侧让位（画布随之变窄并重绘），
                     //         悬浮模式占满整宽，详情面板覆盖其上。
@@ -972,6 +971,7 @@ Item {
                     // 信息：POC / 解码序 / 大小
                     Text {
                         width: parent.width
+                        wrapMode: Text.WordWrap
                         text: chartPanel.selFrame
                               ? "POC " + chartPanel.selFrame.poc
                                 + " · 解码序 " + chartPanel.selFrame.decNo
@@ -983,6 +983,7 @@ Item {
                     // 层级：真实解析模式下显示码流真实层级（0 最重要，与 VQ 金字塔一致）
                     Text {
                         width: parent.width
+                        wrapMode: Text.WordWrap
                         visible: chartPanel.refReady && chartPanel.selFrame
                         text: chartPanel.selFrame
                               ? "Layer " + chartPanel.selFrame.depth
@@ -991,30 +992,51 @@ Item {
                         color: "#e0c46a"; font.pixelSize: 10
                         font.family: "Monospace"
                     }
-                    // 参考列表（该帧参考了谁）
+                    // 参考列表：折行芯片，一行多项
                     Text {
                         text: chartPanel.selFrame
                               ? "参考 (" + chartPanel.selFrame.refs.length + ")"
                               : ""
                         color: "#bbbbbb"; font.pixelSize: 10; font.bold: true
                     }
-                    Repeater {
-                        model: chartPanel.selFrame ? chartPanel.selFrame.refs : []
-                        Text {
-                            required property int modelData
-                            readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
-                                                       ? chartPanel.rowsData[modelData] : null
-                            width: detailCol.width
-                            text: rf ? (modelData < chartPanel.selRank ? "← " : "→ ")
-                                        + "POC " + rf.poc + " · " + chartPanel.typeLabel(rf)
-                                    : ""
-                            color: (rf && modelData < chartPanel.selRank) ? "#7ec8ff" : "#8fe6a8"
-                            font.pixelSize: 10
-                            font.family: "Monospace"
+                    Flow {
+                        width: parent.width
+                        spacing: 4
+                        Repeater {
+                            model: chartPanel.selFrame ? chartPanel.selFrame.refs : []
+                            delegate: Rectangle {
+                                required property int modelData
+                                readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
+                                                           ? chartPanel.rowsData[modelData] : null
+                                readonly property bool backward: rf && modelData < chartPanel.selRank
+                                implicitWidth: chipLab.implicitWidth + 10
+                                height: 18
+                                radius: 3
+                                color: "#182028"
+                                border.width: 1
+                                border.color: backward ? "#3a6a90" : "#3a7a58"
+                                Text {
+                                    id: chipLab
+                                    anchors.centerIn: parent
+                                    text: rf ? ((backward ? "←" : "→") + rf.poc + " " + chartPanel.typeLabel(rf)) : ""
+                                    color: backward ? "#7ec8ff" : "#8fe6a8"
+                                    font.pixelSize: 10
+                                    font.family: "Monospace"
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (modelData >= 0) {
+                                            chartPanel.selRank = modelData
+                                            chartPanel.detailOn = true
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                    // DPB 保留（RPS 中 used=0）：本帧不用于预测，但要求解码器继续保留，
-                    // 供解码序后续的帧使用。不画箭头，仅以暗灰列出以示区分。
+                    // DPB 保留（RPS 中 used=0）：本帧不用于预测，但要求解码器继续保留
                     Text {
                         text: chartPanel.selFrame
                               ? "DPB 保留 (" + chartPanel.selFrame.keptRefs.length + ")"
@@ -1024,40 +1046,89 @@ Item {
                                  && chartPanel.selFrame.keptRefs
                                  && chartPanel.selFrame.keptRefs.length > 0
                     }
-                    Repeater {
-                        model: (chartPanel.selFrame && chartPanel.selFrame.keptRefs)
-                               ? chartPanel.selFrame.keptRefs : []
-                        Text {
-                            required property int modelData
-                            readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
-                                                       ? chartPanel.rowsData[modelData] : null
-                            width: detailCol.width
-                            text: rf ? (modelData < chartPanel.selRank ? "· " : "· ")
-                                        + "POC " + rf.poc + " · " + chartPanel.typeLabel(rf)
-                                    : ""
-                            color: "#8a8a8a"; font.pixelSize: 10
-                            font.family: "Monospace"
+                    Flow {
+                        width: parent.width
+                        spacing: 4
+                        visible: chartPanel.selFrame
+                                 && chartPanel.selFrame.keptRefs
+                                 && chartPanel.selFrame.keptRefs.length > 0
+                        Repeater {
+                            model: (chartPanel.selFrame && chartPanel.selFrame.keptRefs)
+                                   ? chartPanel.selFrame.keptRefs : []
+                            delegate: Rectangle {
+                                required property int modelData
+                                readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
+                                                           ? chartPanel.rowsData[modelData] : null
+                                implicitWidth: keptLab.implicitWidth + 10
+                                height: 18
+                                radius: 3
+                                color: "#161616"
+                                border.width: 1
+                                border.color: "#3a3a3a"
+                                Text {
+                                    id: keptLab
+                                    anchors.centerIn: parent
+                                    text: rf ? (rf.poc + " " + chartPanel.typeLabel(rf)) : ""
+                                    color: "#8a8a8a"
+                                    font.pixelSize: 10
+                                    font.family: "Monospace"
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (modelData >= 0) {
+                                            chartPanel.selRank = modelData
+                                            chartPanel.detailOn = true
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                    // 被参考列表（谁参考了该帧，全量，区域可滚动）
-                    // 口径：仅统计本 IDR(GOP) 内引用它的帧，不跨 IDR 累积
+                    // 被参考：仅本 GOP 内；芯片折行
                     Text {
                         text: "被参考(" + chartPanel.selBackRefs.length + ")·本GOP内"
                         color: "#e0a33e"; font.pixelSize: 10; font.bold: true
                         visible: chartPanel.selBackRefs.length > 0
                     }
-                    Repeater {
-                        model: chartPanel.selBackRefs
-                        Text {
-                            required property int modelData
-                            readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
-                                                       ? chartPanel.rowsData[modelData] : null
-                            width: detailInner.width
-                            text: rf ? "POC " + rf.poc + " · " + chartPanel.typeLabel(rf) : ""
-                            color: "#e0a33e"; font.pixelSize: 10
-                            font.family: "Monospace"
+                    Flow {
+                        width: parent.width
+                        spacing: 4
+                        visible: chartPanel.selBackRefs.length > 0
+                        Repeater {
+                            model: chartPanel.selBackRefs
+                            delegate: Rectangle {
+                                required property int modelData
+                                readonly property var rf: (modelData >= 0 && modelData < chartPanel.rowsData.length)
+                                                           ? chartPanel.rowsData[modelData] : null
+                                implicitWidth: backLab.implicitWidth + 10
+                                height: 18
+                                radius: 3
+                                color: "#201810"
+                                border.width: 1
+                                border.color: "#6a4a1e"
+                                Text {
+                                    id: backLab
+                                    anchors.centerIn: parent
+                                    text: rf ? (rf.poc + " " + chartPanel.typeLabel(rf)) : ""
+                                    color: "#e0a33e"
+                                    font.pixelSize: 10
+                                    font.family: "Monospace"
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (modelData >= 0) {
+                                            chartPanel.selRank = modelData
+                                            chartPanel.detailOn = true
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        }
+                    }
                     }
                 }
                 }
