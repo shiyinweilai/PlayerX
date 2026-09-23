@@ -210,6 +210,12 @@ Shortcut {
             for (let i = 0; i < n; ++i) YuvBridge.firstFrame(i)
             return
         }
+        // 码流分析 tab：R = 重置到第 0 帧
+        if (root.currentTab === "stream" && typeof streamViewComp !== "undefined"
+                && streamViewComp && streamViewComp.slotActive) {
+            streamViewComp.resetToStart()
+            return
+        }
         // 播放 tab：R = 回到开头
         Engine.seek(0)
     }

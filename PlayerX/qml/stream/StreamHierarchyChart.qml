@@ -448,7 +448,10 @@ Item {
 
             Column {
                 anchors.fill: parent
-                anchors.margins: 10
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                anchors.topMargin: 8
+                anchors.bottomMargin: 0
                 spacing: 6
 
                 // ── 头部 ──
