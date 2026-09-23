@@ -401,19 +401,31 @@ Item {
                         { label: "时间戳",      value: "—" }
                       ]
             }
+            function pctPair(count, areaPct, total) {
+                if (!total) return "—"
+                const n = Number(count)
+                const a = Number(areaPct)
+                return (100.0 * n / total).toFixed(1) + "% · 面积 " + a.toFixed(1) + "%"
+            }
             readonly property var streamStatsRows: {
                 const _ = panel.ver
+                const st = panel.blockStats
+                const n = st && st.valid ? Number(st.blockCount) : 0
                 return panel.slotActive && panel.currentFrameItem
                     ? [
                         { label: "帧大小",   value: (Number(panel.currentFrameItem.sizeBytes) / 1024).toFixed(1) + " KB" },
                         { label: "码率",     value: panel.curFrameBitrateMbps.toFixed(2) + " Mbps" },
-                        { label: "QP 均值",  value: panel.blockStats.valid
-                                                 ? Number(panel.blockStats.avgQp).toFixed(1) : "—" },
-                        { label: "QP 最小 / 最大", value: panel.blockStats.valid
-                                                 ? (panel.blockStats.minQp + " / " + panel.blockStats.maxQp) : "— / —" },
-                        { label: "CU 总数",  value: panel.blockStats.valid
-                                                 ? String(panel.blockStats.blockCount) : "—" },
-                        { label: "跳过 CU 占比", value: "—" }
+                        { label: "QP 均值",  value: st.valid ? Number(st.avgQp).toFixed(1) : "—" },
+                        { label: "QP 最小 / 最大", value: st.valid
+                                                 ? (st.minQp + " / " + st.maxQp) : "— / —" },
+                        { label: "CU 总数",  value: st.valid ? String(n) : "—" },
+                        { label: "跳过 CU",  value: st.valid ? panel.pctPair(st.skipCount, st.skipAreaPct, n) : "—" },
+                        { label: "Intra CU", value: st.valid ? panel.pctPair(st.intraCount, st.intraAreaPct, n) : "—" },
+                        { label: "Inter CU", value: st.valid ? panel.pctPair(st.interCount, st.interAreaPct, n) : "—" },
+                        { label: "IBC CU",   value: st.valid && Number(st.ibcCount) > 0
+                                                 ? panel.pctPair(st.ibcCount, st.ibcAreaPct, n) : "—" },
+                        { label: "平均 |MV|", value: st.valid && Number(st.avgAbsMv) > 0
+                                                 ? Number(st.avgAbsMv).toFixed(1) + " px" : "—" }
                       ]
                     : [
                         { label: "帧大小",   value: "—" },
@@ -421,7 +433,11 @@ Item {
                         { label: "QP 均值",  value: "—" },
                         { label: "QP 最小 / 最大", value: "—" },
                         { label: "CU 总数",  value: "—" },
-                        { label: "跳过 CU 占比", value: "—" }
+                        { label: "跳过 CU",  value: "—" },
+                        { label: "Intra CU", value: "—" },
+                        { label: "Inter CU", value: "—" },
+                        { label: "IBC CU",   value: "—" },
+                        { label: "平均 |MV|", value: "—" }
                       ]
             }
 

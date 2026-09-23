@@ -201,7 +201,9 @@ public:
     Q_INVOKABLE bool blockInfoSupported(int slot) const;
     // 块级精度描述，如 "宏块级 (16×16)"；不支持时为空串
     Q_INVOKABLE QString blockGranularity(int slot) const;
-    // 该帧块级统计：{ valid, avgQp, minQp, maxQp, blockCount, width, height }
+    // 该帧块级统计：{ valid, avgQp, minQp, maxQp, blockCount, width, height,
+    //   skipCount, intraCount, interCount, ibcCount, pltCount,
+    //   skipAreaPct, intraAreaPct, interAreaPct, avgAbsMv }
     Q_INVOKABLE QVariantMap blockStats(int slot, int frameIndex) const;
 
     // ── 联动播放器 seek（占位）────────────────────────────────────

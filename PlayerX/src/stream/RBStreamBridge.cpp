@@ -31,6 +31,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cmath>
 #include <QFile>
 #include <QFileInfo>
 #include <QDebug>
@@ -1423,6 +1424,42 @@ QVariantMap RBStreamBridge::blockStats(int slot, int frameIndex) const {
     m["blockCount"] = static_cast<int>(fb.blocks.size());
     m["width"]      = fb.width;
     m["height"]     = fb.height;
+
+    int skipN = 0, intraN = 0, interN = 0, ibcN = 0, pltN = 0, mvN = 0;
+    qint64 skipA = 0, intraA = 0, interA = 0, ibcA = 0, pltA = 0, totalA = 0;
+    double mvSum = 0.0;
+    for (const auto& bi : fb.blocks) {
+        const qint64 a = qint64(std::max(1, bi.w)) * qint64(std::max(1, bi.h));
+        totalA += a;
+        const int pm = bi.predMode;
+        if (bi.isSkip || pm == 2) {
+            ++skipN; skipA += a;
+        } else if (pm == 4) {
+            ++ibcN; ibcA += a;
+        } else if (pm == 3) {
+            ++pltN; pltA += a;
+        } else if (bi.isIntra || pm == 1) {
+            ++intraN; intraA += a;
+        } else {
+            ++interN; interA += a;
+        }
+        if (!bi.isIntra && !bi.isSkip && pm != 1 && pm != 2) {
+            mvSum += std::hypot(double(bi.mvx), double(bi.mvy));
+            ++mvN;
+        }
+    }
+    const double denom = totalA > 0 ? double(totalA) : 1.0;
+    m["skipCount"]    = skipN;
+    m["intraCount"]   = intraN;
+    m["interCount"]   = interN;
+    m["ibcCount"]     = ibcN;
+    m["pltCount"]     = pltN;
+    m["skipAreaPct"]  = 100.0 * double(skipA) / denom;
+    m["intraAreaPct"] = 100.0 * double(intraA) / denom;
+    m["interAreaPct"] = 100.0 * double(interA) / denom;
+    m["ibcAreaPct"]   = 100.0 * double(ibcA) / denom;
+    m["pltAreaPct"]   = 100.0 * double(pltA) / denom;
+    m["avgAbsMv"]     = mvN > 0 ? mvSum / double(mvN) : 0.0;
     return m;
 }
 

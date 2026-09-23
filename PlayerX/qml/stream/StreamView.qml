@@ -575,7 +575,10 @@ property real panelSplitRatio: 0.5
     // 画面数据（YUV/RGB）始终随帧解码产出，即使该帧块信息为空（如 B 帧首帧
     // side data 缺失）画面也应正常显示，不受 blockSupported 连坐。
     property bool frameHasImage: false
-    property bool qpOverlayEnabled: true   // 默认开块信息
+    // 叠加：0 关 / 1 划分 / 2 QP / 3 Pred / 4 MV。块信息菜单只开关总闸。
+    property int overlayMode: 1
+    property int overlayModeSaved: 1
+    readonly property bool qpOverlayEnabled: overlayMode > 0
 
     // ── 播放窗口缩放（画面 + CU 网格同一层，保证对齐）──────────────
     // viewZoom=1 / pan=0 为适应窗口；滚轮对着指针缩放，双击或「复位」恢复。
@@ -592,6 +595,73 @@ property real panelSplitRatio: 0.5
         viewPanX = 0
         viewPanY = 0
         _zoomWheelAccum = 0
+    }
+    function overlayQpRgba(qp, qmin, qmax, a) {
+        let t = 0.5
+        if (qmax > qmin)
+            t = Math.max(0, Math.min(1, (qp - qmin) / (qmax - qmin)))
+        let r = 0, g = 0, b = 0
+        if (t < 0.25) {
+            const u = t / 0.25
+            g = Math.round(80 + 175 * u); b = 255
+        } else if (t < 0.5) {
+            const u = (t - 0.25) / 0.25
+            g = 255; b = Math.round(255 * (1 - u))
+        } else if (t < 0.75) {
+            const u = (t - 0.5) / 0.25
+            r = Math.round(255 * u); g = 255
+        } else {
+            const u = (t - 0.75) / 0.25
+            r = 255; g = Math.round(255 * (1 - u))
+        }
+        return "rgba(" + r + "," + g + "," + b + "," + a + ")"
+    }
+    function overlayPredRgba(b, a) {
+        const pm = Number(b.predMode)
+        if (b.isSkip || pm === 2) return "rgba(160,160,160," + a + ")"
+        if (pm === 4) return "rgba(180,80,220," + a + ")"
+        if (pm === 3) return "rgba(230,150,40," + a + ")"
+        if (b.isIntra || pm === 1) return "rgba(220,70,70," + a + ")"
+        const pf = Number(b.predFlag)
+        if (pf === 3) return "rgba(40,190,200," + a + ")"
+        if (pf === 2) return "rgba(200,80,180," + a + ")"
+        return "rgba(60,120,230," + a + ")"
+    }
+    function drawOverlayMv(ctx, b, x, y, w, h) {
+        const cx = x + w * 0.5
+        const cy = y + h * 0.5
+        const scalePx = Math.max(w, h) / 18
+        function arrow(mx, my, color) {
+            const dx = Number(mx) * scalePx
+            const dy = Number(my) * scalePx
+            if (Math.abs(dx) < 0.4 && Math.abs(dy) < 0.4) return
+            const ex = cx + dx
+            const ey = cy + dy
+            ctx.strokeStyle = color
+            ctx.fillStyle = color
+            ctx.lineWidth = 1.2
+            ctx.beginPath()
+            ctx.moveTo(cx, cy)
+            ctx.lineTo(ex, ey)
+            ctx.stroke()
+            const ang = Math.atan2(dy, dx)
+            ctx.beginPath()
+            ctx.moveTo(ex, ey)
+            ctx.lineTo(ex - 5 * Math.cos(ang - 0.4), ey - 5 * Math.sin(ang - 0.4))
+            ctx.lineTo(ex - 5 * Math.cos(ang + 0.4), ey - 5 * Math.sin(ang + 0.4))
+            ctx.closePath()
+            ctx.fill()
+        }
+        const pf = Number(b.predFlag)
+        const hasL0 = (pf & 1) || (Math.abs(Number(b.mvxL0)) + Math.abs(Number(b.mvyL0)) > 0.01)
+        const hasL1 = (pf & 2) || (Math.abs(Number(b.mvxL1)) + Math.abs(Number(b.mvyL1)) > 0.01)
+        if (hasL0)
+            arrow(b.mvxL0 !== undefined ? b.mvxL0 : b.mvx,
+                  b.mvyL0 !== undefined ? b.mvyL0 : b.mvy, "rgba(80,220,120,0.95)")
+        if (hasL1)
+            arrow(b.mvxL1, b.mvyL1, "rgba(230,90,200,0.95)")
+        if (!hasL0 && !hasL1 && (Math.abs(Number(b.mvx)) + Math.abs(Number(b.mvy)) > 0.01))
+            arrow(b.mvx, b.mvy, "rgba(80,220,120,0.95)")
     }
     function clampViewPan() {
         if (!viewZoomed) {
@@ -1527,7 +1597,7 @@ property real panelSplitRatio: 0.5
                 Text { Layout.alignment: Qt.AlignHCenter
                     text: streamView.blockGranularityText.length > 0
                           ? "当前帧块级数据暂不可用（" + streamView.blockGranularityText + "）"
-                          : "当前编码格式暂不支持块级分析（P1 支持 H.264 / HEVC）"
+                          : "当前编码格式暂不支持块级分析（H.264 / HEVC / VVC）"
                     color: "#9aa0a6"; font.pixelSize: 12 }
             }
 
@@ -1647,15 +1717,37 @@ property real panelSplitRatio: 0.5
                     const scale  = drawW / vw
                     const scaleY = drawH / vh
 
-                    // ── CU 网格线（只画白色线条，不填充色块）──
-                    // 用户需求：不要蓝色底，划分仅用白色线条，且白线更亮。
-                    if (streamView.qpOverlayEnabled) {
-                        ctx.lineWidth = 1
-                        ctx.strokeStyle = "rgba(255,255,255,0.95)"
+                    const mode = streamView.overlayMode
+                    if (mode > 0) {
+                        let qmin = 1e9, qmax = -1e9
+                        if (mode === 2) {
+                            for (let i = 0; i < blocks.length; ++i) {
+                                const q = Number(blocks[i].qp)
+                                if (q < qmin) qmin = q
+                                if (q > qmax) qmax = q
+                            }
+                            if (qmax < qmin) { qmin = 0; qmax = 1 }
+                        }
                         for (let i = 0; i < blocks.length; ++i) {
                             const b = blocks[i]
-                            ctx.strokeRect(offX + b.x * scale, offY + b.y * scaleY,
-                                           b.w * scale, b.h * scaleY)
+                            const x = offX + b.x * scale
+                            const y = offY + b.y * scaleY
+                            const w = b.w * scale
+                            const h = b.h * scaleY
+                            if (mode === 2) {
+                                ctx.fillStyle = streamView.overlayQpRgba(Number(b.qp), qmin, qmax, 0.42)
+                                ctx.fillRect(x, y, w, h)
+                            } else if (mode === 3) {
+                                ctx.fillStyle = streamView.overlayPredRgba(b, 0.40)
+                                ctx.fillRect(x, y, w, h)
+                            }
+                            ctx.lineWidth = 1
+                            ctx.strokeStyle = (mode === 1)
+                                              ? "rgba(255,255,255,0.95)"
+                                              : "rgba(255,255,255,0.28)"
+                            ctx.strokeRect(x, y, w, h)
+                            if (mode === 4 && w >= 7 && h >= 7)
+                                streamView.drawOverlayMv(ctx, b, x, y, w, h)
                         }
                     }
 
@@ -1697,6 +1789,7 @@ property real panelSplitRatio: 0.5
                     target: streamView
                     function onSlotBlocksChanged()       { blockCanvas.requestPaint() }
                     function onQpOverlayEnabledChanged() { blockCanvas.requestPaint() }
+                    function onOverlayModeChanged()      { blockCanvas.requestPaint() }
                     function onSlotCurrentChanged() {
                         blockCanvas.selectedIndex = -1
                         streamView.selectedBlockIndex = -1
@@ -2034,6 +2127,103 @@ property real panelSplitRatio: 0.5
                 }
             }
 
+            // 图例浮在画面角上，不占布局行。写死色块，避免 Repeater/非法属性导致加载崩溃。
+            Item {
+                id: overlayLegendFloat
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 16
+                anchors.bottomMargin: 8
+                height: 14
+                z: 40
+                visible: streamView.qpOverlayEnabled && streamView.overlayMode >= 2
+
+                Row {
+                    id: legendQpRow
+                    height: 14
+                    spacing: 6
+                    visible: streamView.overlayMode === 2
+                    Text {
+                        height: 14; text: "低"; color: "#c8ccd2"; font.pixelSize: 10
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#0050ff"; y: 3 }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#00ff00"; y: 3 }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#ffff00"; y: 3 }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#ff0000"; y: 3 }
+                    Text {
+                        height: 14; text: "高"; color: "#c8ccd2"; font.pixelSize: 10
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+                Row {
+                    height: 14
+                    spacing: 8
+                    visible: streamView.overlayMode === 3
+                    Row {
+                        height: 14; spacing: 3
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#dc4646"; y: 3 }
+                        Text {
+                            height: 14; text: "Intra"; color: "#c8ccd2"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    Row {
+                        height: 14; spacing: 3
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#3c78e6"; y: 3 }
+                        Text {
+                            height: 14; text: "Inter"; color: "#c8ccd2"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    Row {
+                        height: 14; spacing: 3
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#28bec8"; y: 3 }
+                        Text {
+                            height: 14; text: "Bi"; color: "#c8ccd2"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    Row {
+                        height: 14; spacing: 3
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#a0a0a0"; y: 3 }
+                        Text {
+                            height: 14; text: "Skip"; color: "#c8ccd2"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    Row {
+                        height: 14; spacing: 3
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#b450dc"; y: 3 }
+                        Text {
+                            height: 14; text: "IBC"; color: "#c8ccd2"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+                Row {
+                    height: 14
+                    spacing: 8
+                    visible: streamView.overlayMode === 4
+                    Row {
+                        height: 14; spacing: 3
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#50dc78"; y: 3 }
+                        Text {
+                            height: 14; text: "L0"; color: "#c8ccd2"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    Row {
+                        height: 14; spacing: 3
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#e65ac8"; y: 3 }
+                        Text {
+                            height: 14; text: "L1"; color: "#c8ccd2"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+            }
+
         }
 
         // ══════════════ 码率 / 层级 面板宿主（联合分栏）══════════════
@@ -2299,13 +2489,13 @@ property real panelSplitRatio: 0.5
                         onClicked: viewMenuPopup.visible ? viewMenuPopup.close() : viewMenuPopup.open()
                     }
                     ToolTip.visible: viewMenuMa.containsMouse && !viewMenuPopup.visible
-                    ToolTip.text: qsTr("显示选项：编码顺序 / 码率 / 层级 / 块信息")
+                    ToolTip.text: qsTr("显示：编码顺序 / 码率 / 层级 / 块信息")
 
                     Popup {
                         id: viewMenuPopup
                         x: 0
                         y: -implicitHeight - 4
-                        padding: 4
+                        padding: 6
                         modal: false
                         dim: false
                         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
@@ -2315,7 +2505,7 @@ property real panelSplitRatio: 0.5
                             radius: 4
                         }
                         contentItem: Column {
-                            spacing: 1
+                            spacing: 2
                             Repeater {
                                 model: [
                                     { key: "order",  label: "编码顺序" },
@@ -2377,11 +2567,62 @@ property real panelSplitRatio: 0.5
                                             } else if (k === "hier") {
                                                 streamView.hierarchyChartOpen = !streamView.hierarchyChartOpen
                                             } else {
-                                                streamView.qpOverlayEnabled = !streamView.qpOverlayEnabled
+                                                if (streamView.overlayMode > 0) {
+                                                    streamView.overlayModeSaved = streamView.overlayMode
+                                                    streamView.overlayMode = 0
+                                                } else {
+                                                    streamView.overlayMode = streamView.overlayModeSaved > 0
+                                                                             ? streamView.overlayModeSaved : 1
+                                                }
                                             }
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 12
+                    Layout.alignment: Qt.AlignVCenter
+                    color: "#3a3a44"
+                    visible: streamView.qpOverlayEnabled
+                }
+
+                Row {
+                    id: overlayModeBar
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: streamView.qpOverlayEnabled
+                    spacing: 3
+                    Repeater {
+                        model: [
+                            { m: 1, t: "划分" },
+                            { m: 2, t: "QP" },
+                            { m: 3, t: "Pred" },
+                            { m: 4, t: "MV" }
+                        ]
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: ovBarLab.implicitWidth + 10
+                            height: 18
+                            radius: 3
+                            color: streamView.overlayMode === modelData.m ? "#2a3f5a" : "#80252528"
+                            border.color: streamView.overlayMode === modelData.m ? "#42A5FF" : "#3a3a44"
+                            Text {
+                                id: ovBarLab
+                                anchors.centerIn: parent
+                                text: modelData.t
+                                color: streamView.overlayMode === modelData.m ? "#e6f0ff" : "#9aa0a6"
+                                font.pixelSize: 10
+                                font.bold: streamView.overlayMode === modelData.m
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: streamView.overlayMode = modelData.m
                             }
                         }
                     }

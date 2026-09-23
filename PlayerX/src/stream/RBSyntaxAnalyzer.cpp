@@ -96,6 +96,12 @@ bool isApsNal(int codec, int nalType) {
     return codec == 2 && (nalType == 17 || nalType == 18);
 }
 
+bool isSeiNal(int codec, int nalType) {
+    if (codec == 0) return nalType == 6;
+    if (codec == 1) return nalType == 39 || nalType == 40;   // PREFIX/SUFFIX_SEI
+    return nalType == 23 || nalType == 24;                   // VVC PREFIX/SUFFIX_SEI
+}
+
 QByteArray wrapAnnexb(const uint8_t* data, int size)
 {
     QByteArray a;
@@ -220,31 +226,36 @@ std::vector<std::pair<int, QByteArray>> findPicturePackets(
 // ── 参数集 NAL 类型判定 + 组标签 ─────────────────────────────────
 // 与 FFmpeg vvc.h / hevc.h NUT 枚举一致；H.264 无 VPS。
 bool isParameterSetNal(int codec, int nalType) {
-    if (codec == 0) {           // h264: 7=SPS 8=PPS
-        return nalType == 7 || nalType == 8;
+    if (codec == 0) {           // h264: 7=SPS 8=PPS 6=SEI
+        return nalType == 7 || nalType == 8 || nalType == 6;
     }
-    if (codec == 1) {           // hevc: 32=VPS 33=SPS 34=PPS
-        return nalType == 32 || nalType == 33 || nalType == 34;
+    if (codec == 1) {           // hevc: 32=VPS 33=SPS 34=PPS 39/40=SEI
+        return nalType == 32 || nalType == 33 || nalType == 34
+            || nalType == 39 || nalType == 40;
     }
-    // vvc: 13=DCI 14=VPS 15=SPS 16=PPS 17/18=APS
+    // vvc: 13=DCI 14=VPS 15=SPS 16=PPS 17/18=APS 23/24=SEI
     return nalType == 13 || nalType == 14 || nalType == 15
-        || nalType == 16 || nalType == 17 || nalType == 18;
+        || nalType == 16 || nalType == 17 || nalType == 18
+        || nalType == 23 || nalType == 24;
 }
 
 QString parameterSetLabel(int codec, int nalType) {
     if (codec == 0) {
         if (nalType == 7) return QStringLiteral("SPS");
         if (nalType == 8) return QStringLiteral("PPS");
+        if (nalType == 6) return QStringLiteral("SEI");
     } else if (codec == 1) {
         if (nalType == 32) return QStringLiteral("VPS");
         if (nalType == 33) return QStringLiteral("SPS");
         if (nalType == 34) return QStringLiteral("PPS");
+        if (nalType == 39 || nalType == 40) return QStringLiteral("SEI");
     } else {
         if (nalType == 13) return QStringLiteral("DCI");
         if (nalType == 14) return QStringLiteral("VPS");
         if (nalType == 15) return QStringLiteral("SPS");
         if (nalType == 16) return QStringLiteral("PPS");
         if (nalType == 17 || nalType == 18) return QStringLiteral("APS");
+        if (nalType == 23 || nalType == 24) return QStringLiteral("SEI");
     }
     return QString();
 }
@@ -587,11 +598,12 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
     auto collectAnnexbPackets = [&](const uint8_t* data, int64_t size) {
         std::vector<std::pair<int, QByteArray>> packets;
         bool typeSeen[64] = { false };
-        int ppsCount = 0, apsCount = 0;
+        int ppsCount = 0, apsCount = 0, seiCount = 0;
         for (const auto& nal : scanNals(data, size, codecIdx)) {
             if (parameterSetLabel(codecIdx, nal.nalType).isEmpty()) continue;
             const bool multi = isPpsNal(codecIdx, nal.nalType)
-                            || isApsNal(codecIdx, nal.nalType);
+                            || isApsNal(codecIdx, nal.nalType)
+                            || isSeiNal(codecIdx, nal.nalType);
             // HEVC VPS/SPS 是 32/33，必须用到 64；原先 <32 导致裸 265
             // 每遇到一次参数集就重复收集。
             if (!multi && nal.nalType >= 0 && nal.nalType < 64) {
@@ -600,6 +612,7 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
             }
             if (isPpsNal(codecIdx, nal.nalType) && ++ppsCount > 8) continue;
             if (isApsNal(codecIdx, nal.nalType) && ++apsCount > 32) continue;
+            if (isSeiNal(codecIdx, nal.nalType) && ++seiCount > 16) continue;
             packets.push_back({nal.nalType, QByteArray(
                 reinterpret_cast<const char*>(data + nal.startOff), int(nal.totalLen))});
         }
@@ -772,7 +785,8 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
         collector.out = dest;
         std::vector<std::pair<int, QByteArray>> base;
         for (const auto& p : paramPackets) {
-            if (isPpsNal(codecIdx, p.first) || isApsNal(codecIdx, p.first))
+            if (isPpsNal(codecIdx, p.first) || isApsNal(codecIdx, p.first)
+                || isSeiNal(codecIdx, p.first))
                 continue;
             base.push_back(p);
         }
@@ -789,10 +803,11 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
     };
 
     if (!inbandPackets.empty()) {
-        std::vector<std::pair<int, QByteArray>> ppsPkts, apsPkts, otherPkts;
+        std::vector<std::pair<int, QByteArray>> ppsPkts, apsPkts, seiPkts, otherPkts;
         for (const auto& p : inbandPackets) {
             if (isPpsNal(codecIdx, p.first)) ppsPkts.push_back(p);
             else if (isApsNal(codecIdx, p.first)) apsPkts.push_back(p);
+            else if (isSeiNal(codecIdx, p.first)) seiPkts.push_back(p);
             else otherPkts.push_back(p);
         }
         bool haveSps = false;
@@ -846,6 +861,14 @@ std::vector<RBSyntaxEntry> RBSyntaxAnalyzer::analyze(const QString& codecName,
             paramEntries.insert(paramEntries.end(), onlyAps.begin(), onlyAps.end());
             for (const auto& a : apsPkts)
                 paramPackets.push_back(a);
+        }
+
+        if (!seiPkts.empty()) {
+            std::vector<RBSyntaxEntry> seiEntries;
+            parseWithSps(seiPkts, &seiEntries);
+            eraseSet(paramEntries, QStringLiteral("SEI"));
+            auto onlySei = takeSet(seiEntries, QStringLiteral("SEI"));
+            paramEntries.insert(paramEntries.end(), onlySei.begin(), onlySei.end());
         }
     }
 
