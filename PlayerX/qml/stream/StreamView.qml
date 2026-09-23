@@ -1729,6 +1729,7 @@ property real panelSplitRatio: 0.5
                     }
 
                     onPressed: function(mouse) {
+                        streamView.forceActiveFocus()
                         if (streamView.viewZoom > 1) {
                             _panning = true
                             _lastX = mouse.x

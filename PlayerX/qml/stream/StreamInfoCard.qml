@@ -477,22 +477,25 @@ Item {
                         anchors.right: parent.right
                         text: {
                             const _ = panel.syntaxVer
+                            const tab = panel.syntaxTab
                             if (!StreamBridge.hasFile(panel.slot)) return "—"
                             if (!panel.syntaxReady) return "解析中…"
-                            const total = panel.syntaxEntries.length
-                            // 未过滤 → 只显示总数；过滤 → 显示 matched / total
+                            const order = panel.syntaxGroups.order
+                            const src = (tab >= 0 && tab < order.length)
+                                        ? (panel.syntaxGroups.map[order[tab]] || [])
+                                        : []
+                            const tabTotal = src.length
                             if (!panel.syntaxFilter || panel.syntaxFilter.length === 0)
-                                return total + " 项"
-                            // 全量过滤（跨所有分组）以让计数直观反映筛选结果
+                                return tabTotal + " 项"
                             const kw = panel.syntaxFilter.toLowerCase()
                             let hit = 0
-                            for (let i = 0; i < panel.syntaxEntries.length; ++i) {
-                                const e = panel.syntaxEntries[i]
+                            for (let i = 0; i < src.length; ++i) {
+                                const e = src[i]
                                 const nm = String(e.name || "").toLowerCase()
                                 const vl = String(e.value || "").toLowerCase()
                                 if (nm.indexOf(kw) >= 0 || vl.indexOf(kw) >= 0) ++hit
                             }
-                            return hit + " / " + total + " 项"
+                            return hit + " / " + tabTotal + " 项"
                         }
                         color: (panel.syntaxFilter && panel.syntaxFilter.length > 0)
                                ? "#42A5FF" : "#9aa0a6"
@@ -552,10 +555,19 @@ Item {
                             onTextChanged: {
                                 if (panel.syntaxFilter !== text) panel.syntaxFilter = text
                             }
-                            // Esc 快捷清空
-                            Keys.onEscapePressed: {
+                            Keys.onEscapePressed: function(event) {
                                 panel.syntaxFilter = ""
                                 text = ""
+                                focus = false
+                                event.accepted = true
+                            }
+                            Keys.onReturnPressed: function(event) {
+                                focus = false
+                                event.accepted = true
+                            }
+                            Keys.onEnterPressed: function(event) {
+                                focus = false
+                                event.accepted = true
                             }
                         }
 
@@ -910,6 +922,28 @@ Item {
                             }
                         }
                     }
+                }
+            }
+
+            // 点侧栏其它区域时收起搜索焦点，避免空格/方向键仍被输入框吃掉
+            MouseArea {
+                anchors.fill: parent
+                z: 1000
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                propagateComposedEvents: true
+                onPressed: function(mouse) {
+                    if (!synFilterField.activeFocus) {
+                        mouse.accepted = false
+                        return
+                    }
+                    const p = mapToItem(synSearchBox, mouse.x, mouse.y)
+                    const inside = synSearchBox.visible
+                                   && p.x >= 0 && p.y >= 0
+                                   && p.x < synSearchBox.width
+                                   && p.y < synSearchBox.height
+                    if (!inside)
+                        synFilterField.focus = false
+                    mouse.accepted = false
                 }
             }
         }
