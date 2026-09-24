@@ -628,13 +628,13 @@ property real panelSplitRatio: 0.5
     function overlayPredRgba(b, a) {
         const pm = Number(b.predMode)
         const pf = Number(b.predFlag)
-        if (b.isSkip || pm === 2) return "rgba(160,160,160," + a + ")"
-        if (pm === 4 || pf === 5) return "rgba(180,80,220," + a + ")"
-        if (pm === 3) return "rgba(230,150,40," + a + ")"
-        if (pm === 1 || (b.isIntra && pm !== 0)) return "rgba(220,70,70," + a + ")"
-        if (pf === 3) return "rgba(40,190,200," + a + ")"
-        if (pf === 2) return "rgba(200,80,180," + a + ")"
-        return "rgba(60,120,230," + a + ")"
+        if (b.isSkip || pm === 2) return "rgba(190,196,204," + Math.min(a, 0.50) + ")"
+        if (pm === 4 || pf === 5) return "rgba(200,76,255," + a + ")"
+        if (pm === 3) return "rgba(255,176,32," + a + ")"
+        if (pm === 1 || (b.isIntra && pm !== 0)) return "rgba(255,45,106," + a + ")"
+        if (pf === 3) return "rgba(0,229,208," + a + ")"
+        if (pf === 2) return "rgba(255,106,44," + a + ")"
+        return "rgba(43,111,255," + a + ")"
     }
     function drawOverlayMv(ctx, b, x, y, w, h) {
         // 与层级图入边一致：L0/过去 ← #3d9eff 蓝，L1/未来 → #ff6a2c 橙。
@@ -713,8 +713,24 @@ property real panelSplitRatio: 0.5
             if (z1) dot(colL1)
             else arrow(v1, colL1)
         }
-        if (!hasL0 && !hasL1 && (Math.abs(Number(b.mvx)) + Math.abs(Number(b.mvy)) > 0.01))
+        if (hasL0 || hasL1) return
+        if (Math.abs(Number(b.mvx)) + Math.abs(Number(b.mvy)) > 0.01) {
             arrow(vec(b.mvx, b.mvy), colL0)
+            return
+        }
+        // Intra / Palette：语法上无 MV，画浅灰叉，避免被看成漏导。
+        const pm = Number(b.predMode)
+        if (b.isIntra || pm === 1 || pm === 3) {
+            const s = Math.min(3.2, Math.max(1.8, Math.min(w, h) * 0.18))
+            ctx.strokeStyle = "rgba(170,176,184,0.85)"
+            ctx.lineWidth = 1.1
+            ctx.beginPath()
+            ctx.moveTo(cx - s, cy - s)
+            ctx.lineTo(cx + s, cy + s)
+            ctx.moveTo(cx + s, cy - s)
+            ctx.lineTo(cx - s, cy + s)
+            ctx.stroke()
+        }
     }
     function clampViewPan() {
         if (!viewZoomed) {
@@ -1791,7 +1807,7 @@ property real panelSplitRatio: 0.5
                                 ctx.fillStyle = streamView.overlayQpRgba(Number(b.qp), qmin, qmax, 0.52)
                                 ctx.fillRect(x, y, w, h)
                             } else if (mode === 3) {
-                                ctx.fillStyle = streamView.overlayPredRgba(b, 0.40)
+                                ctx.fillStyle = streamView.overlayPredRgba(b, 0.66)
                                 ctx.fillRect(x, y, w, h)
                             }
                             ctx.lineWidth = 1
@@ -2230,31 +2246,31 @@ property real panelSplitRatio: 0.5
                     visible: streamView.overlayMode === 3
                     Row {
                         height: 14; spacing: 3
-                        Rectangle { width: 8; height: 8; radius: 2; color: "#dc4646"; y: 3 }
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#ff2d6a"; y: 3 }
                         Text {
-                            height: 14; text: "Intra"; color: "#c8ccd2"; font.pixelSize: 10
+                            height: 14; text: "Intra"; color: "#ff2d6a"; font.pixelSize: 10
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
                     Row {
                         height: 14; spacing: 3
-                        Rectangle { width: 8; height: 8; radius: 2; color: "#3c78e6"; y: 3 }
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#2b6fff"; y: 3 }
                         Text {
-                            height: 14; text: "Inter"; color: "#c8ccd2"; font.pixelSize: 10
+                            height: 14; text: "Inter"; color: "#2b6fff"; font.pixelSize: 10
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
                     Row {
                         height: 14; spacing: 3
-                        Rectangle { width: 8; height: 8; radius: 2; color: "#28bec8"; y: 3 }
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#00e5d0"; y: 3 }
                         Text {
-                            height: 14; text: "Bi"; color: "#c8ccd2"; font.pixelSize: 10
+                            height: 14; text: "Bi"; color: "#00e5d0"; font.pixelSize: 10
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
                     Row {
                         height: 14; spacing: 3
-                        Rectangle { width: 8; height: 8; radius: 2; color: "#a0a0a0"; y: 3 }
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#bec4cc"; y: 3 }
                         Text {
                             height: 14; text: "Skip"; color: "#c8ccd2"; font.pixelSize: 10
                             verticalAlignment: Text.AlignVCenter
@@ -2262,9 +2278,9 @@ property real panelSplitRatio: 0.5
                     }
                     Row {
                         height: 14; spacing: 3
-                        Rectangle { width: 8; height: 8; radius: 2; color: "#b450dc"; y: 3 }
+                        Rectangle { width: 8; height: 8; radius: 2; color: "#c84cff"; y: 3 }
                         Text {
-                            height: 14; text: "IBC"; color: "#c8ccd2"; font.pixelSize: 10
+                            height: 14; text: "IBC"; color: "#c84cff"; font.pixelSize: 10
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
@@ -2300,6 +2316,10 @@ property real panelSplitRatio: 0.5
                         }
                         Text {
                             height: 14; text: "蓝|橙圆=Bi 且两路≈0"; color: "#ffb088"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Text {
+                            height: 14; text: "灰叉=Intra 无MV"; color: "#aab0b8"; font.pixelSize: 10
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
