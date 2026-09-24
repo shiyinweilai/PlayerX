@@ -772,13 +772,13 @@ Item {
                                     let col, lw = 1
                                     if (inEdge) {
                                         // 入边配色与右侧「参考」列表逐字一致：
-                                        //   后向(←) #7ec8ff 浅蓝 / 前向(→) #8fe6a8 浅绿
+                                        //   后向 L0(←) #3d9eff 蓝 / 前向 L1(→) #ff6a2c 橙（与 MV 叠加同色）
                                         lw = 2
-                                        col = isPast ? "#7ec8ff" : "#8fe6a8"
+                                        col = isPast ? "#3d9eff" : "#ff6a2c"
                                     } else if (hasSel) {
-                                        col = isPast ? "rgba(74,144,217,0.10)" : "rgba(91,191,127,0.10)"
+                                        col = isPast ? "rgba(61,158,255,0.10)" : "rgba(255,106,44,0.10)"
                                     } else {
-                                        col = isPast ? "rgba(74,144,217,0.45)" : "rgba(91,191,127,0.45)"
+                                        col = isPast ? "rgba(61,158,255,0.50)" : "rgba(255,106,44,0.50)"
                                     }
                                     drawArrow(ctx, xc(tr), rowY(rows[tr].row), xc(r), rowY(f.row), col, lw)
                                 }
@@ -811,7 +811,7 @@ Item {
                                     ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2
                                     ctx.strokeRect(x - 2, y - 2, bw + 4, bh + 4)
                                 } else if (isSelRef) {
-                                    ctx.strokeStyle = "#7ec8ff"; ctx.lineWidth = 1.5
+                                    ctx.strokeStyle = "#3d9eff"; ctx.lineWidth = 1.5
                                     ctx.strokeRect(x - 1.5, y - 1.5, bw + 3, bh + 3)
                                 }
                                 // 帧号：全部帧都标 POC（口径与 VQ 一致），选中帧用高亮色。
@@ -1014,12 +1014,12 @@ Item {
                                 radius: 3
                                 color: "#182028"
                                 border.width: 1
-                                border.color: backward ? "#3a6a90" : "#3a7a58"
+                                border.color: backward ? "#2a5080" : "#8a3518"
                                 Text {
                                     id: chipLab
                                     anchors.centerIn: parent
                                     text: rf ? ((backward ? "←" : "→") + rf.poc + " " + chartPanel.typeLabel(rf)) : ""
-                                    color: backward ? "#7ec8ff" : "#8fe6a8"
+                                    color: backward ? "#3d9eff" : "#ff6a2c"
                                     font.pixelSize: 10
                                     font.family: "Monospace"
                                 }

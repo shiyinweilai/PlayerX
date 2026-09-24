@@ -299,10 +299,11 @@ bool RBBlockAnalyzer::extractH264(AVFrame* frame, RBFrameBlocks& out) {
 }
 
 bool RBBlockAnalyzer::extractHevcCtu(AVFrame* frame, RBFrameBlocks& out) {
-    // HEVC 降级方案：FFmpeg 原生未导出 HEVC 的 enc_params。
-    // 完整实现需给 hevcdec.c 打补丁导出 qp_y_tab + tab_mvf（见 §4）。
-    // 一期：若上游补丁已合入并产出了 H264 同款 side data（type=HEVC），
-    // 这里复用同一解析逻辑；否则返回 false，由 UI 降级提示。
+    // 优先读 CODEC_BLOCK_INFO（与 VVC 同布局：QP / Pred / MV）。
+    if (extractVvc(frame, out))
+        return true;
+
+    // 仅有 enc_params 时退回划分 + QP（Pred/MV 再交给 fillMotionVectors）。
     const AVFrameSideData* sd =
         av_frame_get_side_data(frame, AV_FRAME_DATA_VIDEO_ENC_PARAMS);
     if (!sd || sd->size < static_cast<int>(sizeof(AVVideoEncParams))) return false;
@@ -495,9 +496,12 @@ bool RBBlockAnalyzer::extractBlocks(AVFrame* frame, RBFrameBlocks& out) {
 
     if (!ok) return false;
 
-    // VVC 已从 CODEC_BLOCK_INFO 拿到真实 pred/skip/MV，不再用运动矢量 side data 覆盖。
-    // H.264 / HEVC 的 enc_params 不含 MV，再补 AV_FRAME_DATA_MOTION_VECTORS。
-    if (m_codecId != AV_CODEC_ID_VVC)
+    // VVC / HEVC 若已从 CODEC_BLOCK_INFO 拿到 Pred/MV，不要再用 MOTION_VECTORS 覆盖。
+    // H.264（以及 HEVC 仅有 enc_params 的旧路径）再补运动矢量。
+    const bool haveCodecBlocks =
+        av_frame_get_side_data(frame, AV_FRAME_DATA_CODEC_BLOCK_INFO) != nullptr;
+    if (m_codecId == AV_CODEC_ID_H264 ||
+        (m_codecId == AV_CODEC_ID_HEVC && !haveCodecBlocks))
         fillMotionVectors(frame, out);
     return true;
 }

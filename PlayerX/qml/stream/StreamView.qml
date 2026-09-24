@@ -596,72 +596,125 @@ property real panelSplitRatio: 0.5
         viewPanY = 0
         _zoomWheelAccum = 0
     }
+    function overlayQpRgbStops(t) {
+        // 蓝→青→绿→黄→红，相邻 QP 换色相，不靠深浅。
+        t = Math.max(0, Math.min(1, t))
+        const s = [
+            [32, 96, 255],
+            [0, 210, 220],
+            [56, 210, 48],
+            [255, 210, 32],
+            [255, 48, 40]
+        ]
+        const x = t * 4
+        const i = Math.min(3, Math.floor(x))
+        const u = x - i
+        return [
+            Math.round(s[i][0] + (s[i + 1][0] - s[i][0]) * u),
+            Math.round(s[i][1] + (s[i + 1][1] - s[i][1]) * u),
+            Math.round(s[i][2] + (s[i + 1][2] - s[i][2]) * u)
+        ]
+    }
     function overlayQpRgba(qp, qmin, qmax, a) {
-        let t = 0.5
-        if (qmax > qmin)
-            t = Math.max(0, Math.min(1, (qp - qmin) / (qmax - qmin)))
-        let r = 0, g = 0, b = 0
-        if (t < 0.25) {
-            const u = t / 0.25
-            g = Math.round(80 + 175 * u); b = 255
-        } else if (t < 0.5) {
-            const u = (t - 0.25) / 0.25
-            g = 255; b = Math.round(255 * (1 - u))
-        } else if (t < 0.75) {
-            const u = (t - 0.5) / 0.25
-            r = Math.round(255 * u); g = 255
-        } else {
-            const u = (t - 0.75) / 0.25
-            r = 255; g = Math.round(255 * (1 - u))
-        }
-        return "rgba(" + r + "," + g + "," + b + "," + a + ")"
+        const span = qmax - qmin
+        let t
+        if (span >= 2)
+            t = (qp - qmin) / span
+        else
+            t = Math.max(0, Math.min(1, (Number(qp) - 10) / 41))
+        const rgb = overlayQpRgbStops(t)
+        return "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + a + ")"
     }
     function overlayPredRgba(b, a) {
         const pm = Number(b.predMode)
-        if (b.isSkip || pm === 2) return "rgba(160,160,160," + a + ")"
-        if (pm === 4) return "rgba(180,80,220," + a + ")"
-        if (pm === 3) return "rgba(230,150,40," + a + ")"
-        if (b.isIntra || pm === 1) return "rgba(220,70,70," + a + ")"
         const pf = Number(b.predFlag)
+        if (b.isSkip || pm === 2) return "rgba(160,160,160," + a + ")"
+        if (pm === 4 || pf === 5) return "rgba(180,80,220," + a + ")"
+        if (pm === 3) return "rgba(230,150,40," + a + ")"
+        if (pm === 1 || (b.isIntra && pm !== 0)) return "rgba(220,70,70," + a + ")"
         if (pf === 3) return "rgba(40,190,200," + a + ")"
         if (pf === 2) return "rgba(200,80,180," + a + ")"
         return "rgba(60,120,230," + a + ")"
     }
     function drawOverlayMv(ctx, b, x, y, w, h) {
+        // 与层级图入边一致：L0/过去 ← #3d9eff 蓝，L1/未来 → #ff6a2c 橙。
+        // 蓝橙色相差一截，小圆点叠在画面上也分得清。
+        const colL0 = "rgba(61,158,255,0.95)"
+        const colL1 = "rgba(255,106,44,0.95)"
         const cx = x + w * 0.5
         const cy = y + h * 0.5
-        const scalePx = Math.max(w, h) / 18
-        function arrow(mx, my, color) {
-            const dx = Number(mx) * scalePx
-            const dy = Number(my) * scalePx
-            if (Math.abs(dx) < 0.4 && Math.abs(dy) < 0.4) return
-            const ex = cx + dx
-            const ey = cy + dy
+        const sx = (Number(b.w) > 0) ? (w / Number(b.w)) : 1
+        const sy = (Number(b.h) > 0) ? (h / Number(b.h)) : 1
+        function vec(mx, my) {
+            return { dx: Number(mx) * sx, dy: Number(my) * sy }
+        }
+        // 按码流像素判断，不按画布像素。缩小时 1 像素位移也会被画成 <1px，
+        // 不能因此当成 ≈0（例如 L1=(1.0, 0.5) 必须画箭头）。
+        function isNearZeroPel(mx, my) {
+            return Math.hypot(Number(mx), Number(my)) < 0.25
+        }
+        function arrow(v, color) {
+            const len = Math.hypot(v.dx, v.dy)
             ctx.strokeStyle = color
             ctx.fillStyle = color
-            ctx.lineWidth = 1.2
+            ctx.lineWidth = 1.1
+            const ang = Math.atan2(v.dy, v.dx)
+            const shaft = Math.max(len, 6)
+            const ex = cx + Math.cos(ang) * shaft
+            const ey = cy + Math.sin(ang) * shaft
             ctx.beginPath()
             ctx.moveTo(cx, cy)
             ctx.lineTo(ex, ey)
             ctx.stroke()
-            const ang = Math.atan2(dy, dx)
+            const hs = Math.min(4, Math.max(2.2, shaft * 0.28))
             ctx.beginPath()
             ctx.moveTo(ex, ey)
-            ctx.lineTo(ex - 5 * Math.cos(ang - 0.4), ey - 5 * Math.sin(ang - 0.4))
-            ctx.lineTo(ex - 5 * Math.cos(ang + 0.4), ey - 5 * Math.sin(ang + 0.4))
+            ctx.lineTo(ex - hs * Math.cos(ang - 0.45), ey - hs * Math.sin(ang - 0.45))
+            ctx.lineTo(ex - hs * Math.cos(ang + 0.45), ey - hs * Math.sin(ang + 0.45))
             ctx.closePath()
             ctx.fill()
         }
+        function dot(color) {
+            ctx.fillStyle = color
+            ctx.beginPath()
+            ctx.arc(cx, cy, 2.2, 0, 6.2832)
+            ctx.fill()
+        }
+        function biZeroDot() {
+            ctx.beginPath()
+            ctx.arc(cx, cy, 2.4, -1.5708, 1.5708)
+            ctx.fillStyle = colL0
+            ctx.fill()
+            ctx.beginPath()
+            ctx.arc(cx, cy, 2.4, 1.5708, 4.7124)
+            ctx.fillStyle = colL1
+            ctx.fill()
+        }
         const pf = Number(b.predFlag)
-        const hasL0 = (pf & 1) || (Math.abs(Number(b.mvxL0)) + Math.abs(Number(b.mvyL0)) > 0.01)
-        const hasL1 = (pf & 2) || (Math.abs(Number(b.mvxL1)) + Math.abs(Number(b.mvyL1)) > 0.01)
-        if (hasL0)
-            arrow(b.mvxL0 !== undefined ? b.mvxL0 : b.mvx,
-                  b.mvyL0 !== undefined ? b.mvyL0 : b.mvy, "rgba(80,220,120,0.95)")
-        if (hasL1)
-            arrow(b.mvxL1, b.mvyL1, "rgba(230,90,200,0.95)")
+        const mx0 = b.mvxL0 !== undefined ? b.mvxL0 : b.mvx
+        const my0 = b.mvyL0 !== undefined ? b.mvyL0 : b.mvy
+        const mx1 = b.mvxL1
+        const my1 = b.mvyL1
+        const v0 = vec(mx0, my0)
+        const v1 = vec(mx1, my1)
+        const z0 = isNearZeroPel(mx0, my0)
+        const z1 = isNearZeroPel(mx1, my1)
+        const hasL0 = (pf & 1) || (Math.abs(Number(mx0)) + Math.abs(Number(my0)) > 0.01)
+        const hasL1 = (pf & 2) || (Math.abs(Number(mx1)) + Math.abs(Number(my1)) > 0.01)
+        if (hasL0 && hasL1 && z0 && z1) {
+            biZeroDot()
+            return
+        }
+        if (hasL0) {
+            if (z0) dot(colL0)
+            else arrow(v0, colL0)
+        }
+        if (hasL1) {
+            if (z1) dot(colL1)
+            else arrow(v1, colL1)
+        }
         if (!hasL0 && !hasL1 && (Math.abs(Number(b.mvx)) + Math.abs(Number(b.mvy)) > 0.01))
-            arrow(b.mvx, b.mvy, "rgba(80,220,120,0.95)")
+            arrow(vec(b.mvx, b.mvy), colL0)
     }
     function clampViewPan() {
         if (!viewZoomed) {
@@ -1735,7 +1788,7 @@ property real panelSplitRatio: 0.5
                             const w = b.w * scale
                             const h = b.h * scaleY
                             if (mode === 2) {
-                                ctx.fillStyle = streamView.overlayQpRgba(Number(b.qp), qmin, qmax, 0.42)
+                                ctx.fillStyle = streamView.overlayQpRgba(Number(b.qp), qmin, qmax, 0.52)
                                 ctx.fillRect(x, y, w, h)
                             } else if (mode === 3) {
                                 ctx.fillStyle = streamView.overlayPredRgba(b, 0.40)
@@ -1746,7 +1799,7 @@ property real panelSplitRatio: 0.5
                                               ? "rgba(255,255,255,0.95)"
                                               : "rgba(255,255,255,0.28)"
                             ctx.strokeRect(x, y, w, h)
-                            if (mode === 4 && w >= 7 && h >= 7)
+                            if (mode === 4 && w >= 3 && h >= 3)
                                 streamView.drawOverlayMv(ctx, b, x, y, w, h)
                         }
                     }
@@ -2022,7 +2075,7 @@ property real panelSplitRatio: 0.5
                         return "Inter"
                     }
                     function refLabel(b) {
-                        if (!b || b.isIntra || b.isSkip) return ""
+                        if (!b || b.isIntra) return ""
                         const pf = Number(b.predFlag !== undefined ? b.predFlag : 0)
                         if (pf === 3) return "Bi"
                         if (pf === 2) return "L1"
@@ -2031,11 +2084,25 @@ property real panelSplitRatio: 0.5
                         if (b.refIdx === 0) return "L0"
                         return ""
                     }
+                    function fmtMv(x, y) {
+                        const nx = Number(x), ny = Number(y)
+                        if (!(nx === nx) || !(ny === ny)) return ""
+                        return "(" + nx.toFixed(1) + ", " + ny.toFixed(1) + ")"
+                    }
                     function mvLabel(b) {
-                        if (!b || b.isIntra || b.isSkip) return ""
-                        const x = Number(b.mvx), y = Number(b.mvy)
-                        if (!(x === x) || !(y === y)) return ""
-                        return "(" + x.toFixed(1) + ", " + y.toFixed(1) + ")"
+                        if (!b || b.isIntra) return ""
+                        const pf = Number(b.predFlag !== undefined ? b.predFlag : 0)
+                        const l0 = cardCol.fmtMv(b.mvxL0 !== undefined ? b.mvxL0 : b.mvx,
+                                                 b.mvyL0 !== undefined ? b.mvyL0 : b.mvy)
+                        const l1 = cardCol.fmtMv(b.mvxL1, b.mvyL1)
+                        const hasL0 = (pf & 1) || (Math.abs(Number(b.mvxL0)) + Math.abs(Number(b.mvyL0)) > 0.01)
+                                   || (Math.abs(Number(b.mvx)) + Math.abs(Number(b.mvy)) > 0.01)
+                        const hasL1 = (pf & 2) || (Math.abs(Number(b.mvxL1)) + Math.abs(Number(b.mvyL1)) > 0.01)
+                        const parts = []
+                        if (hasL0 && l0) parts.push("L0 " + l0)
+                        if (hasL1 && l1) parts.push("L1 " + l1)
+                        if (parts.length === 0 && l0) parts.push(l0)
+                        return parts.join("  ")
                     }
 
                     Text {
@@ -2095,7 +2162,7 @@ property real panelSplitRatio: 0.5
                             color: "#cccccc"; font.pixelSize: 11; font.family: "Monospace"
                         }
                     }
-                    // 帧间块才显示 MV / 参考（帧内 / Skip 无意义）
+                    // Intra 无 MV；Skip 仍有 merge 矢量，一并显示
                     Row {
                         id: mvRow
                         visible: cardCol.mvLabel(cardCol.b).length > 0
@@ -2144,15 +2211,16 @@ property real panelSplitRatio: 0.5
                     spacing: 6
                     visible: streamView.overlayMode === 2
                     Text {
-                        height: 14; text: "低"; color: "#c8ccd2"; font.pixelSize: 10
+                        height: 14; text: "低"; color: "#3d9eff"; font.pixelSize: 10
                         verticalAlignment: Text.AlignVCenter
                     }
-                    Rectangle { width: 8; height: 8; radius: 2; color: "#0050ff"; y: 3 }
-                    Rectangle { width: 8; height: 8; radius: 2; color: "#00ff00"; y: 3 }
-                    Rectangle { width: 8; height: 8; radius: 2; color: "#ffff00"; y: 3 }
-                    Rectangle { width: 8; height: 8; radius: 2; color: "#ff0000"; y: 3 }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#2060ff"; y: 3 }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#00d2dc"; y: 3 }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#38d230"; y: 3 }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#ffd220"; y: 3 }
+                    Rectangle { width: 8; height: 8; radius: 2; color: "#ff3028"; y: 3 }
                     Text {
-                        height: 14; text: "高"; color: "#c8ccd2"; font.pixelSize: 10
+                        height: 14; text: "高"; color: "#ff6a2c"; font.pixelSize: 10
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
@@ -2201,23 +2269,37 @@ property real panelSplitRatio: 0.5
                         }
                     }
                 }
-                Row {
-                    height: 14
-                    spacing: 8
+                Rectangle {
                     visible: streamView.overlayMode === 4
+                    height: 18
+                    width: legendMvRow.implicitWidth + 12
+                    radius: 3
+                    color: "#d014181c"
                     Row {
-                        height: 14; spacing: 3
-                        Rectangle { width: 8; height: 8; radius: 2; color: "#50dc78"; y: 3 }
+                        id: legendMvRow
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 6
+                        height: 14
+                        spacing: 10
                         Text {
-                            height: 14; text: "L0"; color: "#c8ccd2"; font.pixelSize: 10
+                            height: 14; text: "蓝 L0 ←"; color: "#3d9eff"; font.pixelSize: 10
                             verticalAlignment: Text.AlignVCenter
                         }
-                    }
-                    Row {
-                        height: 14; spacing: 3
-                        Rectangle { width: 8; height: 8; radius: 2; color: "#e65ac8"; y: 3 }
                         Text {
-                            height: 14; text: "L1"; color: "#c8ccd2"; font.pixelSize: 10
+                            height: 14; text: "橙 L1 →"; color: "#ff6a2c"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Text {
+                            height: 14; text: "箭头=有位移"; color: "#ff6a2c"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Text {
+                            height: 14; text: "单色圆=该路≈0"; color: "#3d9eff"; font.pixelSize: 10
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Text {
+                            height: 14; text: "蓝|橙圆=Bi 且两路≈0"; color: "#ffb088"; font.pixelSize: 10
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
