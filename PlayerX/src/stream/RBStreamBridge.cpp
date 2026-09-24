@@ -26,14 +26,21 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavformat/avformat.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
 }
 
 #include <algorithm>
 #include <cmath>
 #include <QFile>
 #include <QFileInfo>
+#include <QDir>
+#include <QImage>
+#include <QTextStream>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QPainter>
 #include <QFont>
@@ -1788,6 +1795,26 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
         m["colorSpace"]   = colorSpaceToString(par->color_space);
         m["colorRange"]   = colorRangeToString(par->color_range);
         m["frameCount"]   = int(fmt->streams[vIdx]->nb_frames);
+        // 裸 VVC/HEVC 容器常不写 nb_frames；按视频包数补一帧数（与开始分析预扫描一致）
+        if (m["frameCount"].toInt() <= 0) {
+            const AVCodecID cid = par->codec_id;
+            const char* iname = fmt->iformat ? fmt->iformat->name : "";
+            const bool rawish = (cid == AV_CODEC_ID_H264 || cid == AV_CODEC_ID_HEVC
+                                 || cid == AV_CODEC_ID_VVC)
+                                || (iname && (std::strcmp(iname, "h264") == 0
+                                              || std::strcmp(iname, "hevc") == 0
+                                              || std::strcmp(iname, "vvc") == 0));
+            if (rawish) {
+                AVPacket* pk = av_packet_alloc();
+                int n = 0;
+                while (pk && av_read_frame(fmt, pk) >= 0) {
+                    if (pk->stream_index == vIdx) ++n;
+                    av_packet_unref(pk);
+                }
+                av_packet_free(&pk);
+                if (n > 0) m["frameCount"] = n;
+            }
+        }
         // ── 补充字段 ──
         m["colorPrimaries"] = colorPrimariesToString(par->color_primaries);
         m["colorTransfer"]  = colorTransferToString(par->color_trc);
@@ -1822,7 +1849,9 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
     // 裸 h264/hevc 文件缺少容器元数据：bitrate / duration / frameCount 全为 0。
     // 扫描 NAL start codes 数出 slice 帧数，再反推时长和码率。
     bool isRawBitstream = (m["format"].toString() == "h264"
-                           || m["format"].toString() == "hevc");
+                           || m["format"].toString() == "hevc"
+                           || m["format"].toString() == "vvc"
+                           || m["codec"].toString() == "vvc");
     if (isRawBitstream && vIdx >= 0) {
         int fc = m["frameCount"].toInt();
         double dur = m["duration"].toDouble();
@@ -1835,10 +1864,13 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
                 f.close();
                 int64_t fileSize = bytes.size();
                 const uint8_t* data = reinterpret_cast<const uint8_t*>(bytes.constData());
-                bool isHevc = (m["codec"].toString() == "hevc");
+                const QString codec = m["codec"].toString();
+                const bool isHevc = (codec == "hevc");
+                const bool isVvc  = (codec == "vvc");
 
-                // 扫描 NAL start codes，统计 slice NAL 数量
+                // 扫描 NAL start codes，统计画面数
                 int sliceCount = 0;
+                int vvcPh = 0, vvcVcl = 0;
                 int64_t i = 0;
                 while (i + 4 <= fileSize) {
                     int scLen = 0;
@@ -1848,14 +1880,22 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
                     }
                     if (scLen == 0) { ++i; continue; }
                     if (i + scLen >= fileSize) break;
-                    int nalType = isHevc ? ((data[i + scLen] & 0x7E) >> 1)
-                                         : (data[i + scLen] & 0x1F);
-                    // h264: 1=non-IDR slice, 5=IDR slice
-                    // hevc: 0-9=TRAIL/TSA/STSA/RADL/RASL, 16-21=BLA/IDR/CRA
-                    if (!isHevc) {
-                        if (nalType == 1 || nalType == 5) ++sliceCount;
+                    if (isVvc) {
+                        // nuh_unit_type 在第 2 字节高 5 bit
+                        if (i + scLen + 1 >= fileSize) break;
+                        const int nalType = (data[i + scLen + 1] >> 3) & 0x1F;
+                        if (nalType == 19) ++vvcPh;           // PH_NUT
+                        if (nalType <= 10) ++vvcVcl;           // VCL 0–10
                     } else {
-                        if (nalType <= 9 || (nalType >= 16 && nalType <= 21)) ++sliceCount;
+                        int nalType = isHevc ? ((data[i + scLen] & 0x7E) >> 1)
+                                             : (data[i + scLen] & 0x1F);
+                        // h264: 1=non-IDR slice, 5=IDR slice
+                        // hevc: 0-9=TRAIL/TSA/STSA/RADL/RASL, 16-21=BLA/IDR/CRA
+                        if (!isHevc) {
+                            if (nalType == 1 || nalType == 5) ++sliceCount;
+                        } else {
+                            if (nalType <= 9 || (nalType >= 16 && nalType <= 21)) ++sliceCount;
+                        }
                     }
                     // 跳到下一个 start code
                     int64_t j = i + scLen + 1;
@@ -1869,6 +1909,8 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
                     if (j + 3 >= fileSize) break;
                     i = j;
                 }
+                if (isVvc)
+                    sliceCount = (vvcPh > 0) ? vvcPh : vvcVcl;
 
                 double fpsVal = m["fps"].toDouble();
                 if (fc <= 0 && sliceCount > 0) {
@@ -1979,10 +2021,11 @@ QVariantMap RBStreamBridge::demuxToAnnexB(const QString& path, const QString& ou
     AVCodecParameters* par = vs->codecpar;
     bool isH264  = (par->codec_id == AV_CODEC_ID_H264);
     bool isHevc  = (par->codec_id == AV_CODEC_ID_HEVC);
+    bool isVvc   = (par->codec_id == AV_CODEC_ID_VVC);
 
-    if (!isH264 && !isHevc) {
+    if (!isH264 && !isHevc && !isVvc) {
         avformat_close_input(&fmt);
-        result["error"] = "仅支持 H.264 / H.265，当前编码：" +
+        result["error"] = "仅支持 H.264 / H.265 / H.266，当前编码：" +
                           codecIdToShortName(par->codec_id);
         return result;
     }
@@ -1990,7 +2033,8 @@ QVariantMap RBStreamBridge::demuxToAnnexB(const QString& path, const QString& ou
     // 判断源是否已是裸流
     bool isAlreadyRaw = (fmt->iformat && (
         std::strcmp(fmt->iformat->name, "h264") == 0 ||
-        std::strcmp(fmt->iformat->name, "hevc") == 0));
+        std::strcmp(fmt->iformat->name, "hevc") == 0 ||
+        std::strcmp(fmt->iformat->name, "vvc") == 0));
 
     QFile outFile(outPath);
     if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -2128,6 +2172,377 @@ QVariantMap RBStreamBridge::demuxToAnnexB(const QString& path, const QString& ou
     result["frameCount"] = frameCount;
     result["fileSize"] = qint64(bytesWritten);
     return result;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// setup 导出：YUV / 指定帧 / 帧列表（不占分析 slot）
+// ═════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+QString frameYuvMd5(const AVFrame* fr) {
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(AVPixelFormat(fr->format));
+    if (!desc || !fr->data[0]) return QString();
+    QCryptographicHash hash(QCryptographicHash::Md5);
+    const int nb = av_pix_fmt_count_planes(AVPixelFormat(fr->format));
+    for (int p = 0; p < nb; ++p) {
+        const int sh = (p == 0) ? 0 : desc->log2_chroma_h;
+        const int rows = (fr->height + ((1 << sh) - 1)) >> sh;
+        const int ls = av_image_get_linesize(AVPixelFormat(fr->format), fr->width, p);
+        if (ls <= 0 || !fr->data[p]) return QString();
+        for (int y = 0; y < rows; ++y)
+            hash.addData(reinterpret_cast<const char*>(fr->data[p] + y * fr->linesize[p]), ls);
+    }
+    return QString::fromLatin1(hash.result().toHex());
+}
+
+int writeRawPlanes(QIODevice& out, const AVFrame* fr) {
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(AVPixelFormat(fr->format));
+    if (!desc || !fr->data[0]) return -1;
+    const int nb = av_pix_fmt_count_planes(AVPixelFormat(fr->format));
+    for (int p = 0; p < nb; ++p) {
+        const int sh = (p == 0) ? 0 : desc->log2_chroma_h;
+        const int rows = (fr->height + ((1 << sh) - 1)) >> sh;
+        const int ls = av_image_get_linesize(AVPixelFormat(fr->format), fr->width, p);
+        if (ls <= 0 || !fr->data[p]) return -1;
+        for (int y = 0; y < rows; ++y) {
+            if (out.write(reinterpret_cast<const char*>(fr->data[p] + y * fr->linesize[p]),
+                          ls) != ls)
+                return -1;
+        }
+    }
+    return 0;
+}
+
+const char* pictTypeName(AVPictureType t) {
+    switch (t) {
+    case AV_PICTURE_TYPE_I:  return "I";
+    case AV_PICTURE_TYPE_P:  return "P";
+    case AV_PICTURE_TYPE_B:  return "B";
+    case AV_PICTURE_TYPE_S:  return "S";
+    case AV_PICTURE_TYPE_SI: return "SI";
+    case AV_PICTURE_TYPE_SP: return "SP";
+    case AV_PICTURE_TYPE_BI: return "BI";
+    default: return "?";
+    }
+}
+
+struct OpenedDec {
+    AVFormatContext* fmt = nullptr;
+    AVCodecContext*  dec = nullptr;
+    int vIdx = -1;
+};
+
+void closeDec(OpenedDec& o) {
+    if (o.dec) avcodec_free_context(&o.dec);
+    if (o.fmt) avformat_close_input(&o.fmt);
+    o = {};
+}
+
+bool openDec(const QString& path, OpenedDec& o, QString* err) {
+    int ret = avformat_open_input(&o.fmt, path.toUtf8().constData(), nullptr, nullptr);
+    if (ret < 0 || !o.fmt) {
+        if (err) *err = "无法打开文件";
+        return false;
+    }
+    if (avformat_find_stream_info(o.fmt, nullptr) < 0) {
+        if (err) *err = "无法获取流信息";
+        closeDec(o);
+        return false;
+    }
+    o.vIdx = av_find_best_stream(o.fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (o.vIdx < 0) {
+        if (err) *err = "未找到视频流";
+        closeDec(o);
+        return false;
+    }
+    const AVCodec* codec = avcodec_find_decoder(o.fmt->streams[o.vIdx]->codecpar->codec_id);
+    if (!codec) {
+        if (err) *err = "找不到解码器";
+        closeDec(o);
+        return false;
+    }
+    o.dec = avcodec_alloc_context3(codec);
+    if (!o.dec || avcodec_parameters_to_context(o.dec, o.fmt->streams[o.vIdx]->codecpar) < 0
+        || avcodec_open2(o.dec, codec, nullptr) < 0) {
+        if (err) *err = "打开解码器失败";
+        closeDec(o);
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+QVariantMap RBStreamBridge::exportDecodedYuv(const QString& path, const QString& outPath,
+                                             int first, int last) {
+    QVariantMap r;
+    r["ok"] = false;
+    if (path.isEmpty() || outPath.isEmpty()) {
+        r["error"] = "路径为空";
+        return r;
+    }
+    if (first < 0) first = 0;
+    QString err;
+    OpenedDec o;
+    if (!openDec(path, o, &err)) {
+        r["error"] = err;
+        return r;
+    }
+    QFile out(outPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        closeDec(o);
+        r["error"] = "无法创建输出文件";
+        return r;
+    }
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* fr = av_frame_alloc();
+    int idx = 0, written = 0;
+    auto handle = [&](AVFrame* f) {
+        if (last >= 0 && idx > last) return;
+        if (idx >= first && (last < 0 || idx <= last)) {
+            if (writeRawPlanes(out, f) == 0) ++written;
+        }
+        ++idx;
+        if ((idx & 7) == 0)
+            emit exportJobProgress(QString("YUV %1 帧…").arg(idx),
+                                   last >= 0 ? double(idx) / double(last + 1) : 0);
+    };
+    while (av_read_frame(o.fmt, pkt) >= 0) {
+        if (pkt->stream_index != o.vIdx) { av_packet_unref(pkt); continue; }
+        if (avcodec_send_packet(o.dec, pkt) == 0) {
+            while (avcodec_receive_frame(o.dec, fr) == 0) {
+                handle(fr);
+                av_frame_unref(fr);
+            }
+        }
+        av_packet_unref(pkt);
+        if (last >= 0 && idx > last) break;
+    }
+    avcodec_send_packet(o.dec, nullptr);
+    while (avcodec_receive_frame(o.dec, fr) == 0) {
+        handle(fr);
+        av_frame_unref(fr);
+    }
+    av_packet_free(&pkt);
+    av_frame_free(&fr);
+    const QString pix = QString::fromLatin1(av_get_pix_fmt_name(o.dec->pix_fmt) ? av_get_pix_fmt_name(o.dec->pix_fmt) : "?");
+    const int w = o.dec->width, h = o.dec->height;
+    closeDec(o);
+    out.close();
+    r["ok"] = written > 0;
+    r["frameCount"] = written;
+    r["error"] = written > 0 ? QString() : "没有写出任何帧";
+    r["pixFmt"] = pix;
+    r["width"] = w;
+    r["height"] = h;
+    return r;
+}
+
+QVariantMap RBStreamBridge::exportDecodedFrames(const QString& path, const QString& outDir,
+                                                int first, int last, const QString& format) {
+    QVariantMap r;
+    r["ok"] = false;
+    if (path.isEmpty() || outDir.isEmpty()) {
+        r["error"] = "路径为空";
+        return r;
+    }
+    if (first < 0) first = 0;
+    const QString fmt = format.toLower();
+    const bool asPng = (fmt != "yuv");
+    QDir().mkpath(outDir);
+    QString err;
+    OpenedDec o;
+    if (!openDec(path, o, &err)) {
+        r["error"] = err;
+        return r;
+    }
+    SwsContext* sws = nullptr;
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* fr = av_frame_alloc();
+    int idx = 0, written = 0;
+    QString stem = QFileInfo(path).completeBaseName();
+    auto handle = [&](AVFrame* f) {
+        if (last >= 0 && idx > last) return;
+        if (idx >= first && (last < 0 || idx <= last)) {
+            const QString name = QString("%1/%2_%3").arg(outDir, stem)
+                                    .arg(idx, 6, 10, QChar('0'));
+            bool ok = false;
+            if (asPng) {
+                if (!sws) {
+                    sws = sws_getContext(f->width, f->height, AVPixelFormat(f->format),
+                                         f->width, f->height, AV_PIX_FMT_RGB24,
+                                         SWS_BILINEAR, nullptr, nullptr, nullptr);
+                }
+                if (sws) {
+                    QImage img(f->width, f->height, QImage::Format_RGB888);
+                    uint8_t* dst[4] = { img.bits(), nullptr, nullptr, nullptr };
+                    int dstLs[4] = { int(img.bytesPerLine()), 0, 0, 0 };
+                    sws_scale(sws, f->data, f->linesize, 0, f->height, dst, dstLs);
+                    ok = img.save(name + ".png", "PNG");
+                }
+            } else {
+                QFile yuv(name + ".yuv");
+                ok = yuv.open(QIODevice::WriteOnly | QIODevice::Truncate)
+                     && writeRawPlanes(yuv, f) == 0;
+            }
+            if (ok) ++written;
+        }
+        ++idx;
+        if ((idx & 7) == 0)
+            emit exportJobProgress(QString("导出帧 %1…").arg(idx),
+                                   last >= 0 ? double(idx) / double(last + 1) : 0);
+    };
+    while (av_read_frame(o.fmt, pkt) >= 0) {
+        if (pkt->stream_index != o.vIdx) { av_packet_unref(pkt); continue; }
+        if (avcodec_send_packet(o.dec, pkt) == 0) {
+            while (avcodec_receive_frame(o.dec, fr) == 0) {
+                handle(fr);
+                av_frame_unref(fr);
+            }
+        }
+        av_packet_unref(pkt);
+        if (last >= 0 && idx > last) break;
+    }
+    avcodec_send_packet(o.dec, nullptr);
+    while (avcodec_receive_frame(o.dec, fr) == 0) {
+        handle(fr);
+        av_frame_unref(fr);
+    }
+    if (sws) sws_freeContext(sws);
+    av_packet_free(&pkt);
+    av_frame_free(&fr);
+    closeDec(o);
+    r["ok"] = written > 0;
+    r["frameCount"] = written;
+    r["error"] = written > 0 ? QString() : "没有写出任何帧";
+    return r;
+}
+
+QVariantMap RBStreamBridge::exportFrameListCsv(const QString& path, const QString& outPath) {
+    QVariantMap r;
+    r["ok"] = false;
+    if (path.isEmpty() || outPath.isEmpty()) {
+        r["error"] = "路径为空";
+        return r;
+    }
+    QString err;
+    OpenedDec o;
+    if (!openDec(path, o, &err)) {
+        r["error"] = err;
+        return r;
+    }
+    QFile out(outPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        closeDec(o);
+        r["error"] = "无法创建 CSV";
+        return r;
+    }
+    QTextStream ts(&out);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts << "index,type,pts,pkt_dts,pkt_size,width,height,md5\n";
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* fr = av_frame_alloc();
+    int idx = 0;
+    auto handle = [&](AVFrame* f, int pktSize) {
+        ts << idx << ',' << pictTypeName(f->pict_type) << ','
+           << qint64(f->pts) << ',' << qint64(f->pkt_dts) << ','
+           << pktSize << ',' << f->width << ',' << f->height << ','
+           << frameYuvMd5(f) << '\n';
+        ++idx;
+        if ((idx & 7) == 0)
+            emit exportJobProgress(QString("帧列表 %1 帧…").arg(idx), 0);
+    };
+    while (av_read_frame(o.fmt, pkt) >= 0) {
+        if (pkt->stream_index != o.vIdx) { av_packet_unref(pkt); continue; }
+        if (avcodec_send_packet(o.dec, pkt) == 0) {
+            while (avcodec_receive_frame(o.dec, fr) == 0) {
+                handle(fr, pkt->size);
+                av_frame_unref(fr);
+            }
+        }
+        av_packet_unref(pkt);
+    }
+    avcodec_send_packet(o.dec, nullptr);
+    while (avcodec_receive_frame(o.dec, fr) == 0) {
+        handle(fr, 0);
+        av_frame_unref(fr);
+    }
+    av_packet_free(&pkt);
+    av_frame_free(&fr);
+    closeDec(o);
+    out.close();
+    r["ok"] = idx > 0;
+    r["frameCount"] = idx;
+    r["error"] = idx > 0 ? QString() : "没有解码到帧";
+    return r;
+}
+
+void RBStreamBridge::startExportYuv(const QString& path, const QString& outPath,
+                                    int first, int last) {
+    if (m_exportBusy) {
+        emit exportJobFinished(false, "已有导出任务在运行");
+        return;
+    }
+    m_exportBusy = true;
+    emit exportJobProgress("开始导出 YUV…", 0);
+    QtConcurrent::run([this, path, outPath, first, last]() {
+        const QVariantMap r = exportDecodedYuv(path, outPath, first, last);
+        const bool ok = r.value("ok").toBool();
+        QString msg = r.value("error").toString();
+        if (ok) {
+            msg = QString("已导出 YUV %1 帧（%2x%3 %4）")
+                      .arg(r.value("frameCount").toInt())
+                      .arg(r.value("width").toInt())
+                      .arg(r.value("height").toInt())
+                      .arg(r.value("pixFmt").toString());
+        }
+        QMetaObject::invokeMethod(this, [this, ok, msg]() {
+            m_exportBusy = false;
+            emit exportJobFinished(ok, msg);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void RBStreamBridge::startExportFrames(const QString& path, const QString& outDir,
+                                       int first, int last, const QString& format) {
+    if (m_exportBusy) {
+        emit exportJobFinished(false, "已有导出任务在运行");
+        return;
+    }
+    m_exportBusy = true;
+    emit exportJobProgress("开始导出指定帧…", 0);
+    QtConcurrent::run([this, path, outDir, first, last, format]() {
+        const QVariantMap r = exportDecodedFrames(path, outDir, first, last, format);
+        const bool ok = r.value("ok").toBool();
+        QString msg = r.value("error").toString();
+        if (ok)
+            msg = QString("已导出 %1 帧到 %2").arg(r.value("frameCount").toInt()).arg(outDir);
+        QMetaObject::invokeMethod(this, [this, ok, msg]() {
+            m_exportBusy = false;
+            emit exportJobFinished(ok, msg);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void RBStreamBridge::startExportFrameList(const QString& path, const QString& outPath) {
+    if (m_exportBusy) {
+        emit exportJobFinished(false, "已有导出任务在运行");
+        return;
+    }
+    m_exportBusy = true;
+    emit exportJobProgress("开始导出帧列表…", 0);
+    QtConcurrent::run([this, path, outPath]() {
+        const QVariantMap r = exportFrameListCsv(path, outPath);
+        const bool ok = r.value("ok").toBool();
+        QString msg = r.value("error").toString();
+        if (ok)
+            msg = QString("已导出帧列表 %1 行").arg(r.value("frameCount").toInt());
+        QMetaObject::invokeMethod(this, [this, ok, msg]() {
+            m_exportBusy = false;
+            emit exportJobFinished(ok, msg);
+        }, Qt::QueuedConnection);
+    });
 }
 
 // ═════════════════════════════════════════════════════════════════════════

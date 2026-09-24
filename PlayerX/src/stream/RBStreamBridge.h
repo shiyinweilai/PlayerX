@@ -225,6 +225,20 @@ public:
     // 返回 QVariantMap：{ ok(bool), frameCount(int), fileSize(qint64), error(QString) }
     Q_INVOKABLE QVariantMap demuxToAnnexB(const QString& path, const QString& outPath);
 
+    // ── 码流分析 setup 导出（不占 slot）──────────────────────────
+    // first/last 为 0-based 输出序，含端点；last < 0 表示直到末帧。
+    Q_INVOKABLE QVariantMap exportDecodedYuv(const QString& path, const QString& outPath,
+                                             int first, int last);
+    Q_INVOKABLE QVariantMap exportDecodedFrames(const QString& path, const QString& outDir,
+                                                int first, int last, const QString& format);
+    Q_INVOKABLE QVariantMap exportFrameListCsv(const QString& path, const QString& outPath);
+    Q_INVOKABLE void startExportYuv(const QString& path, const QString& outPath,
+                                    int first, int last);
+    Q_INVOKABLE void startExportFrames(const QString& path, const QString& outDir,
+                                       int first, int last, const QString& format);
+    Q_INVOKABLE void startExportFrameList(const QString& path, const QString& outPath);
+    Q_INVOKABLE bool exportBusy() const { return m_exportBusy; }
+
     // ── 底层原始画面（供 CU 网格叠加在真实渲染图上）──────────────
     // 返回该 slot 当前帧解码后的画面。QML 侧用量：
     //   Image { source: "image://streamframe/" + slot + "_" + frame + "_" + version }
@@ -263,6 +277,8 @@ signals:
     void fileClosed(int slot);
     void currentFrameChanged(int slot);
     void demuxProgress(const QString& path, double ratio);  // 裸码流导出进度
+    void exportJobProgress(const QString& message, double ratio);
+    void exportJobFinished(bool ok, const QString& message);
     // 帧图像就绪（画面解码完成，QML 需刷新 Image source）
     void frameImageChanged(int slot);
     // 编码顺序勾选变化（POC 展示口径切换，QML 需刷新帧列表绑定）
@@ -391,4 +407,5 @@ private:
     Slot m_slots[MaxSlots];
     int  m_slotCount = 0;
     int  m_prescanning = 0;  // 0/1，简单布尔占位
+    bool m_exportBusy = false;
 };

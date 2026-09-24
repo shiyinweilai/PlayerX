@@ -142,10 +142,19 @@ property real panelSplitRatio: 0.5
         }
         return paths
     }
-    // ── 裸码流导出 ──
+    // ── 导出（setup：裸码流 / YUV / 指定帧 / 帧列表）──
     property string _exportStatus: ""
     property bool _exporting: false
+    property bool _exportDone: false
+    property bool _exportOk: true
+    property real _exportProgress: 0   // 0–1；<0 不确定进度
     property var _pendingExportPaths: []
+    property string _exportKind: "raw"   // raw | yuv | frames | csv
+    property int _exportFirst: 0
+    property int _exportLast: -1
+    property string _exportFrameFmt: "yuv"
+    property int _exportRangeFirstUi: 1
+    property int _exportRangeLastUi: 1
 
     // 导出裸码流（支持单个或批量）
     // paths: 选中的文件路径数组；不传则用 _selectedPaths()
@@ -166,12 +175,10 @@ property real panelSplitRatio: 0.5
     function _doExportRawBitstream(outputDir) {
         var paths = streamView._pendingExportPaths || []
         if (paths.length === 0) {
-            streamView._exportStatus = "⚠ 没有待导出的文件"
-            exportStatusClearTimer.restart()
+            streamView._endExportUi(false, "没有待导出的文件")
             return
         }
-        streamView._exporting = true
-        streamView._exportStatus = "正在导出 0/" + paths.length + "…"
+        streamView._beginExportUi("正在导出 0/" + paths.length + "…")
 
         var done = 0
         var failed = 0
@@ -182,13 +189,14 @@ property real panelSplitRatio: 0.5
             // 输出文件名：原名 + .h264 / .265（根据编码）
             var info = streamView._probeCache[srcPath] || {}
             var codec = info.codec || "h264"
-            var ext = (codec === "hevc") ? ".265" : ".h264"
+            var ext = (codec === "vvc") ? ".vvc" : ((codec === "hevc") ? ".265" : ".h264")
             // 去掉原扩展名再加裸码流扩展名
             var dotIdx = baseName.lastIndexOf(".")
             if (dotIdx > 0) baseName = baseName.substring(0, dotIdx)
             var outPath = outputDir + "/" + baseName + ext
 
-            streamView._exportStatus = "正在导出 (" + (i + 1) + "/" + paths.length + ") " + baseName + "…"
+            streamView._updateExportUi("正在导出 (" + (i + 1) + "/" + paths.length + ") " + baseName + "…",
+                                       (i + 1) / paths.length)
 
             var result = StreamBridge.demuxToAnnexB(srcPath, outPath)
             if (result.ok) {
@@ -201,16 +209,96 @@ property real panelSplitRatio: 0.5
             }
         }
 
+        if (failed === 0)
+            streamView._endExportUi(true, "已导出 " + done + " 个裸码流文件到 " + outputDir)
+        else
+            streamView._endExportUi(false, "导出完成：成功 " + done + " / 失败 " + failed
+                + (errorMsgs.length > 0 ? "（" + errorMsgs.join("; ") + "）" : ""))
+    }
+
+    function _beginExportUi(msg) {
+        streamView._exporting = true
+        streamView._exportDone = false
+        streamView._exportOk = true
+        streamView._exportProgress = 0
+        streamView._exportStatus = msg || "正在导出…"
+        exportProgressPopup.open()
+    }
+    function _updateExportUi(msg, ratio) {
+        streamView._exporting = true
+        streamView._exportDone = false
+        if (msg) streamView._exportStatus = msg
+        streamView._exportProgress = streamView._normalizeExportRatio(msg, ratio)
+        if (!exportProgressPopup.opened) exportProgressPopup.open()
+    }
+    function _endExportUi(ok, msg) {
         streamView._exporting = false
-        if (failed === 0) {
-            streamView._exportStatus = "✅ 已导出 " + done + " 个裸码流文件到 " + outputDir
-        } else {
-            streamView._exportStatus = "⚠ 导出完成：成功 " + done + " / 失败 " + failed
-                + (errorMsgs.length > 0 ? "（" + errorMsgs.join("; ") + "）" : "")
-        }
-        // 5 秒后清空状态（有错误时留更久）
-        exportStatusClearTimer.interval = (failed > 0) ? 8000 : 3000
+        streamView._exportDone = true
+        streamView._exportOk = ok
+        streamView._exportStatus = msg || (ok ? "导出完成" : "导出失败")
+        if (ok && streamView._exportProgress < 1) streamView._exportProgress = 1
+        if (!exportProgressPopup.opened) exportProgressPopup.open()
+        exportStatusClearTimer.interval = ok ? 2500 : 8000
         exportStatusClearTimer.restart()
+    }
+    function _normalizeExportRatio(message, ratio) {
+        if (ratio > 0) return Math.min(1, Number(ratio))
+        const s = String(message || "")
+        const pair = s.match(/(\d+)\s*\/\s*(\d+)/)
+        if (pair && Number(pair[2]) > 0) return Math.min(1, Number(pair[1]) / Number(pair[2]))
+        const one = s.match(/(\d+)/)
+        const n = streamView._probeFrameCount(streamView._primaryExportPath())
+        if (one && n > 0) return Math.min(0.99, Number(one[1]) / n)
+        return -1
+    }
+
+    function _primaryExportPath() {
+        const sel = streamView._selectedPaths()
+        if (sel && sel.length > 0) return sel[0]
+        if (streamView.pendingSelectedIndex >= 0
+            && streamView.pendingSelectedIndex < streamView.pendingFiles.length)
+            return streamView.pendingFiles[streamView.pendingSelectedIndex]
+        return ""
+    }
+    function _exportStem(srcPath) {
+        var base = streamView._fileBasename(srcPath)
+        const dot = base.lastIndexOf(".")
+        return dot > 0 ? base.substring(0, dot) : base
+    }
+    function _probeFrameCount(srcPath) {
+        const info = streamView._probeCache[srcPath] || streamView._probeData || {}
+        const n = Number(info.frameCount || 0)
+        return n > 0 ? n : 0
+    }
+    function _exportYuvAll() {
+        if (streamView._exporting) return
+        const src = streamView._primaryExportPath()
+        if (!src) { streamView._exportStatus = "请先选择文件"; return }
+        streamView._exportKind = "yuv"
+        streamView._pendingExportPaths = [src]
+        streamView._exportFirst = 0
+        streamView._exportLast = -1
+        exportFolderDialog.title = "选择 YUV 导出目录"
+        exportFolderDialog.open()
+    }
+    function _openExportRange() {
+        const src = streamView._primaryExportPath()
+        if (!src) { streamView._exportStatus = "请先选择文件"; return }
+        const n = streamView._probeFrameCount(src)
+        streamView._exportRangeFirstUi = 1
+        streamView._exportRangeLastUi = n > 0 ? n : 1
+        exportRangePopup.open()
+    }
+    function _exportFrameList() {
+        if (streamView._exporting) return
+        const src = streamView._primaryExportPath()
+        if (!src) { streamView._exportStatus = "请先选择文件"; return }
+        var dir = ""
+        try { dir = Fs.downloadsDir() } catch (e) { dir = "" }
+        if (!dir) { streamView._exportStatus = "无法定位下载目录"; return }
+        const outPath = dir.replace(/\/+$/, "") + "/" + streamView._exportStem(src) + "_frames.csv"
+        streamView._beginExportUi("开始导出帧列表…")
+        StreamBridge.startExportFrameList(src, outPath)
     }
 
     Component.onCompleted: {
@@ -1192,31 +1280,84 @@ property real panelSplitRatio: 0.5
                             }
                         }
                         Rectangle {
-                            width: 100; height: 28; radius: 6
-                            color: exportRawHeadMa.containsMouse ? "#2a2a34" : "#1e1e24"
-                            border.color: exportRawHeadMa.containsMouse ? "#4a4a56" : "#3a3a44"
+                            width: 88; height: 28; radius: 6
+                            color: exportHeadMa.containsMouse || exportMenu.visible ? "#2a2a34" : "#1e1e24"
+                            border.color: exportHeadMa.containsMouse || exportMenu.visible ? "#4a4a56" : "#3a3a44"
                             border.width: 1
-                            enabled: streamView._selectedCount() > 0
-                            opacity: streamView._selectedCount() > 0 ? 1.0 : 0.5
+                            enabled: streamView._selectedCount() > 0 && !streamView._exporting
+                            opacity: enabled ? 1.0 : 0.5
                             Text {
                                 anchors.centerIn: parent
-                                text: "导出码流"
+                                text: "导出 ▾"
                                 color: "#cccccc"; font.pixelSize: 12
                             }
                             MouseArea {
-                                id: exportRawHeadMa
+                                id: exportHeadMa
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: streamView._exportRawBitstream()
+                                onClicked: { if (!streamView._exporting) exportMenu.open() }
                             }
-                            ToolTip.visible: exportRawHeadMa.containsMouse
+                            ToolTip.visible: exportHeadMa.containsMouse && !exportMenu.visible
                             ToolTip.text: streamView._selectedCount() > 0
-                                          ? ("导出裸码流（已选 " + streamView._selectedCount() + " 个）")
+                                          ? ("导出：裸码流 / YUV / 指定帧 / 帧列表（已选 "
+                                             + streamView._selectedCount() + " 个）")
                                           : "请先选择文件"
                             ToolTip.delay: 200
+                            Menu {
+                                id: exportMenu
+                                y: parent.height + 4
+                                width: 200
+                                background: Rectangle {
+                                    implicitWidth: 200
+                                    color: "#cc1a1a1f"
+                                    border.color: "#33ffffff"
+                                    radius: 6
+                                }
+                                topPadding: 6; bottomPadding: 6
+                                leftPadding: 4; rightPadding: 4
+                                MenuItem {
+                                    text: "导出裸码流"
+                                    height: 28
+                                    onTriggered: streamView._exportRawBitstream()
+                                    contentItem: Text {
+                                        text: parent.text; color: "#e8e8ec"; font.pixelSize: 12
+                                        leftPadding: 12; verticalAlignment: Text.AlignVCenter
+                                    }
+                                    background: Rectangle { color: parent.hovered ? "#803a3a3d" : "transparent"; radius: 4 }
+                                }
+                                MenuItem {
+                                    text: "导出 YUV（全部）"
+                                    height: 28
+                                    onTriggered: streamView._exportYuvAll()
+                                    contentItem: Text {
+                                        text: parent.text; color: "#e8e8ec"; font.pixelSize: 12
+                                        leftPadding: 12; verticalAlignment: Text.AlignVCenter
+                                    }
+                                    background: Rectangle { color: parent.hovered ? "#803a3a3d" : "transparent"; radius: 4 }
+                                }
+                                MenuItem {
+                                    text: "导出指定帧…"
+                                    height: 28
+                                    onTriggered: streamView._openExportRange()
+                                    contentItem: Text {
+                                        text: parent.text; color: "#e8e8ec"; font.pixelSize: 12
+                                        leftPadding: 12; verticalAlignment: Text.AlignVCenter
+                                    }
+                                    background: Rectangle { color: parent.hovered ? "#803a3a3d" : "transparent"; radius: 4 }
+                                }
+                                MenuItem {
+                                    text: "导出帧列表 CSV"
+                                    height: 28
+                                    onTriggered: streamView._exportFrameList()
+                                    contentItem: Text {
+                                        text: parent.text; color: "#e8e8ec"; font.pixelSize: 12
+                                        leftPadding: 12; verticalAlignment: Text.AlignVCenter
+                                    }
+                                    background: Rectangle { color: parent.hovered ? "#803a3a3d" : "transparent"; radius: 4 }
+                                }
+                            }
                         }
-                        // 已选计数
                         Text {
                             visible: streamView._selectedCount() > 0
                             text: "已选 " + streamView._selectedCount() + " 个"
@@ -1597,15 +1738,6 @@ property real panelSplitRatio: 0.5
                         color: "#e05050"; font.pixelSize: 11
                         visible: streamView.pendingStatus.length > 0
                         Layout.bottomMargin: 8
-                    }
-
-                    // 导出状态文本
-                    Text {
-                        text: streamView._exportStatus
-                        color: "#6a6f76"; font.pixelSize: 11
-                        visible: streamView._exportStatus.length > 0
-                        Layout.topMargin: 4
-                        Layout.bottomMargin: 4
                     }
                 }
             }
@@ -3038,22 +3170,275 @@ property real panelSplitRatio: 0.5
     // ── 裸码流导出：选择输出目录 ──
     FolderDialog {
         id: exportFolderDialog
-        title: "选择裸码流导出目录"
+        title: "选择导出目录"
         currentFolder: {
             try { return "file://" + Fs.downloadsDir() } catch (e) { return "" }
         }
         onAccepted: {
             const outDir = streamView._normalizeFilePath(selectedFolder)
-            streamView._doExportRawBitstream(outDir)
+            const src = (streamView._pendingExportPaths && streamView._pendingExportPaths[0]) || ""
+            if (streamView._exportKind === "yuv") {
+                const info = streamView._probeCache[src] || {}
+                const w = info.width || 0
+                const h = info.height || 0
+                const pix = (info.pixFmt || "yuv").replace(/[^A-Za-z0-9]+/g, "")
+                const name = streamView._exportStem(src) + "_" + w + "x" + h + "_" + pix + ".yuv"
+                streamView._beginExportUi("开始导出 YUV…")
+                StreamBridge.startExportYuv(src, outDir + "/" + name,
+                                            streamView._exportFirst, streamView._exportLast)
+            } else if (streamView._exportKind === "frames") {
+                streamView._beginExportUi("开始导出指定帧…")
+                StreamBridge.startExportFrames(src, outDir,
+                                               streamView._exportFirst, streamView._exportLast,
+                                               streamView._exportFrameFmt)
+            } else {
+                streamView._doExportRawBitstream(outDir)
+            }
+        }
+    }
+    Popup {
+        id: exportRangePopup
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: 320
+        padding: 14
+        onOpened: forceActiveFocus()
+        Keys.onEscapePressed: close()
+        background: Rectangle {
+            color: "#1a1d22"
+            border.color: "#2a2e33"
+            radius: 8
+        }
+        contentItem: Column {
+            spacing: 10
+            Text { text: "导出指定帧"; color: "#e8e8ec"; font.pixelSize: 14; font.bold: true }
+            Text {
+                text: {
+                    const src = streamView._primaryExportPath()
+                    const n = streamView._probeFrameCount(src)
+                    return streamView._fileBasename(src) + (n > 0 ? ("  ·  共 " + n + " 帧") : "")
+                }
+                color: "#9aa0a6"; font.pixelSize: 11
+                elide: Text.ElideMiddle
+                width: parent.width
+            }
+            Row {
+                spacing: 8
+                Text { text: "起始"; color: "#9aa0a6"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+                TextField {
+                    id: rangeFirstField
+                    width: 72; height: 26
+                    text: String(streamView._exportRangeFirstUi)
+                    color: "#e8e8ec"
+                    background: Rectangle { color: "#252528"; radius: 4; border.color: "#3a3a44" }
+                    onEditingFinished: streamView._exportRangeFirstUi = Math.max(1, parseInt(text) || 1)
+                    Keys.onEscapePressed: exportRangePopup.close()
+                }
+                Text { text: "结束"; color: "#9aa0a6"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+                TextField {
+                    id: rangeLastField
+                    width: 72; height: 26
+                    text: String(streamView._exportRangeLastUi)
+                    color: "#e8e8ec"
+                    background: Rectangle { color: "#252528"; radius: 4; border.color: "#3a3a44" }
+                    onEditingFinished: streamView._exportRangeLastUi = Math.max(1, parseInt(text) || 1)
+                    Keys.onEscapePressed: exportRangePopup.close()
+                }
+            }
+            Row {
+                spacing: 6
+                Repeater {
+                    model: [
+                        { k: "png", t: "PNG 序列" },
+                        { k: "yuv", t: "YUV" }
+                    ]
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: fmtLab.implicitWidth + 12
+                        height: 22
+                        radius: 4
+                        color: streamView._exportFrameFmt === modelData.k ? "#2a3f5a" : "#252528"
+                        border.color: streamView._exportFrameFmt === modelData.k ? "#42A5FF" : "#3a3a44"
+                        Text {
+                            id: fmtLab
+                            anchors.centerIn: parent
+                            text: modelData.t
+                            color: streamView._exportFrameFmt === modelData.k ? "#e6f0ff" : "#9aa0a6"
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: streamView._exportFrameFmt = modelData.k
+                        }
+                    }
+                }
+            }
+            Row {
+                spacing: 8
+                layoutDirection: Qt.RightToLeft
+                width: parent.width
+                Rectangle {
+                    width: 72; height: 26; radius: 5
+                    color: "#2a5fc0"
+                    Text { anchors.centerIn: parent; text: "导出"; color: "#fff"; font.pixelSize: 12 }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            const src = streamView._primaryExportPath()
+                            var a = Math.max(1, parseInt(rangeFirstField.text) || 1)
+                            var b = Math.max(1, parseInt(rangeLastField.text) || 1)
+                            if (b < a) { const t = a; a = b; b = t }
+                            streamView._pendingExportPaths = [src]
+                            streamView._exportFirst = a - 1
+                            streamView._exportLast = b - 1
+                            exportRangePopup.close()
+                            streamView._exportKind = streamView._exportFrameFmt === "yuv" ? "yuv" : "frames"
+                            exportFolderDialog.title = "选择导出目录"
+                            exportFolderDialog.open()
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 72; height: 26; radius: 5
+                    color: "#252528"
+                    border.color: "#3a3a44"
+                    Text { anchors.centerIn: parent; text: "取消"; color: "#cccccc"; font.pixelSize: 12 }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: exportRangePopup.close()
+                    }
+                }
+            }
+        }
+    }
+    Popup {
+        id: exportProgressPopup
+        modal: true
+        focus: true
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: 420
+        padding: 20
+        closePolicy: streamView._exporting ? Popup.NoAutoClose
+                                          : (Popup.CloseOnEscape | Popup.CloseOnPressOutside)
+        background: Rectangle {
+            color: "#1a1d22"
+            border.color: streamView._exportDone
+                          ? (streamView._exportOk ? "#3dcc7a" : "#e07070")
+                          : "#3a3f48"
+            radius: 10
+        }
+        contentItem: Column {
+            spacing: 14
+            width: parent.width
+            Text {
+                text: streamView._exportDone
+                      ? (streamView._exportOk ? "导出完成" : "导出失败")
+                      : "正在导出"
+                color: "#e8e8ec"
+                font.pixelSize: 15
+                font.bold: true
+            }
+            Text {
+                width: parent.width
+                text: streamView._exportStatus
+                color: "#b8bdc4"
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
+            Rectangle {
+                width: parent.width
+                height: 8
+                radius: 4
+                color: "#2a2e33"
+                clip: true
+                Rectangle {
+                    visible: streamView._exportProgress >= 0
+                    width: parent.width * Math.max(0, Math.min(1, streamView._exportProgress))
+                    height: parent.height
+                    radius: 4
+                    color: streamView._exportDone
+                           ? (streamView._exportOk ? "#3dcc7a" : "#e07070")
+                           : "#42A5FF"
+                }
+                Rectangle {
+                    visible: streamView._exporting && streamView._exportProgress < 0
+                    width: parent.width * 0.28
+                    height: parent.height
+                    radius: 4
+                    color: "#42A5FF"
+                    x: (parent.width - width) * exportIndetAnim.phase
+                }
+                SequentialAnimation {
+                    id: exportIndetAnim
+                    property real phase: 0
+                    running: streamView._exporting && streamView._exportProgress < 0
+                    loops: Animation.Infinite
+                    NumberAnimation { target: exportIndetAnim; property: "phase"; from: 0; to: 1; duration: 900 }
+                    NumberAnimation { target: exportIndetAnim; property: "phase"; from: 1; to: 0; duration: 900 }
+                }
+            }
+            Text {
+                visible: streamView._exportProgress >= 0
+                text: streamView._exportDone && streamView._exportOk
+                      ? "100%"
+                      : (Math.round(Math.max(0, streamView._exportProgress) * 100) + "%")
+                color: "#8a9098"
+                font.pixelSize: 11
+            }
+            Row {
+                visible: streamView._exportDone
+                spacing: 8
+                layoutDirection: Qt.RightToLeft
+                width: parent.width
+                Rectangle {
+                    width: 72; height: 28; radius: 5
+                    color: "#2a5fc0"
+                    Text { anchors.centerIn: parent; text: "关闭"; color: "#fff"; font.pixelSize: 12 }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            exportStatusClearTimer.stop()
+                            streamView._exportStatus = ""
+                            exportProgressPopup.close()
+                        }
+                    }
+                }
+            }
+        }
+        Keys.onEscapePressed: {
+            if (!streamView._exporting) {
+                exportStatusClearTimer.stop()
+                streamView._exportStatus = ""
+                close()
+            }
+        }
+    }
+    Connections {
+        target: StreamBridge
+        function onExportJobProgress(message, ratio) {
+            streamView._updateExportUi(message, ratio)
+        }
+        function onExportJobFinished(ok, message) {
+            streamView._endExportUi(ok, message)
         }
     }
 
-    // 导出状态自动清除
     Timer {
         id: exportStatusClearTimer
         interval: 3000
         repeat: false
-        onTriggered: streamView._exportStatus = ""
+        onTriggered: {
+            streamView._exportStatus = ""
+            exportProgressPopup.close()
+        }
     }
 
     // ── 工具函数 ──
