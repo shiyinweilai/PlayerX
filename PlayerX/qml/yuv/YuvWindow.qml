@@ -624,38 +624,7 @@ Item {
                                 }
                             }
 
-                            // ── 右键按住拖拽平移 ──
-                            MouseArea {
-                                id: panArea
-                                anchors.fill: parent
-                                acceptedButtons: Qt.RightButton
-                                property real lastX: 0
-                                property real lastY: 0
-
-                                onPressed: function(mouse) {
-                                    lastX = mouse.x
-                                    lastY = mouse.y
-                                    cursorShape = Qt.ClosedHandCursor
-                                }
-                                onReleased: {
-                                    cursorShape = Qt.ArrowCursor
-                                }
-                                onPositionChanged: function(mouse) {
-                                    if (pressed) {
-                                        yuvDisp.panX += mouse.x - lastX
-                                        yuvDisp.panY += mouse.y - lastY
-                                        lastX = mouse.x
-                                        lastY = mouse.y
-                                    }
-                                }
-                                // 右键双击：重置平移归位
-                                onDoubleClicked: {
-                                    yuvDisp.panX = 0
-                                    yuvDisp.panY = 0
-                                }
-                            }
-
-                            // ── 鼠标悬浮矩阵浮窗交互 ────────────────────────────────
+                            // ── 鼠标悬浮矩阵 + 左键/三指拖拽平移（与系统拖移一致）──
                             // 悬浮态：固定视口尺寸（viewCells×viewCells）+ 固定单元格大小，
                             // 跟随鼠标显示当前块左上角部分；块越大只露出可视区域内的内容。
                             // 左键点击后进入"固定"态：弹窗停止跟随鼠标（冻结屏幕坐标与内容），
@@ -670,6 +639,9 @@ Item {
 
                                 property bool showPixelGrid: false
                                 property bool pinned: false
+                                property bool _panning: false
+                                property real _panLastX: 0
+                                property real _panLastY: 0
                                 property int pixelX: 0
                                 property int pixelY: 0
                                 property var pixelData: []
@@ -684,6 +656,28 @@ Item {
                                 // 缩放过猛。这里累积到 240（= 普通鼠标两格）才做一次
                                 // 线性缩放（×1.1），显著降低敏感度；余数保留供后续累积。
                                 property real wheelAccum: 0
+
+                                // 与 YuvDisplayItem::updatePaintNode 同一套：居中 + pan + scale
+                                function imageOrigin() {
+                                    const s = yuvDisp.scale > 0 ? yuvDisp.scale : 1
+                                    const imgW = YuvBridge.width(slotWin.slotIdx)
+                                    const imgH = YuvBridge.height(slotWin.slotIdx)
+                                    return {
+                                        offX: (pixelHoverArea.width  - imgW * s) / 2.0 + yuvDisp.panX,
+                                        offY: (pixelHoverArea.height - imgH * s) / 2.0 + yuvDisp.panY,
+                                        scale: s,
+                                        imgW: imgW,
+                                        imgH: imgH
+                                    }
+                                }
+                                function mouseToImage(mx, my) {
+                                    const o = imageOrigin()
+                                    if (o.imgW <= 0 || o.imgH <= 0 || o.scale <= 0) return null
+                                    const ix = Math.floor((mx - o.offX) / o.scale)
+                                    const iy = Math.floor((my - o.offY) / o.scale)
+                                    if (ix < 0 || iy < 0 || ix >= o.imgW || iy >= o.imgH) return null
+                                    return { x: ix, y: iy }
+                                }
 
                                 // 按当前块大小（YuvBridge.blockSize）拉取一次悬浮矩阵数据，
                                 // hover 移动 / 块大小切换共用此函数。
@@ -723,24 +717,39 @@ Item {
                                     else return yuvView.height - pgh - 8 - slotOffY
                                 }
 
+                                onPressed: function(mouse) {
+                                    _panning = false
+                                    _panLastX = mouse.x
+                                    _panLastY = mouse.y
+                                }
+                                onReleased: {
+                                    cursorShape = Qt.ArrowCursor
+                                }
                                 onPositionChanged: function(mouse) {
+                                    if (pressed) {
+                                        const dx = mouse.x - _panLastX
+                                        const dy = mouse.y - _panLastY
+                                        if (!_panning && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+                                            _panning = true
+                                            cursorShape = Qt.ClosedHandCursor
+                                        }
+                                        if (_panning) {
+                                            yuvDisp.panX += dx
+                                            yuvDisp.panY += dy
+                                            _panLastX = mouse.x
+                                            _panLastY = mouse.y
+                                            return
+                                        }
+                                    }
                                     // 标记当前活跃 slot，其他 slot 检测到被取代后自动关闭弹窗
                                     if (yuvView.activeHoverSlot !== slotWin.slotIdx)
                                         yuvView.activeHoverSlot = slotWin.slotIdx
                                     // ── 双路对比模式：悬浮任一路视频，联动三窗口浮窗组 ──
                                     if (yuvView.cmpActive) {
                                         if (yuvView.cmpPinned) return
-                                        const imgWc = YuvBridge.width(slotWin.slotIdx)
-                                        const imgHc = YuvBridge.height(slotWin.slotIdx)
-                                        if (imgWc <= 0 || imgHc <= 0) return
-                                        const dispWc = pixelHoverArea.width
-                                        const dispHc = pixelHoverArea.height
-                                        const offXc = (dispWc - imgWc) / 2.0 + yuvDisp.panX
-                                        const offYc = (dispHc - imgHc) / 2.0 + yuvDisp.panY
-                                        const ixc = Math.floor(mouse.x - offXc)
-                                        const iyc = Math.floor(mouse.y - offYc)
-                                        if (ixc >= 0 && ixc < imgWc && iyc >= 0 && iyc < imgHc) {
-                                            yuvView.cmpFetchAt(ixc, iyc)
+                                        const p = mouseToImage(mouse.x, mouse.y)
+                                        if (p) {
+                                            yuvView.cmpFetchAt(p.x, p.y)
                                             const gp = pixelHoverArea.mapToItem(yuvView, mouse.x, mouse.y)
                                             yuvView.cmpMouseX = gp.x
                                             yuvView.cmpMouseY = gp.y
@@ -750,24 +759,9 @@ Item {
                                         return
                                     }
                                     if (pinned) return   // 已固定：不再跟随鼠标刷新
-                                    // 将鼠标坐标映射到图像坐标
-                                    // YuvDisplayItem 使用 1:1 原尺寸居中 + panX/panY 偏移
-                                    const imgW = YuvBridge.width(slotWin.slotIdx)
-                                    const imgH = YuvBridge.height(slotWin.slotIdx)
-                                    if (imgW <= 0 || imgH <= 0) return
-
-                                    const dispW = pixelHoverArea.width
-                                    const dispH = pixelHoverArea.height
-
-                                    // 1:1 居中偏移 + 平移偏移（与 YuvDisplayItem::paint 一致）
-                                    const offX = (dispW - imgW) / 2.0 + yuvDisp.panX
-                                    const offY = (dispH - imgH) / 2.0 + yuvDisp.panY
-
-                                    const ix = Math.floor(mouse.x - offX)
-                                    const iy = Math.floor(mouse.y - offY)
-
-                                    if (ix >= 0 && ix < imgW && iy >= 0 && iy < imgH) {
-                                        fetchAt(ix, iy)
+                                    const hit = mouseToImage(mouse.x, mouse.y)
+                                    if (hit) {
+                                        fetchAt(hit.x, hit.y)
                                     } else {
                                         showPixelGrid = false
                                         YuvBridge.setHoverPixel(slotWin.slotIdx, 0, 0, false)
@@ -787,6 +781,7 @@ Item {
                                     YuvBridge.setHoverPixel(slotWin.slotIdx, 0, 0, false)
                                 }
                                 onClicked: function(mouse) {
+                                    if (_panning) return
                                     if (yuvView.cmpActive) {
                                         if (yuvView.cmpPinned) {
                                             // 点击视频区域（浮窗组之外）→ 取消固定，恢复跟随鼠标
@@ -835,8 +830,7 @@ Item {
                                 // 直接写在 pixelHoverArea 的 onWheel 里最可靠。
                                 //   - 全局缩放走 YuvBridge.zoomBy（线性连续缩放，非档位跳变），
                                 //     所有 slot 通过 globalScaleChanged 同步重算预缩放图。
-                                //   - 以鼠标为锚点：只调整鼠标所在 slot 的 pan，让缩放后
-                                //     鼠标下的像素位置基本不漂移（标准体验）。
+                                //   - 始终绕画面居中点缩放（不跟鼠标），只改 scale，不改 pan。
                                 //   - 敏感度控制：累积滚轮增量，凑满 240（= 普通鼠标 2 格）
                                 //     才做一次缩放，且每次只乘 1.1（缩小乘 1/1.1），
                                 //     跳变感弱、缩放平缓。
@@ -844,20 +838,12 @@ Item {
                                     if (YuvBridge.slotCount <= 0) return
                                     const dy = wheel.angleDelta.y
                                     if (dy === 0) return
-                                    // 累积滚轮增量，凑满 240（普通鼠标两格）才缩放一次
                                     wheelAccum += dy
                                     let zoomFactor = 0
                                     if (wheelAccum >= 240)      { zoomFactor = 1.1; wheelAccum -= 240 }
                                     else if (wheelAccum <= -240) { zoomFactor = 1 / 1.1; wheelAccum += 240 }
                                     if (zoomFactor === 0) { wheel.accepted = true; return }
-                                    const oldScale = YuvBridge.globalScale
                                     YuvBridge.zoomBy(zoomFactor)
-                                    const newScale = YuvBridge.globalScale
-                                    if (Math.abs(oldScale - newScale) < 1e-6) { wheel.accepted = true; return }
-                                    // panNew = panOld + (1 - r) * (mouseX - dispW/2)
-                                    const r = oldScale / newScale
-                                    yuvDisp.panX = yuvDisp.panX + (1 - r) * (wheel.x - pixelHoverArea.width / 2.0)
-                                    yuvDisp.panY = yuvDisp.panY + (1 - r) * (wheel.y - pixelHoverArea.height / 2.0)
                                     wheel.accepted = true
                                 }
                             }
@@ -880,31 +866,27 @@ Item {
                             Rectangle {
                                 id: blockHighlight
                                 visible: yuvView.cmpActive ? yuvView.cmpShow : pixelHoverArea.showPixelGrid
-                                width: YuvBridge.blockSize
-                                height: YuvBridge.blockSize
+                                readonly property real _s: yuvDisp.scale > 0 ? yuvDisp.scale : 1
+                                width: YuvBridge.blockSize * _s
+                                height: YuvBridge.blockSize * _s
                                 color: "transparent"
                                 border.color: (yuvView.cmpActive ? yuvView.cmpPinned : pixelHoverArea.pinned) ? "#3a6fd8" : "#00FF88"
                                 border.width: 2
                                 radius: 1
 
-                                // 定位到当前像素所在的块（对齐到块边界）
                                 x: {
-                                    const imgW = YuvBridge.width(slotWin.slotIdx)
-                                    const dispW = pixelHoverArea.width
-                                    const offX = (dispW - imgW) / 2.0 + yuvDisp.panX
+                                    const _ = yuvDisp.panX + yuvDisp.scale + pixelHoverArea.width
+                                    const o = pixelHoverArea.imageOrigin()
                                     const bs = YuvBridge.blockSize
                                     const px = yuvView.cmpActive ? yuvView.cmpPixelX : pixelHoverArea.pixelX
-                                    const blockX = Math.floor(px / bs) * bs
-                                    return offX + blockX
+                                    return o.offX + Math.floor(px / bs) * bs * o.scale
                                 }
                                 y: {
-                                    const imgH = YuvBridge.height(slotWin.slotIdx)
-                                    const dispH = pixelHoverArea.height
-                                    const offY = (dispH - imgH) / 2.0 + yuvDisp.panY
+                                    const _ = yuvDisp.panY + yuvDisp.scale + pixelHoverArea.height
+                                    const o = pixelHoverArea.imageOrigin()
                                     const bs = YuvBridge.blockSize
                                     const py = yuvView.cmpActive ? yuvView.cmpPixelY : pixelHoverArea.pixelY
-                                    const blockY = Math.floor(py / bs) * bs
-                                    return offY + blockY
+                                    return o.offY + Math.floor(py / bs) * bs * o.scale
                                 }
                             }
 
@@ -1695,6 +1677,55 @@ Item {
                                 }
                             }
                         } // end Rectangle slotInfoBar
+
+                        Rectangle {
+                            id: zoomChip
+                            visible: Math.abs(YuvBridge.globalScale - 1.0) > 0.005
+                            anchors.left: slotScreen.left
+                            anchors.bottom: slotScreen.bottom
+                            anchors.leftMargin: 6
+                            anchors.bottomMargin: 42
+                            z: 40
+                            height: 26
+                            width: zoomChipRow.implicitWidth + 10
+                            radius: 6
+                            color: "#cc1a1a22"
+                            border.color: "#3a3a4a"
+                            border.width: 1
+                            Row {
+                                id: zoomChipRow
+                                anchors.centerIn: parent
+                                spacing: 6
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: {
+                                        const pct = YuvBridge.globalScale * 100
+                                        return (Math.abs(pct - Math.round(pct)) < 0.5
+                                                ? Math.round(pct) : pct.toFixed(0)) + "%"
+                                    }
+                                    color: "#e8e8ec"
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                    font.family: "Menlo, Monaco, Courier New, monospace"
+                                }
+                                Rectangle {
+                                    width: 40; height: 18; radius: 4
+                                    color: zoomResetMa.containsMouse ? "#3a6fd8" : "#2a2a34"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "复位"
+                                        color: "#fff"; font.pixelSize: 10
+                                    }
+                                    MouseArea {
+                                        id: zoomResetMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: YuvBridge.resetView()
+                                    }
+                                }
+                            }
+                        }
                     } // end Item slotStage
                 } // end delegate Rectangle
             } // end Repeater

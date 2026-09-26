@@ -66,6 +66,7 @@ Item {
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
         onPositionChanged: {
+            if (xformLayer.pressed) return
             if (view.width <= 0) return
             view.splitRatio = Math.max(0, Math.min(1, mouseX / view.width))
         }
@@ -75,12 +76,13 @@ Item {
         }
     }
 
-    // ─── 右键拖拽平移 + 滚轮缩放 ──────────────────────────────────────
+    // ─── 左键/三指拖拽平移 + 滚轮缩放（与系统拖移一致）────────────────
     MouseArea {
         id: xformLayer
         anchors.fill: parent
         z: 4   // 高于 tracker，但低于通道信息条 (z:5)
-        acceptedButtons: Qt.RightButton
+        hoverEnabled: false
+        acceptedButtons: Qt.LeftButton
         cursorShape: pressed ? Qt.ClosedHandCursor : Qt.ArrowCursor
 
         property real lastX: 0
@@ -264,6 +266,49 @@ Item {
                 }
                 elide: Text.ElideMiddle
                 Layout.maximumWidth: Math.max(120, view.width / 3)
+            }
+        }
+    }
+
+    Rectangle {
+        visible: Math.abs(YuvBridge.globalScale - 1.0) > 0.005
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.margins: 10
+        z: 40
+        height: 26
+        width: cmpZoomRow.implicitWidth + 10
+        radius: 6
+        color: "#cc1a1a22"
+        border.color: "#3a3a4a"
+        border.width: 1
+        Row {
+            id: cmpZoomRow
+            anchors.centerIn: parent
+            spacing: 6
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: {
+                    const pct = YuvBridge.globalScale * 100
+                    return (Math.abs(pct - Math.round(pct)) < 0.5
+                            ? Math.round(pct) : pct.toFixed(0)) + "%"
+                }
+                color: "#e8e8ec"
+                font.pixelSize: 11
+                font.bold: true
+                font.family: "Menlo, Monaco, Courier New, monospace"
+            }
+            Rectangle {
+                width: 40; height: 18; radius: 4
+                color: cmpZoomResetMa.containsMouse ? "#3a6fd8" : "#2a2a34"
+                Text { anchors.centerIn: parent; text: "复位"; color: "#fff"; font.pixelSize: 10 }
+                MouseArea {
+                    id: cmpZoomResetMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: YuvBridge.resetView()
+                }
             }
         }
     }

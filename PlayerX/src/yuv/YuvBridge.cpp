@@ -947,6 +947,8 @@ void YuvBridge::refreshFrameImageAsyncToFrame(int slot, int targetFrame) {
             const QImage result = m_watchers[slot]->result();
             m_frameImages[slot] = result;
             m_asyncBusy[slot] = false;
+            if (m_analyzers[slot] && m_analyzers[slot]->isOpen())
+                m_visibleFrame[slot] = m_analyzers[slot]->currentFrame();
 
             // 检查是否在解码期间有新的帧请求
             const int pending = m_pendingFrame[slot];
@@ -1174,20 +1176,23 @@ void YuvBridge::startSyncPlay(bool reverse) {
 }
 
 void YuvBridge::stopSyncPlay() {
+    const bool wasSync = (m_syncTimer != nullptr);
     if (m_syncTimer) {
         m_syncTimer->stop();
         delete m_syncTimer;
         m_syncTimer = nullptr;
     }
-    // 暂停时把 m_currentFrame 对齐到"最后可见帧"：后台解码可能已把
-    // m_currentFrame 推到更靠前的位置，逐帧导航需从当前可见帧继续。
-    for (int i = 0; i < MaxSlots; ++i) {
-        if (!m_analyzers[i] || !m_analyzers[i]->isOpen()) continue;
-        const int vis = m_visibleFrame[i];
-        if (vis >= 0) {
-            m_analyzers[i]->lockData();
-            m_analyzers[i]->setCurrentFrameNoLock(vis);
-            m_analyzers[i]->unlockData();
+    // 仅多路同步播放才用 m_visibleFrame 回写：单路 play() 不维护这套缓冲，
+    // 默认 vis=0，globalPause 里无条件对齐会把画面打回第 0 帧。
+    if (wasSync) {
+        for (int i = 0; i < MaxSlots; ++i) {
+            if (!m_analyzers[i] || !m_analyzers[i]->isOpen()) continue;
+            const int vis = m_visibleFrame[i];
+            if (vis >= 0) {
+                m_analyzers[i]->lockData();
+                m_analyzers[i]->setCurrentFrameNoLock(vis);
+                m_analyzers[i]->unlockData();
+            }
         }
     }
     for (int i = 0; i < MaxSlots; ++i) {
@@ -1385,13 +1390,10 @@ void YuvBridge::globalPlayReverse() {
 }
 
 void YuvBridge::globalPause() {
-    // 停止同步主时钟
     stopSyncPlay();
-    // 停止所有 per-slot timer
     for (int i = 0; i < MaxSlots; ++i) {
-        if (m_playing[i]) {
+        if (m_playing[i])
             pause(i);
-        }
     }
 }
 
