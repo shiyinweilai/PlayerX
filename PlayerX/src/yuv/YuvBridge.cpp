@@ -12,6 +12,10 @@
 #include <cstdio>
 #include <cstdlib>
 
+extern "C" {
+#include <libavutil/pixdesc.h>
+}
+
 // 将路径标准化：统一分隔符为 '/'，处理 file:// URL 前缀
 static QString normalizePath(const QString& input) {
     QString p = input.trimmed();
@@ -421,9 +425,24 @@ QVariantMap YuvBridge::blockDiffOverview(int slotA, int slotB, int plane) const 
     if (slotA < 0 || slotA >= MaxSlots || slotB < 0 || slotB >= MaxSlots) return result;
     if (!m_analyzers[slotA]->isOpen() || !m_analyzers[slotB]->isOpen()) return result;
 
+    // 必须对同一显示帧各拍一份快照再比：同步播放时后台预解码会把
+    // analyzer 各自 seek 到不同的未来帧，直接 getPixelYUV 会把错位当成差异。
+    int target = m_visibleFrame[slotA];
+    if (target < 0) target = m_analyzers[slotA]->currentFrame();
+    auto snapAt = [](rb::YuvAnalyzer* a, int frame) {
+        a->lockData();
+        a->seekToFrameNoLock(frame);
+        auto s = a->snapshotCurrentFrameLocked();
+        a->unlockData();
+        return s;
+    };
+    const auto snapA = snapAt(m_analyzers[slotA].get(), target);
+    const auto snapB = snapAt(m_analyzers[slotB].get(), target);
+    if (!snapA.valid || !snapB.valid) return result;
+
     // 取两路的公共分辨率（交集），避免分辨率不一致时越界。
-    const int w = std::min(m_analyzers[slotA]->width(),  m_analyzers[slotB]->width());
-    const int h = std::min(m_analyzers[slotA]->height(), m_analyzers[slotB]->height());
+    const int w = std::min(snapA.width, snapB.width);
+    const int h = std::min(snapA.height, snapB.height);
     if (w <= 0 || h <= 0) return result;
 
     const int bs = std::max(1, m_blockSize);
@@ -438,6 +457,26 @@ QVariantMap YuvBridge::blockDiffOverview(int slotA, int slotB, int plane) const 
     // 判定为"有差异"的阈值（avg abs diff），过滤掉量化误差等噪声级别的抖动。
     const double diffThreshold = 1.0;
 
+    auto sample = [plane](const rb::YuvAnalyzer::FrameSnapshot& s, int x, int y) -> int {
+        if (!s.valid || x < 0 || y < 0 || x >= s.width || y >= s.height) return -1;
+        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(s.pixFmt);
+        const bool hi = desc && desc->comp[0].depth > 8;
+        const int p = (plane <= 0) ? 0 : ((plane == 1) ? 1 : 2);
+        if (p >= s.planeCount || s.planes[p].data.empty()) return -1;
+        int sx = x, sy = y;
+        if (p > 0 && desc) {
+            sx = x >> desc->log2_chroma_w;
+            sy = y >> desc->log2_chroma_h;
+        }
+        const auto& pl = s.planes[p];
+        if (sx < 0 || sy < 0 || sx >= pl.pw || sy >= pl.ph) return -1;
+        if (hi) {
+            const auto* row = reinterpret_cast<const uint16_t*>(pl.data.data() + sy * pl.stride);
+            return int(row[sx]);
+        }
+        return int(pl.data[sy * pl.stride + sx]);
+    };
+
     for (int by = 0; by < rows; ++by) {
         for (int bx = 0; bx < cols; ++bx) {
             const int x0 = bx * bs;
@@ -449,14 +488,8 @@ QVariantMap YuvBridge::blockDiffOverview(int slotA, int slotB, int plane) const 
             int count = 0;
             for (int y = y0; y < y1; ++y) {
                 for (int x = x0; x < x1; ++x) {
-                    const auto pa = m_analyzers[slotA]->getPixelYUV(x, y);
-                    const auto pb = m_analyzers[slotB]->getPixelYUV(x, y);
-                    int va, vb;
-                    switch (plane) {
-                        case 1:  va = pa.u; vb = pb.u; break;
-                        case 2:  va = pa.v; vb = pb.v; break;
-                        default: va = pa.y; vb = pb.y; break;
-                    }
+                    const int va = sample(snapA, x, y);
+                    const int vb = sample(snapB, x, y);
                     if (va < 0 || vb < 0) continue;
                     sum += std::abs(va - vb);
                     ++count;
@@ -481,6 +514,7 @@ QVariantMap YuvBridge::blockDiffOverview(int slotA, int slotB, int plane) const 
     result["maxDiff"] = maxDiff;
     result["firstDiffCol"] = firstCol;
     result["firstDiffRow"] = firstRow;
+    result["frame"] = target;
     return result;
 }
 
@@ -1298,6 +1332,29 @@ void YuvBridge::onSyncTimerTick() {
 
     // 解码没跟上（有通道缓冲空但未到末尾）→ 本 tick 不推进，避免失步
     if (!allHaveFrame) return;
+
+    // 只消费同一帧号：某路若因丢帧/预取错位领先或落后，先丢掉落后帧再对齐。
+    int want = -1;
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (!m_analyzers[i] || !m_analyzers[i]->isOpen() || !m_playing[i]) continue;
+        if (m_frameBuffer[i].empty()) continue;
+        want = std::max(want, m_frameBuffer[i].front().frameNum);
+    }
+    if (want < 0) return;
+    bool aligned = true;
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (!m_analyzers[i] || !m_analyzers[i]->isOpen() || !m_playing[i]) continue;
+        while (!m_frameBuffer[i].empty() && m_frameBuffer[i].front().frameNum < want) {
+            m_frameBuffer[i].pop_front();
+            scheduleDecode(i);
+        }
+        if (m_frameBuffer[i].empty()) {
+            if (!m_reachedEnd[i]) aligned = false;
+        } else if (m_frameBuffer[i].front().frameNum != want) {
+            aligned = false;
+        }
+    }
+    if (!aligned) return;
 
     // 2) 同时从各通道队列取一帧显示（消费者），并触发继续解码
     for (int i = 0; i < MaxSlots; ++i) {

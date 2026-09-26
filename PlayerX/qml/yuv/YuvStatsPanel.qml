@@ -61,7 +61,13 @@ Rectangle {
         target: YuvBridge
         function onFrameChanged(slot) {
             if (slot === panel.activeSlot) panel.ver++
-            if (panel.statsMode === 2 && (slot === 0 || slot === 1)) panel.refreshDiffOverview()
+            if (panel.statsMode === 2 && (slot === 0 || slot === 1)
+                    && !YuvBridge.isPlaying(0) && !YuvBridge.isPlaying(1))
+                panel.refreshDiffOverview()
+        }
+        function onPlayStateChanged(slot) {
+            if (panel.statsMode === 2 && !YuvBridge.isPlaying(0) && !YuvBridge.isPlaying(1))
+                panel.refreshDiffOverview()
         }
         function onStatsReady(slot) {
             // 帧级统计异步计算完成后刷新面板（与 frameChanged 解耦）

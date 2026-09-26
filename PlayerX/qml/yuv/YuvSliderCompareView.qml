@@ -87,6 +87,7 @@ Item {
 
         property real lastX: 0
         property real lastY: 0
+        property real wheelAccum: 0
         onPressed: function(mouse) {
             lastX = mouse.x
             lastY = mouse.y
@@ -105,15 +106,24 @@ Item {
             compareItem.panY = 0
         }
 
-        // 滚轮缩放：与 YuvWindow 的全局缩放联动
+        // 滚轮缩放：与单路相同，累积 240 才 ×1.1，避免触控板每格跳一档
         WheelHandler {
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
             target: null
             onWheel: function(event) {
-                var dy = event.angleDelta.y
+                const dy = event.angleDelta.y
                 if (dy === 0) return
-                if (dy > 0) YuvBridge.bumpScale(1)
-                else YuvBridge.bumpScale(-1)
+                xformLayer.wheelAccum += dy
+                let zoomFactor = 0
+                if (xformLayer.wheelAccum >= 240) {
+                    zoomFactor = 1.1
+                    xformLayer.wheelAccum -= 240
+                } else if (xformLayer.wheelAccum <= -240) {
+                    zoomFactor = 1 / 1.1
+                    xformLayer.wheelAccum += 240
+                }
+                if (zoomFactor !== 0)
+                    YuvBridge.zoomBy(zoomFactor)
                 event.accepted = true
             }
         }
@@ -272,6 +282,8 @@ Item {
 
     Rectangle {
         visible: Math.abs(YuvBridge.globalScale - 1.0) > 0.005
+                 || Math.abs(compareItem.panX) > 0.5
+                 || Math.abs(compareItem.panY) > 0.5
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: 10
@@ -297,6 +309,21 @@ Item {
                 font.pixelSize: 11
                 font.bold: true
                 font.family: "Menlo, Monaco, Courier New, monospace"
+            }
+            Rectangle {
+                width: 40; height: 18; radius: 4
+                color: cmpZoomCenterMa.containsMouse ? "#3a6fd8" : "#2a2a34"
+                Text { anchors.centerIn: parent; text: "居中"; color: "#fff"; font.pixelSize: 10 }
+                MouseArea {
+                    id: cmpZoomCenterMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        compareItem.panX = 0
+                        compareItem.panY = 0
+                    }
+                }
             }
             Rectangle {
                 width: 40; height: 18; radius: 4

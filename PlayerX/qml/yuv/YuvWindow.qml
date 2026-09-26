@@ -1582,22 +1582,6 @@ Item {
                                         }
                                     }
 
-                                    Item { width: 8 }
-
-                                    // 一键居中（重置平移）
-                                    Rectangle {
-                                        width: 28; height: 22; radius: 3
-                                        color: navCenterMa.containsMouse ? "#803a3a3d" : "#80252528"
-                                        Text { anchors.centerIn: parent; text: "⊙"; color: "#ccc"; font.pixelSize: 13 }
-                                        MouseArea {
-                                            id: navCenterMa; anchors.fill: parent
-                                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                yuvDisp.panX = 0
-                                                yuvDisp.panY = 0
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         } // end Rectangle slotFloatBar
@@ -1681,6 +1665,8 @@ Item {
                         Rectangle {
                             id: zoomChip
                             visible: Math.abs(YuvBridge.globalScale - 1.0) > 0.005
+                                     || Math.abs(yuvDisp.panX) > 0.5
+                                     || Math.abs(yuvDisp.panY) > 0.5
                             anchors.left: slotScreen.left
                             anchors.bottom: slotScreen.bottom
                             anchors.leftMargin: 6
@@ -1707,6 +1693,26 @@ Item {
                                     font.pixelSize: 11
                                     font.bold: true
                                     font.family: "Menlo, Monaco, Courier New, monospace"
+                                }
+                                Rectangle {
+                                    width: 40; height: 18; radius: 4
+                                    color: zoomCenterMa.containsMouse ? "#3a6fd8" : "#2a2a34"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "居中"
+                                        color: "#fff"; font.pixelSize: 10
+                                    }
+                                    MouseArea {
+                                        id: zoomCenterMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            yuvDisp.panX = 0
+                                            yuvDisp.panY = 0
+                                            yuvView.centerAllRequested()
+                                        }
+                                    }
                                 }
                                 Rectangle {
                                     width: 40; height: 18; radius: 4
@@ -2018,17 +2024,6 @@ Item {
                             onClicked: yuvView.globalToggleReverse()
                         }
                     }
-                    // ⊙（全部画面居中复位）
-                    Rectangle {
-                        width: 28; height: 22; radius: 3
-                        color: gCenterMa.containsMouse ? "#803a3a3d" : "#80252528"
-                        Text { anchors.centerIn: parent; text: "⊙"; color: "#ccc"; font.pixelSize: 13 }
-                        MouseArea {
-                            id: gCenterMa; anchors.fill: parent
-                            hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: yuvView.centerAllRequested()
-                        }
-                    }
                 }
 
                 // ── 滑动对比切换按钮（仅 2 路时显示，等价于快捷键 B）──
@@ -2053,15 +2048,10 @@ Item {
 
 
 
-                // 清空全部 YUV（破坏性按钮，红色突出）—— 放在最右侧
-                // （左侧已有的 Item { Layout.fillWidth: true } 已把所有按钮右对齐）
-                // 命名采用"清空"而非"关闭"，避免与 tab 导航混淆（用户反馈）。
-                // 注意：本按钮只清空 YUV slot 数据，**不**自动切回 home tab——
-                // 留在 YUV tab 内可立即"重新打开文件"继续分析，流转更顺。
                 Rectangle {
                     width: 64; height: 22; radius: 3
                     color: gCloseAllMa.containsMouse ? "#80c87070" : "#80b85a5a"
-                    Text { anchors.centerIn: parent; text: "清空"; color: "#fff"; font.pixelSize: 11 }
+                    Text { anchors.centerIn: parent; text: "返回"; color: "#fff"; font.pixelSize: 11 }
                     MouseArea {
                         id: gCloseAllMa; anchors.fill: parent
                         hoverEnabled: true; cursorShape: Qt.PointingHandCursor
