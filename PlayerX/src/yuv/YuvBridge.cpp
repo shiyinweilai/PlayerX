@@ -1381,12 +1381,10 @@ void YuvBridge::setHoverPixel(int slot, int px, int py, bool valid) {
 }
 
 void YuvBridge::setBlockSize(int size) {
-    // 仅接受 8/16/32/64 四档，其余取最近的合法值。
-    int v = 8;
+    int v = 16;
     if (size >= 64) v = 64;
     else if (size >= 32) v = 32;
-    else if (size >= 16) v = 16;
-    else v = 8;
+    else v = 16;
 
     if (v == m_blockSize) return;
     m_blockSize = v;

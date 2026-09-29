@@ -666,16 +666,9 @@ MenuBar {
         }
         DarkMenuSeparator {}
 
-        // ── 块大小 ▶ ──（像素块统计 / 悬浮矩阵的对齐块大小，4 档互斥单选）
-        // 全局设置，不依赖右侧栏统计面板是否打开；同样绑定 YuvBridge.blockSize，
-        // 用法与"播放速度 ▶"一致（不用 Repeater，逐项声明最稳）。
+        // ── 块大小 ▶ ──（像素块统计 / 悬浮矩阵的对齐块大小，16/32/64 互斥）
         DarkMenu {
             title: qsTr("块大小")
-            DarkMenuItem {
-                text: qsTr("8×8")
-                checked: YuvBridge.blockSize === 8
-                onTriggered: YuvBridge.blockSize = 8
-            }
             DarkMenuItem {
                 text: qsTr("16×16")
                 checked: YuvBridge.blockSize === 16

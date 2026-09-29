@@ -178,9 +178,9 @@ Item {
         readonly property bool ready: dataA.length === bs * bs && dataB.length === bs * bs
 
         readonly property int rulerSize: 8
-        readonly property int cellSize: 30
+        readonly property int cellSize: 20
         readonly property int cellSpacing: 1
-        readonly property int viewCells: 8
+        readonly property int viewCells: 16
         readonly property int gridSpan: viewCells * cellSize + (viewCells - 1) * cellSpacing
 
         width: rulerSize + gridSpan + 16
@@ -387,7 +387,7 @@ Item {
                                         const lum = (0.299*(15+t*55) + 0.587*(18+t*60) + 0.114*(24+t*72)) / 255
                                         return lum > 0.55 ? "#0a0a0a" : "#f0f0f0"
                                     }
-                                    font.pixelSize: 10; font.bold: true
+                                    font.pixelSize: 9; font.bold: true
                                     font.family: "Menlo, Monaco, Consolas, monospace"
                                 }
                             }
@@ -911,7 +911,7 @@ Item {
                                 // 弹窗需要覆盖在路径信息条（z:5）和控制条之上
                                 z: 50
                                 // 左对齐（不再水平居中），避免弹窗宽度 > 网格实际宽度时产生大片左侧空白
-                                width: 271
+                                width: contentCol.implicitWidth + 16
                                 height: contentCol.implicitHeight + 16
                                 radius: 6
                                 color: "#1a1a22"
@@ -1133,9 +1133,9 @@ Item {
                                     Item {
                                         id: gridWithRulers
                                         readonly property int rulerSize: 8
-                                        readonly property int cellSize: 30
+                                        readonly property int cellSize: 20
                                         readonly property int cellSpacing: 1
-                                        readonly property int viewCells: 8
+                                        readonly property int viewCells: 16
                                         readonly property int gridSpan: viewCells * cellSize + (viewCells - 1) * cellSpacing
 
                                         // 左对齐（不再水平居中），避免弹窗宽度 > 网格实际宽度时产生大片左侧空白
@@ -1327,7 +1327,7 @@ Item {
                                                             const lum = (0.299 * (15 + t*55) + 0.587 * (18 + t*60) + 0.114 * (24 + t*72)) / 255
                                                             return lum > 0.55 ? "#0a0a0a" : "#f0f0f0"
                                                         }
-                                                        font.pixelSize: 10
+                                                        font.pixelSize: 9
                                                         font.family: "Menlo, Monaco, Consolas, monospace"
                                                         font.bold: true
                                                     }
