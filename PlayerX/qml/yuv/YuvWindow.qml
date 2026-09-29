@@ -40,11 +40,10 @@ Item {
         yuvView.sliderCompareActive = !yuvView.sliderCompareActive
     }
 
-    // ── 画面内侧路径信息显隐（C 快捷键切换）────────────────────────────
-    // 默认显示；C 键切换后隐藏画面内侧的序号+文件名 overlay。
-    property bool slotInfoVisible: true
+    // ── 画面内侧路径信息显隐（V / C 切换，与 YuvBridge.slotInfoVisible 同步）──
+    property bool slotInfoVisible: YuvBridge.slotInfoVisible
     function toggleSlotInfo() {
-        yuvView.slotInfoVisible = !yuvView.slotInfoVisible
+        YuvBridge.requestToggleSlotInfo()
     }
 
     // ── 布局模式（顶部菜单切换）──
@@ -163,10 +162,7 @@ Item {
         function onToggleSliderCompareRequested() {
             yuvView.toggleSliderCompare()
         }
-        // 快捷键 C → YuvBridge.requestToggleSlotInfo() → 本信号
-        function onToggleSlotInfoRequested() {
-            yuvView.toggleSlotInfo()
-        }
+        function onToggleSlotInfoRequested() {}
     }
 
     // ── 对比模式悬浮矩阵浮窗（单个面板：YUV-A / YUV-B / 差异Δ 复用同一组件）──
@@ -607,8 +603,7 @@ Item {
                         Item {
                             id: slotScreen
                             anchors.fill: parent
-                            // 弹窗显示时提升 z 到 infoBar(z:5) 之上，避免路径信息条遮挡弹窗
-                            z: pixelHoverArea.showPixelGrid ? 10 : 0
+                            z: 0
 
                             YuvDisplayItem {
                                 id: yuvDisp
@@ -1007,10 +1002,32 @@ Item {
                                             color: "#aaa"; font.pixelSize: 10
                                             elide: Text.ElideRight
                                         }
-                                        Text {
-                                            visible: pixelHoverArea.pinned
-                                            text: "📌"
-                                            font.pixelSize: 11
+                                        Rectangle {
+                                            Layout.preferredWidth: panelVHint.implicitWidth + 10
+                                            Layout.preferredHeight: 22
+                                            radius: 4
+                                            color: panelVMa.containsMouse ? "#ffe14a" : "#f5c518"
+                                            Text {
+                                                id: panelVHint
+                                                anchors.centerIn: parent
+                                                text: "按 V 隐藏"
+                                                color: "#1a1400"
+                                                font.pixelSize: 13
+                                                font.bold: true
+                                            }
+                                            MouseArea {
+                                                id: panelVMa
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    YuvBridge.slotInfoVisible = false
+                                                    YuvBridge.pixelInfoVisible = false
+                                                }
+                                                ToolTip.visible: containsMouse
+                                                ToolTip.delay: 300
+                                                ToolTip.text: "按 V 隐藏"
+                                            }
                                         }
                                         // 一键拷贝当前通道矩阵（Tab 分隔，可直接粘贴进 Excel/Numbers/Sheets 自动分列）
                                         Rectangle {
@@ -1077,31 +1094,29 @@ Item {
                                         }
 
                                         Repeater {
-                                            model: ["Y", "U", "V"]
+                                            model: ["YUV", "Y", "U", "V"]
                                             delegate: Rectangle {
                                                 required property int index
                                                 required property string modelData
-                                                width: 30; height: 18; radius: 3
-                                                color: parent.channel === index ? "#3a6fd8" : "#2a2a34"
+                                                property bool isActive: {
+                                                    const _ = slotWin.ver
+                                                    return YuvBridge.displayMode(slotWin.slotIdx) === index
+                                                }
+                                                width: index === 0 ? 36 : 28
+                                                height: 18
+                                                radius: 3
+                                                color: isActive ? "#3a6fd8" : "#2a2a34"
                                                 Text {
                                                     anchors.centerIn: parent
                                                     text: modelData
-                                                    color: parent.parent.channel === index ? "#fff" : "#888"
-                                                    font.pixelSize: 10; font.bold: true
+                                                    color: isActive ? "#fff" : "#888"
+                                                    font.pixelSize: 10
+                                                    font.bold: true
                                                 }
                                                 MouseArea {
                                                     anchors.fill: parent
                                                     cursorShape: Qt.PointingHandCursor
-                                                    onClicked: {
-                                                        // 1) 立即更新本地 channel（让 UI 立刻响应）
-                                                        parent.parent.channel = index
-                                                        // 2) 同步到 YuvBridge 的显示模式
-                                                        //    matrix Y → displayMode 1 (Y)
-                                                        //    matrix U → displayMode 2 (U)
-                                                        //    matrix V → displayMode 3 (V)
-                                                        const dm = (index === 0) ? 1 : (index === 1 ? 2 : 3)
-                                                        YuvBridge.setDisplayMode(slotWin.slotIdx, dm)
-                                                    }
+                                                    onClicked: YuvBridge.setDisplayMode(slotWin.slotIdx, index)
                                                 }
                                             }
                                         }
@@ -1606,7 +1621,8 @@ Item {
                             }
                         } // end Rectangle slotFloatBar
 
-                        // ── 画面内侧顶部 overlay：序号 + 文件名 + 关闭（C 键切换显隐）──
+                        // ── 画面内侧顶部 overlay：序号 + 文件名 + 关闭（V / C 切换显隐）──
+                        // 与 YUV 值面板同层，叠在画面之上，不被 slotScreen 整层抬起盖住。
                         Rectangle {
                             id: slotInfoBar
                             anchors.left: slotScreen.left
@@ -1614,12 +1630,19 @@ Item {
                             anchors.margins: 6
                             radius: 3
                             color: "#aa000000"
-                            visible: yuvView.slotInfoVisible
-                            z: 5
+                            visible: YuvBridge.slotInfoVisible
+                            z: 50
                             implicitWidth: slotInfoRow.implicitWidth + 12
                             implicitHeight: slotInfoRow.implicitHeight + 4
                             width:  implicitWidth
                             height: implicitHeight
+
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton
+                                onClicked: {}
+                            }
 
                             RowLayout {
                                 id: slotInfoRow
@@ -1684,9 +1707,11 @@ Item {
 
                         Rectangle {
                             id: zoomChip
-                            visible: Math.abs(YuvBridge.globalScale - 1.0) > 0.005
-                                     || Math.abs(yuvDisp.panX) > 0.5
-                                     || Math.abs(yuvDisp.panY) > 0.5
+                            visible: {
+                                const _ = slotWin.ver
+                                const __ = YuvBridge.slotCount
+                                return YuvBridge.hasFile(slotWin.slotIdx)
+                            }
                             anchors.left: slotScreen.left
                             anchors.bottom: slotScreen.bottom
                             anchors.leftMargin: 6
@@ -1728,6 +1753,35 @@ Item {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: {
+                                            yuvDisp.panX = 0
+                                            yuvDisp.panY = 0
+                                            yuvView.centerAllRequested()
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    width: 40; height: 18; radius: 4
+                                    color: zoomFitMa.containsMouse ? "#3a6fd8" : "#2a2a34"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "撑满"
+                                        color: "#fff"; font.pixelSize: 10
+                                    }
+                                    MouseArea {
+                                        id: zoomFitMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            const imgW = YuvBridge.width(slotWin.slotIdx)
+                                            const imgH = YuvBridge.height(slotWin.slotIdx)
+                                            const vw = yuvDisp.width
+                                            const vh = yuvDisp.height
+                                            if (imgW <= 0 || imgH <= 0 || vw <= 0 || vh <= 0) return
+                                            let s = Math.min(vw / imgW, vh / imgH)
+                                            if (s < 0.01) s = 0.01
+                                            if (s > 32) s = 32
+                                            YuvBridge.globalScale = s
                                             yuvDisp.panX = 0
                                             yuvDisp.panY = 0
                                             yuvView.centerAllRequested()

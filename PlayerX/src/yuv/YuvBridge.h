@@ -17,6 +17,7 @@
 #include <QVariantMap>
 #include <QTimer>
 #include <QFutureWatcher>
+#include <atomic>
 #include <memory>
 #include <deque>
 #include <mutex>
@@ -48,6 +49,7 @@ class YuvBridge : public QObject {
     // false = 隐藏（V 快捷键或菜单勾选切换）
     // 不持久化，每次启动默认为 true。
     Q_PROPERTY(bool pixelInfoVisible READ pixelInfoVisible WRITE setPixelInfoVisible NOTIFY pixelInfoVisibleChanged)
+    Q_PROPERTY(bool slotInfoVisible READ slotInfoVisible WRITE setSlotInfoVisible NOTIFY slotInfoVisibleChanged)
 
     // ── 色度插值模式（控制 4:2:0/4:2:2 上采样算法）──
     // 0 = Nearest Neighbor（默认；像素级分析标准，展示原始色度值）
@@ -203,6 +205,7 @@ public:
     // opts: histSummary, histBins, gradient, features, gopSummary, gopSize, outPath
     Q_INVOKABLE void startExportFrameStats(int slot, int firstFrame, int lastFrame,
                                            const QVariantMap& opts);
+    Q_INVOKABLE void stopExportFrameStats();
     Q_INVOKABLE bool statsExportBusy() const { return m_statsExportBusy; }
 
     // ── 全局鼠标悬浮像素坐标（供右侧栏"块级别"统计随鼠标实时刷新）───────
@@ -222,7 +225,7 @@ public:
     Q_INVOKABLE void requestToggleSliderCompare() { emit toggleSliderCompareRequested(); }
 
     // ── 画面内侧路径信息显隐切换（由快捷键 C 触发，YuvWindow 监听信号执行切换）──
-    Q_INVOKABLE void requestToggleSlotInfo() { emit toggleSlotInfoRequested(); }
+    Q_INVOKABLE void requestToggleSlotInfo() { setSlotInfoVisible(!m_slotInfoVisible); }
 
     // ── 块大小设置（8/16/32/64，全局唯一）───────────────────────────────
     int  blockSize() const { return m_blockSize; }
@@ -235,6 +238,8 @@ public:
     // ── YUV 值面板可见性 ──
     bool pixelInfoVisible() const { return m_pixelInfoVisible; }
     void setPixelInfoVisible(bool visible);
+    bool slotInfoVisible() const { return m_slotInfoVisible; }
+    void setSlotInfoVisible(bool visible);
 
     // ── 色度插值模式 ──
     int  chromaInterpolation() const { return m_chromaInterpolation; }
@@ -318,6 +323,7 @@ signals:
     void toggleSlotInfoRequested();
     void inlineControlsHiddenChanged();
     void pixelInfoVisibleChanged();
+    void slotInfoVisibleChanged();
     void chromaInterpolationChanged();
     void colorConversionChanged();
     void globalScaleChanged();
@@ -427,6 +433,7 @@ private:
 
     // YUV 值面板可见性；默认 true（显示，hover 视频时弹出像素统计浮窗）
     bool m_pixelInfoVisible{true};
+    bool m_slotInfoVisible{true};
 
     // 色度插值模式；默认 0 = NearestNeighbor（像素级分析标准）
     int  m_chromaInterpolation{0};
@@ -442,6 +449,7 @@ private:
     // ── 差异检测（仅两路 YUV 播放）──
     bool m_scanBusy{false};
     bool m_statsExportBusy{false};
+    std::atomic<bool> m_statsExportCancel{false};
     bool m_diffDetectEnabled{true};   // 差异检测开关（默认开启）
     bool m_diffPaused{false};         // 因差异暂停中（避免重复触发）
     // 用户选择"忽略差异继续播放"时置 true，下次播放不再检测差异，

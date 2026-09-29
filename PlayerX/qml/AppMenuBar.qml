@@ -705,10 +705,17 @@ MenuBar {
             onTriggered: YuvBridge.inlineControlsHidden = YuvBridge.inlineControlsHidden ? false : true
         }
 
-        // ── YUV 值面板 ──（hover 视频时弹出的像素矩阵浮窗 + avg/min/max 统计）
-        // 默认勾选 = 显示；V 快捷键也可切换。
+        // ── 路径信息 ──（画面左上角序号+文件名+帧号，V / C 切换）
         DarkMenuItem {
-            text: qsTr("YUV 值面板")
+            text: qsTr("路径信息 (V)")
+            checked: YuvBridge.slotInfoVisible
+            onTriggered: YuvBridge.requestToggleSlotInfo()
+        }
+
+        // ── YUV 值面板 ──（hover 视频时弹出的像素矩阵浮窗 + avg/min/max 统计）
+        // 默认勾选 = 显示；V 与路径信息一同切换。
+        DarkMenuItem {
+            text: qsTr("YUV 值面板 (V)")
             checked: YuvBridge.pixelInfoVisible
             onTriggered: YuvBridge.pixelInfoVisible = YuvBridge.pixelInfoVisible ? false : true
         }

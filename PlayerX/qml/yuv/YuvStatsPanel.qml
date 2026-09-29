@@ -42,6 +42,31 @@ Item {
     property bool expFeatures: true
     property bool expGop: true
     property int exportGopSize: 32
+    function parseExportRange() {
+        const tot = YuvBridge.totalFrames(panel.activeSlot)
+        const firstTxt = exportFirstField ? exportFirstField.text : String(panel.exportFirstUi)
+        const lastTxt = exportLastField ? exportLastField.text : String(panel.exportLastUi)
+        const gopTxt = exportGopField ? exportGopField.text : String(panel.exportGopSize)
+        let a = Math.max(1, parseInt(firstTxt) || 1)
+        let b = Math.max(1, parseInt(lastTxt) || 1)
+        const g = Math.max(1, Math.min(4096, parseInt(gopTxt) || 32))
+        if (tot > 0) {
+            a = Math.min(a, tot)
+            b = Math.min(b, tot)
+        }
+        if (a > b) { const t = a; a = b; b = t }
+        return { a: a, b: b, g: g, tot: tot, n: b - a + 1 }
+    }
+    function applyExportRange() {
+        const r = panel.parseExportRange()
+        panel.exportFirstUi = r.a
+        panel.exportLastUi = r.b
+        panel.exportGopSize = r.g
+        if (exportFirstField) exportFirstField.text = String(r.a)
+        if (exportLastField) exportLastField.text = String(r.b)
+        if (exportGopField) exportGopField.text = String(r.g)
+        return r
+    }
     function refreshCmpMetrics() {
         if (!panel.cmpAvailable) { panel.cmpMetrics = null; return }
         if (YuvBridge.isPlaying(0) || YuvBridge.isPlaying(1)) return
@@ -1304,16 +1329,13 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     text: {
                         const _ = panel.ver
-                        const tot = YuvBridge.totalFrames(panel.activeSlot)
-                        const a = Math.max(1, panel.exportFirstUi)
-                        const b = Math.max(a, panel.exportLastUi)
-                        const aa = Math.min(tot, a)
-                        const bb = Math.min(tot, Math.max(aa, b))
-                        const g = Math.max(1, panel.exportGopSize)
+                        const __ = exportFirstField.text + exportLastField.text + exportGopField.text
+                        const r = panel.parseExportRange()
                         const gops = panel.expGop
-                                    ? (Math.floor((bb - 1) / g) - Math.floor((aa - 1) / g) + 1)
+                                    ? (Math.floor((r.b - 1) / r.g) - Math.floor((r.a - 1) / r.g) + 1)
                                     : 0
                         return "槽 " + (panel.activeSlot + 1)
+                               + "  ·  " + r.n + " 帧"
                                + (panel.expGop ? ("  ·  ~" + gops + " GOP") : "")
                     }
                     color: "#7d848c"
@@ -1341,6 +1363,7 @@ Item {
                                 color: "#0f1114"
                                 border.color: "#2c3138"
                                 TextField {
+                                    id: exportFirstField
                                     anchors.fill: parent
                                     anchors.leftMargin: 8
                                     anchors.rightMargin: 8
@@ -1352,7 +1375,7 @@ Item {
                                     enabled: !panel.exporting
                                     verticalAlignment: Text.AlignVCenter
                                     background: Item {}
-                                    onEditingFinished: panel.exportFirstUi = Math.max(1, parseInt(text) || 1)
+                                    onEditingFinished: panel.applyExportRange()
                                 }
                             }
                             Text {
@@ -1366,6 +1389,7 @@ Item {
                                 color: "#0f1114"
                                 border.color: "#2c3138"
                                 TextField {
+                                    id: exportLastField
                                     anchors.fill: parent
                                     anchors.leftMargin: 8
                                     anchors.rightMargin: 8
@@ -1377,7 +1401,7 @@ Item {
                                     enabled: !panel.exporting
                                     verticalAlignment: Text.AlignVCenter
                                     background: Item {}
-                                    onEditingFinished: panel.exportLastUi = Math.max(1, parseInt(text) || 1)
+                                    onEditingFinished: panel.applyExportRange()
                                 }
                             }
                         }
@@ -1390,6 +1414,7 @@ Item {
                             color: "#0f1114"
                             border.color: "#2c3138"
                             TextField {
+                                id: exportGopField
                                 anchors.fill: parent
                                 anchors.leftMargin: 8
                                 anchors.rightMargin: 8
@@ -1401,10 +1426,7 @@ Item {
                                 enabled: !panel.exporting
                                 verticalAlignment: Text.AlignVCenter
                                 background: Item {}
-                                onEditingFinished: {
-                                    const n = parseInt(text)
-                                    panel.exportGopSize = Math.max(1, Math.min(4096, n || 32))
-                                }
+                                onEditingFinished: panel.applyExportRange()
                             }
                         }
                     }
@@ -1619,37 +1641,54 @@ Item {
                     }
                     Rectangle {
                         width: 64; height: 28; radius: 5
-                        color: panel.exporting ? "#1c1f24" : "#2a3a55"
-                        border.color: panel.exporting ? "#2c3138" : "#3a6fd8"
-                        opacity: panel.exporting ? 0.5 : 1
+                        visible: panel.exporting
+                        color: stopExportMa.containsMouse ? "#8a3a3a" : "#3a2222"
+                        border.color: "#b85a5a"
                         Text {
                             anchors.centerIn: parent
-                            text: panel.exporting ? "导出中" : "导出"
+                            text: "停止"
+                            color: "#f5c4c4"
+                            font.pixelSize: 12
+                        }
+                        MouseArea {
+                            id: stopExportMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                panel.exportStatus = "正在停止…"
+                                YuvBridge.stopExportFrameStats()
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 64; height: 28; radius: 5
+                        visible: !panel.exporting
+                        color: "#2a3a55"
+                        border.color: "#3a6fd8"
+                        Text {
+                            anchors.centerIn: parent
+                            text: "导出"
                             color: "#e8eaed"
                             font.pixelSize: 12
                         }
                         MouseArea {
                             anchors.fill: parent
-                            enabled: !panel.exporting
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                const tot = YuvBridge.totalFrames(panel.activeSlot)
-                                let a = Math.max(1, panel.exportFirstUi)
-                                let b = Math.max(1, panel.exportLastUi)
-                                if (b > tot) b = tot
-                                if (a > b) { const t = a; a = b; b = t }
+                                const r = panel.applyExportRange()
                                 panel.exporting = true
                                 panel.exportOk = false
                                 panel.exportPath = ""
                                 panel.exportRatio = 0
-                                panel.exportStatus = "正在导出…"
-                                YuvBridge.startExportFrameStats(panel.activeSlot, a - 1, b - 1, {
+                                panel.exportStatus = "正在导出 " + r.n + " 帧…"
+                                YuvBridge.startExportFrameStats(panel.activeSlot, r.a - 1, r.b - 1, {
                                     histSummary: panel.expHistSummary,
                                     histBins: panel.expHistBins,
                                     gradient: panel.expGradient,
                                     features: panel.expFeatures,
                                     gopSummary: panel.expGop,
-                                    gopSize: panel.exportGopSize
+                                    gopSize: r.g
                                 })
                             }
                         }

@@ -50,11 +50,12 @@ Shortcut {
         Engine.togglePause()
     }
 }
-// V：切换全局显示视频信息。YUV tab 下切换 YUV 值面板（像素矩阵浮窗）。
+// V：切换画面上的路径/视频信息。YUV tab 下同时切左上角路径条与 YUV 值面板。
 Shortcut {
     sequence: "V"; context: Qt.ApplicationShortcut
     onActivated: {
         if (root.currentTab === "yuv") {
+            YuvBridge.requestToggleSlotInfo()
             YuvBridge.pixelInfoVisible = !YuvBridge.pixelInfoVisible
             return
         }

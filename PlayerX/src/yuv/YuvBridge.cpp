@@ -698,6 +698,12 @@ void YuvBridge::gotoBothFrames(int frameNum) {
     }
 }
 
+void YuvBridge::stopExportFrameStats() {
+    if (!m_statsExportBusy)
+        return;
+    m_statsExportCancel.store(true);
+}
+
 void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
                                       const QVariantMap& opts) {
     if (m_statsExportBusy) {
@@ -745,7 +751,25 @@ void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
             QStringLiteral("%1_slot%2_f%3-%4_frame.csv")
                 .arg(stem).arg(slot + 1).arg(first + 1).arg(last + 1));
     }
+    {
+        QFileInfo csvInfo(outPath);
+        QString batch = csvInfo.completeBaseName();
+        if (batch.endsWith(QStringLiteral("_frame")))
+            batch.chop(6);
+        if (batch.isEmpty())
+            batch = QStringLiteral("yuv_stats");
+        QDir parent = csvInfo.dir();
+        if (parent.dirName() != batch) {
+            const QString folder = parent.filePath(batch);
+            QDir().mkpath(folder);
+            const QString fileName = csvInfo.fileName().isEmpty()
+                ? (batch + QStringLiteral("_frame.csv"))
+                : csvInfo.fileName();
+            outPath = QDir(folder).filePath(fileName);
+        }
+    }
 
+    m_statsExportCancel.store(false);
     m_statsExportBusy = true;
     emit statsExportProgress(QStringLiteral("开始导出统计…"), 0);
 
@@ -1047,6 +1071,13 @@ void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
             prevSnap = snap;
             havePrev = snap.valid;
 
+            if (m_statsExportCancel.load()) {
+                file.close();
+                QFile::remove(outPath);
+                fail(QStringLiteral("已停止导出"));
+                return;
+            }
+
             if (((f - first) & 3) == 0 || f == last) {
                 const QString msg = QStringLiteral("导出帧 %1 / %2…").arg(f - first + 1).arg(span);
                 const double ratio = span > 0 ? double(f - first + 1) / double(span) : 1;
@@ -1255,9 +1286,10 @@ void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
             done += QStringLiteral("，说明见 .readme.txt");
         }
 
-        QMetaObject::invokeMethod(this, [this, done, outPath]() {
+        const QString revealPath = QFileInfo(outPath).absolutePath();
+        QMetaObject::invokeMethod(this, [this, done, revealPath]() {
             m_statsExportBusy = false;
-            emit statsExportFinished(true, done, outPath);
+            emit statsExportFinished(true, done, revealPath);
         }, Qt::QueuedConnection);
     });
 }
@@ -1564,6 +1596,13 @@ void YuvBridge::setPixelInfoVisible(bool visible) {
     if (m_pixelInfoVisible == visible) return;
     m_pixelInfoVisible = visible;
     emit pixelInfoVisibleChanged();
+}
+
+void YuvBridge::setSlotInfoVisible(bool visible) {
+    if (m_slotInfoVisible == visible) return;
+    m_slotInfoVisible = visible;
+    emit slotInfoVisibleChanged();
+    emit toggleSlotInfoRequested();
 }
 
 void YuvBridge::setChromaInterpolation(int mode) {

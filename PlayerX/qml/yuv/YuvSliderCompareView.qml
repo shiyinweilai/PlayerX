@@ -20,7 +20,7 @@ Item {
     // ── 内部状态 ──
     property int frameVer: 0          // 帧刷新版本号，驱动 leftImage/rightImage 绑定
     property real splitRatio: 0.5     // 分割比例 [0, 1]
-    property bool infoVisible: true   // L/R 通道信息条显隐（C 键切换）
+    property bool infoVisible: YuvBridge.slotInfoVisible
 
     // 监听 YuvBridge 帧/通道变化，递增 frameVer 使 image 绑定重新求值
     // 同时监听 toggleSlotInfoRequested 信号，与多窗口模式同步显隐
@@ -29,7 +29,6 @@ Item {
         function onFrameChanged(slot) { view.frameVer++ }
         function onDisplayModeChanged(slot) { view.frameVer++ }
         function onPlayStateChanged(slot) { view.frameVer++ }
-        function onToggleSlotInfoRequested() { view.infoVisible = !view.infoVisible }
     }
 
     // ─── 渲染主体 ─────────────────────────────────────────────────────
@@ -281,9 +280,7 @@ Item {
     }
 
     Rectangle {
-        visible: Math.abs(YuvBridge.globalScale - 1.0) > 0.005
-                 || Math.abs(compareItem.panX) > 0.5
-                 || Math.abs(compareItem.panY) > 0.5
+        visible: YuvBridge.slotCount > 0
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: 10
@@ -320,6 +317,30 @@ Item {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
+                        compareItem.panX = 0
+                        compareItem.panY = 0
+                    }
+                }
+            }
+            Rectangle {
+                width: 40; height: 18; radius: 4
+                color: cmpZoomFitMa.containsMouse ? "#3a6fd8" : "#2a2a34"
+                Text { anchors.centerIn: parent; text: "撑满"; color: "#fff"; font.pixelSize: 10 }
+                MouseArea {
+                    id: cmpZoomFitMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        const imgW = YuvBridge.width(0)
+                        const imgH = YuvBridge.height(0)
+                        const vw = compareItem.width
+                        const vh = compareItem.height
+                        if (imgW <= 0 || imgH <= 0 || vw <= 0 || vh <= 0) return
+                        let s = Math.min(vw / imgW, vh / imgH)
+                        if (s < 0.01) s = 0.01
+                        if (s > 32) s = 32
+                        YuvBridge.globalScale = s
                         compareItem.panX = 0
                         compareItem.panY = 0
                     }
