@@ -20,6 +20,7 @@
  */
 
 #include <QQuickItem>
+#include <QSizeF>
 #include <QImage>
 #include <QSGGeometryNode>
 #include <QSGTextureMaterial>
@@ -59,6 +60,7 @@ signals:
 
 protected:
     QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
+    void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
 
 private:
     // 缩放档位常量（与 YuvBridge::kScaleValues 严格一致）
@@ -83,5 +85,6 @@ private:
     QSGTexture* m_texture = nullptr;
     bool m_imageDirty   = true;   // 图像内容变更 → 需重建纹理
     bool m_geometryDirty = true;  // 位置/尺寸/缩放变更 → 需重算顶点
+    QSizeF m_lastPaintSize;
     mutable std::optional<bool> m_softwareBackendCache;
 };

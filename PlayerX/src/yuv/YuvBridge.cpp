@@ -7,8 +7,10 @@
 #include <QUrl>
 #include <QtConcurrent>
 #include <QFutureWatcher>
+#include <QMetaObject>
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -145,6 +147,7 @@ void YuvBridge::closeAll() {
         }
         m_asyncBusy[i] = false;
         m_pendingFrame[i] = -1;
+        m_asyncTarget[i] = -1;
         m_statsPendingFrame[i] = -1;
         invalidateStatsCache(i);
         m_analyzers[i]->close();
@@ -183,6 +186,7 @@ void YuvBridge::closeFile(int slot) {
     }
     m_asyncBusy[slot] = false;
     m_pendingFrame[slot] = -1;
+    m_asyncTarget[slot] = -1;
     m_statsPendingFrame[slot] = -1;
     invalidateStatsCache(slot);
     m_analyzers[slot]->close();
@@ -214,15 +218,13 @@ void YuvBridge::gotoFrame(int slot, int frameNum) {
 void YuvBridge::nextFrame(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
-    const int cur = m_analyzers[slot]->currentFrame();
-    refreshFrameImageAsyncToFrame(slot, cur + 1);
+    refreshFrameImageAsyncToFrame(slot, currentFrame(slot) + 1);
 }
 
 void YuvBridge::prevFrame(int slot) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
-    const int cur = m_analyzers[slot]->currentFrame();
-    refreshFrameImageAsyncToFrame(slot, cur - 1);
+    refreshFrameImageAsyncToFrame(slot, currentFrame(slot) - 1);
 }
 
 void YuvBridge::firstFrame(int slot) {
@@ -241,7 +243,12 @@ QImage  YuvBridge::frameImage(int slot) const {
     return (slot >= 0 && slot < MaxSlots) ? m_frameImages[slot] : QImage();
 }
 int     YuvBridge::currentFrame(int slot) const {
-    return (slot >= 0 && slot < MaxSlots) ? m_analyzers[slot]->currentFrame() : 0;
+    if (slot < 0 || slot >= MaxSlots) return 0;
+    // 显示帧号以 m_visibleFrame 为准：重置/seek 立刻改这里，避免分析器被
+    // 对照快照 seek 走之后底栏仍停在旧帧、或画面已回第一帧而数字不动。
+    if (m_analyzers[slot]->isOpen() && m_visibleFrame[slot] >= 0)
+        return m_visibleFrame[slot];
+    return m_analyzers[slot]->currentFrame();
 }
 int     YuvBridge::totalFrames(int slot) const {
     return (slot >= 0 && slot < MaxSlots) ? m_analyzers[slot]->totalFrames() : 0;
@@ -516,6 +523,192 @@ QVariantMap YuvBridge::blockDiffOverview(int slotA, int slotB, int plane) const 
     result["firstDiffRow"] = firstRow;
     result["frame"] = target;
     return result;
+}
+
+namespace {
+
+rb::YuvAnalyzer::FrameSnapshot snapshotSlotAt(rb::YuvAnalyzer* a, int frame) {
+    a->lockData();
+    a->seekToFrameNoLock(frame);
+    auto s = a->snapshotCurrentFrameLocked();
+    a->unlockData();
+    return s;
+}
+
+int sampleSnap(const rb::YuvAnalyzer::FrameSnapshot& s, int plane, int x, int y) {
+    if (!s.valid || x < 0 || y < 0 || x >= s.width || y >= s.height) return -1;
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(s.pixFmt);
+    const bool hi = desc && desc->comp[0].depth > 8;
+    const int p = (plane <= 0) ? 0 : ((plane == 1) ? 1 : 2);
+    if (p >= s.planeCount || s.planes[p].data.empty()) return -1;
+    int sx = x, sy = y;
+    if (p > 0 && desc) {
+        sx = x >> desc->log2_chroma_w;
+        sy = y >> desc->log2_chroma_h;
+    }
+    const auto& pl = s.planes[p];
+    if (sx < 0 || sy < 0 || sx >= pl.pw || sy >= pl.ph) return -1;
+    if (hi) {
+        const auto* row = reinterpret_cast<const uint16_t*>(pl.data.data() + sy * pl.stride);
+        return int(row[sx]);
+    }
+    return int(pl.data[sy * pl.stride + sx]);
+}
+
+void planeMetrics(const rb::YuvAnalyzer::FrameSnapshot& a,
+                  const rb::YuvAnalyzer::FrameSnapshot& b,
+                  int plane, int w, int h, const AVPixFmtDescriptor* desc,
+                  double* mse, int* maxAbs, qint64* sad, qint64* count) {
+    int stepX = 1, stepY = 1;
+    if (plane > 0 && desc) {
+        stepX = 1 << desc->log2_chroma_w;
+        stepY = 1 << desc->log2_chroma_h;
+    }
+    double se = 0;
+    int mx = 0;
+    qint64 s = 0, n = 0;
+    for (int y = 0; y < h; y += stepY) {
+        for (int x = 0; x < w; x += stepX) {
+            const int va = sampleSnap(a, plane, x, y);
+            const int vb = sampleSnap(b, plane, x, y);
+            if (va < 0 || vb < 0) continue;
+            const int d = std::abs(va - vb);
+            se += double(d) * double(d);
+            s += d;
+            if (d > mx) mx = d;
+            ++n;
+        }
+    }
+    *mse = (n > 0) ? (se / double(n)) : 0;
+    *maxAbs = mx;
+    *sad = s;
+    *count = n;
+}
+
+double psnrFromMse(double mse, int peak) {
+    if (mse <= 0) return 99.0;
+    return 10.0 * std::log10((double(peak) * double(peak)) / mse);
+}
+
+} // namespace
+
+QVariantMap YuvBridge::compareFrameMetrics(int slotA, int slotB) const {
+    QVariantMap r;
+    r["ok"] = false;
+    if (slotA < 0 || slotA >= MaxSlots || slotB < 0 || slotB >= MaxSlots) return r;
+    if (!m_analyzers[slotA]->isOpen() || !m_analyzers[slotB]->isOpen()) return r;
+    int target = m_visibleFrame[slotA];
+    if (target < 0) target = m_analyzers[slotA]->currentFrame();
+    const auto sa = snapshotSlotAt(m_analyzers[slotA].get(), target);
+    const auto sb = snapshotSlotAt(m_analyzers[slotB].get(), target);
+    if (!sa.valid || !sb.valid) return r;
+    const int w = std::min(sa.width, sb.width);
+    const int h = std::min(sa.height, sb.height);
+    if (w <= 0 || h <= 0) return r;
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(sa.pixFmt);
+    const int peak = (desc && desc->comp[0].depth > 8) ? ((1 << desc->comp[0].depth) - 1) : 255;
+    double mse[3] = {0, 0, 0};
+    int mx[3] = {0, 0, 0};
+    qint64 sad[3] = {0, 0, 0}, cnt[3] = {0, 0, 0};
+    for (int p = 0; p < 3; ++p)
+        planeMetrics(sa, sb, p, w, h, desc, &mse[p], &mx[p], &sad[p], &cnt[p]);
+    const bool identical = (mx[0] == 0 && mx[1] == 0 && mx[2] == 0);
+    r["ok"] = true;
+    r["frame"] = target;
+    r["identical"] = identical;
+    r["peak"] = peak;
+    r["maxAbsY"] = mx[0]; r["maxAbsU"] = mx[1]; r["maxAbsV"] = mx[2];
+    r["madY"] = (cnt[0] > 0) ? (double(sad[0]) / double(cnt[0])) : 0;
+    r["psnrY"] = psnrFromMse(mse[0], peak);
+    r["psnrU"] = psnrFromMse(mse[1], peak);
+    r["psnrV"] = psnrFromMse(mse[2], peak);
+    return r;
+}
+
+void YuvBridge::gotoBothFrames(int frameNum) {
+    globalPause();
+    for (int i = 0; i < MaxSlots; ++i) {
+        if (m_analyzers[i] && m_analyzers[i]->isOpen())
+            gotoFrame(i, frameNum);
+    }
+}
+
+void YuvBridge::startScanFirstDiff(int slotA, int slotB, int fromFrame) {
+    if (m_scanBusy) {
+        emit scanJobFinished(false, -1, "已有扫描在运行");
+        return;
+    }
+    if (slotA < 0 || slotB < 0 || !m_analyzers[slotA]->isOpen() || !m_analyzers[slotB]->isOpen()) {
+        emit scanJobFinished(false, -1, "需要打开两路 YUV");
+        return;
+    }
+    const QString pathA = m_analyzers[slotA]->filePath();
+    const QString pathB = m_analyzers[slotB]->filePath();
+    const int w = m_analyzers[slotA]->width();
+    const int h = m_analyzers[slotA]->height();
+    const QString fmt = m_analyzers[slotA]->pixelFormatName();
+    const double fps = m_analyzers[slotA]->fps();
+    const int total = std::min(m_analyzers[slotA]->totalFrames(), m_analyzers[slotB]->totalFrames());
+    const int start = std::max(0, fromFrame);
+    m_scanBusy = true;
+    emit scanJobProgress("开始扫描差异帧…", 0);
+    QtConcurrent::run([this, pathA, pathB, w, h, fmt, fps, start, total]() {
+        rb::YuvAnalyzer scanA;
+        rb::YuvAnalyzer scanB;
+        int found = -1;
+        int lastMax = 0;
+        if (!scanA.open(pathA, w, h, fmt, fps) || !scanB.open(pathB, w, h, fmt, fps)) {
+            QMetaObject::invokeMethod(this, [this]() {
+                m_scanBusy = false;
+                emit scanJobFinished(false, -1, "无法打开对照文件进行扫描");
+            }, Qt::QueuedConnection);
+            return;
+        }
+        for (int f = start; f < total; ++f) {
+            const auto sa = snapshotSlotAt(&scanA, f);
+            const auto sb = snapshotSlotAt(&scanB, f);
+            int mx = 0;
+            if (sa.valid && sb.valid) {
+                const auto& pa = sa.planes[0];
+                const auto& pb = sb.planes[0];
+                if (!pa.data.empty() && pa.data.size() == pb.data.size()
+                        && pa.data == pb.data) {
+                    mx = 0;
+                } else {
+                    const int cw = std::min(sa.width, sb.width);
+                    const int ch = std::min(sa.height, sb.height);
+                    for (int y = 0; y < ch && mx < 1; ++y) {
+                        for (int x = 0; x < cw; ++x) {
+                            const int d = std::abs(sampleSnap(sa, 0, x, y) - sampleSnap(sb, 0, x, y));
+                            if (d > mx) mx = d;
+                            if (mx >= 1) break;
+                        }
+                    }
+                }
+            }
+            lastMax = mx;
+            if ((f & 7) == 0) {
+                const QString msg = QString("扫描帧 %1 / %2…").arg(f + 1).arg(total);
+                const double ratio = total > 0 ? double(f + 1) / double(total) : 0;
+                QMetaObject::invokeMethod(this, [this, msg, ratio]() {
+                    emit scanJobProgress(msg, ratio);
+                }, Qt::QueuedConnection);
+            }
+            if (mx >= 1) { found = f; break; }
+        }
+        QMetaObject::invokeMethod(this, [this, found, lastMax, total, start]() {
+            m_scanBusy = false;
+            if (found >= 0) {
+                gotoBothFrames(found);
+                emit scanJobFinished(true, found,
+                    QString("首个差异帧 #%1（Y max|Δ|≥1）").arg(found + 1));
+            } else {
+                emit scanJobFinished(false, -1,
+                    QString("从 #%1 到 #%2 未发现 Y 差异").arg(start + 1).arg(total));
+            }
+            Q_UNUSED(lastMax);
+        }, Qt::QueuedConnection);
+    });
 }
 
 void YuvBridge::setHoverPixel(int slot, int px, int py, bool valid) {
@@ -912,25 +1105,7 @@ void YuvBridge::refreshFrameImage(int slot) {
         emit frameChanged(slot);
         return;
     }
-
-    // 检查是否已有异步任务在进行中。如果当前请求的帧与 pending 帧不同，
-    // 取消旧任务（不等完成），启动新的。如果相同，则等待已有任务完成即可。
-    const int targetFrame = m_analyzers[slot]->currentFrame();
-
-    if (m_asyncBusy[slot]) {
-        // 已有异步任务在进行
-        if (m_pendingFrame[slot] == targetFrame) {
-            // 同一帧已在解码中，无需重复启动
-            return;
-        }
-        // 不同帧：等待当前任务完成后自动启动新的（通过 watcher finished 信号链）
-        // 不主动 cancel（QImage 计算不可中断），但标记需要重新刷新
-        // pendingFrame 会在 finished 回调里检查并决定是否需要再发一次
-        m_pendingFrame[slot] = -2;  // 标记"需要重试"
-        return;
-    }
-
-    refreshFrameImageAsync(slot);
+    refreshFrameImageAsyncToFrame(slot, currentFrame(slot));
 }
 
 void YuvBridge::refreshFrameImageAsync(int slot) {
@@ -945,28 +1120,27 @@ void YuvBridge::refreshFrameImageAsyncToFrame(int slot, int targetFrame) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot]->isOpen()) return;
 
-    const int displayMode = m_displayModes[slot];
+    const int total = m_analyzers[slot]->totalFrames();
+    if (total <= 0) return;
+    if (targetFrame < 0) targetFrame = 0;
+    if (targetFrame >= total) targetFrame = total - 1;
 
-    // 如果已有异步任务在进行中，标记需要重试（finished 回调会检查）
+    m_visibleFrame[slot] = targetFrame;
+    emit frameChanged(slot);
+
     if (m_asyncBusy[slot]) {
-        m_pendingFrame[slot] = -2;  // 标记"需要重试"
+        m_pendingFrame[slot] = targetFrame;
         return;
     }
 
     m_asyncBusy[slot] = true;
-    m_pendingFrame[slot] = targetFrame;
+    m_asyncTarget[slot] = targetFrame;
+    m_pendingFrame[slot] = -1;
 
-    // 主线程先设置 m_currentFrame（锁内），这样 Worker 线程的幂等检查能跳过 seek
-    {
-        // YuvAnalyzer::seekToFrame 会锁+readCurrentFrameLocked，但我们不想在主线程做 I/O
-        // 所以只设置 frame number，让 Worker 线程做 seek+read
-        // 这里用 lockData 直接设 m_currentFrame（通过 seekToFrameNoLock 的幂等检查实现）
-    }
-
+    const int displayMode = m_displayModes[slot];
     auto* analyzer = m_analyzers[slot].get();
     QFuture<QImage> future = QtConcurrent::run([analyzer, targetFrame, displayMode]() -> QImage {
         analyzer->lockData();
-        // Worker 线程做 seek+read+convert（全在锁内）
         analyzer->seekToFrameNoLock(targetFrame);
         QImage img = analyzer->getFrameImageLocked(displayMode);
         analyzer->unlockData();
@@ -979,32 +1153,24 @@ void YuvBridge::refreshFrameImageAsyncToFrame(int slot, int targetFrame) {
             if (slot < 0 || slot >= MaxSlots || !m_watchers[slot]) return;
 
             const QImage result = m_watchers[slot]->result();
+            const int decoded = m_asyncTarget[slot];
             m_frameImages[slot] = result;
             m_asyncBusy[slot] = false;
-            if (m_analyzers[slot] && m_analyzers[slot]->isOpen())
-                m_visibleFrame[slot] = m_analyzers[slot]->currentFrame();
+            if (m_analyzers[slot] && m_analyzers[slot]->isOpen() && decoded >= 0)
+                m_visibleFrame[slot] = decoded;
 
-            // 检查是否在解码期间有新的帧请求
             const int pending = m_pendingFrame[slot];
             m_pendingFrame[slot] = -1;
-
-            if (pending == -2) {
-                // 解码期间有新的帧请求，重新触发当前帧
-                refreshFrameImage(slot);
-            } else {
-                emit frameChanged(slot);
-                // 非播放状态 → 总是计算帧级统计
-                // 播放状态 + 右侧栏展开 → 兼顾实时统计渲染，也计算
-                // 播放状态 + 右侧栏收起 → 跳过统计，保证最大帧率
-                if (!m_playing[slot] || m_rightSidebarOpen) {
-                    const int curFrame = m_analyzers[slot]->currentFrame();
-                    computeStatsAsync(slot, curFrame);
-                }
-                // ── 差异检测：非播放状态帧加载完成时也检查 ──
-                if (!m_playing[slot]) {
-                    checkDiffDetect();
-                }
+            if (pending >= 0 && pending != decoded) {
+                refreshFrameImageAsyncToFrame(slot, pending);
+                return;
             }
+
+            emit frameChanged(slot);
+            if (!m_playing[slot] || m_rightSidebarOpen)
+                computeStatsAsync(slot, decoded);
+            if (!m_playing[slot])
+                checkDiffDetect();
         });
     }
 
@@ -1387,40 +1553,44 @@ void YuvBridge::onSyncTimerTick() {
 }
 
 void YuvBridge::checkDiffDetect() {
-    // 仅两路 + 开关开启 + 非忽略模式
-    if (!m_diffDetectEnabled || m_diffIgnoreOnce ||
-        activeSlotCount() != 2 ||
-        m_frameImages[0].isNull() || m_frameImages[1].isNull()) {
+    // 仅两路 + 开关开启 + 非忽略。重置/seek 时两路异步完成时刻不同，
+    // 未对齐的显示帧或还在解码的路，不能当成“有差异”。
+    if (!m_diffDetectEnabled || m_diffIgnoreOnce || activeSlotCount() != 2)
         return;
-    }
+    if (!m_analyzers[0]->isOpen() || !m_analyzers[1]->isOpen())
+        return;
+    if (m_asyncBusy[0] || m_asyncBusy[1])
+        return;
+    if (m_visibleFrame[0] != m_visibleFrame[1] || m_visibleFrame[0] < 0)
+        return;
 
-    const QImage& a = m_frameImages[0];
-    const QImage& b = m_frameImages[1];
-    const int w = std::min(a.width(), b.width());
-    const int h = std::min(a.height(), b.height());
-    if (w <= 0 || h <= 0) return;
+    const int target = m_visibleFrame[0];
+    const auto sa = snapshotSlotAt(m_analyzers[0].get(), target);
+    const auto sb = snapshotSlotAt(m_analyzers[1].get(), target);
+    if (!sa.valid || !sb.valid) return;
 
-    // 采样比较：每隔 4 像素取一点（快），统计 Y 通道最大绝对差
     int maxAbsDiff = 0;
-    const int step = 4;
-    for (int y = 0; y < h; y += step) {
-        for (int x = 0; x < w; x += step) {
-            const QRgb pa = a.pixel(x, y);
-            const QRgb pb = b.pixel(x, y);
-            const int ya = (qRed(pa) + qGreen(pa) + qBlue(pa)) / 3;
-            const int yb = (qRed(pb) + qGreen(pb) + qBlue(pb)) / 3;
-            const int d = std::abs(ya - yb);
-            if (d > maxAbsDiff) maxAbsDiff = d;
+    const auto& pa = sa.planes[0];
+    const auto& pb = sb.planes[0];
+    if (!pa.data.empty() && pa.data.size() == pb.data.size() && pa.data == pb.data) {
+        maxAbsDiff = 0;
+    } else {
+        const int w = std::min(sa.width, sb.width);
+        const int h = std::min(sa.height, sb.height);
+        for (int y = 0; y < h && maxAbsDiff < 1; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const int d = std::abs(sampleSnap(sa, 0, x, y) - sampleSnap(sb, 0, x, y));
+                if (d > maxAbsDiff) maxAbsDiff = d;
+                if (maxAbsDiff >= 1) break;
+            }
         }
     }
-    // 阈值：最大绝对差 > 3（过滤量化噪声）
-    if (maxAbsDiff > 3) {
-        // 立即停止播放（暂停在当前帧），再通知 QML 显示 Toast
-        if (m_syncTimer) m_syncTimer->stop();
-        for (int i = 0; i < MaxSlots; ++i) m_playing[i] = false;
-        const int curFrame = m_visibleFrame[0];
-        emit diffDetected(curFrame, maxAbsDiff);
-    }
+    if (maxAbsDiff < 1)
+        return;
+
+    if (m_syncTimer) m_syncTimer->stop();
+    for (int i = 0; i < MaxSlots; ++i) m_playing[i] = false;
+    emit diffDetected(target, maxAbsDiff);
 }
 
 void YuvBridge::globalPlay() {
@@ -1609,7 +1779,7 @@ bool YuvBridge::isReversing(int slot) const {
 void YuvBridge::skipForward(int slot, int frames) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
-    const int cur = m_analyzers[slot]->currentFrame();
+    const int cur = currentFrame(slot);
     const int total = m_analyzers[slot]->totalFrames();
     const int target = qMin(cur + frames, total - 1);
     refreshFrameImageAsyncToFrame(slot, target);
@@ -1618,7 +1788,7 @@ void YuvBridge::skipForward(int slot, int frames) {
 void YuvBridge::skipBackward(int slot, int frames) {
     if (slot < 0 || slot >= MaxSlots) return;
     if (!m_analyzers[slot] || !m_analyzers[slot]->isOpen()) return;
-    const int cur = m_analyzers[slot]->currentFrame();
+    const int cur = currentFrame(slot);
     const int target = qMax(cur - frames, 0);
     refreshFrameImageAsyncToFrame(slot, target);
 }

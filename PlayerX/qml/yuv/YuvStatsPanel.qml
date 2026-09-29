@@ -12,10 +12,12 @@ import PlayerX 1.0
 //     "YUV 分析→块大小"设置），随鼠标移动实时刷新（hoverVer）。
 //     悬浮坐标由 YuvWindow.qml 的像素悬浮 MouseArea 通过
 //     YuvBridge.setHoverPixel() 上报，跨窗口全局共享。
-Rectangle {
+Item {
     id: panel
-    color: "#121417"
     anchors.fill: parent
+
+    property bool floating: false
+    function toggleFloating() { panel.floating = !panel.floating }
 
     property int activeSlot: 0
     property int ver: 0
@@ -24,6 +26,14 @@ Rectangle {
     property int diffPlane: 0   // 差异总览通道：0=Y / 1=U / 2=V
     property int viewMode: 0    // 二级 tab：0=直方图 / 1=梯度纹理 / 2=编码参考
     readonly property bool cmpAvailable: YuvBridge.slotCount === 2
+    property var cmpMetrics: null
+    property string scanStatus: ""
+    property bool scanning: false
+    function refreshCmpMetrics() {
+        if (!panel.cmpAvailable) { panel.cmpMetrics = null; return }
+        if (YuvBridge.isPlaying(0) || YuvBridge.isPlaying(1)) return
+        panel.cmpMetrics = YuvBridge.compareFrameMetrics(0, 1)
+    }
 
     // 差异总览数据（切到该 tab / 帧变化 / 块大小变化 / 通道切换时重新拉取）
     property var diffData: null
@@ -61,22 +71,40 @@ Rectangle {
         target: YuvBridge
         function onFrameChanged(slot) {
             if (slot === panel.activeSlot) panel.ver++
-            if (panel.statsMode === 2 && (slot === 0 || slot === 1)
-                    && !YuvBridge.isPlaying(0) && !YuvBridge.isPlaying(1))
-                panel.refreshDiffOverview()
+            if ((slot === 0 || slot === 1) && !YuvBridge.isPlaying(0) && !YuvBridge.isPlaying(1)) {
+                panel.refreshCmpMetrics()
+                if (panel.statsMode === 2) panel.refreshDiffOverview()
+            }
         }
         function onPlayStateChanged(slot) {
-            if (panel.statsMode === 2 && !YuvBridge.isPlaying(0) && !YuvBridge.isPlaying(1))
-                panel.refreshDiffOverview()
+            if (!YuvBridge.isPlaying(0) && !YuvBridge.isPlaying(1)) {
+                panel.refreshCmpMetrics()
+                if (panel.statsMode === 2) panel.refreshDiffOverview()
+            }
+        }
+        function onScanJobProgress(message, ratio) {
+            panel.scanning = true
+            panel.scanStatus = message + "  " + Math.round(ratio * 100) + "%"
+        }
+        function onScanJobFinished(found, frameNum, message) {
+            panel.scanning = false
+            panel.scanStatus = message
+            panel.refreshCmpMetrics()
+            if (panel.statsMode === 2) panel.refreshDiffOverview()
         }
         function onStatsReady(slot) {
             // 帧级统计异步计算完成后刷新面板（与 frameChanged 解耦）
             if (slot === panel.activeSlot) panel.ver++
         }
-        function onFileOpened(slot) { panel.ver++; if (panel.statsMode === 2) panel.refreshDiffOverview() }
+        function onFileOpened(slot) {
+            panel.ver++
+            panel.refreshCmpMetrics()
+            if (panel.statsMode === 2) panel.refreshDiffOverview()
+        }
         function onSlotCountChanged() {
             panel.ver++
             if (!panel.cmpAvailable && panel.statsMode === 2) panel.statsMode = 0
+            panel.refreshCmpMetrics()
             if (panel.statsMode === 2) panel.refreshDiffOverview()
         }
         function onHoverChanged() { panel.hoverVer++ }
@@ -90,21 +118,341 @@ Rectangle {
         if (statsMode === 2) refreshDiffOverview()
     }
     onDiffPlaneChanged: if (statsMode === 2) refreshDiffOverview()
+    Component.onCompleted: refreshCmpMetrics()
 
-    // 左侧分隔线
+    component SegChip: Rectangle {
+        id: chip
+        property string label: ""
+        property bool selected: false
+        signal activated
+        implicitWidth: Math.ceil(chipLab.implicitWidth) + 14
+        implicitHeight: 22
+        width: visible ? implicitWidth : 0
+        height: visible ? implicitHeight : 0
+        radius: 3
+        color: selected ? "#2a3a55" : "transparent"
+        border.width: 1
+        border.color: selected ? "#3a6fd8" : "transparent"
+        opacity: enabled ? 1 : 0.4
+        Text {
+            id: chipLab
+            anchors.centerIn: parent
+            text: chip.label
+            color: chip.selected ? "#ffffff" : "#9aa0a6"
+            font.pixelSize: 11
+        }
+        MouseArea {
+            anchors.fill: parent
+            enabled: chip.enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: chip.activated()
+        }
+    }
+
+    component ChipTrack: Rectangle {
+        default property alias content: trackRow.data
+        implicitWidth: trackRow.implicitWidth + 6
+        implicitHeight: 26
+        width: visible ? implicitWidth : 0
+        height: visible ? implicitHeight : 0
+        color: "#1a1d22"
+        radius: 4
+        border.color: "#2a2e33"
+        border.width: 1
+        Row {
+            id: trackRow
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.leftMargin: 3
+            spacing: 1
+        }
+    }
+
+    function startDiffScan(fromCurrent) {
+        const fr = YuvBridge.currentFrame(0)
+        panel.scanning = true
+        panel.scanStatus = "扫描中…"
+        YuvBridge.startScanFirstDiff(0, 1, fromCurrent ? (fr + 1) : 0)
+    }
+
     Rectangle {
-        anchors.left: parent.left
+        visible: !panel.floating
+        anchors.fill: parent
+        color: "#121417"
+        Rectangle {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 1
+            color: "#2a2e33"
+        }
+    }
+
+    Rectangle {
+        visible: panel.floating
+        anchors.right: parent.right
+        anchors.rightMargin: 12
+        anchors.top: parent.top
+        anchors.topMargin: 12
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 12
+        width: 304
+        radius: 8
+        color: "#f0121417"
+        border.color: "#2a2e33"
+        border.width: 1
+    }
+
+    Item {
+        id: contentHost
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: 1
-        color: "#2a2e33"
+        anchors.right: parent.right
+        anchors.left: panel.floating ? undefined : parent.left
+        anchors.topMargin: panel.floating ? 12 : 0
+        anchors.bottomMargin: panel.floating ? 12 : 0
+        anchors.rightMargin: panel.floating ? 12 : 0
+        width: panel.floating ? 304 : undefined
+
+    // 工具条固定在顶：范围 / 槽 / 视图按文字宽度排，不拉成通栏
+    Column {
+        id: chrome
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.leftMargin: 8
+        anchors.rightMargin: 8
+        anchors.topMargin: 8
+        spacing: 8
+
+        RowLayout {
+            width: parent.width
+            spacing: 8
+            Text {
+                text: "YUV 分析"
+                color: "#d0d4d8"
+                font.pixelSize: 13
+                font.bold: true
+            }
+            Item { Layout.fillWidth: true }
+            Text {
+                text: {
+                    const _ = panel.ver
+                    if (YuvBridge.slotCount <= 0) return ""
+                    return (YuvBridge.currentFrame(panel.activeSlot) + 1) +
+                           " / " + YuvBridge.totalFrames(panel.activeSlot)
+                }
+                color: "#8a9098"
+                font.pixelSize: 11
+                font.family: "Menlo"
+            }
+            Rectangle {
+                Layout.preferredWidth: 22
+                Layout.preferredHeight: 22
+                radius: 4
+                color: floatModeMa.pressed ? "#2a3f5a" : "#1a1d22"
+                border.color: "#2a2e33"
+                border.width: 1
+                Text {
+                    anchors.centerIn: parent
+                    text: panel.floating ? "◫" : "▣"
+                    color: "#9aa0a6"
+                    font.pixelSize: 12
+                }
+                MouseArea {
+                    id: floatModeMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: panel.toggleFloating()
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: panel.floating
+                                  ? "切换为腾位模式（画面让出右侧栏）"
+                                  : "切换为悬浮模式（浮于画面上层）"
+                }
+            }
+        }
+
+        Flow {
+            width: parent.width
+            spacing: 6
+
+            ChipTrack {
+                SegChip {
+                    label: "帧"
+                    selected: panel.statsMode === 0
+                    onActivated: panel.statsMode = 0
+                }
+                SegChip {
+                    label: "块"
+                    selected: panel.statsMode === 1
+                    onActivated: panel.statsMode = 1
+                }
+                SegChip {
+                    visible: panel.cmpAvailable
+                    label: "差异图"
+                    selected: panel.statsMode === 2
+                    onActivated: panel.statsMode = 2
+                }
+            }
+
+            ChipTrack {
+                visible: YuvBridge.slotCount > 1 && panel.statsMode === 0
+                Repeater {
+                    model: YuvBridge.slotCount
+                    delegate: SegChip {
+                        required property int index
+                        label: "槽" + (index + 1)
+                        selected: panel.activeSlot === index
+                        onActivated: { panel.activeSlot = index; panel.ver++ }
+                    }
+                }
+            }
+
+            ChipTrack {
+                visible: panel.statsMode !== 2
+                SegChip {
+                    label: "直方"
+                    selected: panel.viewMode === 0
+                    onActivated: panel.viewMode = 0
+                }
+                SegChip {
+                    label: "梯度"
+                    selected: panel.viewMode === 1
+                    onActivated: panel.viewMode = 1
+                }
+                SegChip {
+                    label: "编码"
+                    selected: panel.viewMode === 2
+                    onActivated: panel.viewMode = 2
+                }
+            }
+
+            ChipTrack {
+                visible: panel.statsMode === 2
+                SegChip {
+                    label: "Y"
+                    selected: panel.diffPlane === 0
+                    onActivated: panel.diffPlane = 0
+                }
+                SegChip {
+                    label: "U"
+                    selected: panel.diffPlane === 1
+                    onActivated: panel.diffPlane = 1
+                }
+                SegChip {
+                    label: "V"
+                    selected: panel.diffPlane === 2
+                    onActivated: panel.diffPlane = 2
+                }
+            }
+        }
+
+        Rectangle {
+            width: parent.width
+            visible: panel.cmpAvailable
+            color: "#1a1d22"
+            radius: 4
+            border.color: "#2a2e33"
+            border.width: 1
+            implicitHeight: cmpInner.implicitHeight + 12
+            readonly property var m: panel.cmpMetrics
+            readonly property bool ok: m && m.ok
+            readonly property bool same: ok && m.identical
+
+            Column {
+                id: cmpInner
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 6
+                spacing: 4
+
+                RowLayout {
+                    width: parent.width
+                    spacing: 6
+                    Text {
+                        text: {
+                            const _ = panel.ver
+                            const m = panel.cmpMetrics
+                            if (!m || !m.ok) return "对照  ·  暂停后计算"
+                            return m.identical ? ("对照  ·  #" + (m.frame + 1) + " 一致")
+                                               : ("对照  ·  #" + (m.frame + 1) + " 有差异")
+                        }
+                        color: {
+                            const m = panel.cmpMetrics
+                            if (m && m.ok && m.identical) return "#6fbf73"
+                            if (m && m.ok) return "#e8a24a"
+                            return "#9aa0a6"
+                        }
+                        font.pixelSize: 11
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                    }
+                    SegChip {
+                        label: "从头扫"
+                        enabled: !panel.scanning
+                        onActivated: panel.startDiffScan(false)
+                    }
+                    SegChip {
+                        label: "向后扫"
+                        enabled: !panel.scanning
+                        onActivated: panel.startDiffScan(true)
+                    }
+                }
+                Text {
+                    visible: panel.cmpMetrics && panel.cmpMetrics.ok
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    text: {
+                        const m = panel.cmpMetrics
+                        if (!m || !m.ok) return ""
+                        return "PSNR " + m.psnrY.toFixed(1) + "/" + m.psnrU.toFixed(1) + "/" + m.psnrV.toFixed(1)
+                               + "   MAD-Y " + m.madY.toFixed(3)
+                               + "   max|Δ| " + m.maxAbsY + "/" + m.maxAbsU + "/" + m.maxAbsV
+                    }
+                    color: "#b0b6bc"
+                    font.pixelSize: 10
+                    font.family: "Menlo"
+                }
+                Text {
+                    width: parent.width
+                    visible: panel.scanStatus.length > 0
+                    wrapMode: Text.WordWrap
+                    text: panel.scanStatus
+                    color: "#8a9098"
+                    font.pixelSize: 10
+                }
+            }
+        }
+
+        Text {
+            width: parent.width
+            visible: panel.statsMode === 1
+            text: {
+                const _ = panel.hoverVer
+                const __ = YuvBridge.blockSize
+                if (!YuvBridge.hoverValid()) return "将鼠标移到画面上看块统计"
+                const bs = YuvBridge.blockSize
+                const bx = Math.floor(YuvBridge.hoverPixelX() / bs) * bs
+                const by = Math.floor(YuvBridge.hoverPixelY() / bs) * bs
+                return "块 [" + bx + "," + by + "]–[" + (bx + bs - 1) + "," + (by + bs - 1) + "]  " + bs + "×" + bs
+            }
+            color: "#c9a227"
+            font.pixelSize: 11
+            wrapMode: Text.WordWrap
+        }
     }
 
     Flickable {
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: chrome.bottom
+        anchors.bottom: parent.bottom
         anchors.leftMargin: 8
         anchors.rightMargin: 8
-        anchors.topMargin: 12
+        anchors.topMargin: 8
         contentWidth: width
         contentHeight: col.implicitHeight
         clip: true
@@ -114,98 +462,13 @@ Rectangle {
         Column {
             id: col
             width: parent.width
-            spacing: 12
-
-            // ── 标题栏 ──
-            Row {
-                width: parent.width
-                Text {
-                    text: "YUV 统计"
-                    color: "#bbbbbb"; font.pixelSize: 14; font.bold: true
-                }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    text: {
-                        const _ = panel.ver
-                        if (YuvBridge.slotCount <= 0) return ""
-                        return "帧 " + (YuvBridge.currentFrame(panel.activeSlot) + 1) +
-                               " / " + YuvBridge.totalFrames(panel.activeSlot)
-                    }
-                    color: "#9aa0a6"; font.pixelSize: 11
-                }
-            }
-
-            // ── 帧级别 / 块级别 / 差异总览 切换 tab（差异总览仅双路打开时可用）──
-            Row {
-                id: modeTabRow
-                width: parent.width
-                spacing: 4
-                readonly property var tabLabels: panel.cmpAvailable ? ["帧级别", "块级别", "差异总览"] : ["帧级别", "块级别"]
-                Repeater {
-                    model: modeTabRow.tabLabels
-                    delegate: Rectangle {
-                        required property int index
-                        required property string modelData
-                        width: (col.width - (modeTabRow.tabLabels.length - 1) * 4) / modeTabRow.tabLabels.length
-                        height: 24
-                        radius: 4
-                        color: panel.statsMode === index ? "#2a3a55" : "#1e1e26"
-                        border.color: panel.statsMode === index ? "#3a6fd8" : "#2a2a32"
-                        border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            text: modelData
-                            color: panel.statsMode === index ? "#ffffff" : "#a0a4ac"
-                            font.pixelSize: 11
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: panel.statsMode = index
-                        }
-                    }
-                }
-            }
-
-            // 块级别模式下的引导条已统一挪到二级 tab 下方（见下），此处不再夹提示。
-            // 保留空注释作为维护者提示：两级 tab 之间不应再放任何文字。
+            spacing: 10
 
             // ── 差异总览（整帧块级差异热力图，快速定位第一个不同的块）──
             Column {
                 width: parent.width
                 visible: panel.statsMode === 2
-                spacing: 10
-
-                // Y/U/V 通道切换（决定按哪个通道计算差异）
-                Row {
-                    width: parent.width
-                    spacing: 4
-                    Repeater {
-                        model: ["Y", "U", "V"]
-                        delegate: Rectangle {
-                            required property int index
-                            required property string modelData
-                            width: (col.width - 8) / 3
-                            height: 22
-                            radius: 4
-                            color: panel.diffPlane === index ? "#2a3a55" : "#1e1e26"
-                            border.color: panel.diffPlane === index ? "#3a6fd8" : "#2a2a32"
-                            border.width: 1
-                            Text {
-                                anchors.centerIn: parent
-                                text: modelData
-                                color: panel.diffPlane === index ? "#ffffff" : "#a0a4ac"
-                                font.pixelSize: 11
-                            }
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: panel.diffPlane = index
-                            }
-                        }
-                    }
-                }
+                spacing: 8
 
                 Text {
                     width: parent.width
@@ -335,98 +598,6 @@ Rectangle {
                 }
             }
 
-            // ── slot 选择 tabs（多路时，仅帧级别模式下有意义）──
-            Row {
-                width: parent.width
-                visible: YuvBridge.slotCount > 1 && panel.statsMode === 0
-                spacing: 4
-                Repeater {
-                    model: YuvBridge.slotCount
-                    delegate: Rectangle {
-                        required property int index
-                        width: Math.max(44, (col.width - 8) / YuvBridge.slotCount)
-                        height: 22
-                        radius: 4
-                        color: panel.activeSlot === index ? "#2a3a55" : "#1e1e26"
-                        border.color: panel.activeSlot === index ? "#3a6fd8" : "#2a2a32"
-                        border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            text: "槽 " + (index + 1)
-                            color: panel.activeSlot === index ? "#ffffff" : "#a0a4ac"
-                            font.pixelSize: 11
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: { panel.activeSlot = index; panel.ver++ }
-                        }
-                    }
-                }
-            }
-
-            // ── 二级 tabs：帧级别 / 块级别 都显示，差异总览（statsMode === 2）独立处理 ──
-            //   三视图互斥，避免堆叠遮挡：
-            //     0=直方图：Y/U/V 直方图 + 基础统计 + 方差/对比度（帧/块级别都可用）
-            //     1=梯度纹理：Y/U/V 全方向梯度 + Laplacian + Tenengrad（仅帧级别有意义）
-            //     2=编码参考：基于 Y 平面的编码指导（仅帧级别有意义；块级别下自动隐藏）
-            Row {
-                id: viewTabRow
-                width: parent.width
-                visible: panel.statsMode !== 2
-                spacing: 4
-                readonly property var tabLabels: ["直方图", "梯度纹理", "编码参考"]
-                Repeater {
-                    model: viewTabRow.tabLabels
-                    delegate: Rectangle {
-                        required property int index
-                        required property string modelData
-                        width: (col.width - (viewTabRow.tabLabels.length - 1) * 4) / viewTabRow.tabLabels.length
-                        height: 22
-                        radius: 4
-                        color: panel.viewMode === index ? "#2a3a55" : "#1e1e26"
-                        border.color: panel.viewMode === index ? "#3a6fd8" : "#2a2a32"
-                        border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            text: modelData
-                            color: panel.viewMode === index ? "#ffffff" : "#a0a4ac"
-                            font.pixelSize: 11
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: panel.viewMode = index
-                        }
-                    }
-                }
-            }
-
-            // ── 块级别引导条：放在二级 tab 下方（不再夹在两级 tab 中间）──
-            //   仅 statsMode === 1 时显示；用黄色加粗明确区分为"块级实时提示"，
-            //   不依赖二级 tab 类型（直方图/梯度纹理都需要这块引导）。
-            //   内容随 hover 状态切换：
-            //     - 无悬浮 → "将鼠标移动到画面上查看块级统计"（引导）
-            //     - 有悬浮 → "块 [bx,by] ~ [bx+bs-1,by+bs-1]（bs×bs）"（当前块坐标）
-            Text {
-                width: parent.width
-                visible: panel.statsMode === 1
-                text: {
-                    const _ = panel.hoverVer
-                    const __ = YuvBridge.blockSize
-                    if (!YuvBridge.hoverValid()) return "▸ 将鼠标移动到画面上查看块级统计"
-                    const bs = YuvBridge.blockSize
-                    const bx = Math.floor(YuvBridge.hoverPixelX() / bs) * bs
-                    const by = Math.floor(YuvBridge.hoverPixelY() / bs) * bs
-                    return "▸ 块 [" + bx + "," + by + "] ~ [" + (bx + bs - 1) + "," + (by + bs - 1) + "]（" + bs + "×" + bs + "）"
-                }
-                // 黄色加粗，与暗色背景形成鲜明对比，提醒用户这是"块级实时"提示
-                color: "#f0c040"
-                font.pixelSize: 12
-                font.bold: true
-                wrapMode: Text.WordWrap
-            }
-
             // ── 直方图视图（viewMode === 0）──
             //   帧级别与块级别都展示：直方图是基础统计，无论哪个模式都该可见。
             //   spacing 较大以便"方差/对比度"行与下一通道标题之间留出呼吸空间，
@@ -436,7 +607,7 @@ Rectangle {
             Column {
                 width: parent.width
                 visible: panel.statsMode !== 2 && panel.viewMode === 0
-                spacing: 16
+                spacing: 10
 
                 // 单平面直方图卡片：暗色背景 + 圆角 + 通道色圆点 + 居中布局
                 component HistCard: Rectangle {
@@ -1153,5 +1324,6 @@ Rectangle {
 
             Item { width: parent.width; height: 8 }
         }
+    }
     }
 }

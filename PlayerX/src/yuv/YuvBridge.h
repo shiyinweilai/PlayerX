@@ -188,6 +188,13 @@ public:
     //     "firstDiffCol","firstDiffRow": int }  // 第一个有效差异块坐标，-1=完全一致
     Q_INVOKABLE QVariantMap blockDiffOverview(int slotA, int slotB, int plane) const;
 
+    // 双路当前显示帧客观指标（PSNR / MAD / max|Δ|），两路对齐到同一帧再比。
+    Q_INVOKABLE QVariantMap compareFrameMetrics(int slotA, int slotB) const;
+    // 从 fromFrame 起扫描首个有差异的帧（Y 最大绝对差 ≥ 1），不占分析 slot。
+    Q_INVOKABLE void startScanFirstDiff(int slotA, int slotB, int fromFrame);
+    Q_INVOKABLE bool scanBusy() const { return m_scanBusy; }
+    Q_INVOKABLE void gotoBothFrames(int frameNum);
+
     // ── 全局鼠标悬浮像素坐标（供右侧栏"块级别"统计随鼠标实时刷新）───────
     // 由 YuvWindow.qml 的像素悬浮 MouseArea 在 positionChanged / exited 时上报。
     Q_INVOKABLE void setHoverPixel(int slot, int px, int py, bool valid);
@@ -313,6 +320,8 @@ signals:
     // 帧级统计异步计算完成时发出，QML 监听此信号递增 ver 刷新面板。
     // 播放期间不发此信号（统计跳过），暂停/逐帧时才计算并发出。
     void statsReady(int slot);
+    void scanJobProgress(const QString& message, double ratio);
+    void scanJobFinished(bool found, int frameNum, const QString& message);
 
 private:
     void refreshFrameImage(int slot);
@@ -358,7 +367,8 @@ private:
     // refreshFrameImageAsync 在 Worker 线程执行 seek+read+getFrameImageLocked，
     // 完成后在主线程把结果写入 m_frameImages 并发 frameChanged 信号。
     QFutureWatcher<QImage>* m_watchers[MaxSlots]{};
-    int  m_pendingFrame[MaxSlots]{-1, -1, -1, -1, -1, -1, -1, -1, -1};  // Worker 正在解码的帧号
+    int  m_pendingFrame[MaxSlots]{-1, -1, -1, -1, -1, -1, -1, -1, -1};  // 解码中排队的下一目标；-1=无
+    int  m_asyncTarget[MaxSlots]{-1, -1, -1, -1, -1, -1, -1, -1, -1};   // Worker 正在解码的帧号
     bool m_asyncBusy[MaxSlots]{false, false, false, false, false, false, false, false, false};
 
     // ── 帧级统计缓存 ──
@@ -417,6 +427,7 @@ private:
     int  m_syncFps{30};  // 多通道同步播放帧率，默认 30fps
 
     // ── 差异检测（仅两路 YUV 播放）──
+    bool m_scanBusy{false};
     bool m_diffDetectEnabled{true};   // 差异检测开关（默认开启）
     bool m_diffPaused{false};         // 因差异暂停中（避免重复触发）
     // 用户选择"忽略差异继续播放"时置 true，下次播放不再检测差异，

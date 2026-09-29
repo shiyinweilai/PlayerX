@@ -2049,7 +2049,9 @@ ApplicationWindow {
         }
         width: root.streamSidebarEffectiveW
         z: 199
-        visible: root.rightSidebarOpen && !root.streamSidebarFloating
+        visible: root.rightSidebarOpen
+                 && !((root.currentTab === "stream" && root.streamSidebarFloating)
+                      || (root.currentTab === "yuv" && root.yuvSidebarFloating))
         acceptedButtons: Qt.NoButton  // 不拦截任何点击，透传给下方
         onWheel: function(wheel) {
             // 消费滚轮事件，阻止穿透到 ImageView
@@ -2073,9 +2075,10 @@ ApplicationWindow {
         // 命中区中心与 sidebar 左边缘对齐
         x: rightSidebarLoader.x - 3
         width: 6
-        visible: root.currentTab === "stream"
+        visible: (root.currentTab === "stream" || root.currentTab === "yuv")
                  && root.rightSidebarOpen
-                 && !root.streamSidebarFloating
+                 && !(root.currentTab === "stream" ? root.streamSidebarFloating
+                                                   : root.yuvSidebarFloating)
         z: 201
         color: streamSidebarSplitterMA.pressed
                ? "#42A5FF"
@@ -2107,7 +2110,7 @@ ApplicationWindow {
             Text {
                 id: hintText
                 anchors.centerIn: parent
-                text: root.streamSidebarUserWidth + " px"
+                text: root.streamSidebarEffectiveW + " px"
                 color: "#42A5FF"
                 font.pixelSize: 10
             }
@@ -2127,7 +2130,7 @@ ApplicationWindow {
             property int startW: 0
             onPressed: function(mouse) {
                 startGlobalX = mapToGlobal(mouse.x, mouse.y).x
-                startW = root.streamSidebarUserWidth
+                startW = root.streamSidebarEffectiveW
                 mouse.accepted = true
             }
             onPositionChanged: function(mouse) {
@@ -2140,17 +2143,28 @@ ApplicationWindow {
                 // 上限还需保证视频区最小可视宽度（至少 400px）
                 const maxByWin = Math.max(root.streamSidebarMinW, root.width - 400)
                 const maxW = Math.min(root.streamSidebarMaxW, maxByWin)
-                root.streamSidebarUserWidth =
-                    Math.max(root.streamSidebarMinW, Math.min(maxW, nw))
+                const clamped = Math.max(root.streamSidebarMinW, Math.min(maxW, nw))
+                if (root.currentTab === "yuv")
+                    root.yuvSidebarUserWidth = clamped
+                else
+                    root.streamSidebarUserWidth = clamped
             }
-            onDoubleClicked: root.streamSidebarUserWidth = 320
+            onDoubleClicked: {
+                if (root.currentTab === "yuv")
+                    root.yuvSidebarUserWidth = 320
+                else
+                    root.streamSidebarUserWidth = 320
+            }
         }
     }
 
     // ── YUV 统计面板（直方图 + 统计摘要）────────────────────────
     Component {
         id: yuvStatsPanelComp
-        YuvStatsPanel { }
+        YuvStatsPanel {
+            floating: root.yuvSidebarFloating
+            onFloatingChanged: root.yuvSidebarFloating = floating
+        }
     }
 
     // ── 图片信息面板 ────────────────────────────────────────
@@ -2292,14 +2306,17 @@ Component {
     // floating=true 时卡片悬浮在画面上层，StreamView 不腾位（z 更高）；
     // floating=false 时为腾位栏，StreamView 右缘左移 streamSidebarUserWidth 让出空间。
     property bool streamSidebarFloating: false
-    // ── 码流分析右侧栏宽度（唯一数据源，仅 stream tab 使用）────────
-    // 左边缘拖拽调整；限制 [260, 640]：太窄语法元素列展示不下，太宽挤压视频区。
-    // 双击左边缘分隔条复位到 320。当前不做持久化（与底部栏 hierarchy 面板一致）。
+    property bool yuvSidebarFloating: false
+    // ── 右侧栏宽度（stream / yuv 腾位时画面右缘锚到侧栏左缘）────────
     property int streamSidebarUserWidth: 320
+    property int yuvSidebarUserWidth: 320
     readonly property int streamSidebarMinW: 260
     readonly property int streamSidebarMaxW: 640
-    readonly property int streamSidebarEffectiveW:
-        (root.currentTab === "stream") ? streamSidebarUserWidth : 320
+    readonly property int streamSidebarEffectiveW: {
+        if (root.currentTab === "stream") return root.streamSidebarUserWidth
+        if (root.currentTab === "yuv") return root.yuvSidebarUserWidth
+        return 320
+    }
     Component {
         id: streamPanelComp
         StreamInfoCard {
@@ -2541,15 +2558,23 @@ Component {
         }
     }
 
-    // ── YUV 分析视图（拆分至 YuvSetupView.qml） ──────────────────────
-    YuvSetupView {
-        id: yuvView
-        // render 阶段铺满 contentItem（沉浸满屏），setup 阶段让出左侧导航栏
+    // ── YUV 分析视图：外层 host 用 rightMargin 腾位（与 StreamView 相同）──
+    // 不要用 anchors.right: sidebar.left 的三元锚点，Qt 里动态换 AnchorLine 经常不重算宽度。
+    Item {
+        id: yuvPlayHost
         anchors.left: (YuvBridge.slotCount > 0) ? parent.left : leftNavBar.right
         anchors.right: parent.right
+        anchors.rightMargin: (root.currentTab === "yuv" && root.rightSidebarOpen && !root.yuvSidebarFloating)
+                             ? root.yuvSidebarUserWidth : 0
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         visible: root.currentTab === "yuv"
+        clip: true
+
+        YuvSetupView {
+            id: yuvView
+            anchors.fill: parent
+        }
     }
 
     // ══════════════ 左侧主导航栏 ══════════════

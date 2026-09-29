@@ -97,6 +97,15 @@ void YuvDisplayItem::setPanY(qreal v) {
     emit panChanged();
 }
 
+void YuvDisplayItem::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry)
+{
+    QQuickItem::geometryChange(newGeometry, oldGeometry);
+    if (newGeometry.size() != oldGeometry.size()) {
+        m_geometryDirty = true;
+        update();
+    }
+}
+
 void YuvDisplayItem::onGlobalScaleChanged(qreal newScale) {
     if (qFuzzyCompare(m_scale, newScale)) return;
     m_scale = newScale;
@@ -178,9 +187,15 @@ QSGNode* YuvDisplayItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
         m_imageDirty = false;
     }
 
+    // 腾位/改窗后 boundingRect 变了也必须重算居中，不能只靠 geometryChange。
+    const QRectF r = boundingRect();
+    if (r.size() != m_lastPaintSize) {
+        m_lastPaintSize = r.size();
+        m_geometryDirty = true;
+    }
+
     // ── 更新几何顶点（在图像/缩放/平移/尺寸变更时）──
     if (m_geometryDirty) {
-        const QRectF r = boundingRect();
         const int iw = texSource.width();
         const int ih = texSource.height();
         if (iw <= 0 || ih <= 0) {

@@ -265,7 +265,12 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: cmpPanel.title
+                text: {
+                    const bs = cmpPanel.bs
+                    const bx = Math.floor(yuvView.cmpPixelX / bs) * bs
+                    const by = Math.floor(yuvView.cmpPixelY / bs) * bs
+                    return cmpPanel.title + "  [" + bx + "," + by + "]–[" + (bx + bs - 1) + "," + (by + bs - 1) + "]"
+                }
                 color: cmpPanel.mode === "diff" ? "#ff8a80" : "#9fc1ff"
                 font.pixelSize: 11; font.bold: true
                 elide: Text.ElideRight
@@ -483,7 +488,9 @@ Item {
     function globalSkipForward() {
         for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.skipForward(i, 15)
     }
+    function dismissDiffAlert() { diffAlertRow._hasDiff = false }
     function globalResetFrame() {
+        yuvView.dismissDiffAlert()
         YuvBridge.globalPause()
         for (let i = 0; i < yuvView.openSlotCount; ++i) YuvBridge.resetFrame(i)
     }
@@ -1558,7 +1565,10 @@ Item {
                                         MouseArea {
                                             id: navResetMa; anchors.fill: parent
                                             hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: YuvBridge.resetFrame(slotWin.slotIdx)
+                                            onClicked: {
+                                                yuvView.dismissDiffAlert()
+                                                YuvBridge.resetFrame(slotWin.slotIdx)
+                                            }
                                         }
                                     }
                                     // 倒放
@@ -2074,15 +2084,19 @@ Item {
         x: yuvView.cmpPinned ? yuvView.cmpGroupX : yuvView.cmpComputeGroupX(yuvView.cmpMouseX)
         y: yuvView.cmpPinned ? yuvView.cmpGroupY : yuvView.cmpComputeGroupY(yuvView.cmpMouseY)
 
-        CompareMatrixPanel { title: "YUV-A · slot " + yuvView.cmpSlotA; mode: "a" }
-        CompareMatrixPanel { title: "YUV-B · slot " + yuvView.cmpSlotB; mode: "b" }
-        CompareMatrixPanel { title: "差异 Δ = A − B"; mode: "diff" }
+        CompareMatrixPanel { title: "YUV-A"; mode: "a" }
+        CompareMatrixPanel { title: "YUV-B"; mode: "b" }
+        CompareMatrixPanel { title: "Δ A−B"; mode: "diff" }
     }
 
     // 连接 diffDetected 信号 → 更新底部栏差异提示
     Connections {
         target: YuvBridge
         function onDiffDetected(frameNum, maxAbsDiff) {
+            if (maxAbsDiff < 1) {
+                diffAlertRow._hasDiff = false
+                return
+            }
             diffAlertRow._maxDiff = maxAbsDiff
             diffAlertRow._hasDiff = true
         }

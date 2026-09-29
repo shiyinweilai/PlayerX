@@ -10,7 +10,7 @@ import PlayerX 1.0
 
 Item {
     id: yuvView
-    z: 100
+    clip: true
 
     // ── 布局属性（暴露给顶部菜单 / 全局快捷键读写）──
     // 这三个是唯一数据源，通过下方 Binding 单向下推给 Loader 内的 YuvWindow。
