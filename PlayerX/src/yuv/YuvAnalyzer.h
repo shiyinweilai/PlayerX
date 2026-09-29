@@ -210,6 +210,55 @@ public:
     // 基于快照计算梯度统计（无锁，Worker 线程安全）
     static PlaneStats computeStatsFromSnapshot(const FrameSnapshot& snap, int plane);
 
+    // 帧级原始特征：分布分位/限幅/条带/噪声/块方差占比/色度能量；
+    // prev 有效时再补 TI / 帧差 / 静止块比。
+    struct FrameFeatures {
+        bool valid = false;
+        int bitDepth = 8;
+        int peak = 255;
+
+        double yEntropy = 0;
+        int yUsedBins = 0;
+        int yLongestHole = 0;
+        double yHoleRatio = 0;
+        double yP01 = 0, yP05 = 0, yP50 = 0, yP95 = 0, yP99 = 0;
+
+        double yFootroomPct = 0;   // Y < TV 下限
+        double yHeadroomPct = 0;   // Y > TV 上限
+        double ySat0Pct = 0;
+        double ySatPeakPct = 0;
+        double uOutRangePct = 0;
+        double vOutRangePct = 0;
+
+        double yNoiseSigma = 0;
+        double yBandingScore = 0;
+
+        struct BlockVarShare {
+            int size = 0;
+            int count = 0;
+            double meanVar = 0;
+            double p90Var = 0;
+            double highEnergyPct = 0;
+        };
+        BlockVarShare blk[4]{};
+
+        double yAcEnergy = 0;
+        double chromaMeanAbs = 0;
+        double chromaRatio = 0;
+        double uvCorr = 0;
+
+        bool temporalValid = false;
+        double ti = 0;
+        double sadY = 0;
+        double mseY = 0;
+        double madY = 0;
+        int maxAbsY = 0;
+        double staticBlk16Pct = 0;
+        double meanAbsDiffY = 0;
+    };
+    static FrameFeatures computeFrameFeaturesFromSnapshot(const FrameSnapshot& snap,
+                                                          const FrameSnapshot* prev = nullptr);
+
 private:
     void initSwsContext();
     void freeSwsContext();

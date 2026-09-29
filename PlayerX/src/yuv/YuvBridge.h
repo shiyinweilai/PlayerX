@@ -178,6 +178,9 @@ public:
     //   梯度幅值、能量、Tenengrad 等越大代表画面纹理越强/越锐利。
     Q_INVOKABLE QVariantMap planeStats(int slot, int plane) const;
 
+    // 帧级原始特征（分位、限幅、噪声、块方差占比、色度、TI/帧差），随 statsReady 更新。
+    Q_INVOKABLE QVariantMap frameFeatures(int slot) const;
+
     // ── 双路块级差异总览（右侧栏"差异总览"热力图，plane: 0=Y,1=U,2=V）────────
     // 按 blockSize 网格划分两路的公共分辨率（取交集宽高），逐块计算平均绝对差，
     // 用于绘制整帧差异热力图快速定位"从哪个块开始出现差异"。
@@ -194,6 +197,13 @@ public:
     Q_INVOKABLE void startScanFirstDiff(int slotA, int slotB, int fromFrame);
     Q_INVOKABLE bool scanBusy() const { return m_scanBusy; }
     Q_INVOKABLE void gotoBothFrames(int frameNum);
+
+    // 按帧范围导出：逐帧 CSV + 可选 GOP 汇总 CSV + 同目录说明。
+    // GOP 按显示序、从文件第 1 帧起按 gopSize 切段，不是码流编码序。
+    // opts: histSummary, histBins, gradient, features, gopSummary, gopSize, outPath
+    Q_INVOKABLE void startExportFrameStats(int slot, int firstFrame, int lastFrame,
+                                           const QVariantMap& opts);
+    Q_INVOKABLE bool statsExportBusy() const { return m_statsExportBusy; }
 
     // ── 全局鼠标悬浮像素坐标（供右侧栏"块级别"统计随鼠标实时刷新）───────
     // 由 YuvWindow.qml 的像素悬浮 MouseArea 在 positionChanged / exited 时上报。
@@ -322,6 +332,8 @@ signals:
     void statsReady(int slot);
     void scanJobProgress(const QString& message, double ratio);
     void scanJobFinished(bool found, int frameNum, const QString& message);
+    void statsExportProgress(const QString& message, double ratio);
+    void statsExportFinished(bool ok, const QString& message, const QString& path);
 
 private:
     void refreshFrameImage(int slot);
@@ -378,6 +390,7 @@ private:
         int frameNum = -1;             // 缓存对应的帧号，-1 = 无缓存
         QVariantMap hist[3];           // Y/U/V 直方图（bins + mean/stddev/min/max/...）
         QVariantMap stats[3];          // Y/U/V 平面统计（梯度/纹理/锐利度）
+        QVariantMap features;          // 帧级原始特征
     };
     CachedStats m_cachedStats[MaxSlots];
     QFutureWatcher<void>* m_statsWatchers[MaxSlots]{};
@@ -428,6 +441,7 @@ private:
 
     // ── 差异检测（仅两路 YUV 播放）──
     bool m_scanBusy{false};
+    bool m_statsExportBusy{false};
     bool m_diffDetectEnabled{true};   // 差异检测开关（默认开启）
     bool m_diffPaused{false};         // 因差异暂停中（避免重复触发）
     // 用户选择"忽略差异继续播放"时置 true，下次播放不再检测差异，

@@ -24,11 +24,24 @@ Item {
     property int hoverVer: 0
     property int statsMode: 0   // 0=帧级别, 1=块级别, 2=差异总览（仅双路时可用）
     property int diffPlane: 0   // 差异总览通道：0=Y / 1=U / 2=V
-    property int viewMode: 0    // 二级 tab：0=直方图 / 1=梯度纹理 / 2=编码参考
+    property int viewMode: 0    // 二级 tab：0=直方 / 1=梯度 / 2=特征
     readonly property bool cmpAvailable: YuvBridge.slotCount === 2
     property var cmpMetrics: null
     property string scanStatus: ""
     property bool scanning: false
+    property bool exporting: false
+    property string exportStatus: ""
+    property string exportPath: ""
+    property bool exportOk: false
+    property real exportRatio: 0
+    property int exportFirstUi: 1
+    property int exportLastUi: 1
+    property bool expHistSummary: true
+    property bool expHistBins: false
+    property bool expGradient: true
+    property bool expFeatures: true
+    property bool expGop: true
+    property int exportGopSize: 32
     function refreshCmpMetrics() {
         if (!panel.cmpAvailable) { panel.cmpMetrics = null; return }
         if (YuvBridge.isPlaying(0) || YuvBridge.isPlaying(1)) return
@@ -109,12 +122,20 @@ Item {
         }
         function onHoverChanged() { panel.hoverVer++ }
         function onBlockSizeChanged() { if (panel.statsMode === 2) panel.refreshDiffOverview() }
+        function onStatsExportProgress(message, ratio) {
+            panel.exporting = true
+            panel.exportStatus = message
+            panel.exportRatio = ratio
+        }
+        function onStatsExportFinished(ok, message, path) {
+            panel.exporting = false
+            panel.exportOk = ok
+            panel.exportStatus = message
+            panel.exportPath = path || ""
+        }
     }
     onStatsModeChanged: {
-        // 切到非帧级别模式时，把二级 tab 重置到"直方图"（避免"梯度纹理"在
-        // 差异总览下显示空白，差异总览无梯度数据；"编码参考"同理仅帧级别）。
-        // 块级别下"梯度纹理"是有数据的（blockStats），允许保留。
-        if (statsMode !== 0 && viewMode !== 0) viewMode = 0
+        if (statsMode !== 0 && viewMode === 2) viewMode = 0
         if (statsMode === 2) refreshDiffOverview()
     }
     onDiffPlaneChanged: if (statsMode === 2) refreshDiffOverview()
@@ -223,7 +244,7 @@ Item {
         anchors.leftMargin: 8
         anchors.rightMargin: 8
         anchors.topMargin: 8
-        spacing: 8
+        spacing: 6
 
         RowLayout {
             width: parent.width
@@ -245,6 +266,41 @@ Item {
                 color: "#8a9098"
                 font.pixelSize: 11
                 font.family: "Menlo"
+            }
+            Rectangle {
+                Layout.preferredWidth: 36
+                Layout.preferredHeight: 22
+                radius: 4
+                color: exportBtnMa.containsMouse ? "#2a3f5a" : "#1a1d22"
+                border.color: "#2a2e33"
+                border.width: 1
+                opacity: (YuvBridge.slotCount > 0 && !panel.exporting) ? 1 : 0.45
+                Text {
+                    anchors.centerIn: parent
+                    text: "导出"
+                    color: "#9aa0a6"
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: exportBtnMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: YuvBridge.slotCount > 0 && !panel.exporting
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        const tot = YuvBridge.totalFrames(panel.activeSlot)
+                        panel.exportFirstUi = 1
+                        panel.exportLastUi = tot > 0 ? tot : 1
+                        panel.exportStatus = ""
+                        panel.exportPath = ""
+                        panel.exportOk = false
+                        panel.exportRatio = 0
+                        exportPopup.open()
+                    }
+                    ToolTip.visible: containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: "按帧范围导出帧级统计"
+                }
             }
             Rectangle {
                 Layout.preferredWidth: 22
@@ -323,7 +379,8 @@ Item {
                     onActivated: panel.viewMode = 1
                 }
                 SegChip {
-                    label: "编码"
+                    label: "特征"
+                    visible: panel.statsMode === 0
                     selected: panel.viewMode === 2
                     onActivated: panel.viewMode = 2
                 }
@@ -356,7 +413,7 @@ Item {
             radius: 4
             border.color: "#2a2e33"
             border.width: 1
-            implicitHeight: cmpInner.implicitHeight + 12
+            implicitHeight: cmpInner.implicitHeight + 8
             readonly property var m: panel.cmpMetrics
             readonly property bool ok: m && m.ok
             readonly property bool same: ok && m.identical
@@ -462,7 +519,7 @@ Item {
         Column {
             id: col
             width: parent.width
-            spacing: 10
+            spacing: 8
 
             // ── 差异总览（整帧块级差异热力图，快速定位第一个不同的块）──
             Column {
@@ -607,7 +664,7 @@ Item {
             Column {
                 width: parent.width
                 visible: panel.statsMode !== 2 && panel.viewMode === 0
-                spacing: 10
+                spacing: 6
 
                 // 单平面直方图卡片：暗色背景 + 圆角 + 通道色圆点 + 居中布局
                 component HistCard: Rectangle {
@@ -617,7 +674,7 @@ Item {
                     radius: 4
                     border.color: "#2a2e33"
                     border.width: 1
-                    height: histCardCol.implicitHeight + 12
+                    height: histCardCol.implicitHeight + 8
 
                     property string title: ""
                     property color drawColor: "#ffffff"
@@ -657,7 +714,7 @@ Item {
                             drawColor: histCard.drawColor
                             plane: histCard.plane
                             // 直方图绘图区固定高度；HistItem 内部 Canvas 自适应宽度
-                            height: 180
+                            height: 108
                             // 去掉 HistItem 自身顶部标题（标题已由外层卡片绘制）
                             showInlineTitle: false
                             // 去掉 HistItem 自身底部统计文本（已挪到下方"统计行"）
@@ -682,37 +739,13 @@ Item {
                         }
                         GridLayout {
                             width: parent.width
-                            columns: panel.statsMode === 0 && histItem.varianceVal !== "—" ? 3 : 1
+                            columns: 2
                             columnSpacing: 4
                             rowSpacing: 2
-                            Text {
-                                Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter
-                                text: "极差"; color: "#8a8f96"; font.pixelSize: 10
-                            }
-                            Text {
-                                Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter
-                                visible: panel.statsMode === 0 && histItem.varianceVal !== "—"
-                                text: "方差"; color: "#8a8f96"; font.pixelSize: 10
-                            }
-                            Text {
-                                Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter
-                                visible: panel.statsMode === 0 && histItem.varianceVal !== "—"
-                                text: "对比度"; color: "#8a8f96"; font.pixelSize: 10
-                            }
-                            Text {
-                                Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter
-                                text: histItem.rangeVal; color: "#cccccc"; font.pixelSize: 12; font.family: "Monospace"
-                            }
-                            Text {
-                                Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter
-                                visible: panel.statsMode === 0 && histItem.varianceVal !== "—"
-                                text: histItem.varianceVal; color: "#cccccc"; font.pixelSize: 12; font.family: "Monospace"
-                            }
-                            Text {
-                                Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter
-                                visible: panel.statsMode === 0 && histItem.varianceVal !== "—"
-                                text: histItem.rangeVal; color: "#cccccc"; font.pixelSize: 12; font.family: "Monospace"
-                            }
+                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "极差"; color: "#8a8f96"; font.pixelSize: 10 }
+                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "方差"; color: "#8a8f96"; font.pixelSize: 10 }
+                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: histItem.rangeVal; color: "#cccccc"; font.pixelSize: 12; font.family: "Menlo" }
+                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: histItem.varianceVal; color: "#cccccc"; font.pixelSize: 12; font.family: "Menlo" }
                         }
                     }
                 }
@@ -736,313 +769,220 @@ Item {
 
             // Y / U / V 直方图（已并入上方"直方图视图" Column；下方是历史兼容占位，已不再渲染）
 
-            // ── 梯度纹理视图（viewMode === 1）──
-            //   单卡渲染三平面：每个平面一张"指标卡片"，整齐对齐便于横向对比。
-            //   帧级别 / 块级别都展示（编码参考 tab 仅帧级别，二级 tab 切换逻辑在 onStatsModeChanged）。
             Column {
                 width: parent.width
                 visible: panel.statsMode !== 2 && panel.viewMode === 1
-                spacing: 10
+                spacing: 6
 
-                // 顶部说明
-                Text {
-                    width: parent.width
-                    text: panel.statsMode === 1
-                          ? "当前鼠标悬浮块（" + YuvBridge.blockSize + "×" + YuvBridge.blockSize + "）" +
-                            "的四方向一阶差分 + Laplacian 锐利度 + Sobel/Tenengrad 纹理复杂度。" +
-                            "将鼠标移到画面上实时刷新。"
-                          : "四方向一阶差分 + Laplacian 锐利度 + Sobel/Tenengrad 纹理复杂度。" +
-                            "仅基于 Y/U/V 全帧扫描得出，与编码器的 CU 划分 / QP 决策正相关。"
-                    color: "#9aa0a6"; font.pixelSize: 12
-                    wrapMode: Text.WordWrap
-                }
-
-                // 复用一个 component：单平面梯度卡片
-                component PlaneGradientCard: Rectangle {
-                    id: gradCard
+                Rectangle {
+                    id: gradBox
                     width: parent.width
                     color: "#1a1d22"
                     radius: 4
                     border.color: "#2a2e33"
                     border.width: 1
-                    height: planeCardCol.implicitHeight + 16
-
-                    property string planeLabel: ""
-                    property color planeColor: "#ffffff"
-                    property int planeIndex: 0
-
-                    // 数据来源：帧级别走 YuvBridge.planeStats（全帧），块级别走
-                    // YuvBridge.blockStats（与直方图 blockHistogram 同一块），并
-                    // 通过 panel.statsForPlane() 自动按 statsMode 分发。
-                    readonly property var ps: {
-                        const _ = panel.ver
-                        const __ = panel.hoverVer
-                        if (YuvBridge.slotCount <= 0) return null
-                        return panel.statsForPlane(gradCard.planeIndex)
+                    height: gradTableCol.implicitHeight + 10
+                    readonly property var sy: {
+                        const _ = panel.ver; const __ = panel.hoverVer
+                        return YuvBridge.slotCount > 0 ? panel.statsForPlane(0) : null
                     }
-                    readonly property string mean: {
-                        const s = gradCard.ps
-                        if (!s) return "—"
-                        if (s.mean === undefined) return "—"
-                        return Number(s.mean).toFixed(1)
+                    readonly property var su: {
+                        const _ = panel.ver; const __ = panel.hoverVer
+                        return YuvBridge.slotCount > 0 ? panel.statsForPlane(1) : null
                     }
-                    readonly property string stdDev: {
-                        const s = gradCard.ps
-                        if (!s || s.stddev === undefined) return "—"
-                        return Number(s.stddev).toFixed(1)
+                    readonly property var sv: {
+                        const _ = panel.ver; const __ = panel.hoverVer
+                        return YuvBridge.slotCount > 0 ? panel.statsForPlane(2) : null
                     }
-                    readonly property string variance: {
-                        const s = gradCard.ps
-                        if (!s || s.variance === undefined) return "—"
-                        return Number(s.variance).toFixed(1)
-                    }
-                    readonly property string rangeV: {
-                        const s = gradCard.ps
-                        if (!s || s.range === undefined) return "—"
-                        return String(s.range)
-                    }
-                    readonly property string gH: {
-                        const s = gradCard.ps
-                        if (!s || s.gradHorizMean === undefined) return "—"
-                        return Number(s.gradHorizMean).toFixed(2)
-                    }
-                    readonly property string gV: {
-                        const s = gradCard.ps
-                        if (!s || s.gradVertMean === undefined) return "—"
-                        return Number(s.gradVertMean).toFixed(2)
-                    }
-                    readonly property string g45: {
-                        const s = gradCard.ps
-                        if (!s || s.gradDiag45Mean === undefined) return "—"
-                        return Number(s.gradDiag45Mean).toFixed(2)
-                    }
-                    readonly property string g135: {
-                        const s = gradCard.ps
-                        if (!s || s.gradDiag135Mean === undefined) return "—"
-                        return Number(s.gradDiag135Mean).toFixed(2)
-                    }
-                    readonly property string gMean: {
-                        const s = gradCard.ps
-                        if (!s || s.gradMean === undefined) return "—"
-                        return Number(s.gradMean).toFixed(2)
-                    }
-                    readonly property string lap: {
-                        const s = gradCard.ps
-                        if (!s || s.laplacianEnergy === undefined) return "—"
-                        return Number(s.laplacianEnergy).toFixed(1)
-                    }
-                    readonly property string tg: {
-                        const s = gradCard.ps
-                        if (!s || s.tenengrad === undefined) return "—"
-                        return Number(s.tenengrad).toFixed(1)
+                    function n(s, k, d) {
+                        if (!s || s[k] === undefined) return "—"
+                        return Number(s[k]).toFixed(d)
                     }
 
                     Column {
-                        id: planeCardCol
+                        id: gradTableCol
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.top: parent.top
-                        anchors.margins: 8
-                        spacing: 4
+                        anchors.margins: 6
+                        spacing: 2
 
-                        Row {
+                        RowLayout {
                             width: parent.width
-                            spacing: 6
-                            Rectangle {
-                                width: 8; height: 8; radius: 2
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: gradCard.planeColor
+                            spacing: 3
+                            Text { Layout.preferredWidth: 44; text: ""; font.pixelSize: 10 }
+                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "Y"; color: "#ffffff"; font.pixelSize: 11; font.bold: true }
+                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "U"; color: "#42A5FF"; font.pixelSize: 11; font.bold: true }
+                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "V"; color: "#FF4888"; font.pixelSize: 11; font.bold: true }
+                        }
+                        Repeater {
+                            model: [
+                                { t: "均值", k: "mean", d: 1 },
+                                { t: "标准差", k: "stddev", d: 1 },
+                                { t: "方差", k: "variance", d: 1 },
+                                { t: "极差", k: "range", d: 0 },
+                                { t: "水平∇", k: "gradHorizMean", d: 2 },
+                                { t: "垂直∇", k: "gradVertMean", d: 2 },
+                                { t: "45°∇", k: "gradDiag45Mean", d: 2 },
+                                { t: "135°∇", k: "gradDiag135Mean", d: 2 },
+                                { t: "∇均", k: "gradMean", d: 2 },
+                                { t: "Lap", k: "laplacianEnergy", d: 1 },
+                                { t: "Ten", k: "tenengrad", d: 1 }
+                            ]
+                            delegate: RowLayout {
+                                required property var modelData
+                                width: parent.width
+                                spacing: 3
+                                Text {
+                                    Layout.preferredWidth: 44
+                                    text: modelData.t
+                                    color: "#8a8f96"
+                                    font.pixelSize: 10
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: gradBox.n(gradBox.sy, modelData.k, modelData.d)
+                                    color: "#d0d4d8"
+                                    font.pixelSize: 11
+                                    font.family: "Menlo"
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: gradBox.n(gradBox.su, modelData.k, modelData.d)
+                                    color: "#d0d4d8"
+                                    font.pixelSize: 11
+                                    font.family: "Menlo"
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: gradBox.n(gradBox.sv, modelData.k, modelData.d)
+                                    color: "#d0d4d8"
+                                    font.pixelSize: 11
+                                    font.family: "Menlo"
+                                }
                             }
-                            Text {
-                                text: gradCard.planeLabel + " 平面"
-                                color: "#ffffff"
-                                font.pixelSize: 15
-                                font.bold: true
-                            }
-                        }
-
-                        // 基础统计行：表格式呈现（一行表头 + 一行数值，列对齐）
-                        GridLayout {
-                            width: parent.width
-                            columns: 4
-                            columnSpacing: 4
-                            rowSpacing: 2
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "均值"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "标准差"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "极差"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "方差"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.mean; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.stdDev; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.rangeV; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.variance; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                        }
-
-                        // 梯度 / 纹理指标：同样按"表头行 + 数值行"的表格样式对齐呈现
-                        Text {
-                            width: parent.width
-                            text: "▾ 梯度（方向幅值均值）"
-                            color: gradCard.planeColor
-                            font.pixelSize: 12
-                            font.bold: true
-                        }
-                        GridLayout {
-                            width: parent.width
-                            columns: 5
-                            columnSpacing: 4
-                            rowSpacing: 2
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "水平"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "垂直"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "45°"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "135°"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "平均"; color: gradCard.planeColor; font.pixelSize: 11; font.bold: true }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.gH; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.gV; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.g45; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.g135; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.gMean; color: gradCard.planeColor; font.pixelSize: 13; font.family: "Monospace"; font.bold: true }
-                        }
-
-                        // 锐利度 / 纹理复杂度
-                        Text {
-                            width: parent.width
-                            text: "▾ 锐利度 / 纹理复杂度"
-                            color: gradCard.planeColor
-                            font.pixelSize: 12
-                            font.bold: true
-                        }
-                        GridLayout {
-                            width: parent.width
-                            columns: 2
-                            columnSpacing: 4
-                            rowSpacing: 2
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "Laplacian能量"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "Tenengrad"; color: "#8a8f96"; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.lap; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
-                            Text { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: gradCard.tg; color: "#cccccc"; font.pixelSize: 13; font.family: "Monospace" }
                         }
                     }
-                }
-
-                PlaneGradientCard {
-                    planeLabel: "Y"
-                    planeColor: "#ffffff"
-                    planeIndex: 0
-                }
-                PlaneGradientCard {
-                    planeLabel: "U"
-                    planeColor: "#42A5FF"
-                    planeIndex: 1
-                }
-                PlaneGradientCard {
-                    planeLabel: "V"
-                    planeColor: "#FF4888"
-                    planeIndex: 2
                 }
             }
 
-            // ── 编码参考视图（viewMode === 2）──
-            //   阈值基于经验值，参考 H.264/HEVC/VVC 编码器内部的纹理能量判断逻辑；
-            //   仅作"参考性提示"，不替代实际编码器内部的率失真优化决策。
-            //   基于 Y 平面梯度/纹理数据（仅帧级别有意义）；块级别模式下不显示。
             Column {
+                id: featCol
                 width: parent.width
                 visible: panel.statsMode === 0 && panel.viewMode === 2
-                spacing: 8
+                spacing: 6
+                readonly property var feat: {
+                    const _ = panel.ver
+                    return YuvBridge.slotCount > 0 ? YuvBridge.frameFeatures(panel.activeSlot) : null
+                }
+                function fv(k, d) {
+                    const f = feat
+                    if (!f || !f.ok || f[k] === undefined) return "—"
+                    return Number(f[k]).toFixed(d)
+                }
+                function blk(i, k, d) {
+                    const f = feat
+                    if (!f || !f.blockVar || !f.blockVar[i]) return "—"
+                    return Number(f.blockVar[i][k]).toFixed(d)
+                }
 
-                Rectangle {
+                component FeatCard: Rectangle {
+                    id: featCard
                     width: parent.width
                     color: "#1a1d22"
                     radius: 4
                     border.color: "#2a2e33"
                     border.width: 1
-                    height: codingHintCol.implicitHeight + 16
-
+                    property string title: ""
+                    default property alias body: featRows.data
+                    height: featInner.implicitHeight + 10
                     Column {
-                        id: codingHintCol
+                        id: featInner
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.top: parent.top
-                        anchors.margins: 8
-                        spacing: 4
-
-                        Row {
-                            width: parent.width
-                            spacing: 6
-                            Rectangle {
-                                width: 6; height: 6; radius: 3
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: "#3a6fd8"
-                            }
-                            Text {
-                                text: "编码参考（基于 Y 平面）"
-                                color: "#bbbbbb"
-                                font.pixelSize: 13
-                                font.bold: true
-                            }
-                        }
-
+                        anchors.margins: 6
+                        spacing: 3
                         Text {
+                            text: featCard.title
+                            color: "#9aa0a6"
+                            font.pixelSize: 10
+                            font.bold: true
+                        }
+                        Column {
+                            id: featRows
                             width: parent.width
-                            text: {
-                                const _ = panel.ver
-                                const s = YuvBridge.planeStats(panel.activeSlot, 0)
-                                if (!s || s.gradMean === undefined) return "暂无数据"
-                                const gm = Number(s.gradMean)
-                                const lap = Number(s.laplacianEnergy)
-                                const ten = Number(s.tenengrad)
-                                // 纹理复杂度（决定 CU 划分倾向）
-                                let complexity
-                                if (gm < 3)        complexity = "平坦（适合大块量化）"
-                                else if (gm < 8)   complexity = "中等（默认编码参数即可）"
-                                else               complexity = "复杂（建议更细 CU 划分 / 提高 QP 容差）"
-                                // 清晰度（决定是否需要预处理锐化 / 是否失焦）
-                                let sharpness
-                                if (lap < 100)        sharpness = "较模糊"
-                                else if (lap < 1000)  sharpness = "一般"
-                                else                  sharpness = "锐利"
-                                return "纹理：" + complexity +
-                                       "\n清晰度：" + sharpness +
-                                       "（Laplacian " + lap.toFixed(1) + "）" +
-                                       "\n综合（Tenengrad）：" + ten.toFixed(1) +
-                                       "（值越高纹理越丰富，编码需分配更多码率）"
-                            }
-                            color: "#bbbbbb"
-                            font.pixelSize: 13
-                            wrapMode: Text.WordWrap
+                            spacing: 2
                         }
                     }
                 }
-
-                // 阈值说明（让用户理解阈值来源）
-                Rectangle {
+                component KV: RowLayout {
                     width: parent.width
-                    color: "#16181c"
-                    radius: 4
-                    border.color: "#25282d"
-                    border.width: 1
-                    height: codingThreshCol.implicitHeight + 16
+                    property string k: ""
+                    property string v: ""
+                    spacing: 6
+                    Text { text: k; color: "#7d848c"; font.pixelSize: 10; Layout.preferredWidth: 72 }
+                    Text { text: v; color: "#d8dce0"; font.pixelSize: 11; font.family: "Menlo"; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                }
 
-                    Column {
-                        id: codingThreshCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 8
-                        spacing: 3
-
-                        Text {
-                            text: "阈值说明"
-                            color: "#bbbbbb"; font.pixelSize: 13; font.bold: true
+                FeatCard {
+                    title: "时间（相对上一帧 · Y）"
+                    KV { k: "TI"; v: featCol.fv("ti", 3) }
+                    KV { k: "MAD / MSE"; v: featCol.fv("madY", 3) + "  /  " + featCol.fv("mseY", 3) }
+                    KV { k: "SAD"; v: featCol.fv("sadY", 0) }
+                    KV { k: "max|Δ|"; v: featCol.fv("maxAbsY", 0) }
+                    KV { k: "静止16×16"; v: featCol.fv("staticBlk16Pct", 2) + " %" }
+                    Text {
+                        width: parent.width
+                        visible: {
+                            const f = featCol.feat
+                            return !f || !f.ok || !f.temporalValid
                         }
-                        Text {
-                            width: parent.width
-                            text: "纹理（平均梯度 ｜g｜）：< 3 平坦 / 3~8 中等 / ≥ 8 复杂\n" +
-                                  "清晰度（Laplacian 能量）：< 100 较模糊 / 100~1000 一般 / ≥ 1000 锐利\n" +
-                                  "综合（Tenengrad）：越大代表纹理越丰富，编码需分配更多码率"
-                            color: "#9aa0a6"; font.pixelSize: 12
-                            wrapMode: Text.WordWrap
-                        }
+                        text: "首帧或无上一帧时时间量为空"
+                        color: "#6a7078"
+                        font.pixelSize: 10
                     }
+                }
+                FeatCard {
+                    title: "Y 分布"
+                    KV { k: "p01 / p50"; v: featCol.fv("yP01", 1) + "  /  " + featCol.fv("yP50", 1) }
+                    KV { k: "p95 / p99"; v: featCol.fv("yP95", 1) + "  /  " + featCol.fv("yP99", 1) }
+                    KV { k: "熵 / 占用桶"; v: featCol.fv("yEntropy", 3) + "  /  " + featCol.fv("yUsedBins", 0) }
+                    KV { k: "空洞比"; v: featCol.fv("yHoleRatio", 3) }
+                    KV { k: "最长空洞"; v: featCol.fv("yLongestHole", 0) + " bin" }
+                }
+                FeatCard {
+                    title: "限幅 / 合法范围"
+                    KV { k: "Y < TV"; v: featCol.fv("yFootroomPct", 3) + " %" }
+                    KV { k: "Y > TV"; v: featCol.fv("yHeadroomPct", 3) + " %" }
+                    KV { k: "Y=0 / peak"; v: featCol.fv("ySat0Pct", 3) + " %  /  " + featCol.fv("ySatPeakPct", 3) + " %" }
+                    KV { k: "U / V 越界"; v: featCol.fv("uOutRangePct", 3) + " %  /  " + featCol.fv("vOutRangePct", 3) + " %" }
+                }
+                FeatCard {
+                    title: "噪声 / 条带"
+                    KV { k: "噪声 σ"; v: featCol.fv("yNoiseSigma", 3) }
+                    KV { k: "条带分"; v: featCol.fv("yBandingScore", 3) }
+                }
+                FeatCard {
+                    title: "块方差占比（Y · 高能=σ>4）"
+                    KV { k: "8×8 μ/p90"; v: featCol.blk(0, "meanVar", 1) + "  /  " + featCol.blk(0, "p90Var", 1) }
+                    KV { k: "8×8 高能"; v: featCol.blk(0, "highEnergyPct", 2) + " %" }
+                    KV { k: "16×16 μ/p90"; v: featCol.blk(1, "meanVar", 1) + "  /  " + featCol.blk(1, "p90Var", 1) }
+                    KV { k: "16×16 高能"; v: featCol.blk(1, "highEnergyPct", 2) + " %" }
+                    KV { k: "32×32 μ/p90"; v: featCol.blk(2, "meanVar", 1) + "  /  " + featCol.blk(2, "p90Var", 1) }
+                    KV { k: "32×32 高能"; v: featCol.blk(2, "highEnergyPct", 2) + " %" }
+                    KV { k: "64×64 μ/p90"; v: featCol.blk(3, "meanVar", 1) + "  /  " + featCol.blk(3, "p90Var", 1) }
+                    KV { k: "64×64 高能"; v: featCol.blk(3, "highEnergyPct", 2) + " %" }
+                }
+                FeatCard {
+                    title: "色度"
+                    KV { k: "Y σ"; v: featCol.fv("yAcEnergy", 2) }
+                    KV { k: "平均|C|"; v: featCol.fv("chromaMeanAbs", 2) }
+                    KV { k: "|C| / Yσ"; v: featCol.fv("chromaRatio", 3) }
+                    KV { k: "UV 相关"; v: featCol.fv("uvCorr", 3) }
                 }
             }
 
@@ -1175,7 +1115,7 @@ Item {
                 Canvas {
                     id: cv
                     width: parent.width
-                    height: 160
+                    height: histRoot.showInlineTitle ? 160 : parent.height
                     Component.onCompleted: cv.requestPaint()
                     Connections {
                         target: histRoot
@@ -1325,5 +1265,397 @@ Item {
             Item { width: parent.width; height: 8 }
         }
     }
+    }
+
+    Popup {
+        id: exportPopup
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        padding: 0
+        closePolicy: panel.exporting ? Popup.NoAutoClose : (Popup.CloseOnEscape | Popup.CloseOnPressOutside)
+        background: Rectangle {
+            color: "#16181d"
+            radius: 10
+            border.color: "#2c3138"
+            border.width: 1
+        }
+
+        Column {
+            id: expCol
+            width: 368
+            spacing: 0
+
+            Item {
+                width: parent.width
+                height: 44
+                Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 16
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "导出统计"
+                    color: "#e8eaed"
+                    font.pixelSize: 14
+                    font.bold: true
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 16
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: {
+                        const _ = panel.ver
+                        const tot = YuvBridge.totalFrames(panel.activeSlot)
+                        const a = Math.max(1, panel.exportFirstUi)
+                        const b = Math.max(a, panel.exportLastUi)
+                        const aa = Math.min(tot, a)
+                        const bb = Math.min(tot, Math.max(aa, b))
+                        const g = Math.max(1, panel.exportGopSize)
+                        const gops = panel.expGop
+                                    ? (Math.floor((bb - 1) / g) - Math.floor((aa - 1) / g) + 1)
+                                    : 0
+                        return "槽 " + (panel.activeSlot + 1)
+                               + (panel.expGop ? ("  ·  ~" + gops + " GOP") : "")
+                    }
+                    color: "#7d848c"
+                    font.pixelSize: 11
+                }
+            }
+
+            Rectangle { width: parent.width; height: 1; color: "#2c3138" }
+
+            Column {
+                width: parent.width
+                padding: 16
+                spacing: 12
+
+                Row {
+                    width: parent.width - 32
+                    spacing: 16
+                    Column {
+                        spacing: 6
+                        Text { text: "帧范围"; color: "#8b9198"; font.pixelSize: 11 }
+                        Row {
+                            spacing: 6
+                            Rectangle {
+                                width: 72; height: 28; radius: 5
+                                color: "#0f1114"
+                                border.color: "#2c3138"
+                                TextField {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    text: String(panel.exportFirstUi)
+                                    color: "#e8eaed"
+                                    font.pixelSize: 12
+                                    font.family: "Menlo"
+                                    selectByMouse: true
+                                    enabled: !panel.exporting
+                                    verticalAlignment: Text.AlignVCenter
+                                    background: Item {}
+                                    onEditingFinished: panel.exportFirstUi = Math.max(1, parseInt(text) || 1)
+                                }
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "–"
+                                color: "#6a7078"
+                                font.pixelSize: 12
+                            }
+                            Rectangle {
+                                width: 72; height: 28; radius: 5
+                                color: "#0f1114"
+                                border.color: "#2c3138"
+                                TextField {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    text: String(panel.exportLastUi)
+                                    color: "#e8eaed"
+                                    font.pixelSize: 12
+                                    font.family: "Menlo"
+                                    selectByMouse: true
+                                    enabled: !panel.exporting
+                                    verticalAlignment: Text.AlignVCenter
+                                    background: Item {}
+                                    onEditingFinished: panel.exportLastUi = Math.max(1, parseInt(text) || 1)
+                                }
+                            }
+                        }
+                    }
+                    Column {
+                        spacing: 6
+                        Text { text: "GOP 大小"; color: "#8b9198"; font.pixelSize: 11 }
+                        Rectangle {
+                            width: 88; height: 28; radius: 5
+                            color: "#0f1114"
+                            border.color: "#2c3138"
+                            TextField {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                text: String(panel.exportGopSize)
+                                color: "#e8eaed"
+                                font.pixelSize: 12
+                                font.family: "Menlo"
+                                selectByMouse: true
+                                enabled: !panel.exporting
+                                verticalAlignment: Text.AlignVCenter
+                                background: Item {}
+                                onEditingFinished: {
+                                    const n = parseInt(text)
+                                    panel.exportGopSize = Math.max(1, Math.min(4096, n || 32))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    width: parent.width - 32
+                    text: "行按层级 B 编码序写出（GOP=32 → 0,32,16,8,24…）。TI/SAD 仍相对显示相邻帧。"
+                    color: "#6a7078"
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
+
+                Column {
+                    width: parent.width - 32
+                    spacing: 6
+                    Text { text: "文件"; color: "#8b9198"; font.pixelSize: 11 }
+                    Row {
+                        spacing: 6
+                        Repeater {
+                            model: [
+                                { k: "expGop", t: "GOP 汇总表", s: "一段一行" }
+                            ]
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 148; height: 36; radius: 6
+                                color: panel[modelData.k] ? "#1c2430" : "#121417"
+                                border.color: panel[modelData.k] ? "#3a6fd8" : "#2c3138"
+                                opacity: panel.exporting ? 0.55 : 1
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    spacing: 8
+                                    Rectangle {
+                                        width: 14; height: 14; radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: panel[modelData.k] ? "#3a6fd8" : "transparent"
+                                        border.color: panel[modelData.k] ? "#5a8ee8" : "#4a5058"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: panel[modelData.k] ? "✓" : ""
+                                            color: "#fff"
+                                            font.pixelSize: 9
+                                        }
+                                    }
+                                    Column {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        spacing: 0
+                                        Text { text: modelData.t; color: "#e0e3e7"; font.pixelSize: 12 }
+                                        Text { text: modelData.s; color: "#6a7078"; font.pixelSize: 10 }
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: !panel.exporting
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: panel[modelData.k] = !panel[modelData.k]
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 148; height: 36; radius: 6
+                            color: "#1c2430"
+                            border.color: "#3a6fd8"
+                            Column {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left
+                                anchors.leftMargin: 10
+                                spacing: 0
+                                Text { text: "逐帧表"; color: "#e0e3e7"; font.pixelSize: 12 }
+                                Text { text: "始终写出"; color: "#6a7078"; font.pixelSize: 10 }
+                            }
+                        }
+                    }
+                }
+
+                Column {
+                    width: parent.width - 32
+                    spacing: 6
+                    Text { text: "逐帧列"; color: "#8b9198"; font.pixelSize: 11 }
+                    Grid {
+                        width: parent.width
+                        columns: 2
+                        columnSpacing: 6
+                        rowSpacing: 6
+                        Repeater {
+                            model: [
+                                { k: "expHistSummary", t: "直方摘要", s: "均值 / 方差 / 极值" },
+                                { k: "expHistBins", t: "直方桶", s: "Y/U/V 整列" },
+                                { k: "expGradient", t: "梯度纹理", s: "四向 · Lap · Ten" },
+                                { k: "expFeatures", t: "帧级特征", s: "TI / 限幅 / 块方差" }
+                            ]
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 160; height: 40; radius: 6
+                                color: panel[modelData.k] ? "#1c2430" : "#121417"
+                                border.color: panel[modelData.k] ? "#3a6fd8" : "#2c3138"
+                                opacity: panel.exporting ? 0.55 : 1
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    spacing: 8
+                                    Rectangle {
+                                        width: 14; height: 14; radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: panel[modelData.k] ? "#3a6fd8" : "transparent"
+                                        border.color: panel[modelData.k] ? "#5a8ee8" : "#4a5058"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: panel[modelData.k] ? "✓" : ""
+                                            color: "#fff"
+                                            font.pixelSize: 9
+                                        }
+                                    }
+                                    Column {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        spacing: 0
+                                        Text { text: modelData.t; color: "#e0e3e7"; font.pixelSize: 12 }
+                                        Text { text: modelData.s; color: "#6a7078"; font.pixelSize: 10 }
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: !panel.exporting
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: panel[modelData.k] = !panel[modelData.k]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: "#2c3138"
+                visible: panel.exporting || panel.exportStatus.length > 0
+            }
+
+            Column {
+                width: parent.width
+                visible: panel.exporting || panel.exportStatus.length > 0
+                padding: 12
+                spacing: 8
+                Rectangle {
+                    width: parent.width - 24
+                    height: 3
+                    radius: 2
+                    color: "#0f1114"
+                    visible: panel.exporting || panel.exportRatio > 0
+                    Rectangle {
+                        width: parent.width * Math.max(0, Math.min(1, panel.exportRatio))
+                        height: parent.height
+                        radius: 2
+                        color: panel.exportOk && !panel.exporting ? "#3dcc7a" : "#3a6fd8"
+                    }
+                }
+                Text {
+                    width: parent.width - 24
+                    visible: panel.exportStatus.length > 0
+                    text: panel.exportStatus
+                    color: panel.exportOk && !panel.exporting ? "#6fbf73" : "#9aa0a6"
+                    font.pixelSize: 11
+                }
+            }
+
+            Rectangle { width: parent.width; height: 1; color: "#2c3138" }
+
+            Item {
+                width: parent.width
+                height: 52
+                Row {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 16
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 8
+
+                    Rectangle {
+                        width: 64; height: 28; radius: 5
+                        color: "#1c1f24"
+                        border.color: "#2c3138"
+                        visible: !panel.exporting
+                        Text {
+                            anchors.centerIn: parent
+                            text: "关闭"
+                            color: "#b0b6bc"
+                            font.pixelSize: 12
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: exportPopup.close()
+                        }
+                    }
+                    Rectangle {
+                        width: 108; height: 28; radius: 5
+                        color: "#1c2430"
+                        border.color: "#3a6fd8"
+                        visible: panel.exportOk && panel.exportPath.length > 0 && !panel.exporting
+                        Text {
+                            anchors.centerIn: parent
+                            text: "打开所在文件夹"
+                            color: "#d8e4ff"
+                            font.pixelSize: 12
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: Fs.revealInFileManager(panel.exportPath)
+                        }
+                    }
+                    Rectangle {
+                        width: 64; height: 28; radius: 5
+                        color: panel.exporting ? "#1c1f24" : "#2a3a55"
+                        border.color: panel.exporting ? "#2c3138" : "#3a6fd8"
+                        opacity: panel.exporting ? 0.5 : 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: panel.exporting ? "导出中" : "导出"
+                            color: "#e8eaed"
+                            font.pixelSize: 12
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: !panel.exporting
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const tot = YuvBridge.totalFrames(panel.activeSlot)
+                                let a = Math.max(1, panel.exportFirstUi)
+                                let b = Math.max(1, panel.exportLastUi)
+                                if (b > tot) b = tot
+                                if (a > b) { const t = a; a = b; b = t }
+                                panel.exporting = true
+                                panel.exportOk = false
+                                panel.exportPath = ""
+                                panel.exportRatio = 0
+                                panel.exportStatus = "正在导出…"
+                                YuvBridge.startExportFrameStats(panel.activeSlot, a - 1, b - 1, {
+                                    histSummary: panel.expHistSummary,
+                                    histBins: panel.expHistBins,
+                                    gradient: panel.expGradient,
+                                    features: panel.expFeatures,
+                                    gopSummary: panel.expGop,
+                                    gopSize: panel.exportGopSize
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

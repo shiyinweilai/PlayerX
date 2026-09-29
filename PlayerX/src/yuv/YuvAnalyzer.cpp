@@ -6,6 +6,7 @@
 #include <cmath>
 #include <climits>
 #include <algorithm>
+#include <cstddef>
 
 #include "simd/SimdAPI.h"
 
@@ -1192,6 +1193,280 @@ YuvAnalyzer::PlaneStats YuvAnalyzer::computeStatsFromSnapshot(const FrameSnapsho
         r.tenengrad       = sTgd / nGrad;
     }
     return r;
+}
+
+namespace {
+
+int snapBitDepth(const YuvAnalyzer::FrameSnapshot& snap) {
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(snap.pixFmt);
+    return (desc && desc->comp[0].depth > 8) ? desc->comp[0].depth : 8;
+}
+
+int readSnap(const YuvAnalyzer::FrameSnapshot::Plane& p, int plane, AVPixelFormat fmt,
+             bool highDepth, int x, int y) {
+    const uint8_t* row = p.data.data() + static_cast<size_t>(y) * p.stride;
+    if (highDepth)
+        return reinterpret_cast<const uint16_t*>(row)[x];
+    if ((fmt == AV_PIX_FMT_NV12 || fmt == AV_PIX_FMT_NV21) && plane >= 1)
+        return row[x * 2 + ((plane == 1) ? 0 : 1)];
+    return row[x];
+}
+
+double percentileFromBins(const std::vector<int>& bins, long long count, double p) {
+    if (count <= 0 || bins.empty()) return 0;
+    long long target = static_cast<long long>(std::llround(count * p / 100.0));
+    if (target < 1) target = 1;
+    if (target > count) target = count;
+    long long acc = 0;
+    for (int i = 0; i < static_cast<int>(bins.size()); ++i) {
+        acc += bins[static_cast<size_t>(i)];
+        if (acc >= target) return static_cast<double>(i);
+    }
+    return static_cast<double>(static_cast<int>(bins.size()) - 1);
+}
+
+double entropyFromBins(const std::vector<int>& bins, long long count) {
+    if (count <= 0) return 0;
+    double e = 0;
+    const double n = static_cast<double>(count);
+    for (int c : bins) {
+        if (c <= 0) continue;
+        const double p = static_cast<double>(c) / n;
+        e -= p * (std::log(p) / std::log(2.0));
+    }
+    return e;
+}
+
+long long countBinsRange(const std::vector<int>& bins, int lo, int hi) {
+    long long n = 0;
+    const int last = static_cast<int>(bins.size()) - 1;
+    lo = std::max(0, lo);
+    hi = std::min(last, hi);
+    for (int i = lo; i <= hi; ++i) n += bins[static_cast<size_t>(i)];
+    return n;
+}
+
+} // namespace
+
+YuvAnalyzer::FrameFeatures YuvAnalyzer::computeFrameFeaturesFromSnapshot(
+        const FrameSnapshot& snap, const FrameSnapshot* prev) {
+    FrameFeatures f;
+    if (!snap.valid || snap.planeCount < 1) return f;
+
+    const auto hy = computeHistogramFromSnapshot(snap, 0);
+    const auto hu = (snap.planeCount > 1) ? computeHistogramFromSnapshot(snap, 1) : PlaneHistogram{};
+    const auto hv = (snap.planeCount > 2) ? computeHistogramFromSnapshot(snap, 2) : PlaneHistogram{};
+    if (hy.binCount <= 0) return f;
+
+    f.valid = true;
+    f.bitDepth = snapBitDepth(snap);
+    f.peak = (1 << f.bitDepth) - 1;
+    const int shift = std::max(0, f.bitDepth - 8);
+    const int yLo = 16 << shift;
+    const int yHi = 235 << shift;
+    const int cLo = 16 << shift;
+    const int cHi = 240 << shift;
+    const int mid = 128 << shift;
+
+    long long yCount = 0;
+    for (int c : hy.bins) yCount += c;
+    f.yAcEnergy = hy.stddev;
+    f.yEntropy = entropyFromBins(hy.bins, yCount);
+    f.yUsedBins = 0;
+    for (int c : hy.bins) if (c > 0) ++f.yUsedBins;
+    f.yP01 = percentileFromBins(hy.bins, yCount, 1);
+    f.yP05 = percentileFromBins(hy.bins, yCount, 5);
+    f.yP50 = percentileFromBins(hy.bins, yCount, 50);
+    f.yP95 = percentileFromBins(hy.bins, yCount, 95);
+    f.yP99 = percentileFromBins(hy.bins, yCount, 99);
+
+    if (yCount > 0) {
+        f.yFootroomPct = 100.0 * static_cast<double>(countBinsRange(hy.bins, 0, yLo - 1)) / yCount;
+        f.yHeadroomPct = 100.0 * static_cast<double>(countBinsRange(hy.bins, yHi + 1, f.peak)) / yCount;
+        if (0 < static_cast<int>(hy.bins.size()))
+            f.ySat0Pct = 100.0 * static_cast<double>(hy.bins[0]) / yCount;
+        if (f.peak < static_cast<int>(hy.bins.size()))
+            f.ySatPeakPct = 100.0 * static_cast<double>(hy.bins[static_cast<size_t>(f.peak)]) / yCount;
+    }
+
+    long long uCount = 0, vCount = 0;
+    for (int c : hu.bins) uCount += c;
+    for (int c : hv.bins) vCount += c;
+    if (uCount > 0)
+        f.uOutRangePct = 100.0 * static_cast<double>(
+            countBinsRange(hu.bins, 0, cLo - 1) + countBinsRange(hu.bins, cHi + 1, f.peak)) / uCount;
+    if (vCount > 0)
+        f.vOutRangePct = 100.0 * static_cast<double>(
+            countBinsRange(hv.bins, 0, cLo - 1) + countBinsRange(hv.bins, cHi + 1, f.peak)) / vCount;
+
+    const int usedLo = hy.minVal;
+    const int usedHi = hy.maxVal;
+    int longestHole = 0, hole = 0, emptyInRange = 0;
+    if (usedHi >= usedLo) {
+        for (int i = usedLo; i <= usedHi && i < static_cast<int>(hy.bins.size()); ++i) {
+            if (hy.bins[static_cast<size_t>(i)] == 0) {
+                ++hole;
+                ++emptyInRange;
+                if (hole > longestHole) longestHole = hole;
+            } else {
+                hole = 0;
+            }
+        }
+        const int span = usedHi - usedLo + 1;
+        f.yHoleRatio = (span > 0) ? (static_cast<double>(emptyInRange) / span) : 0;
+        f.yLongestHole = longestHole;
+        f.yBandingScore = f.yHoleRatio * (1.0 + static_cast<double>(longestHole) / std::max(1, span));
+    }
+
+    const auto& yp = snap.planes[0];
+    const bool highDepth = f.bitDepth > 8;
+    if (!yp.data.empty() && yp.pw >= 3 && yp.ph >= 3) {
+        std::vector<int> laps;
+        laps.reserve(static_cast<size_t>(yp.pw - 2) * static_cast<size_t>(yp.ph - 2));
+        for (int y = 1; y < yp.ph - 1; y += 2) {
+            for (int x = 1; x < yp.pw - 1; x += 2) {
+                const int vC = readSnap(yp, 0, snap.pixFmt, highDepth, x, y);
+                const int lap = std::abs((4 * vC)
+                    - readSnap(yp, 0, snap.pixFmt, highDepth, x - 1, y)
+                    - readSnap(yp, 0, snap.pixFmt, highDepth, x + 1, y)
+                    - readSnap(yp, 0, snap.pixFmt, highDepth, x, y - 1)
+                    - readSnap(yp, 0, snap.pixFmt, highDepth, x, y + 1));
+                laps.push_back(lap);
+            }
+        }
+        if (!laps.empty()) {
+            const size_t midIdx = laps.size() / 2;
+            std::nth_element(laps.begin(), laps.begin() + static_cast<std::ptrdiff_t>(midIdx), laps.end());
+            f.yNoiseSigma = static_cast<double>(laps[midIdx]) / 0.6745;
+        }
+    }
+
+    const int sizes[4] = { 8, 16, 32, 64 };
+    const double highTh = static_cast<double>(4 << shift) * static_cast<double>(4 << shift);
+    for (int si = 0; si < 4; ++si) {
+        const int bs = sizes[si];
+        auto& b = f.blk[si];
+        b.size = bs;
+        if (yp.data.empty() || yp.pw < bs || yp.ph < bs) continue;
+        const int cols = yp.pw / bs;
+        const int rows = yp.ph / bs;
+        std::vector<double> vars;
+        vars.reserve(static_cast<size_t>(cols * rows));
+        double sumVar = 0;
+        int highN = 0;
+        for (int by = 0; by < rows; ++by) {
+            for (int bx = 0; bx < cols; ++bx) {
+                long long sum = 0, sumSq = 0;
+                const int n = bs * bs;
+                for (int yy = 0; yy < bs; ++yy) {
+                    for (int xx = 0; xx < bs; ++xx) {
+                        const int v = readSnap(yp, 0, snap.pixFmt, highDepth, bx * bs + xx, by * bs + yy);
+                        sum += v;
+                        sumSq += static_cast<long long>(v) * v;
+                    }
+                }
+                const double mean = static_cast<double>(sum) / n;
+                const double var = std::max(0.0, static_cast<double>(sumSq) / n - mean * mean);
+                vars.push_back(var);
+                sumVar += var;
+                if (var > highTh) ++highN;
+            }
+        }
+        b.count = static_cast<int>(vars.size());
+        if (b.count > 0) {
+            b.meanVar = sumVar / b.count;
+            b.highEnergyPct = 100.0 * static_cast<double>(highN) / b.count;
+            const size_t p90i = static_cast<size_t>(std::min(b.count - 1,
+                static_cast<int>(std::llround((b.count - 1) * 0.90))));
+            std::nth_element(vars.begin(), vars.begin() + static_cast<std::ptrdiff_t>(p90i), vars.end());
+            b.p90Var = vars[p90i];
+        }
+    }
+
+    if (snap.planeCount >= 3 && !snap.planes[1].data.empty() && !snap.planes[2].data.empty()) {
+        const auto& up = snap.planes[1];
+        const auto& vp = snap.planes[2];
+        const int cw = std::min(up.pw, vp.pw);
+        const int ch = std::min(up.ph, vp.ph);
+        if (cw > 0 && ch > 0) {
+            long double sAbs = 0, sU = 0, sV = 0, sUU = 0, sVV = 0, sUV = 0;
+            const long long n = static_cast<long long>(cw) * ch;
+            for (int y = 0; y < ch; ++y) {
+                for (int x = 0; x < cw; ++x) {
+                    const int u = readSnap(up, 1, snap.pixFmt, highDepth, x, y);
+                    const int v = readSnap(vp, 2, snap.pixFmt, highDepth, x, y);
+                    sAbs += std::abs(u - mid) + std::abs(v - mid);
+                    sU += u; sV += v;
+                    sUU += static_cast<long double>(u) * u;
+                    sVV += static_cast<long double>(v) * v;
+                    sUV += static_cast<long double>(u) * v;
+                }
+            }
+            f.chromaMeanAbs = static_cast<double>(sAbs) / (2.0 * static_cast<double>(n));
+            f.chromaRatio = f.chromaMeanAbs / std::max(1.0, f.yAcEnergy);
+            const double meanU = static_cast<double>(sU / n);
+            const double meanV = static_cast<double>(sV / n);
+            const double cov = static_cast<double>(sUV / n) - meanU * meanV;
+            const double su = std::sqrt(std::max(0.0, static_cast<double>(sUU / n) - meanU * meanU));
+            const double sv = std::sqrt(std::max(0.0, static_cast<double>(sVV / n) - meanV * meanV));
+            if (su > 1e-6 && sv > 1e-6) f.uvCorr = cov / (su * sv);
+        }
+    }
+
+    if (prev && prev->valid && prev->planeCount >= 1
+            && prev->planes[0].pw == yp.pw && prev->planes[0].ph == yp.ph
+            && !yp.data.empty() && !prev->planes[0].data.empty()) {
+        const auto& pp = prev->planes[0];
+        long long sad = 0, sumSq = 0, n = 0;
+        int mx = 0;
+        long double sumD = 0, sumD2 = 0;
+        for (int y = 0; y < yp.ph; ++y) {
+            for (int x = 0; x < yp.pw; ++x) {
+                const int d = readSnap(yp, 0, snap.pixFmt, highDepth, x, y)
+                            - readSnap(pp, 0, prev->pixFmt, highDepth, x, y);
+                const int ad = std::abs(d);
+                sad += ad;
+                sumSq += static_cast<long long>(d) * d;
+                sumD += d;
+                sumD2 += static_cast<long double>(d) * d;
+                if (ad > mx) mx = ad;
+                ++n;
+            }
+        }
+        if (n > 0) {
+            f.temporalValid = true;
+            f.sadY = static_cast<double>(sad);
+            f.mseY = static_cast<double>(sumSq) / static_cast<double>(n);
+            f.madY = static_cast<double>(sad) / static_cast<double>(n);
+            f.maxAbsY = mx;
+            f.meanAbsDiffY = f.madY;
+            const double meanD = static_cast<double>(sumD / n);
+            f.ti = std::sqrt(std::max(0.0, static_cast<double>(sumD2 / n) - meanD * meanD));
+        }
+        const int bs = 16;
+        if (yp.pw >= bs && yp.ph >= bs) {
+            const int cols = yp.pw / bs;
+            const int rows = yp.ph / bs;
+            const int staticTh = (2 << shift) * bs * bs;
+            int statN = 0;
+            for (int by = 0; by < rows; ++by) {
+                for (int bx = 0; bx < cols; ++bx) {
+                    long long bsad = 0;
+                    for (int yy = 0; yy < bs; ++yy) {
+                        for (int xx = 0; xx < bs; ++xx) {
+                            bsad += std::abs(
+                                readSnap(yp, 0, snap.pixFmt, highDepth, bx * bs + xx, by * bs + yy)
+                                - readSnap(pp, 0, prev->pixFmt, highDepth, bx * bs + xx, by * bs + yy));
+                        }
+                    }
+                    if (bsad < staticTh) ++statN;
+                }
+            }
+            const int tot = cols * rows;
+            if (tot > 0) f.staticBlk16Pct = 100.0 * static_cast<double>(statN) / tot;
+        }
+    }
+    return f;
 }
 
 } // namespace rb

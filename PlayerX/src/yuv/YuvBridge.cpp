@@ -2,12 +2,21 @@
 #include "YuvAnalyzer.h"
 
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QStringConverter>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 #include <QtConcurrent>
 #include <QFutureWatcher>
 #include <QMetaObject>
+#include <QHash>
+#include <QVector>
 #include <algorithm>
 #include <climits>
 #include <cmath>
@@ -397,6 +406,62 @@ QVariantMap YuvBridge::planeStats(int slot, int plane) const {
     return QVariantMap();
 }
 
+static QVariantMap frameFeaturesToMap(const rb::YuvAnalyzer::FrameFeatures& f) {
+    QVariantMap m;
+    if (!f.valid) return m;
+    m["ok"] = true;
+    m["bitDepth"] = f.bitDepth;
+    m["peak"] = f.peak;
+    m["yEntropy"] = f.yEntropy;
+    m["yUsedBins"] = f.yUsedBins;
+    m["yLongestHole"] = f.yLongestHole;
+    m["yHoleRatio"] = f.yHoleRatio;
+    m["yP01"] = f.yP01;
+    m["yP05"] = f.yP05;
+    m["yP50"] = f.yP50;
+    m["yP95"] = f.yP95;
+    m["yP99"] = f.yP99;
+    m["yFootroomPct"] = f.yFootroomPct;
+    m["yHeadroomPct"] = f.yHeadroomPct;
+    m["ySat0Pct"] = f.ySat0Pct;
+    m["ySatPeakPct"] = f.ySatPeakPct;
+    m["uOutRangePct"] = f.uOutRangePct;
+    m["vOutRangePct"] = f.vOutRangePct;
+    m["yNoiseSigma"] = f.yNoiseSigma;
+    m["yBandingScore"] = f.yBandingScore;
+    m["yAcEnergy"] = f.yAcEnergy;
+    m["chromaMeanAbs"] = f.chromaMeanAbs;
+    m["chromaRatio"] = f.chromaRatio;
+    m["uvCorr"] = f.uvCorr;
+    QVariantList blk;
+    for (int i = 0; i < 4; ++i) {
+        QVariantMap b;
+        b["size"] = f.blk[i].size;
+        b["count"] = f.blk[i].count;
+        b["meanVar"] = f.blk[i].meanVar;
+        b["p90Var"] = f.blk[i].p90Var;
+        b["highEnergyPct"] = f.blk[i].highEnergyPct;
+        blk.append(b);
+    }
+    m["blockVar"] = blk;
+    m["temporalValid"] = f.temporalValid;
+    m["ti"] = f.ti;
+    m["sadY"] = f.sadY;
+    m["mseY"] = f.mseY;
+    m["madY"] = f.madY;
+    m["maxAbsY"] = f.maxAbsY;
+    m["staticBlk16Pct"] = f.staticBlk16Pct;
+    m["meanAbsDiffY"] = f.meanAbsDiffY;
+    return m;
+}
+
+QVariantMap YuvBridge::frameFeatures(int slot) const {
+    if (slot < 0 || slot >= MaxSlots) return QVariantMap();
+    if (m_cachedStats[slot].frameNum >= 0)
+        return m_cachedStats[slot].features;
+    return QVariantMap();
+}
+
 // ── 块级"梯度 / 纹理 / 锐利度"统计（与 blockHistogram 同一块）──────────
 // 字段与 planeStats 完全一致，方便 UI 端共用同一组 QML 组件。差异：
 //   - 计算范围限制在对齐到 blockSize 倍数后的 [bx..bx+blockSize-1]×[by..by+blockSize-1]
@@ -631,6 +696,570 @@ void YuvBridge::gotoBothFrames(int frameNum) {
         if (m_analyzers[i] && m_analyzers[i]->isOpen())
             gotoFrame(i, frameNum);
     }
+}
+
+void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
+                                      const QVariantMap& opts) {
+    if (m_statsExportBusy) {
+        emit statsExportFinished(false, "已有导出任务在运行", QString());
+        return;
+    }
+    if (slot < 0 || slot >= MaxSlots || !m_analyzers[slot] || !m_analyzers[slot]->isOpen()) {
+        emit statsExportFinished(false, "当前槽未打开 YUV", QString());
+        return;
+    }
+    const bool wantHist = opts.value(QStringLiteral("histSummary"), true).toBool();
+    const bool wantBins = opts.value(QStringLiteral("histBins"), false).toBool();
+    const bool wantGrad = opts.value(QStringLiteral("gradient"), true).toBool();
+    const bool wantFeat = opts.value(QStringLiteral("features"), true).toBool();
+    const bool wantGop = opts.value(QStringLiteral("gopSummary"), true).toBool();
+    int gopSize = opts.value(QStringLiteral("gopSize"), 32).toInt();
+    if (gopSize < 1) gopSize = 1;
+    if (gopSize > 4096) gopSize = 4096;
+    if (!wantHist && !wantBins && !wantGrad && !wantFeat && !wantGop) {
+        emit statsExportFinished(false, "请至少勾选一项导出内容", QString());
+        return;
+    }
+
+    const int total = m_analyzers[slot]->totalFrames();
+    int first = std::max(0, firstFrame);
+    int last = (lastFrame < 0) ? (total - 1) : lastFrame;
+    if (last >= total) last = total - 1;
+    if (first > last) {
+        emit statsExportFinished(false, "帧范围无效", QString());
+        return;
+    }
+
+    const QString srcPath = m_analyzers[slot]->filePath();
+    const int w = m_analyzers[slot]->width();
+    const int h = m_analyzers[slot]->height();
+    const QString fmt = m_analyzers[slot]->pixelFormatName();
+    const double fps = m_analyzers[slot]->fps();
+    QString outPath = opts.value(QStringLiteral("outPath")).toString();
+    if (outPath.isEmpty()) {
+        QString dir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (dir.isEmpty()) dir = QDir::homePath() + QStringLiteral("/Downloads");
+        QDir().mkpath(dir);
+        const QString stem = QFileInfo(srcPath).completeBaseName();
+        outPath = QDir(dir).filePath(
+            QStringLiteral("%1_slot%2_f%3-%4_frame.csv")
+                .arg(stem).arg(slot + 1).arg(first + 1).arg(last + 1));
+    }
+
+    m_statsExportBusy = true;
+    emit statsExportProgress(QStringLiteral("开始导出统计…"), 0);
+
+    QtConcurrent::run([this, srcPath, w, h, fmt, fps, first, last, slot, outPath,
+                       wantHist, wantBins, wantGrad, wantFeat, wantGop, gopSize]() {
+        auto fail = [this](const QString& msg) {
+            QMetaObject::invokeMethod(this, [this, msg]() {
+                m_statsExportBusy = false;
+                emit statsExportFinished(false, msg, QString());
+            }, Qt::QueuedConnection);
+        };
+
+        rb::YuvAnalyzer ana;
+        if (!ana.open(srcPath, w, h, fmt, fps)) {
+            fail(QStringLiteral("无法打开文件进行导出"));
+            return;
+        }
+
+        auto csvEsc = [](const QString& s) {
+            if (!s.contains(QLatin1Char(',')) && !s.contains(QLatin1Char('"'))
+                    && !s.contains(QLatin1Char('\n')))
+                return s;
+            QString t = s;
+            t.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+            return QStringLiteral("\"") + t + QLatin1Char('"');
+        };
+        auto binsJson = [](const rb::YuvAnalyzer::PlaneHistogram& h) {
+            QJsonArray arr;
+            for (int v : h.bins) arr.append(v);
+            return QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+        };
+        const char* planeTag[3] = { "Y", "U", "V" };
+        QStringList headers;
+        headers << QStringLiteral("poc") << QStringLiteral("gopPoc") << QStringLiteral("gopIdx")
+                << QStringLiteral("gopSize") << QStringLiteral("codeIdx") << QStringLiteral("tid")
+                << QStringLiteral("fileFrame") << QStringLiteral("slot") << QStringLiteral("file");
+        if (wantHist) {
+            for (int p = 0; p < 3; ++p) {
+                const QString t = QString::fromLatin1(planeTag[p]);
+                headers << (t + QStringLiteral("_mean")) << (t + QStringLiteral("_stddev"))
+                        << (t + QStringLiteral("_variance")) << (t + QStringLiteral("_min"))
+                        << (t + QStringLiteral("_max")) << (t + QStringLiteral("_range"));
+            }
+        }
+        if (wantBins) {
+            headers << QStringLiteral("Y_bins") << QStringLiteral("U_bins") << QStringLiteral("V_bins");
+        }
+        if (wantGrad) {
+            for (int p = 0; p < 3; ++p) {
+                const QString t = QString::fromLatin1(planeTag[p]);
+                headers << (t + QStringLiteral("_gradH")) << (t + QStringLiteral("_gradV"))
+                        << (t + QStringLiteral("_grad45")) << (t + QStringLiteral("_grad135"))
+                        << (t + QStringLiteral("_gradMean")) << (t + QStringLiteral("_laplacian"))
+                        << (t + QStringLiteral("_tenengrad"));
+            }
+        }
+        if (wantFeat) {
+            headers << QStringLiteral("Y_p01") << QStringLiteral("Y_p05") << QStringLiteral("Y_p50")
+                    << QStringLiteral("Y_p95") << QStringLiteral("Y_p99")
+                    << QStringLiteral("Y_entropy") << QStringLiteral("Y_usedBins")
+                    << QStringLiteral("Y_holeRatio") << QStringLiteral("Y_longestHole")
+                    << QStringLiteral("Y_banding") << QStringLiteral("Y_noiseSigma")
+                    << QStringLiteral("Y_footroomPct") << QStringLiteral("Y_headroomPct")
+                    << QStringLiteral("Y_sat0Pct") << QStringLiteral("Y_satPeakPct")
+                    << QStringLiteral("U_outRangePct") << QStringLiteral("V_outRangePct")
+                    << QStringLiteral("Y_acEnergy") << QStringLiteral("chromaMeanAbs")
+                    << QStringLiteral("chromaRatio") << QStringLiteral("uvCorr")
+                    << QStringLiteral("blk8_meanVar") << QStringLiteral("blk8_p90Var") << QStringLiteral("blk8_highPct")
+                    << QStringLiteral("blk16_meanVar") << QStringLiteral("blk16_p90Var") << QStringLiteral("blk16_highPct")
+                    << QStringLiteral("blk32_meanVar") << QStringLiteral("blk32_p90Var") << QStringLiteral("blk32_highPct")
+                    << QStringLiteral("blk64_meanVar") << QStringLiteral("blk64_p90Var") << QStringLiteral("blk64_highPct")
+                    << QStringLiteral("TI") << QStringLiteral("Y_sad") << QStringLiteral("Y_mse")
+                    << QStringLiteral("Y_mad") << QStringLiteral("Y_maxAbsDiff")
+                    << QStringLiteral("staticBlk16Pct");
+        }
+
+        QFile file(outPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            fail(QStringLiteral("无法写入 ") + outPath);
+            return;
+        }
+        QTextStream ts(&file);
+        ts.setEncoding(QStringConverter::Utf8);
+        ts << QStringLiteral("\uFEFF") << headers.join(QLatin1Char(',')) << QLatin1Char('\n');
+
+        auto encodeGopIdx = [&](int poc) {
+            if (gopSize < 1 || poc <= 0) return 0;
+            return (poc - 1) / gopSize;
+        };
+        auto temporalId = [&](int poc) {
+            if (gopSize < 1 || poc % gopSize == 0) return 0;
+            int step = gopSize;
+            int tid = 0;
+            while (step > 1) {
+                step /= 2;
+                ++tid;
+                if (step < 1) break;
+                if ((poc % (2 * step)) == step) return tid;
+            }
+            return tid;
+        };
+        auto hierarchicalCodingOrder = [&](int pocFirst, int pocLast) {
+            QVector<int> order;
+            if (gopSize < 1 || pocFirst > pocLast) return order;
+            auto inRange = [&](int p) { return p >= pocFirst && p <= pocLast; };
+            if (inRange(0)) order.push_back(0);
+            const int kMax = pocLast / gopSize + 1;
+            for (int k = 0; k <= kMax; ++k) {
+                const int lo = k * gopSize;
+                const int hi = (k + 1) * gopSize;
+                if (lo > pocLast && k > 0) break;
+                if (inRange(hi)) order.push_back(hi);
+                int step = gopSize;
+                while (step > 1) {
+                    step /= 2;
+                    if (step < 1) break;
+                    for (int p = lo + step; p < hi; p += 2 * step) {
+                        if (inRange(p)) order.push_back(p);
+                    }
+                }
+            }
+            QVector<char> seen(pocLast + 1, 0);
+            for (int p : order) {
+                if (p >= 0 && p <= pocLast) seen[p] = 1;
+            }
+            for (int p = pocFirst; p <= pocLast; ++p) {
+                if (!seen[p]) order.push_back(p);
+            }
+            return order;
+        };
+
+        const bool needHist = wantHist || wantBins || wantGop;
+        const bool needGrad = wantGrad || wantGop;
+        const bool needFeat = wantFeat || wantGop;
+
+        struct GopAcc {
+            int gop = -1;
+            int startF = 0;
+            int endF = 0;
+            int n = 0;
+            bool hasHead = false;
+            double yMeanSum = 0, yStdSum = 0, yGradSum = 0, yTenSum = 0;
+            double yMeanMin = 1e300, yMeanMax = 0, yGradMax = 0, yTenMax = 0;
+            int nTi = 0;
+            double tiSum = 0, tiMax = 0, tiHead = 0;
+            double madSum = 0, madMax = 0, mseSum = 0, sadSum = 0;
+            int maxAbsMax = 0;
+            double staticSum = 0, staticMin = 1e300;
+            double footMax = 0, headroomMax = 0, sat0Max = 0, satPMax = 0;
+            double uOutMax = 0, vOutMax = 0;
+            double entSum = 0, bandMax = 0, noiseSum = 0;
+            double blkHighSum[4] = {0, 0, 0, 0};
+            double chromaRatioSum = 0, uvCorrSum = 0;
+            double headYMean = 0, headYGrad = 0, headYTen = 0;
+        };
+        QVector<GopAcc> gops;
+        GopAcc cur;
+
+        auto flushGop = [&]() {
+            if (cur.n > 0) gops.push_back(cur);
+            cur = GopAcc();
+        };
+        auto addGop = [&](int f, const rb::YuvAnalyzer::PlaneHistogram& hy,
+                          const rb::YuvAnalyzer::PlaneStats& sy,
+                          const rb::YuvAnalyzer::FrameFeatures& feat) {
+            const int gi = encodeGopIdx(f);
+            if (cur.n > 0 && cur.gop != gi) flushGop();
+            if (cur.n == 0) {
+                cur.gop = gi;
+                cur.startF = f;
+            }
+            cur.endF = f;
+            ++cur.n;
+            const int keyPoc = (gi == 0) ? 0 : (gi + 1) * gopSize;
+            const bool isHead = (f == keyPoc);
+            if (isHead) {
+                cur.hasHead = true;
+                cur.headYMean = hy.mean;
+                cur.headYGrad = sy.gradMean;
+                cur.headYTen = sy.tenengrad;
+                if (feat.temporalValid) cur.tiHead = feat.ti;
+            }
+            cur.yMeanSum += hy.mean;
+            cur.yStdSum += hy.stddev;
+            cur.yGradSum += sy.gradMean;
+            cur.yTenSum += sy.tenengrad;
+            cur.yMeanMin = std::min(cur.yMeanMin, hy.mean);
+            cur.yMeanMax = std::max(cur.yMeanMax, hy.mean);
+            cur.yGradMax = std::max(cur.yGradMax, sy.gradMean);
+            cur.yTenMax = std::max(cur.yTenMax, sy.tenengrad);
+            if (feat.temporalValid) {
+                ++cur.nTi;
+                cur.tiSum += feat.ti;
+                cur.tiMax = std::max(cur.tiMax, feat.ti);
+                cur.madSum += feat.madY;
+                cur.madMax = std::max(cur.madMax, feat.madY);
+                cur.mseSum += feat.mseY;
+                cur.sadSum += feat.sadY;
+                cur.maxAbsMax = std::max(cur.maxAbsMax, feat.maxAbsY);
+                cur.staticSum += feat.staticBlk16Pct;
+                cur.staticMin = std::min(cur.staticMin, feat.staticBlk16Pct);
+            }
+            cur.footMax = std::max(cur.footMax, feat.yFootroomPct);
+            cur.headroomMax = std::max(cur.headroomMax, feat.yHeadroomPct);
+            cur.sat0Max = std::max(cur.sat0Max, feat.ySat0Pct);
+            cur.satPMax = std::max(cur.satPMax, feat.ySatPeakPct);
+            cur.uOutMax = std::max(cur.uOutMax, feat.uOutRangePct);
+            cur.vOutMax = std::max(cur.vOutMax, feat.vOutRangePct);
+            cur.entSum += feat.yEntropy;
+            cur.bandMax = std::max(cur.bandMax, feat.yBandingScore);
+            cur.noiseSum += feat.yNoiseSigma;
+            for (int i = 0; i < 4; ++i) cur.blkHighSum[i] += feat.blk[i].highEnergyPct;
+            cur.chromaRatioSum += feat.chromaRatio;
+            cur.uvCorrSum += feat.uvCorr;
+        };
+
+        const int span = last - first + 1;
+        rb::YuvAnalyzer::FrameSnapshot prevSnap;
+        bool havePrev = false;
+        if (needFeat && first > 0) {
+            prevSnap = snapshotSlotAt(&ana, first - 1);
+            havePrev = prevSnap.valid;
+        }
+        QHash<int, QStringList> frameRows;
+        for (int f = first; f <= last; ++f) {
+            const auto snap = snapshotSlotAt(&ana, f);
+            rb::YuvAnalyzer::PlaneHistogram hist[3];
+            rb::YuvAnalyzer::PlaneStats st[3];
+            rb::YuvAnalyzer::FrameFeatures feat;
+            for (int p = 0; p < 3; ++p) {
+                if (needHist)
+                    hist[p] = rb::YuvAnalyzer::computeHistogramFromSnapshot(snap, p);
+                if (needGrad)
+                    st[p] = rb::YuvAnalyzer::computeStatsFromSnapshot(snap, p);
+            }
+            if (needFeat)
+                feat = rb::YuvAnalyzer::computeFrameFeaturesFromSnapshot(snap, havePrev ? &prevSnap : nullptr);
+            if (wantGop)
+                addGop(f, hist[0], st[0], feat);
+
+            const int gi = encodeGopIdx(f);
+            QStringList row;
+            row << QString::number(f)
+                << QString::number(f - gi * gopSize)
+                << QString::number(gi)
+                << QString::number(gopSize)
+                << QString()
+                << QString::number(temporalId(f))
+                << QString::number(f + 1)
+                << QString::number(slot + 1)
+                << csvEsc(QFileInfo(srcPath).fileName());
+            if (wantHist) {
+                for (int p = 0; p < 3; ++p) {
+                    row << QString::number(hist[p].mean, 'f', 4)
+                        << QString::number(hist[p].stddev, 'f', 4)
+                        << QString::number(hist[p].variance, 'f', 4)
+                        << QString::number(hist[p].minVal)
+                        << QString::number(hist[p].maxVal)
+                        << QString::number(hist[p].range);
+                }
+            }
+            if (wantBins) {
+                row << csvEsc(binsJson(hist[0]))
+                    << csvEsc(binsJson(hist[1]))
+                    << csvEsc(binsJson(hist[2]));
+            }
+            if (wantGrad) {
+                for (int p = 0; p < 3; ++p) {
+                    row << QString::number(st[p].gradHorizMean, 'f', 4)
+                        << QString::number(st[p].gradVertMean, 'f', 4)
+                        << QString::number(st[p].gradDiag45Mean, 'f', 4)
+                        << QString::number(st[p].gradDiag135Mean, 'f', 4)
+                        << QString::number(st[p].gradMean, 'f', 4)
+                        << QString::number(st[p].laplacianEnergy, 'f', 4)
+                        << QString::number(st[p].tenengrad, 'f', 4);
+                }
+            }
+            if (wantFeat) {
+                auto num = [](double v, int prec = 4) { return QString::number(v, 'f', prec); };
+                row << num(feat.yP01, 2) << num(feat.yP05, 2) << num(feat.yP50, 2)
+                    << num(feat.yP95, 2) << num(feat.yP99, 2)
+                    << num(feat.yEntropy) << QString::number(feat.yUsedBins)
+                    << num(feat.yHoleRatio) << QString::number(feat.yLongestHole)
+                    << num(feat.yBandingScore) << num(feat.yNoiseSigma)
+                    << num(feat.yFootroomPct) << num(feat.yHeadroomPct)
+                    << num(feat.ySat0Pct) << num(feat.ySatPeakPct)
+                    << num(feat.uOutRangePct) << num(feat.vOutRangePct)
+                    << num(feat.yAcEnergy) << num(feat.chromaMeanAbs)
+                    << num(feat.chromaRatio) << num(feat.uvCorr)
+                    << num(feat.blk[0].meanVar) << num(feat.blk[0].p90Var) << num(feat.blk[0].highEnergyPct)
+                    << num(feat.blk[1].meanVar) << num(feat.blk[1].p90Var) << num(feat.blk[1].highEnergyPct)
+                    << num(feat.blk[2].meanVar) << num(feat.blk[2].p90Var) << num(feat.blk[2].highEnergyPct)
+                    << num(feat.blk[3].meanVar) << num(feat.blk[3].p90Var) << num(feat.blk[3].highEnergyPct)
+                    << num(feat.ti) << num(feat.sadY, 1) << num(feat.mseY)
+                    << num(feat.madY) << QString::number(feat.maxAbsY)
+                    << num(feat.staticBlk16Pct);
+            }
+            frameRows.insert(f, row);
+            prevSnap = snap;
+            havePrev = snap.valid;
+
+            if (((f - first) & 3) == 0 || f == last) {
+                const QString msg = QStringLiteral("导出帧 %1 / %2…").arg(f - first + 1).arg(span);
+                const double ratio = span > 0 ? double(f - first + 1) / double(span) : 1;
+                QMetaObject::invokeMethod(this, [this, msg, ratio]() {
+                    emit statsExportProgress(msg, ratio);
+                }, Qt::QueuedConnection);
+            }
+        }
+        const QVector<int> codeOrder = hierarchicalCodingOrder(first, last);
+        int codeIdx = 0;
+        for (int poc : codeOrder) {
+            auto it = frameRows.find(poc);
+            if (it == frameRows.end()) continue;
+            QStringList row = it.value();
+            if (row.size() > 4)
+                row[4] = QString::number(codeIdx);
+            ts << row.join(QLatin1Char(',')) << QLatin1Char('\n');
+            ++codeIdx;
+        }
+        file.close();
+        flushGop();
+
+        const QFileInfo csvInfo(outPath);
+        QString gopPath;
+        if (wantGop) {
+            QString gopName = csvInfo.completeBaseName();
+            if (gopName.endsWith(QStringLiteral("_frame")))
+                gopName.chop(6);
+            gopPath = csvInfo.dir().filePath(gopName + QStringLiteral("_gop.csv"));
+            QFile gf(gopPath);
+            if (!gf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                fail(QStringLiteral("无法写入 ") + gopPath);
+                return;
+            }
+            QTextStream gs(&gf);
+            gs.setEncoding(QStringConverter::Utf8);
+            const QStringList gh{
+                QStringLiteral("gopIdx"), QStringLiteral("startPoc"), QStringLiteral("endPoc"),
+                QStringLiteral("startGopPoc"), QStringLiteral("endGopPoc"),
+                QStringLiteral("frames"), QStringLiteral("gopSize"), QStringLiteral("partial"),
+                QStringLiteral("hasHead"),
+                QStringLiteral("Y_mean_avg"), QStringLiteral("Y_mean_min"), QStringLiteral("Y_mean_max"),
+                QStringLiteral("Y_stddev_avg"),
+                QStringLiteral("Y_gradMean_avg"), QStringLiteral("Y_gradMean_max"),
+                QStringLiteral("Y_tenengrad_avg"), QStringLiteral("Y_tenengrad_max"),
+                QStringLiteral("head_Y_mean"), QStringLiteral("head_Y_gradMean"), QStringLiteral("head_Y_tenengrad"),
+                QStringLiteral("TI_mean"), QStringLiteral("TI_max"), QStringLiteral("TI_head"),
+                QStringLiteral("Y_mad_mean"), QStringLiteral("Y_mad_max"),
+                QStringLiteral("Y_mse_mean"), QStringLiteral("Y_sad_sum"), QStringLiteral("Y_maxAbsDiff_max"),
+                QStringLiteral("staticBlk16Pct_mean"), QStringLiteral("staticBlk16Pct_min"),
+                QStringLiteral("Y_footroomPct_max"), QStringLiteral("Y_headroomPct_max"),
+                QStringLiteral("Y_sat0Pct_max"), QStringLiteral("Y_satPeakPct_max"),
+                QStringLiteral("U_outRangePct_max"), QStringLiteral("V_outRangePct_max"),
+                QStringLiteral("Y_entropy_mean"), QStringLiteral("Y_banding_max"), QStringLiteral("Y_noiseSigma_mean"),
+                QStringLiteral("blk8_highPct_mean"), QStringLiteral("blk16_highPct_mean"),
+                QStringLiteral("blk32_highPct_mean"), QStringLiteral("blk64_highPct_mean"),
+                QStringLiteral("chromaRatio_mean"), QStringLiteral("uvCorr_mean")
+            };
+            gs << QStringLiteral("\uFEFF") << gh.join(QLatin1Char(',')) << QLatin1Char('\n');
+            auto avg = [](double s, int n) { return n > 0 ? s / n : 0.0; };
+            auto num = [](double v, int prec = 4) { return QString::number(v, 'f', prec); };
+            for (const auto& g : gops) {
+                const int n = g.n;
+                const int nTi = g.nTi;
+                QStringList r;
+                r << QString::number(g.gop)
+                  << QString::number(g.startF) << QString::number(g.endF)
+                  << QString::number(g.startF - g.gop * gopSize)
+                  << QString::number(g.endF - g.gop * gopSize)
+                  << QString::number(n) << QString::number(gopSize)
+                  << QString::number(n != ((g.gop == 0) ? (gopSize + 1) : gopSize) ? 1 : 0)
+                  << QString::number(g.hasHead ? 1 : 0)
+                  << num(avg(g.yMeanSum, n)) << num(g.yMeanMin) << num(g.yMeanMax)
+                  << num(avg(g.yStdSum, n))
+                  << num(avg(g.yGradSum, n)) << num(g.yGradMax)
+                  << num(avg(g.yTenSum, n)) << num(g.yTenMax)
+                  << num(g.headYMean) << num(g.headYGrad) << num(g.headYTen)
+                  << num(avg(g.tiSum, nTi)) << num(g.tiMax) << num(g.tiHead)
+                  << num(avg(g.madSum, nTi)) << num(g.madMax)
+                  << num(avg(g.mseSum, nTi)) << num(g.sadSum, 1) << QString::number(g.maxAbsMax)
+                  << num(avg(g.staticSum, nTi)) << num(g.staticMin >= 1e300 ? 0 : g.staticMin)
+                  << num(g.footMax) << num(g.headroomMax)
+                  << num(g.sat0Max) << num(g.satPMax)
+                  << num(g.uOutMax) << num(g.vOutMax)
+                  << num(avg(g.entSum, n)) << num(g.bandMax) << num(avg(g.noiseSum, n))
+                  << num(avg(g.blkHighSum[0], n)) << num(avg(g.blkHighSum[1], n))
+                  << num(avg(g.blkHighSum[2], n)) << num(avg(g.blkHighSum[3], n))
+                  << num(avg(g.chromaRatioSum, n)) << num(avg(g.uvCorrSum, n));
+                gs << r.join(QLatin1Char(',')) << QLatin1Char('\n');
+            }
+            gf.close();
+        }
+
+        QString readmeStem = csvInfo.completeBaseName();
+        if (readmeStem.endsWith(QStringLiteral("_frame")))
+            readmeStem.chop(6);
+        const QString readmePath = csvInfo.dir().filePath(readmeStem + QStringLiteral(".readme.txt"));
+        QFile readme(readmePath);
+        QString done = QStringLiteral("已导出 %1 帧").arg(span);
+        if (wantGop)
+            done += QStringLiteral(" / %1 个 GOP").arg(gops.size());
+        if (readme.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            QTextStream rs(&readme);
+            rs.setEncoding(QStringConverter::Utf8);
+            rs << QStringLiteral("\uFEFF");
+            rs << QStringLiteral("PlayerX YUV 统计导出说明\n");
+            rs << QStringLiteral("========================\n\n");
+            rs << QStringLiteral("逐帧表：") << csvInfo.fileName() << QLatin1Char('\n');
+            if (wantGop)
+                rs << QStringLiteral("GOP 表：") << QFileInfo(gopPath).fileName() << QLatin1Char('\n');
+            rs << QStringLiteral("源文件：") << QFileInfo(srcPath).fileName() << QLatin1Char('\n');
+            rs << QStringLiteral("分辨率：") << w << QLatin1Char('x') << h
+               << QStringLiteral("  格式：") << fmt
+               << QStringLiteral("  fps：") << QString::number(fps, 'f', 3) << QLatin1Char('\n');
+            rs << QStringLiteral("槽：") << (slot + 1)
+               << QStringLiteral("  导出范围 POC：") << first << QLatin1Char('-') << last
+               << QStringLiteral("（播放器帧号 = poc+1）\n");
+            rs << QStringLiteral("GOP 大小：") << gopSize
+               << QStringLiteral("  行顺序按常见层级 B 编码序（GOP=32 时为 0,32,16,8,24…），不是 0,1,2 显示序。\n");
+            rs << QStringLiteral("  假定文件开头为 IDR，其后按 dyadic：先段尾 P，再对半分 B。裸 YUV 无真实参考列表。\n");
+            rs << QStringLiteral("  时间量（TI/SAD/MAD）仍相对显示相邻帧（poc 与 poc-1），不是相对编码上一帧。\n");
+            rs << QStringLiteral("CSV 无注释行，可用 Excel / pandas 直接打开。本文件解释字段。\n\n");
+
+            rs << QStringLiteral("逐帧表 · 公共列\n");
+            rs << QStringLiteral("  poc       显示序 POC，从 0 起（文件第 1 帧 = 0）\n");
+            rs << QStringLiteral("  gopPoc    编码 GOP 内偏移：第 0 段为 0..gopSize（含段尾 P），其后各段 1..gopSize\n");
+            rs << QStringLiteral("  gopIdx    编码 GOP 段号：poc0 与 1..N 为 0；N+1..2N 为 1。不是 GOP 长度\n");
+            rs << QStringLiteral("  gopSize   你输入的切段长度\n");
+            rs << QStringLiteral("  codeIdx   本文件导出范围内的编码序号，0 起；行按此排序\n");
+            rs << QStringLiteral("  tid       时间层：网格上的 I/P 为 0，然后 16→1、8/24→2，依此类推\n");
+            rs << QStringLiteral("  fileFrame 播放器帧号 = poc+1\n");
+            rs << QStringLiteral("  slot / file  导出槽（从 1）与源文件名\n\n");
+
+            if (wantHist) {
+                rs << QStringLiteral("直方图摘要（当前帧、本平面全部像素）\n");
+                rs << QStringLiteral("  {Y,U,V}_mean / _stddev / _variance   均值 / 标准差 / 方差\n");
+                rs << QStringLiteral("  {Y,U,V}_min / _max / _range          最小 / 最大 / 极差=max-min\n");
+                rs << QStringLiteral("  8bit 值域约 0–255；10bit 约 0–1023。色度平面按该格式实际采样点数统计。\n\n");
+            }
+            if (wantBins) {
+                rs << QStringLiteral("直方图桶\n");
+                rs << QStringLiteral("  {Y,U,V}_bins   JSON 数组，下标=像素值，元素=该值的像素个数\n\n");
+            }
+            if (wantGrad) {
+                rs << QStringLiteral("梯度 / 纹理（当前帧、本平面；与上一帧无关）\n");
+                rs << QStringLiteral("  {Y,U,V}_gradH / _gradV / _grad45 / _grad135   水平 / 垂直 / 45° / 135° 一阶差分幅值均值\n");
+                rs << QStringLiteral("  {Y,U,V}_gradMean     上述四向平均\n");
+                rs << QStringLiteral("  {Y,U,V}_laplacian    4 邻域 Laplacian 能量均值（锐利度）\n");
+                rs << QStringLiteral("  {Y,U,V}_tenengrad    Sobel 梯度平方和均值（纹理复杂度）\n\n");
+            }
+            if (wantFeat) {
+                rs << QStringLiteral("帧级特征 · 时间量（相对上一帧的 Y 平面，不是相对另一路文件）\n");
+                rs << QStringLiteral("  比较对象：POC=N 的 Y 与 POC=N-1 的 Y（显示相邻），不是编码参考帧。\n");
+                rs << QStringLiteral("  POC=0 没有上一帧，对应时间量写 0。\n");
+                rs << QStringLiteral("  若导出起点 poc>0，会先读 poc-1，因此起点行也有有效时间量。\n");
+                rs << QStringLiteral("  TI              ITU-T P.910 风格时间信息：帧差（带符号）的标准差\n");
+                rs << QStringLiteral("  Y_sad           帧差绝对值之和 Σ|Y_n − Y_{n-1}|\n");
+                rs << QStringLiteral("  Y_mse           帧差均方  mean((Y_n − Y_{n-1})²)\n");
+                rs << QStringLiteral("  Y_mad           帧差平均绝对差  mean(|Y_n − Y_{n-1}|)\n");
+                rs << QStringLiteral("  Y_maxAbsDiff    帧差最大绝对差  max|Y_n − Y_{n-1}|\n");
+                rs << QStringLiteral("  staticBlk16Pct  16×16 块中 SAD < 2×块像素数 的比例（%）；阈值随位深左移\n\n");
+                rs << QStringLiteral("帧级特征 · Y 分布（当前帧）\n");
+                rs << QStringLiteral("  Y_p01 / p05 / p50 / p95 / p99   直方图分位\n");
+                rs << QStringLiteral("  Y_entropy      直方图熵（bit），越大分布越散\n");
+                rs << QStringLiteral("  Y_usedBins     出现过的桶数\n");
+                rs << QStringLiteral("  Y_holeRatio    [min,max] 内空桶占比\n");
+                rs << QStringLiteral("  Y_longestHole  [min,max] 内最长连续空桶（bin 个数）\n");
+                rs << QStringLiteral("  Y_banding      由空洞比与最长空洞合成的条带倾向分，越大越像条带/量化台阶\n");
+                rs << QStringLiteral("  Y_noiseSigma   隔点 Laplacian 幅值的中位数 / 0.6745，高频噪声尺度估计\n\n");
+                rs << QStringLiteral("帧级特征 · 限幅 / 合法范围（当前帧；按位深缩放 TV range）\n");
+                rs << QStringLiteral("  8bit：Y 合法 16–235，C 合法 16–240；10bit 对应左移 2 位（64–940 / 64–960）。\n");
+                rs << QStringLiteral("  Y_footroomPct / Y_headroomPct   Y 低于 / 高于 TV 亮度范围的像素占比（%）\n");
+                rs << QStringLiteral("  Y_sat0Pct / Y_satPeakPct        Y=0 / Y=peak 的像素占比（%）\n");
+                rs << QStringLiteral("  U_outRangePct / V_outRangePct   色度超出 TV 色度范围的像素占比（%）\n\n");
+                rs << QStringLiteral("帧级特征 · 块方差（当前帧 Y，不重叠块）\n");
+                rs << QStringLiteral("  blk{8,16,32,64}_meanVar   该块大小上方差的均值\n");
+                rs << QStringLiteral("  blk{8,16,32,64}_p90Var    方差的 90 分位\n");
+                rs << QStringLiteral("  blk{8,16,32,64}_highPct   方差 > (4<<bitDepth-8)² 的块占比（%），约 σ>4\n\n");
+                rs << QStringLiteral("帧级特征 · 色度（当前帧）\n");
+                rs << QStringLiteral("  Y_acEnergy      即 Y 标准差\n");
+                rs << QStringLiteral("  chromaMeanAbs   mean((|U−mid|+|V−mid|)/2)，mid=128 或 512\n");
+                rs << QStringLiteral("  chromaRatio     chromaMeanAbs / max(Y_acEnergy, 1)\n");
+                rs << QStringLiteral("  uvCorr          U 与 V 的 Pearson 相关，范围约 [-1,1]\n\n");
+            }
+            if (wantGop) {
+                rs << QStringLiteral("GOP 表（一段一行；按层级编码 GOP 聚合，不是码流里读出的 GOP）\n");
+                rs << QStringLiteral("  第 0 段含 poc 0..N（I + B + 段尾 P）；其后每段含 (kN+1)..(k+1)N\n");
+                rs << QStringLiteral("  gopIdx / startPoc / endPoc   段号与覆盖的起止 POC\n");
+                rs << QStringLiteral("  startGopPoc / endGopPoc   段内偏移\n");
+                rs << QStringLiteral("  frames / gopSize          本段帧数与指定 N；完整第 0 段应为 N+1 帧\n");
+                rs << QStringLiteral("  partial         帧数不足完整段为 1\n");
+                rs << QStringLiteral("  hasHead         段内关键帧是否在范围内（第 0 段看 poc0，其后看段尾 P）\n");
+                rs << QStringLiteral("  Y_mean_* / Y_stddev_avg                段内 Y 均值的均/最小/最大，标准差均值\n");
+                rs << QStringLiteral("  Y_gradMean_* / Y_tenengrad_*           段内纹理：均/最大\n");
+                rs << QStringLiteral("  head_Y_*        仅 hasHead=1 时有意义：段首帧的空间量（对照 I 帧位置）\n");
+                rs << QStringLiteral("  TI_mean / TI_max / TI_head             段内时间信息；TI_head 为段首相对上一显示帧\n");
+                rs << QStringLiteral("  Y_mad_* / Y_mse_mean / Y_sad_sum / Y_maxAbsDiff_max\n");
+                rs << QStringLiteral("                  段内帧差聚合；SAD 为段内各帧 SAD 之和\n");
+                rs << QStringLiteral("  staticBlk16Pct_* 段内静止 16×16 块占比的均/最小\n");
+                rs << QStringLiteral("  *_max（限幅/条带）段内峰值，用来抓该 GOP 最差一帧\n");
+                rs << QStringLiteral("  blk*_highPct_mean  段内高能块占比均值\n");
+                rs << QStringLiteral("  chromaRatio_mean / uvCorr_mean         段内色度均值\n");
+                rs << QStringLiteral("  时间量仍是显示相邻帧，不是 B 帧实际参考帧。\n");
+            }
+            readme.close();
+            done += QStringLiteral("，说明见 .readme.txt");
+        }
+
+        QMetaObject::invokeMethod(this, [this, done, outPath]() {
+            m_statsExportBusy = false;
+            emit statsExportFinished(true, done, outPath);
+        }, Qt::QueuedConnection);
+    });
 }
 
 void YuvBridge::startScanFirstDiff(int slotA, int slotB, int fromFrame) {
@@ -1229,6 +1858,12 @@ void YuvBridge::computeStatsAsync(int slot, int frameNum) {
     QFuture<void> future = QtConcurrent::run([this, analyzer, slot, targetFrame]() {
         // ── 锁内：确保帧数据就位 + 快照拷贝（~2ms）──
         analyzer->lockData();
+        rb::YuvAnalyzer::FrameSnapshot prevSnap;
+        const bool wantPrev = targetFrame > 0;
+        if (wantPrev) {
+            analyzer->seekToFrameNoLock(targetFrame - 1);
+            prevSnap = analyzer->snapshotCurrentFrameLocked();
+        }
         analyzer->seekToFrameNoLock(targetFrame);
         auto snapshot = analyzer->snapshotCurrentFrameLocked();
         analyzer->unlockData();
@@ -1277,6 +1912,10 @@ void YuvBridge::computeStatsAsync(int slot, int frameNum) {
                 cs.stats[plane] = sm;
             }
         }
+
+        cs.features = frameFeaturesToMap(
+            rb::YuvAnalyzer::computeFrameFeaturesFromSnapshot(
+                snapshot, (wantPrev && prevSnap.valid) ? &prevSnap : nullptr));
 
         // 写入缓存（Worker 线程写，主线程通过 finished 回调读取并发 statsReady。
         // histogram()/planeStats() 返回旧缓存或空 map 不会崩溃，statsReady 后刷新。）

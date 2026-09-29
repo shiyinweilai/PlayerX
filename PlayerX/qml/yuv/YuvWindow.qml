@@ -143,6 +143,11 @@ Item {
                 yuvView.cmpScrollY = 0
             }
         }
+        function onFrameChanged(slot) {
+            if (!yuvView.cmpActive || !yuvView.cmpShow) return
+            if (slot === yuvView.cmpSlotA || slot === yuvView.cmpSlotB)
+                yuvView.cmpFetchAt(yuvView.cmpPixelX, yuvView.cmpPixelY)
+        }
         // 右侧栏"差异总览"热力图点击某块 → 左侧联动固定弹出该像素坐标的对比浮窗组
         // （居中定位展示，不依赖具体某路视频的屏幕几何，避免因缩放/平移导致定位偏差）
         function onPixelInspectRequested(px, py) {
@@ -865,6 +870,11 @@ Item {
                                         gridFlick.contentX = 0
                                         gridFlick.contentY = 0
                                     }
+                                }
+                                function onFrameChanged(slot) {
+                                    if (slot !== slotWin.slotIdx) return
+                                    if (!pixelHoverArea.showPixelGrid) return
+                                    pixelHoverArea.fetchAt(pixelHoverArea.pixelX, pixelHoverArea.pixelY)
                                 }
                             }
 
