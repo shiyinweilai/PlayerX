@@ -103,6 +103,19 @@ Item {
             { mode: 2, label: "名称降序", short: "降序" }
         ]
         readonly property string sortLabel: sortOptions[sortMode].short
+        property bool batchExporting: false
+        property string batchExportStatus: ""
+        property string batchExportPath: ""
+        property bool batchExportOk: false
+        property real batchExportRatio: 0
+        property int batchExportFirstUi: 1
+        property int batchExportLastUi: 0
+        property int batchExportGopSize: 32
+        property bool batchExpGop: true
+        property bool batchExpHistSummary: true
+        property bool batchExpHistBins: false
+        property bool batchExpGradient: true
+        property bool batchExpFeatures: true
 
         // 按当前 sortMode 返回有序的展示列表（用于驱动 ListView.model）。
         //   - 添加顺序：保持原始顺序
@@ -322,6 +335,57 @@ Item {
             YuvBridge.setYuvFileParams(currentPath, w + "x" + h + "|" + fmt + "|" + fps + "|" + bd)
         }
 
+        function resolveExportJob(path) {
+            if (path === currentPath)
+                saveCurrentParams()
+            let w = 1920, h = 1080, fmt = "yuv420p", fps = 30.0
+            const stored = YuvBridge.yuvFileParams(path)
+            if (stored && stored.length > 0) {
+                const parts = stored.split('|')
+                if (parts.length >= 1) {
+                    const wh = parts[0].split('x')
+                    if (wh.length === 2) {
+                        w = parseInt(wh[0]) || 1920
+                        h = parseInt(wh[1]) || 1080
+                    }
+                }
+                if (parts.length >= 2 && parts[1].length > 0)
+                    fmt = parts[1]
+                if (parts.length >= 3)
+                    fps = parseFloat(parts[2]) || 30.0
+            } else {
+                const parsed = parseFilenameParams(path)
+                if (parsed.width > 0) w = parsed.width
+                if (parsed.height > 0) h = parsed.height
+                if (parsed.fps > 0) fps = parsed.fps
+                if (parsed.is10bit && fmt.indexOf("10") < 0)
+                    fmt = fmt + "10le"
+                YuvBridge.setYuvFileParams(path, w + "x" + h + "|" + fmt + "|" + fps + "|" + (parsed.is10bit ? 10 : 8))
+            }
+            return { path: path, width: w, height: h, format: fmt, fps: fps }
+        }
+
+        function buildExportJobs() {
+            const paths = _selectedPaths()
+            const jobs = []
+            for (let i = 0; i < paths.length; ++i)
+                jobs.push(resolveExportJob(paths[i]))
+            return jobs
+        }
+
+        function applyBatchExportRange() {
+            const a = Math.max(1, parseInt(batchExportFirstField.text) || 1)
+            const lastTxt = batchExportLastField.text ? batchExportLastField.text.trim() : ""
+            const b = lastTxt.length === 0 ? 0 : Math.max(1, parseInt(lastTxt) || 0)
+            const g = Math.max(1, Math.min(4096, parseInt(batchExportGopField.text) || 32))
+            batchExportFirstUi = a
+            batchExportLastUi = b
+            batchExportGopSize = g
+            batchExportFirstField.text = String(a)
+            if (b > 0) batchExportLastField.text = String(b)
+            return { a: a, b: b, g: g }
+        }
+
         // ── 从文件名自动解析参数（宽高、帧率、bit 深度）──
         // 算法：按下划线 split，逐段查找 "数字x数字" 确定宽高，
         //       宽高段紧后的段作为帧率，含 "10bit" 段则标记 10bit。
@@ -493,7 +557,7 @@ Item {
                         Layout.preferredHeight: 36
                         spacing: 8
 
-                        // 左侧：开始渲染（蓝色主按钮）
+                        // 左侧：开始渲染 + 批量导出
                         Rectangle {
                             width: 100; height: 28; radius: 6
                             color: yuvRenderHeadMa.containsMouse ? "#3d7adf" : "#2a5fc0"
@@ -524,6 +588,36 @@ Item {
                                     } else {
                                         yuvSetupStatus.text = "打开失败，请检查路径和参数"
                                     }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 88; height: 28; radius: 6
+                            color: yuvExportHeadMa.containsMouse ? "#2a3f5a" : "#1c2430"
+                            border.color: "#3a6fd8"
+                            opacity: yuvSetupView._selectedCount() > 0 ? 1 : 0.45
+                            Text {
+                                anchors.centerIn: parent
+                                text: "导出统计"
+                                color: "#d8e4ff"; font.pixelSize: 12
+                            }
+                            MouseArea {
+                                id: yuvExportHeadMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                enabled: yuvSetupView._selectedCount() > 0 && !yuvSetupView.batchExporting
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    yuvSetupView.saveCurrentParams()
+                                    yuvSetupView.batchExportFirstUi = 1
+                                    yuvSetupView.batchExportLastUi = 0
+                                    yuvSetupView.batchExportStatus = ""
+                                    yuvSetupView.batchExportPath = ""
+                                    yuvSetupView.batchExportOk = false
+                                    yuvSetupView.batchExportRatio = 0
+                                    batchExportFirstField.text = "1"
+                                    batchExportLastField.text = ""
+                                    batchExportPopup.open()
                                 }
                             }
                         }
@@ -1661,5 +1755,399 @@ Item {
         value: yuvView.carouselIndex
         when: yuvViewLoader.item !== null
         restoreMode: Binding.RestoreNone
+    }
+
+    Connections {
+        target: YuvBridge
+        enabled: yuvSetupView.visible
+        function onStatsExportProgress(message, ratio) {
+            yuvSetupView.batchExporting = true
+            yuvSetupView.batchExportStatus = message
+            yuvSetupView.batchExportRatio = ratio
+        }
+        function onStatsExportFinished(ok, message, path) {
+            yuvSetupView.batchExporting = false
+            yuvSetupView.batchExportOk = ok
+            yuvSetupView.batchExportStatus = message
+            yuvSetupView.batchExportPath = path || ""
+        }
+    }
+
+    Popup {
+        id: batchExportPopup
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        padding: 0
+        closePolicy: yuvSetupView.batchExporting ? Popup.NoAutoClose : (Popup.CloseOnEscape | Popup.CloseOnPressOutside)
+        background: Rectangle {
+            color: "#16181d"
+            radius: 10
+            border.color: "#2c3138"
+            border.width: 1
+        }
+
+        Column {
+            width: 368
+            spacing: 0
+
+            Item {
+                width: parent.width
+                height: 44
+                Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 16
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "批量导出统计"
+                    color: "#e8eaed"
+                    font.pixelSize: 14
+                    font.bold: true
+                }
+                Text {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 16
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: {
+                        const n = yuvSetupView._selectedCount()
+                        const lastTxt = batchExportLastField.text ? batchExportLastField.text.trim() : ""
+                        const range = lastTxt.length === 0 ? "每文件全部帧" : ("每文件 " + batchExportFirstField.text + "–" + lastTxt)
+                        return n + " 个序列  ·  " + range
+                    }
+                    color: "#7d848c"
+                    font.pixelSize: 11
+                }
+            }
+
+            Rectangle { width: parent.width; height: 1; color: "#2c3138" }
+
+            Column {
+                width: parent.width
+                padding: 16
+                spacing: 12
+
+                Text {
+                    width: parent.width - 32
+                    text: "不必开始渲染。按当前右侧参数（或文件名解析）打开每个选中序列，范围对每个文件各自截断。"
+                    color: "#6a7078"
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
+
+                Row {
+                    width: parent.width - 32
+                    spacing: 16
+                    Column {
+                        spacing: 6
+                        Text { text: "帧范围"; color: "#8b9198"; font.pixelSize: 11 }
+                        Row {
+                            spacing: 6
+                            Rectangle {
+                                width: 72; height: 28; radius: 5
+                                color: "#0f1114"
+                                border.color: "#2c3138"
+                                TextField {
+                                    id: batchExportFirstField
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    text: "1"
+                                    color: "#e8eaed"
+                                    font.pixelSize: 12
+                                    font.family: "Menlo"
+                                    selectByMouse: true
+                                    enabled: !yuvSetupView.batchExporting
+                                    verticalAlignment: Text.AlignVCenter
+                                    background: Item {}
+                                    onEditingFinished: yuvSetupView.applyBatchExportRange()
+                                }
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "–"
+                                color: "#6a7078"
+                                font.pixelSize: 12
+                            }
+                            Rectangle {
+                                width: 72; height: 28; radius: 5
+                                color: "#0f1114"
+                                border.color: "#2c3138"
+                                TextField {
+                                    id: batchExportLastField
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    placeholderText: "全部"
+                                    placeholderTextColor: "#5a6068"
+                                    color: "#e8eaed"
+                                    font.pixelSize: 12
+                                    font.family: "Menlo"
+                                    selectByMouse: true
+                                    enabled: !yuvSetupView.batchExporting
+                                    verticalAlignment: Text.AlignVCenter
+                                    background: Item {}
+                                    onEditingFinished: yuvSetupView.applyBatchExportRange()
+                                }
+                            }
+                        }
+                    }
+                    Column {
+                        spacing: 6
+                        Text { text: "GOP 大小"; color: "#8b9198"; font.pixelSize: 11 }
+                        Rectangle {
+                            width: 88; height: 28; radius: 5
+                            color: "#0f1114"
+                            border.color: "#2c3138"
+                            TextField {
+                                id: batchExportGopField
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                text: String(yuvSetupView.batchExportGopSize)
+                                color: "#e8eaed"
+                                font.pixelSize: 12
+                                font.family: "Menlo"
+                                selectByMouse: true
+                                enabled: !yuvSetupView.batchExporting
+                                verticalAlignment: Text.AlignVCenter
+                                background: Item {}
+                                onEditingFinished: yuvSetupView.applyBatchExportRange()
+                            }
+                        }
+                    }
+                }
+
+                Column {
+                    width: parent.width - 32
+                    spacing: 6
+                    Text { text: "文件"; color: "#8b9198"; font.pixelSize: 11 }
+                    Row {
+                        spacing: 6
+                        Repeater {
+                            model: [{ k: "batchExpGop", t: "GOP 汇总表", s: "一段一行" }]
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 148; height: 36; radius: 6
+                                color: yuvSetupView[modelData.k] ? "#1c2430" : "#121417"
+                                border.color: yuvSetupView[modelData.k] ? "#3a6fd8" : "#2c3138"
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    spacing: 8
+                                    Rectangle {
+                                        width: 14; height: 14; radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: yuvSetupView[modelData.k] ? "#3a6fd8" : "transparent"
+                                        border.color: yuvSetupView[modelData.k] ? "#5a8ee8" : "#4a5058"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: yuvSetupView[modelData.k] ? "✓" : ""
+                                            color: "#fff"
+                                            font.pixelSize: 9
+                                        }
+                                    }
+                                    Column {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        Text { text: modelData.t; color: "#e0e3e7"; font.pixelSize: 12 }
+                                        Text { text: modelData.s; color: "#6a7078"; font.pixelSize: 10 }
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: !yuvSetupView.batchExporting
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: yuvSetupView[modelData.k] = !yuvSetupView[modelData.k]
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 148; height: 36; radius: 6
+                            color: "#1c2430"
+                            border.color: "#3a6fd8"
+                            Column {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left
+                                anchors.leftMargin: 10
+                                Text { text: "逐帧表"; color: "#e0e3e7"; font.pixelSize: 12 }
+                                Text { text: "始终写出"; color: "#6a7078"; font.pixelSize: 10 }
+                            }
+                        }
+                    }
+                }
+
+                Column {
+                    width: parent.width - 32
+                    spacing: 6
+                    Text { text: "逐帧列"; color: "#8b9198"; font.pixelSize: 11 }
+                    Grid {
+                        width: parent.width
+                        columns: 2
+                        columnSpacing: 6
+                        rowSpacing: 6
+                        Repeater {
+                            model: [
+                                { k: "batchExpHistSummary", t: "直方摘要", s: "均值 / 方差 / 极值" },
+                                { k: "batchExpHistBins", t: "直方桶", s: "Y/U/V 整列" },
+                                { k: "batchExpGradient", t: "梯度纹理", s: "四向 · Lap · Ten" },
+                                { k: "batchExpFeatures", t: "帧级特征", s: "TI / 限幅 / 块方差" }
+                            ]
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 160; height: 40; radius: 6
+                                color: yuvSetupView[modelData.k] ? "#1c2430" : "#121417"
+                                border.color: yuvSetupView[modelData.k] ? "#3a6fd8" : "#2c3138"
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    spacing: 8
+                                    Rectangle {
+                                        width: 14; height: 14; radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: yuvSetupView[modelData.k] ? "#3a6fd8" : "transparent"
+                                        border.color: yuvSetupView[modelData.k] ? "#5a8ee8" : "#4a5058"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: yuvSetupView[modelData.k] ? "✓" : ""
+                                            color: "#fff"
+                                            font.pixelSize: 9
+                                        }
+                                    }
+                                    Column {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        Text { text: modelData.t; color: "#e0e3e7"; font.pixelSize: 12 }
+                                        Text { text: modelData.s; color: "#6a7078"; font.pixelSize: 10 }
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    enabled: !yuvSetupView.batchExporting
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: yuvSetupView[modelData.k] = !yuvSetupView[modelData.k]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: "#2c3138"
+                visible: yuvSetupView.batchExporting || yuvSetupView.batchExportStatus.length > 0
+            }
+            Column {
+                width: parent.width
+                visible: yuvSetupView.batchExporting || yuvSetupView.batchExportStatus.length > 0
+                padding: 12
+                spacing: 8
+                Rectangle {
+                    width: parent.width - 24
+                    height: 3
+                    radius: 2
+                    color: "#0f1114"
+                    visible: yuvSetupView.batchExporting || yuvSetupView.batchExportRatio > 0
+                    Rectangle {
+                        width: parent.width * Math.max(0, Math.min(1, yuvSetupView.batchExportRatio))
+                        height: parent.height
+                        radius: 2
+                        color: yuvSetupView.batchExportOk && !yuvSetupView.batchExporting ? "#3dcc7a" : "#3a6fd8"
+                    }
+                }
+                Text {
+                    width: parent.width - 24
+                    visible: yuvSetupView.batchExportStatus.length > 0
+                    text: yuvSetupView.batchExportStatus
+                    color: yuvSetupView.batchExportOk && !yuvSetupView.batchExporting ? "#6fbf73" : "#9aa0a6"
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            Rectangle { width: parent.width; height: 1; color: "#2c3138" }
+
+            Item {
+                width: parent.width
+                height: 52
+                Row {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 16
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 8
+                    Rectangle {
+                        width: 64; height: 28; radius: 5
+                        color: "#1c1f24"
+                        border.color: "#2c3138"
+                        visible: !yuvSetupView.batchExporting
+                        Text { anchors.centerIn: parent; text: "关闭"; color: "#b0b6bc"; font.pixelSize: 12 }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: batchExportPopup.close()
+                        }
+                    }
+                    Rectangle {
+                        width: 108; height: 28; radius: 5
+                        color: "#1c2430"
+                        border.color: "#3a6fd8"
+                        visible: yuvSetupView.batchExportOk && yuvSetupView.batchExportPath.length > 0 && !yuvSetupView.batchExporting
+                        Text { anchors.centerIn: parent; text: "打开所在文件夹"; color: "#d8e4ff"; font.pixelSize: 12 }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: Fs.revealInFileManager(yuvSetupView.batchExportPath)
+                        }
+                    }
+                    Rectangle {
+                        width: 64; height: 28; radius: 5
+                        visible: yuvSetupView.batchExporting
+                        color: "#3a2222"
+                        border.color: "#b85a5a"
+                        Text { anchors.centerIn: parent; text: "停止"; color: "#f5c4c4"; font.pixelSize: 12 }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                yuvSetupView.batchExportStatus = "正在停止…"
+                                YuvBridge.stopExportFrameStats()
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 64; height: 28; radius: 5
+                        visible: !yuvSetupView.batchExporting
+                        color: "#2a3a55"
+                        border.color: "#3a6fd8"
+                        Text { anchors.centerIn: parent; text: "导出"; color: "#e8eaed"; font.pixelSize: 12 }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const r = yuvSetupView.applyBatchExportRange()
+                                const jobs = yuvSetupView.buildExportJobs()
+                                if (jobs.length === 0) {
+                                    yuvSetupView.batchExportStatus = "请先选择要导出的文件"
+                                    return
+                                }
+                                yuvSetupView.batchExporting = true
+                                yuvSetupView.batchExportOk = false
+                                yuvSetupView.batchExportPath = ""
+                                yuvSetupView.batchExportRatio = 0
+                                yuvSetupView.batchExportStatus = "正在导出 " + jobs.length + " 个序列…"
+                                YuvBridge.startExportFrameStatsBatch(jobs, {
+                                    histSummary: yuvSetupView.batchExpHistSummary,
+                                    histBins: yuvSetupView.batchExpHistBins,
+                                    gradient: yuvSetupView.batchExpGradient,
+                                    features: yuvSetupView.batchExpFeatures,
+                                    gopSummary: yuvSetupView.batchExpGop,
+                                    gopSize: r.g,
+                                    firstFrame: r.a - 1,
+                                    lastFrame: r.b > 0 ? (r.b - 1) : -1
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

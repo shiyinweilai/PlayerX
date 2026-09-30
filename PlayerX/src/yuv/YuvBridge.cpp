@@ -1,6 +1,7 @@
 #include "YuvBridge.h"
 #include "YuvAnalyzer.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -706,12 +707,26 @@ void YuvBridge::stopExportFrameStats() {
 
 void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
                                       const QVariantMap& opts) {
-    if (m_statsExportBusy) {
-        emit statsExportFinished(false, "已有导出任务在运行", QString());
-        return;
-    }
     if (slot < 0 || slot >= MaxSlots || !m_analyzers[slot] || !m_analyzers[slot]->isOpen()) {
         emit statsExportFinished(false, "当前槽未打开 YUV", QString());
+        return;
+    }
+    QVariantMap job;
+    job.insert(QStringLiteral("path"), m_analyzers[slot]->filePath());
+    job.insert(QStringLiteral("width"), m_analyzers[slot]->width());
+    job.insert(QStringLiteral("height"), m_analyzers[slot]->height());
+    job.insert(QStringLiteral("format"), m_analyzers[slot]->pixelFormatName());
+    job.insert(QStringLiteral("fps"), m_analyzers[slot]->fps());
+    job.insert(QStringLiteral("first"), firstFrame);
+    job.insert(QStringLiteral("last"), lastFrame);
+    job.insert(QStringLiteral("slot"), slot + 1);
+    startExportFrameStatsBatch(QVariantList{job}, opts);
+}
+
+void YuvBridge::startExportFrameStatsBatch(const QVariantList& jobList,
+                                           const QVariantMap& opts) {
+    if (m_statsExportBusy) {
+        emit statsExportFinished(false, "已有导出任务在运行", QString());
         return;
     }
     const bool wantHist = opts.value(QStringLiteral("histSummary"), true).toBool();
@@ -727,54 +742,51 @@ void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
         return;
     }
 
-    const int total = m_analyzers[slot]->totalFrames();
-    int first = std::max(0, firstFrame);
-    int last = (lastFrame < 0) ? (total - 1) : lastFrame;
-    if (last >= total) last = total - 1;
-    if (first > last) {
-        emit statsExportFinished(false, "帧范围无效", QString());
+    struct Job {
+        QString path;
+        int w = 1920;
+        int h = 1080;
+        QString fmt = QStringLiteral("yuv420p");
+        double fps = 30.0;
+        int first = 0;
+        int last = -1;
+        int slot = 0;
+    };
+    QVector<Job> jobs;
+    jobs.reserve(jobList.size());
+    const int optFirst = opts.value(QStringLiteral("firstFrame"), 0).toInt();
+    const int optLast = opts.value(QStringLiteral("lastFrame"), -1).toInt();
+    for (const QVariant& item : jobList) {
+        const QVariantMap m = item.toMap();
+        const QString path = m.value(QStringLiteral("path")).toString();
+        if (path.isEmpty()) continue;
+        Job j;
+        j.path = path;
+        j.w = m.value(QStringLiteral("width"), 1920).toInt();
+        j.h = m.value(QStringLiteral("height"), 1080).toInt();
+        j.fmt = m.value(QStringLiteral("format"), QStringLiteral("yuv420p")).toString();
+        j.fps = m.value(QStringLiteral("fps"), 30.0).toDouble();
+        j.first = m.contains(QStringLiteral("first")) ? m.value(QStringLiteral("first")).toInt() : optFirst;
+        j.last = m.contains(QStringLiteral("last")) ? m.value(QStringLiteral("last")).toInt() : optLast;
+        j.slot = m.value(QStringLiteral("slot"), 0).toInt();
+        if (j.w <= 0) j.w = 1920;
+        if (j.h <= 0) j.h = 1080;
+        if (j.fps <= 0) j.fps = 30.0;
+        if (j.fmt.isEmpty()) j.fmt = QStringLiteral("yuv420p");
+        jobs.push_back(j);
+    }
+    if (jobs.isEmpty()) {
+        emit statsExportFinished(false, "没有可导出的序列", QString());
         return;
-    }
-
-    const QString srcPath = m_analyzers[slot]->filePath();
-    const int w = m_analyzers[slot]->width();
-    const int h = m_analyzers[slot]->height();
-    const QString fmt = m_analyzers[slot]->pixelFormatName();
-    const double fps = m_analyzers[slot]->fps();
-    QString outPath = opts.value(QStringLiteral("outPath")).toString();
-    if (outPath.isEmpty()) {
-        QString dir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
-        if (dir.isEmpty()) dir = QDir::homePath() + QStringLiteral("/Downloads");
-        QDir().mkpath(dir);
-        const QString stem = QFileInfo(srcPath).completeBaseName();
-        outPath = QDir(dir).filePath(
-            QStringLiteral("%1_slot%2_f%3-%4_frame.csv")
-                .arg(stem).arg(slot + 1).arg(first + 1).arg(last + 1));
-    }
-    {
-        QFileInfo csvInfo(outPath);
-        QString batch = csvInfo.completeBaseName();
-        if (batch.endsWith(QStringLiteral("_frame")))
-            batch.chop(6);
-        if (batch.isEmpty())
-            batch = QStringLiteral("yuv_stats");
-        QDir parent = csvInfo.dir();
-        if (parent.dirName() != batch) {
-            const QString folder = parent.filePath(batch);
-            QDir().mkpath(folder);
-            const QString fileName = csvInfo.fileName().isEmpty()
-                ? (batch + QStringLiteral("_frame.csv"))
-                : csvInfo.fileName();
-            outPath = QDir(folder).filePath(fileName);
-        }
     }
 
     m_statsExportCancel.store(false);
     m_statsExportBusy = true;
-    emit statsExportProgress(QStringLiteral("开始导出统计…"), 0);
+    emit statsExportProgress(jobs.size() > 1
+        ? QStringLiteral("开始批量导出 %1 个序列…").arg(jobs.size())
+        : QStringLiteral("开始导出统计…"), 0);
 
-    QtConcurrent::run([this, srcPath, w, h, fmt, fps, first, last, slot, outPath,
-                       wantHist, wantBins, wantGrad, wantFeat, wantGop, gopSize]() {
+    QtConcurrent::run([this, jobs, wantHist, wantBins, wantGrad, wantFeat, wantGop, gopSize]() {
         auto fail = [this](const QString& msg) {
             QMetaObject::invokeMethod(this, [this, msg]() {
                 m_statsExportBusy = false;
@@ -782,11 +794,79 @@ void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
             }, Qt::QueuedConnection);
         };
 
-        rb::YuvAnalyzer ana;
-        if (!ana.open(srcPath, w, h, fmt, fps)) {
-            fail(QStringLiteral("无法打开文件进行导出"));
-            return;
+        QString downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (downloads.isEmpty()) downloads = QDir::homePath() + QStringLiteral("/Downloads");
+        QDir().mkpath(downloads);
+        QString batchRoot;
+        if (jobs.size() > 1) {
+            batchRoot = QDir(downloads).filePath(
+                QStringLiteral("yuv_stats_%1seq_%2")
+                    .arg(jobs.size())
+                    .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"))));
+            QDir().mkpath(batchRoot);
         }
+
+        int filesOk = 0;
+        int filesFail = 0;
+        QString revealPath = batchRoot;
+        QString lastDone;
+
+        for (int ji = 0; ji < jobs.size(); ++ji) {
+            if (m_statsExportCancel.load()) {
+                fail(filesOk > 0
+                    ? QStringLiteral("已停止，已完成 %1 个序列").arg(filesOk)
+                    : QStringLiteral("已停止导出"));
+                return;
+            }
+
+            const Job job = jobs[ji];
+            const QString srcPath = job.path;
+            const int w = job.w;
+            const int h = job.h;
+            const QString fmt = job.fmt;
+            const double fps = job.fps;
+            const int slot = job.slot;
+
+            rb::YuvAnalyzer ana;
+            if (!ana.open(srcPath, w, h, fmt, fps)) {
+                ++filesFail;
+                continue;
+            }
+            const int total = ana.totalFrames();
+            int first = std::max(0, job.first);
+            int last = (job.last < 0) ? (total - 1) : job.last;
+            if (last >= total) last = total - 1;
+            if (first > last) {
+                ++filesFail;
+                continue;
+            }
+
+            const QString stem = QFileInfo(srcPath).completeBaseName();
+            QString csvName = (slot > 0)
+                ? QStringLiteral("%1_slot%2_f%3-%4_frame.csv")
+                      .arg(stem).arg(slot).arg(first + 1).arg(last + 1)
+                : QStringLiteral("%1_f%2-%3_frame.csv")
+                      .arg(stem).arg(first + 1).arg(last + 1);
+            const QString parentDir = batchRoot.isEmpty() ? downloads : batchRoot;
+            QString outPath = QDir(parentDir).filePath(csvName);
+            {
+                QFileInfo csvInfo(outPath);
+                QString batch = csvInfo.completeBaseName();
+                if (batch.endsWith(QStringLiteral("_frame")))
+                    batch.chop(6);
+                if (batch.isEmpty())
+                    batch = QStringLiteral("yuv_stats");
+                QDir parent = csvInfo.dir();
+                if (parent.dirName() != batch) {
+                    const QString folder = parent.filePath(batch);
+                    QDir().mkpath(folder);
+                    outPath = QDir(folder).filePath(csvInfo.fileName());
+                }
+            }
+            const QString filePrefix = jobs.size() > 1
+                ? QStringLiteral("序列 %1 / %2 · ").arg(ji + 1).arg(jobs.size())
+                : QString();
+            const int jobCount = jobs.size();
 
         auto csvEsc = [](const QString& s) {
             if (!s.contains(QLatin1Char(',')) && !s.contains(QLatin1Char('"'))
@@ -1074,13 +1154,19 @@ void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
             if (m_statsExportCancel.load()) {
                 file.close();
                 QFile::remove(outPath);
-                fail(QStringLiteral("已停止导出"));
+                fail(filesOk > 0
+                    ? QStringLiteral("已停止，已完成 %1 个序列").arg(filesOk)
+                    : QStringLiteral("已停止导出"));
                 return;
             }
 
             if (((f - first) & 3) == 0 || f == last) {
-                const QString msg = QStringLiteral("导出帧 %1 / %2…").arg(f - first + 1).arg(span);
-                const double ratio = span > 0 ? double(f - first + 1) / double(span) : 1;
+                const QString msg = filePrefix
+                    + QStringLiteral("导出帧 %1 / %2…").arg(f - first + 1).arg(span);
+                const double ratio = jobCount > 0
+                    ? (double(ji) + (span > 0 ? double(f - first + 1) / double(span) : 1.0))
+                      / double(jobCount)
+                    : 1;
                 QMetaObject::invokeMethod(this, [this, msg, ratio]() {
                     emit statsExportProgress(msg, ratio);
                 }, Qt::QueuedConnection);
@@ -1286,10 +1372,25 @@ void YuvBridge::startExportFrameStats(int slot, int firstFrame, int lastFrame,
             done += QStringLiteral("，说明见 .readme.txt");
         }
 
-        const QString revealPath = QFileInfo(outPath).absolutePath();
-        QMetaObject::invokeMethod(this, [this, done, revealPath]() {
+            lastDone = done;
+            ++filesOk;
+            revealPath = batchRoot.isEmpty() ? QFileInfo(outPath).absolutePath() : batchRoot;
+        } // jobs
+
+        if (filesOk == 0) {
+            fail(filesFail > 0
+                ? QStringLiteral("全部序列导出失败，请检查路径和参数")
+                : QStringLiteral("没有可导出的序列"));
+            return;
+        }
+        QString summary = jobs.size() > 1
+            ? QStringLiteral("已导出 %1 个序列").arg(filesOk)
+            : lastDone;
+        if (filesFail > 0)
+            summary += QStringLiteral("，%1 个失败").arg(filesFail);
+        QMetaObject::invokeMethod(this, [this, summary, revealPath]() {
             m_statsExportBusy = false;
-            emit statsExportFinished(true, done, revealPath);
+            emit statsExportFinished(true, summary, revealPath);
         }, Qt::QueuedConnection);
     });
 }

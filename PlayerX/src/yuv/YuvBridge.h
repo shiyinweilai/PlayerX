@@ -205,6 +205,10 @@ public:
     // opts: histSummary, histBins, gradient, features, gopSummary, gopSize, outPath
     Q_INVOKABLE void startExportFrameStats(int slot, int firstFrame, int lastFrame,
                                            const QVariantMap& opts);
+    // 外层列表批量导出：jobs 每项 {path,width,height,format,fps}；
+    // opts 另含 firstFrame / lastFrame（0 起，lastFrame<0 表示该文件全部帧）。
+    Q_INVOKABLE void startExportFrameStatsBatch(const QVariantList& jobs,
+                                                const QVariantMap& opts);
     Q_INVOKABLE void stopExportFrameStats();
     Q_INVOKABLE bool statsExportBusy() const { return m_statsExportBusy; }
 
