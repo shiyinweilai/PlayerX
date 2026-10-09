@@ -209,6 +209,9 @@ Window {
     // 上传前检测：若当前 tag 对应的远程任务存在 testSource.groups 限制，
     // 且 currentUser 不在其中，则拦截上传（防止串账号写入垃圾数据）。
     property var remoteTaskList: []
+    // 参考视频目录（由 Main.qml 从 MultiGroupDialog 注入）：
+    // 该目录的评分数据不参与"上传完整性"校验——参考视频本来就不用打分。
+    property string refVideoPath: ""
 
     // 从 file_path 中提取所属目录（兼容 / 与 \）
     function _dirOf(fp) {
@@ -867,8 +870,9 @@ Window {
                 if (!_isFolderChecked(d.key)) continue
                 // path 为空（"(未知文件夹)" 兜底）的不参与校验：它本来也不会上传
                 if (!d.path || d.path.length === 0) continue
-                // REF 参考视频文件夹（lane 目录名 REF）不参与评分，不拦截上传
+                // REF 参考视频文件夹（lane 目录名 REF 或参考视频目录）不参与评分，不拦截上传
                 if (d.path.split("/").pop() === "REF") continue
+                if (root.refVideoPath.length > 0 && d.path === root.refVideoPath) continue
                 var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
                 var total = (d.totalVideos === undefined ? rated : d.totalVideos)
                 var ckMiss = (d.ckMissing === undefined ? 0 : d.ckMissing)

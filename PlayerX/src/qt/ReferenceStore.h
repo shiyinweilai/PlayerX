@@ -171,6 +171,13 @@ private:
         QString textPath;   // csv 绝对路径
     };
     QHash<QString, Entry> m_map;
+
+    // 按目录查 Entry：先精确命中，未命中则沿父目录逐级回溯。
+    // 背景：绑定时用的 key 是「扫描根 folderPath」，而查表时用的是「视频实际所在
+    // 目录」。视频位于扫描根的子目录（如 .../<root>/264_1080P_xxx_bit_stream/）时，
+    // 两者不相等，精确查找会落空并表现为「已绑定但侧栏显示未绑定」。
+    // 回溯让子目录里的视频也能命中其祖先目录上的绑定。
+    QHash<QString, Entry>::const_iterator findEntryForFolder(const QString& folder) const;
     QString m_settingsFile;
 
     // ── 内部工具 ─────────────────────────────────────────────────────

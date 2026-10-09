@@ -1192,6 +1192,20 @@ function _tsImportAndStart(st, extractTarget) {
     for (var rn = 0; rn < bindRefList.length; ++rn) {
         if (bindRefList[rn]) _boundRefNames.push(refDirs[rn])
     }
+    // 回填到「打开文件夹/多组对比」对话框的参考资料区：把本次自动化实际绑定的
+    // 参考帧目录 / 提示词 CSV 写回 refFramePaths / refPromptPath 并持久化，
+    // 这样用户返回对话框再次「启动对比」时，下方展示的就是当前组的真实路径，
+    // 不再停留在上一次手动指定的旧路径（消除流程歧义）。
+    try {
+        if (_multiGroupDialog && typeof _multiGroupDialog.applyAutoRefResources === "function") {
+            var effFrames = []
+            for (var ef = 0; ef < refAbsList.length; ++ef) {
+                if (bindRefList[ef]) effFrames.push(refAbsList[ef])
+            }
+            _multiGroupDialog.applyAutoRefResources(effFrames, bindCsv ? csvAbs : "")
+        }
+    } catch (eRefill) { console.warn("[TestSource] 回填参考资料失败:", eRefill) }
+
     console.log("[TestSource] 根目录:", rootDir, " 组别:", st._chosenGroup || "(无)",
         " 路:", lanes.join(" | "),
         " 参考图:", _boundRefNames.length > 0 ? _boundRefNames.join(",") : "(无)",

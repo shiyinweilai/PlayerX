@@ -232,7 +232,7 @@ int ReferenceStore::maxSlots() const { return kMaxSlots; }
 int ReferenceStore::slotCountOf(const QString& folderPath) const {
     const QString k = normalizeFolder(folderPath);
     if (k.isEmpty()) return 0;
-    auto it = m_map.constFind(k);
+    auto it = findEntryForFolder(k);
     if (it == m_map.constEnd()) return 0;
     return it->imgSlots.size();
 }
@@ -630,10 +630,30 @@ int ReferenceStore::imageCountImpl(const QString& videoPath,
 // (A) 参考图：N 槽位通用 API
 // ════════════════════════════════════════════════════════════════════════
 
+// 沿目录自身 → 逐级父目录查找已绑定条目；全部未命中返回 constEnd()。
+// 这让「视频在扫描根的子目录里」的场景也能命中祖先目录上的绑定
+// （详见头文件 findEntryForFolder 的说明）。
+QHash<QString, ReferenceStore::Entry>::const_iterator
+ReferenceStore::findEntryForFolder(const QString& folder) const {
+    if (folder.isEmpty()) return m_map.constEnd();
+
+    QString cur = normalizeFolder(folder);
+    // 回溯深度上限，避免极端深路径下无意义循环
+    for (int guard = 0; guard < 32 && !cur.isEmpty(); ++guard) {
+        auto it = m_map.constFind(cur);
+        if (it != m_map.constEnd()) return it;
+
+        const int slash = cur.lastIndexOf('/');
+        if (slash <= 0) break;          // 已到 "/" 或根目录，停止
+        cur = cur.left(slash);
+    }
+    return m_map.constEnd();
+}
+
 QString ReferenceStore::kindOfAt(const QString& folderPath, int slot) const {
     const QString k = normalizeFolder(folderPath);
     if (k.isEmpty()) return {};
-    auto it = m_map.constFind(k);
+    auto it = findEntryForFolder(k);
     if (it == m_map.constEnd()) return {};
     const auto kv = imgSlotOf(*it, slot);
     return kindValidated(kv.first, kv.second);
@@ -649,7 +669,7 @@ QUrl ReferenceStore::referenceUrlForVideoOffsetAt(const QString& videoPath, int 
     if (!fi.exists()) return {};
     const QString folder = normalizeFolder(fi.absolutePath());
     if (folder.isEmpty()) return {};
-    auto it = m_map.constFind(folder);
+    auto it = findEntryForFolder(folder);
     if (it == m_map.constEnd()) return {};
     const auto kv = imgSlotOf(*it, slot);
     return urlForVideoOffsetImpl(videoPath, offset, kv.first, kv.second);
@@ -661,7 +681,7 @@ QString ReferenceStore::referenceProgressForVideoOffsetAt(const QString& videoPa
     if (!fi.exists()) return {};
     const QString folder = normalizeFolder(fi.absolutePath());
     if (folder.isEmpty()) return {};
-    auto it = m_map.constFind(folder);
+    auto it = findEntryForFolder(folder);
     if (it == m_map.constEnd()) return {};
     const auto kv = imgSlotOf(*it, slot);
     return progressForVideoOffsetImpl(videoPath, offset, kv.first, kv.second);
@@ -673,7 +693,7 @@ int ReferenceStore::referenceImageCountForVideoAt(const QString& videoPath, int 
     if (!fi.exists()) return 0;
     const QString folder = normalizeFolder(fi.absolutePath());
     if (folder.isEmpty()) return 0;
-    auto it = m_map.constFind(folder);
+    auto it = findEntryForFolder(folder);
     if (it == m_map.constEnd()) return 0;
     const auto kv = imgSlotOf(*it, slot);
     return imageCountImpl(videoPath, kv.first, kv.second);
@@ -755,7 +775,7 @@ bool ReferenceStore::isGroupedAt(const QString& folderPath, int slot) const {
 QString ReferenceStore::groupedRootOfAt(const QString& folderPath, int slot) const {
     const QString k = normalizeFolder(folderPath);
     if (k.isEmpty()) return {};
-    auto it = m_map.constFind(k);
+    auto it = findEntryForFolder(k);
     if (it == m_map.constEnd()) return {};
     const auto kv = imgSlotOf(*it, slot);
     if (kv.first != "grouped") return {};
@@ -791,7 +811,7 @@ bool ReferenceStore::hasReference(const QString& folderPath) const {
 QString ReferenceStore::referenceOf(const QString& folderPath) const {
     const QString k = normalizeFolder(folderPath);
     if (k.isEmpty()) return {};
-    auto it = m_map.constFind(k);
+    auto it = findEntryForFolder(k);
     if (it == m_map.constEnd()) return {};
     const auto kv = imgSlotOf(*it, 1);
     if (kindValidated(kv.first, kv.second).isEmpty()) return {};
@@ -905,7 +925,7 @@ void ReferenceStore::clearReference2(const QString& folderPath) {
 QString ReferenceStore::textKindOf(const QString& folderPath) const {
     const QString k = normalizeFolder(folderPath);
     if (k.isEmpty()) return {};
-    auto it = m_map.constFind(k);
+    auto it = findEntryForFolder(k);
     if (it == m_map.constEnd()) return {};
     if (it->textKind != "csv") return {};
     if (!QFileInfo::exists(it->textPath)) return {};
@@ -919,7 +939,7 @@ bool ReferenceStore::hasText(const QString& folderPath) const {
 QString ReferenceStore::textPathOf(const QString& folderPath) const {
     const QString k = normalizeFolder(folderPath);
     if (k.isEmpty()) return {};
-    auto it = m_map.constFind(k);
+    auto it = findEntryForFolder(k);
     if (it == m_map.constEnd()) return {};
     if (!QFileInfo::exists(it->textPath)) return {};
     return it->textPath;
@@ -936,7 +956,7 @@ QVariantMap ReferenceStore::referenceTextForVideoOffset(const QString& videoPath
     if (!fi.exists()) return out;
 
     const QString folder = normalizeFolder(fi.absolutePath());
-    auto it = m_map.constFind(folder);
+    auto it = findEntryForFolder(folder);
     if (it == m_map.constEnd()) return out;
     if (it->textKind != "csv") return out;
     if (!QFileInfo::exists(it->textPath)) return out;
@@ -1004,7 +1024,7 @@ int ReferenceStore::textRowCountForVideo(const QString& videoPath) const {
     QFileInfo fi(videoPath);
     if (!fi.exists()) return 0;
     const QString folder = normalizeFolder(fi.absolutePath());
-    auto it = m_map.constFind(folder);
+    auto it = findEntryForFolder(folder);
     if (it == m_map.constEnd()) return 0;
     if (it->textKind != "csv") return 0;
     if (!QFileInfo::exists(it->textPath)) return 0;

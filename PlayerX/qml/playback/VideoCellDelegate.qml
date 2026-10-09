@@ -106,14 +106,20 @@ Rectangle {
         return (d - _pos()) <= _cellFrameDur() * 0.5
     }
 
-    // REF 参考视频通道（lane 目录名为 REF）：只显示视频，不参与任何评分 UI。
+    // REF 参考视频通道（lane 目录名为 REF，或目录 === MultiGroupDialog.refVideoPath）：
+    // 只显示视频，不参与任何评分 UI。
     // 依赖 Engine.filePathAt 的 NOTIFY（filesChanged），替换/切组后绑定自动重求值。
     readonly property bool _isRefLane: {
         try {
             var fp = Engine.filePathAt(cell.playerIdx) || ""
             var dir = fp.substring(0, fp.lastIndexOf("/"))
-            return dir.length > 0 && dir.split("/").pop() === "REF"
-        } catch (e) { return false }
+            if (dir.length > 0 && dir.split("/").pop() === "REF") return true
+            // 手动模式参考视频：目录路径 === MultiGroupDialog 配置的 refVideoPath
+            if (cell.multiGroupDialog && cell.multiGroupDialog.refVideoPath
+                && cell.multiGroupDialog.refVideoPath.length > 0
+                && dir === cell.multiGroupDialog.refVideoPath) return true
+        } catch (e) {}
+        return false
     }
 
     // ─── 内容内框（手机比例 / 固定尺寸锁定）───────────────────

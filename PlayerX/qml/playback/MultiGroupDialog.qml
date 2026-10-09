@@ -778,6 +778,260 @@ ApplicationWindow {
         } catch (e) { /* ignore */ }
     }
 
+    // ─── 参考资料（启动对比前一次配好）────────────────────────────
+    // 三个绑定与「主观对比列表」的路同源不同用途：
+    //   · refVideoPath  — 参考视频目录：启动时自动追加为一路，只显示不评分
+    //                     （评分 UI / 完整性判定 / 上传拦截已按 lane REF 链路跳过）；
+    //   · refFramePaths — 参考帧目录（动态 N 槽，最多 9 个，对应侧栏参考图窗口）：
+    //                     每项为 { path, enabled }，启动时对 enabled 的槽位通过
+    //                     Reference.setReferenceFolderAt 绑定到每个评分路；
+    //   · refPromptPath — 提示词 CSV：启动时通过 Reference.setReferenceCsv 绑定。
+    // 全部持久化到 Rating QSettings（mgd/refVideo 等 key），重开对话框自动还原。
+    readonly property int kMaxRefFrames: 9
+    property string refVideoPath: {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function")
+                return Rating.loadString("mgd/refVideo", "") || ""
+        } catch (e) {}
+        return ""
+    }
+    // 参考帧列表：元素为 { path:string, enabled:bool }。
+    // 新 key mgd/refFramesV2 存结构化数据；若不存在则从旧 key mgd/refFrames
+    // （纯路径数组）迁移，迁移后每项默认 enabled=true。至少保证 1 槽存在。
+    property var refFramePaths: {
+        var arr = []
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function") {
+                var s2 = Rating.loadString("mgd/refFramesV2", "") || ""
+                if (s2.length > 0) {
+                    var raw = JSON.parse(s2)
+                    if (raw && Array.isArray(raw)) {
+                        for (var i = 0; i < raw.length; ++i) {
+                            var it = raw[i] || {}
+                            arr.push({ path: String(it.path || ""),
+                                       enabled: it.enabled !== false })
+                        }
+                    }
+                } else {
+                    // 迁移旧格式（纯路径数组）
+                    var s1 = Rating.loadString("mgd/refFrames", "") || ""
+                    if (s1.length > 0) {
+                        var old = JSON.parse(s1)
+                        if (old && Array.isArray(old)) {
+                            for (var j = 0; j < old.length; ++j) {
+                                arr.push({ path: String(old[j] || ""), enabled: true })
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e) { arr = [] }
+        if (!arr || !Array.isArray(arr) || arr.length === 0)
+            arr = [{ path: "", enabled: true }]
+        return arr
+    }
+    property string refPromptPath: {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function")
+                return Rating.loadString("mgd/refPrompt", "") || ""
+        } catch (e) {}
+        return ""
+    }
+    // 参考资料区总开关：只有勾选时才在启动对比时绑定/注入参考资料。
+    // 默认关闭 —— 避免历史残留路径在用户不需要时自动生效；
+    // 勾上后「启动对比」即按下方四行配置一次性绑定到各个功能。
+    property bool refResEnabled: {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function")
+                return Rating.loadString("mgd/refEnabled", "0") === "1"
+        } catch (e) {}
+        return false
+    }
+    onRefResEnabledChanged: _saveRefRes()
+    // 参考视频 / 提示词各自的单独勾选态（默认启用），与参考帧的 enabled 对齐。
+    // 未勾选时启动不注入该项。总开关相当于三类项的全选 / 全不选。
+    property bool refVideoEnabled: {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function")
+                return Rating.loadString("mgd/refVideoEnabled", "1") === "1"
+        } catch (e) {}
+        return true
+    }
+    property bool refPromptEnabled: {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function")
+                return Rating.loadString("mgd/refPromptEnabled", "1") === "1"
+        } catch (e) {}
+        return true
+    }
+
+    // 本次启动确实绑定了参考图 / 提示词 → 通知主窗口展开左侧参考图侧栏与底部提示词栏。
+    // 与测试源自动化 _tsImportAndStart 的行为保持一致（等价手动点左下角「图片」按钮）。
+    signal refResourcesBound()
+
+    // 参考资料区是否配置了任何有效项（参考视频 / 参考帧 / 提示词 CSV）
+    // 注意：总开关关闭时一律视为未配置，启动时不绑定、也不展开侧栏。
+    function _anyRefResConfigured() {
+        if (!refResEnabled) return false
+        if (refVideoPath.length > 0) return true
+        if (refPromptPath.length > 0) return true
+        var fa = refFramePaths || []
+        for (var i = 0; i < fa.length; ++i) {
+            if (fa[i] && String(fa[i].path || "").length > 0) return true
+        }
+        return false
+    }
+    function _saveRefRes() {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.saveString === "function") {
+                Rating.saveString("mgd/refVideo", refVideoPath)
+                Rating.saveString("mgd/refFramesV2", JSON.stringify(refFramePaths || []))
+                Rating.saveString("mgd/refPrompt", refPromptPath)
+                Rating.saveString("mgd/refEnabled", refResEnabled ? "1" : "0")
+                Rating.saveString("mgd/refVideoEnabled", refVideoEnabled ? "1" : "0")
+                Rating.saveString("mgd/refPromptEnabled", refPromptEnabled ? "1" : "0")
+            }
+        } catch (e) { /* ignore */ }
+    }
+    function setRefVideoEnabled(on) { refVideoEnabled = !!on; _saveRefRes() }
+    function setRefPromptEnabled(on) { refPromptEnabled = !!on; _saveRefRes() }
+    function setRefVideo(p) {
+        var np = (p || "").trim()
+        // 即时纠偏：参考视频栏若填入的是纯图片目录（无视频、有图片），
+        // 直接改绑到参考帧 1（空槽时），避免用户填错栏位后参考图扫不到而静默失败。
+        if (np.length > 0) {
+            try {
+                if (Fs.isDirectoryPath(np)) {
+                    var vids = Fs.scanVideoFolderPath(np, true) || []
+                    var imgs = Fs.scanImageFolderPath(np, true) || []
+                    if (vids.length === 0 && imgs.length > 0) {
+                        var fa0 = refFramePaths || []
+                        var slot = (fa0.length === 0 || String(fa0[0].path || "").length === 0)
+                                   ? 0 : fa0.length
+                        console.log("[MGD] 参考视频栏填入图片目录，自动改绑到参考帧", slot + 1, ":", np)
+                        setRefFrame(slot, np)
+                        refVideoPath = ""
+                        _saveRefRes()
+                        return
+                    }
+                }
+            } catch (e) { console.warn("[MGD] setRefVideo 即时纠偏失败:", e) }
+        }
+        refVideoPath = np
+        _saveRefRes()
+    }
+    // 设置第 idx 槽的参考帧路径（不足则补齐空槽；idx 越界自动追加，上限 kMaxRefFrames）
+    function setRefFrame(idx, p) {
+        var arr = _cloneRefFrames()
+        if (idx < 0) idx = 0
+        if (idx >= kMaxRefFrames) idx = kMaxRefFrames - 1
+        while (arr.length <= idx) arr.push({ path: "", enabled: true })
+        arr[idx].path = (p || "").trim()
+        refFramePaths = arr
+        _saveRefRes()
+    }
+    // 设置第 idx 槽的单独勾选态
+    function setRefFrameEnabled(idx, on) {
+        var arr = _cloneRefFrames()
+        if (idx < 0 || idx >= arr.length) return
+        arr[idx].enabled = !!on
+        refFramePaths = arr
+        _saveRefRes()
+    }
+    // 新增一个参考帧槽（上限 kMaxRefFrames）
+    function addRefFrameSlot() {
+        var arr = _cloneRefFrames()
+        if (arr.length >= kMaxRefFrames) return
+        arr.push({ path: "", enabled: true })
+        refFramePaths = arr
+        _saveRefRes()
+    }
+    // 删除第 idx 个参考帧槽（至少保留 1 槽）
+    function removeRefFrameSlot(idx) {
+        var arr = _cloneRefFrames()
+        if (idx < 0 || idx >= arr.length) return
+        arr.splice(idx, 1)
+        if (arr.length === 0) arr.push({ path: "", enabled: true })
+        refFramePaths = arr
+        _saveRefRes()
+    }
+    // 深拷贝参考帧数组（避免直接改引用导致绑定不刷新）
+    function _cloneRefFrames() {
+        var src = refFramePaths || []
+        var out = []
+        for (var i = 0; i < src.length; ++i) {
+            out.push({ path: String(src[i].path || ""),
+                       enabled: src[i].enabled !== false })
+        }
+        if (out.length === 0) out.push({ path: "", enabled: true })
+        return out
+    }
+    // 参考帧是否"全部已勾选"（供顶部总开关做全选/全不选 toggle 判断）
+    function _allRefFramesEnabled() {
+        var fa = refFramePaths || []
+        if (fa.length === 0) return false
+        for (var i = 0; i < fa.length; ++i) {
+            if (fa[i] && String(fa[i].path || "").length > 0 && fa[i].enabled === false)
+                return false
+        }
+        return true
+    }
+    // 批量设置所有"有路径"的参考项（视频 / 帧 / 提示词）的勾选态（顶部总开关联动）
+    function setAllRefFramesEnabled(on) {
+        var arr = _cloneRefFrames()
+        for (var i = 0; i < arr.length; ++i) {
+            if (String(arr[i].path || "").length > 0) arr[i].enabled = !!on
+        }
+        refFramePaths = arr
+        if (refVideoPath.length > 0) refVideoEnabled = !!on
+        if (refPromptPath.length > 0) refPromptEnabled = !!on
+        _saveRefRes()
+    }
+    function setRefPrompt(p) {
+        refPromptPath = (p || "").trim()
+        _saveRefRes()
+    }
+    // 由自动化流程（_tsImportAndStart）回填：把本次实际绑定的参考帧目录列表与
+    // 提示词 CSV 写回参考资料区并持久化，使返回对话框时展示与当前组一致，
+    // 消除「显示旧手动路径」的歧义。回填时自动开启总开关并把这些帧全部置勾。
+    //   · frameDirs: 字符串数组（已绑定、已存在的参考帧绝对目录，按侧栏槽位顺序）
+    //   · csvPath:   提示词 CSV 绝对路径（空串表示本次未绑定 CSV）
+    function applyAutoRefResources(frameDirs, csvPath) {
+        var fd = (frameDirs && frameDirs.length) ? frameDirs : []
+        if (fd.length === 0 && (!csvPath || csvPath.length === 0)) return
+        var arr = []
+        for (var i = 0; i < fd.length && i < kMaxRefFrames; ++i) {
+            var p = String(fd[i] || "").trim()
+            if (p.length > 0) arr.push({ path: p, enabled: true })
+        }
+        if (arr.length === 0) arr.push({ path: "", enabled: true })
+        refFramePaths = arr
+        if (csvPath && csvPath.length > 0) {
+            refPromptPath = String(csvPath).trim()
+            refPromptEnabled = true
+        }
+        // 自动化来源带了参考资料 → 顺带把总开关打开，保证返回后状态自洽
+        refResEnabled = true
+        _saveRefRes()
+        console.log("[MGD] 已回填自动化参考资料：帧",
+                    arr.length, "个, CSV=", refPromptPath || "(无)")
+    }
+    // 判断某 lane 是否为参考视频路（文件夹路径 === refVideoPath，
+    // 或目录名恰为 REF —— 兼容服务端 testSource 下发的 REF 目录）
+    function _isRefLaneByPath(p) {
+        var s = String(p || "")
+        if (s.length === 0) return false
+        if (refVideoPath.length > 0 && s === refVideoPath) return true
+        return s.split("/").pop() === "REF"
+    }
+
     // ─── 对外属性 ───────────────────────────────────────────────────
     // 多组模式是否处于"已启动"状态：用户至少成功 start() 过一次，
     // 且 lanes 仍是当前打开的那一批（lanes 内容若被用户改动会自动失效）。
@@ -1022,8 +1276,8 @@ ApplicationWindow {
         for (var li = 0; li < n; ++li) {
             var lane = _rowsModel.get(li)
             if (!lane || !lane.selected) continue
-            // REF 参考视频 lane（目录名 REF）只显示不评分，不参与完整性判定
-            if (String(lane.folderPath || "").split("/").pop() === "REF") continue
+            // REF 参考视频 lane（参考视频目录或目录名 REF）只显示不评分，不参与完整性判定
+            if (_isRefLaneByPath(lane.folderPath)) continue
             var rt = _laneRuntime[li]
             if (!rt || !rt.visibleFiles) return false
             for (var fi = 0; fi < rt.visibleFiles.length; ++fi) {
@@ -1091,6 +1345,26 @@ ApplicationWindow {
             // 同时固化「全局上次导入目录」，后续新增/打开都从这里起始
             try { _saveLastImportFolder(selectedFolder) } catch (e) { /* ignore */ }
         }
+    }
+
+    // ─── 参考资料选择对话框（参考视频 / 参考帧 ×N / 提示词 CSV）────────
+    FolderDialog {
+        id: refVideoDlg
+        title: "选择参考视频目录"
+        onAccepted: dlg.setRefVideo(Fs.urlToLocalFile(selectedFolder))
+    }
+    // 通用参考帧目录选择：打开前先把目标槽位写入 _refFrameDlgSlot
+    property int _refFrameDlgSlot: 0
+    FolderDialog {
+        id: refFrameDlg
+        title: "选择参考帧目录 " + (dlg._refFrameDlgSlot + 1)
+        onAccepted: dlg.setRefFrame(dlg._refFrameDlgSlot, Fs.urlToLocalFile(selectedFolder))
+    }
+    FileDialog {
+        id: promptCsvDlg
+        title: "选择提示词 CSV"
+        nameFilters: [ "CSV (*.csv)" ]
+        onAccepted: dlg.setRefPrompt(Fs.urlToLocalFile(selectedFile))
     }
 
     // ─── 「重复目录」确认对话框 ─────────────────────────────────
@@ -1999,6 +2273,130 @@ ApplicationWindow {
     function start() {
         if (!canStart) return false
 
+        // ─── 智能纠偏：参考视频 / 参考帧填反时自动纠正 ───────────────
+        // 「参考视频」里填了纯图片目录 → 自动改绑到「参考帧 1」（槽位空时）；
+        // 「参考帧」里填了纯视频目录 → 自动改绑到「参考视频」（其空时）。
+        // 纠正后立即持久化，对话框两个输入框会同步显示新位置。
+        (function() {
+            try {
+                if (!refResEnabled) return        // 总开关未勾选：参考资料整体不生效
+                var fa0 = refFramePaths || []
+                var slot0Empty = (fa0.length === 0 || String(fa0[0].path || "").length === 0)
+                if (refVideoPath.length > 0 && Fs.isDirectoryPath(refVideoPath)) {
+                    var rvVids = Fs.scanVideoFolderPath(refVideoPath, true) || []
+                    var rvImgs = Fs.scanImageFolderPath(refVideoPath, true) || []
+                    if (rvVids.length === 0 && rvImgs.length > 0 && slot0Empty) {
+                        console.log("[MGD] 参考视频目录实为图片目录，自动改绑到参考帧1:", refVideoPath)
+                        setRefFrame(0, refVideoPath)
+                        refVideoPath = ""
+                        _saveRefRes()
+                    }
+                }
+                var faCur = refFramePaths || []
+                for (var cj = 0; cj < faCur.length; ++cj) {
+                    var cp = String((faCur[cj] || {}).path || "")
+                    if (cp.length === 0 || !Fs.isDirectoryPath(cp)) continue
+                    var cfVids = Fs.scanVideoFolderPath(cp, true) || []
+                    var cfImgs = Fs.scanImageFolderPath(cp, true) || []
+                    if (cfVids.length > 0 && cfImgs.length === 0 && refVideoPath.length === 0) {
+                        console.log("[MGD] 参考帧目录实为视频目录，自动改绑到参考视频:", cp)
+                        refVideoPath = cp
+                        setRefFrame(cj, "")
+                        _saveRefRes()
+                    }
+                }
+            } catch (e) { console.warn("[MGD] 参考资料智能纠偏失败:", e) }
+        })()
+
+        // ─── 参考资料：启动前完成绑定/注入 ─────────────────────────
+        // ① 参考视频：已配置且目录存在 → 自动追加为一路（不占用户勾选位，追加在末尾）。
+        //    识别方式见 _isRefLaneByPath（路径相等或目录名 REF），下游评分 UI /
+        //    unratedChecker / allGroupsRated / 上传拦截均已按该链路跳过。
+        //    已存在相同路径的路则不重复添加。
+        if (refResEnabled && refVideoEnabled && refVideoPath.length > 0) {
+            var hasRef = false
+            for (var rvi = 0; rvi < _rowsModel.count; ++rvi) {
+                if (_isRefLaneByPath((_rowsModel.get(rvi) || {}).folderPath)) { hasRef = true; break }
+            }
+            if (!hasRef && _rowsModel.count < kMaxLanes) {
+                try {
+                    if (Fs.isDirectoryPath(refVideoPath)) {
+                        var refFiles = Fs.scanVideoFolderPath(refVideoPath, true) || []
+                        if (refFiles.length > 0) {
+                            var refVis = _filterAndSort(refFiles, "")
+                            _rowsModel.append({
+                                selected: true,
+                                folderPath: refVideoPath,
+                                keyword: "",
+                                currentPath: refVis[0] || "",
+                                currentIndex: 0,
+                                allCount: refFiles.length,
+                                visibleCount: refVis.length
+                            })
+                            _laneRuntime.push({ allFiles: refFiles, visibleFiles: refVis })
+                        }
+                    }
+                } catch (e) { console.warn("[MGD] 参考视频目录注入失败:", e) }
+            }
+        }
+        // ② 参考帧目录（动态 N 槽）与提示词 CSV：绑定到每个参与启动的评分路。
+        //    只绑定「有路径且已勾选」的槽；侧栏槽位号按有效槽顺序连续分配（1..N），
+        //    中间被禁用的槽不占号，避免侧栏出现空窗口。
+        //    与测试源自动化 _tsImportAndStart 的绑定方式一致。
+        // ★ 覆盖历史：先无条件清除本次参与启动的每条评分路在底层 Reference
+        //    的全部旧参考图槽（1..kMaxRefFrames）与 CSV 绑定，再按界面当前
+        //    配置重新写入。否则自动化/上次启动写入的历史绑定（如 3 张参考图）
+        //    会残留——用户在界面删到 1 张后点启动仍加载旧的 3 张。清除不受
+        //    refResEnabled 门槛限制：即使本次取消了参考资料总开关，也要把历史
+        //    绑定清掉，保证"界面即最终状态"。
+        (function() {
+            if (typeof Reference === "undefined" || !Reference) return
+            for (var ci = 0; ci < _rowsModel.count; ++ci) {
+                var lc = _rowsModel.get(ci)
+                if (!lc) continue
+                var fp = lc.folderPath
+                if (!fp || fp.length === 0) continue
+                if (_isRefLaneByPath(fp)) continue   // 参考视频路本身不承载参考图/CSV
+                try {
+                    for (var sc = 1; sc <= kMaxRefFrames; ++sc)
+                        Reference.clearReferenceAt(fp, sc)
+                    if (typeof Reference.clearText === "function")
+                        Reference.clearText(fp)
+                } catch (e) { console.warn("[MGD] 清除旧参考绑定失败:", fp, e) }
+            }
+            console.log("[MGD][refclear] 已清除", _rowsModel.count, "条评分路的历史参考绑定")
+        })();
+        (function() {
+            if (!refResEnabled) return
+            if (typeof Reference === "undefined" || !Reference) return
+            var lanePaths = []
+            for (var li = 0; li < _rowsModel.count; ++li) {
+                var l0 = _rowsModel.get(li)
+                if (!l0 || !l0.selected) continue
+                if (!l0.currentPath || l0.currentPath.length === 0) continue
+                if (_isRefLaneByPath(l0.folderPath)) continue   // 参考视频路不绑定
+                lanePaths.push(l0.folderPath)
+            }
+            // 先收集本次要绑定的有效参考帧目录（已勾选 + 有路径 + 目录存在）
+            var effDirs = []
+            var fa = refFramePaths || []
+            for (var sf = 0; sf < fa.length; ++sf) {
+                var itf = fa[sf] || {}
+                var rp = String(itf.path || "")
+                if (itf.enabled === false) continue
+                if (rp.length > 0 && Fs.isDirectoryPath(rp)) effDirs.push(rp)
+            }
+            for (var bi = 0; bi < lanePaths.length; ++bi) {
+                var lp = lanePaths[bi]
+                for (var ei = 0; ei < effDirs.length; ++ei) {
+                    var okBind = Reference.setReferenceFolderAt(lp, effDirs[ei], ei + 1)
+                    console.log("[MGD][refbind] lane=", lp, "slot", ei + 1, "dir=", effDirs[ei], "=>", okBind)
+                }
+                if (refPromptEnabled && refPromptPath.length > 0 && Fs.fileExists(refPromptPath))
+                    Reference.setReferenceCsv(lp, refPromptPath)
+            }
+        })()
+
         // 只收集「有效路」：勾选 + currentPath 非空。
         // 勾选但未选文件夹的行（如默认第 2 行）会被静默忽略，不阻塞启动。
         var selIdx = []
@@ -2103,6 +2501,9 @@ ApplicationWindow {
                 active = true
                 // 单视频用单视图最合适
                 if (Engine.layoutMode !== 0) Engine.layoutMode = 0
+                // 绑定了参考资料 → 自动展开左侧参考图侧栏 + 底部提示词栏
+                // （与测试源自动化 _tsImportAndStart 的行为一致：等价于手动点左下角「图片」按钮）
+                if (_anyRefResConfigured()) dlg.refResourcesBound()
             }
             return ok1
         }
@@ -2126,6 +2527,8 @@ ApplicationWindow {
             active = true
             // 启动后默认把布局切到 1×N，避免 single 模式只看到一路
             if (Engine.layoutMode === 0 && urls.length > 1) Engine.layoutMode = 1
+            // 绑定了参考资料 → 自动展开左侧参考图侧栏 + 底部提示词栏
+            if (_anyRefResConfigured()) dlg.refResourcesBound()
         }
         return ok
     }
@@ -3023,10 +3426,12 @@ ApplicationWindow {
     }
 
     // ─── 窗口外观 ─────────────────────────────────
-    width: 920
-    height: 520
-    minimumWidth: 760
-    minimumHeight: 360
+    // 加高以容纳底部「参考资料」配置区（参考视频 / 参考帧×N / 提示词），
+    // 并让上方视频通路列表能更紧凑地展示更多路。
+    width: 980
+    height: 820
+    minimumWidth: 800
+    minimumHeight: 520
     color: "#161619"
     flags: Qt.Dialog
     modality: Qt.NonModal
@@ -3401,6 +3806,15 @@ ApplicationWindow {
                             _syncLaneFromRow(index, selected, folderPath, keyword,
                                              allFiles, visibleFiles, currentIndex)
                         }
+                        // 手动勾选：直接写回模型（不动 row.selected，保持绑定不断），
+                        // 这样后续「全选 / 全不选」改模型时能正确推回本行。
+                        onSelectToggled: function(want) {
+                            if (model.selected !== want) {
+                                _rowsModel.setProperty(index, "selected", want)
+                                _bumpState()
+                                _persistLanes()
+                            }
+                        }
                         onRemoveRequested: removeLane(index)
                     }
                 }
@@ -3498,6 +3912,337 @@ ApplicationWindow {
             // 这里不再重复实现 —— 否则会出现 id 重复导致 QML 解析失败 / 行为不可预期。
 
         }
+        }
+
+        // ─── 参考资料配置区（启动前一次配好）───────────────────────
+        // 与主观对比列表同样的"一行一目录"交互：📁 选择 / 拖拽 / 下拉历史（暂不
+        // 需要）/ ✕ 清除；三个绑定分别是参考视频（不评分路）、参考帧×2（侧栏
+        // 参考图窗口）、提示词 CSV。持久化，重开对话框自动还原。
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 6
+
+            // 分组标题 + 启用勾选：只有勾选时，下方配置才在「启动对比」时生效。
+            // 勾选项本身即是明确的触发开关，避免历史残留路径静默生效。
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                CheckBox {
+                    id: refResEnableBox
+                    checked: dlg.refResEnabled
+                    onToggled: {
+                        dlg.refResEnabled = checked
+                        // 总开关相当于参考帧的「全选 / 全不选」：
+                        // 勾上 → 把所有有路径的参考帧置勾；取消 → 全部取消。
+                        dlg.setAllRefFramesEnabled(checked)
+                    }
+                    Layout.preferredHeight: 20
+                    padding: 0
+                    spacing: 6
+                    indicator: Rectangle {
+                        implicitWidth: 15
+                        implicitHeight: 15
+                        x: 0
+                        y: (refResEnableBox.height - height) / 2
+                        radius: 3
+                        color: refResEnableBox.checked ? "#2f6fb5" : "#14141a"
+                        border.color: refResEnableBox.checked ? "#5aa0e8" : "#3a3a42"
+                        border.width: 1
+                        Text {
+                            visible: refResEnableBox.checked
+                            anchors.centerIn: parent
+                            text: "✓"
+                            color: "#eaf3ff"
+                            font.pixelSize: 10
+                            font.bold: true
+                        }
+                    }
+                    contentItem: Text {
+                        text: "启用"
+                        color: dlg.refResEnabled ? "#e8e8ec" : "#8f8f9a"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: refResEnableBox.indicator.width + refResEnableBox.spacing
+                    }
+                }
+                Label {
+                    text: "参考资料"
+                    color: dlg.refResEnabled ? "#ffd84d" : "#8f8f9a"
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+                Label {
+                    text: dlg.refResEnabled ? "（勾选单项可单独启停；本总开关控制整体生效）"
+                                            : "（未启用，启动时忽略）"
+                    color: "#6a6a75"
+                    font.pixelSize: 10
+                }
+                Item { Layout.fillWidth: true }
+                // 新增参考帧按钮：移到标题行右侧，未达上限时可用
+                Button {
+                    id: addRefFrameBtn
+                    enabled: dlg.refResEnabled
+                             && (dlg.refFramePaths ? dlg.refFramePaths.length : 0) < dlg.kMaxRefFrames
+                    text: "＋ 新增参考帧（" + (dlg.refFramePaths ? dlg.refFramePaths.length : 0)
+                          + "/" + dlg.kMaxRefFrames + "）"
+                    Layout.preferredHeight: 22
+                    implicitWidth: contentItem.implicitWidth + 20
+                    onClicked: dlg.addRefFrameSlot()
+                    background: Rectangle {
+                        radius: 3
+                        color: !addRefFrameBtn.enabled ? "#161a20"
+                               : addRefFrameBtn.down ? "#2a3a4a"
+                               : addRefFrameBtn.hovered ? "#243040" : "#1c2430"
+                        border.color: addRefFrameBtn.enabled ? "#3a5068" : "#2a2e36"
+                        border.width: 1
+                    }
+                    contentItem: Text {
+                        text: addRefFrameBtn.text
+                        color: addRefFrameBtn.enabled ? "#8fc0ff" : "#55606e"
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+
+            // 单行通用组件：[可选勾选框] + 左侧标签 + 路径框（📁 选择 + 拖拽 + ✕ 清除）+ [可选删除]
+            component RefResRow: Rectangle {
+                id: resRow
+                property string label: ""
+                property string path: ""
+                property string hint: ""
+                property int frameSlot: -1     // -1=非参考帧；>=0=参考帧槽位（0 基）
+                property bool isCsv: false
+                // 是否显示单独勾选框（仅参考帧行用）；checked 表示该帧是否参与绑定
+                property bool checkable: false
+                property bool checked: true
+                // 是否显示删除按钮（仅参考帧行用，用于删除该槽）
+                property bool removable: false
+                signal applyPath(string p)
+                signal toggleChecked(bool want)
+                signal removeRow()
+
+                Layout.fillWidth: true
+                implicitHeight: 28
+                radius: 4
+                opacity: dlg.refResEnabled ? 1.0 : 0.45
+                enabled: dlg.refResEnabled
+                color: refDrop.containsDrag ? "#23281f" : "#1a1a1f"
+                border.color: refDrop.containsDrag ? "#b8952e" : "#2c2c32"
+                border.width: 1
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 6
+                    spacing: 6
+                    // 单独勾选框（参考帧行）：有路径才可勾；无路径时灰显禁用
+                    CheckBox {
+                        id: rowChk
+                        visible: resRow.checkable
+                        Layout.preferredWidth: visible ? 18 : 0
+                        Layout.preferredHeight: 18
+                        Layout.alignment: Qt.AlignVCenter
+                        enabled: resRow.path.length > 0
+                        checked: resRow.checked
+                        onToggled: {
+                            resRow.toggleChecked(checked)
+                            checked = Qt.binding(function() { return resRow.checked })
+                        }
+                        indicator: Rectangle {
+                            implicitWidth: 14
+                            implicitHeight: 14
+                            x: 0
+                            y: (rowChk.height - height) / 2
+                            radius: 3
+                            color: rowChk.checked && rowChk.enabled ? "#0fa085" : "#101013"
+                            border.color: rowChk.checked && rowChk.enabled ? "#0fa085"
+                                         : (rowChk.enabled ? "#3a3a45" : "#2a2a30")
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                visible: rowChk.checked && rowChk.enabled
+                                text: "✓"
+                                color: "#ffffff"
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
+                        }
+                    }
+                    Label {
+                        text: resRow.label
+                        color: "#ffd84d"
+                        font.pixelSize: 11
+                        font.bold: true
+                        Layout.preferredWidth: 58
+                    }
+                    TextField {
+                        id: resPathField
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 22
+                        placeholderText: resRow.hint
+                        text: resRow.path
+                        selectByMouse: true
+                        color: "#e8e8ec"
+                        font.pixelSize: 11
+                        // 右内边距给内嵌 ✕ 按钮留位；无内容时不留白
+                        rightPadding: resRow.path.length > 0 ? 26 : 8
+                        background: Rectangle {
+                            radius: 3
+                            color: "#14141a"
+                            border.color: resPathField.activeFocus ? "#3a78c8" : "#2c2c32"
+                            border.width: 1
+                        }
+                        onEditingFinished: {
+                            if (text.trim() !== resRow.path)
+                                resRow.applyPath(text.trim())
+                        }
+
+                        // 内嵌清除按钮：浮在输入框右侧内部
+                        MouseArea {
+                            id: clearHit
+                            visible: resRow.path.length > 0
+                            width: 20
+                            height: 20
+                            anchors.right: parent.right
+                            anchors.rightMargin: 3
+                            anchors.verticalCenter: parent.verticalCenter
+                            cursorShape: Qt.PointingHandCursor
+                            hoverEnabled: true
+                            onClicked: resRow.applyPath("")
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 10
+                                color: clearHit.containsMouse ? "#4a2a2a" : "transparent"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "✕"
+                                    color: clearHit.containsMouse ? "#ff9090" : "#8a8a92"
+                                    font.pixelSize: 11
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        text: "📁"
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 22
+                        onClicked: {
+                            if (resRow.isCsv) promptCsvDlg.open()
+                            else if (resRow.frameSlot >= 0) {
+                                dlg._refFrameDlgSlot = resRow.frameSlot
+                                refFrameDlg.open()
+                            }
+                            else refVideoDlg.open()
+                        }
+                        background: Rectangle {
+                            radius: 3
+                            color: parent.down ? "#4a4a55" : parent.hovered ? "#33333a" : "#202024"
+                            border.color: "#3a3a42"
+                            border.width: 1
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    // 删除本参考帧槽（仅 removable 行显示）
+                    Button {
+                        visible: resRow.removable
+                        text: "🗑"
+                        Layout.preferredWidth: visible ? 28 : 0
+                        Layout.preferredHeight: 22
+                        onClicked: resRow.removeRow()
+                        background: Rectangle {
+                            radius: 3
+                            color: parent.down ? "#5a3a3a" : parent.hovered ? "#3a2a2a" : "#202024"
+                            border.color: "#3a3a42"
+                            border.width: 1
+                        }
+                        contentItem: Text {
+                            text: "🗑"
+                            color: "#d08a8a"
+                            font.pixelSize: 11
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+
+                // 拖拽承接：整行任意位置可拖入目录/CSV 文件
+                DropArea {
+                    id: refDrop
+                    anchors.fill: parent
+                    onEntered: function(drag) {
+                        if (!drag.hasUrls) { drag.accepted = false; return }
+                        drag.accept(Qt.CopyAction)
+                    }
+                    onDropped: function(drop) {
+                        if (!drop.hasUrls || drop.urls.length === 0) {
+                            drop.accepted = false
+                            return
+                        }
+                        var u = drop.urls[0]
+                        var p = ""
+                        try { p = Fs.urlToLocalFile(u) } catch (e) { p = "" }
+                        if (resRow.isCsv) {
+                            resRow.applyPath(p)
+                        } else if (p.length > 0 && Fs.isDirectoryPath(p)) {
+                            resRow.applyPath(p)
+                        }
+                        drop.accept(Qt.CopyAction)
+                    }
+                }
+            }
+
+            // ── 上半：参考视频 / 提示词（各带单独勾选框）────────────────
+            RefResRow {
+                label: "参考视频"
+                hint: "参考视频目录（拖拽或点击 📁 选择；启动后自动附加为不评分的一路）"
+                path: dlg.refVideoPath
+                checkable: true
+                checked: dlg.refVideoEnabled
+                onApplyPath: function(p) { dlg.setRefVideo(p) }
+                onToggleChecked: function(want) { dlg.setRefVideoEnabled(want) }
+            }
+            RefResRow {
+                label: "提示词"
+                hint: "prompt.csv（可选，绑定到提示词面板）"
+                isCsv: true
+                path: dlg.refPromptPath
+                checkable: true
+                checked: dlg.refPromptEnabled
+                onApplyPath: function(p) { dlg.setRefPrompt(p) }
+                onToggleChecked: function(want) { dlg.setRefPromptEnabled(want) }
+            }
+            // ── 下半：参考帧动态 N 行（最多 kMaxRefFrames），每行可单独勾选 / 删除 ──
+            Repeater {
+                id: refFrameRepeater
+                model: dlg.refFramePaths ? dlg.refFramePaths.length : 0
+                RefResRow {
+                    label: "参考帧 " + (index + 1)
+                    hint: "参考帧目录 " + (index + 1) + "（绑定到侧栏参考图窗口 " + (index + 1) + "）"
+                    frameSlot: index
+                    checkable: true
+                    checked: {
+                        var it = (dlg.refFramePaths && dlg.refFramePaths[index]) || {}
+                        return it.enabled !== false
+                    }
+                    // 至少保留 1 行；多于 1 行时每行都可删
+                    removable: (dlg.refFramePaths ? dlg.refFramePaths.length : 1) > 1
+                    path: {
+                        var it = (dlg.refFramePaths && dlg.refFramePaths[index]) || {}
+                        return String(it.path || "")
+                    }
+                    onApplyPath: function(p) { dlg.setRefFrame(index, p) }
+                    onToggleChecked: function(want) { dlg.setRefFrameEnabled(index, want) }
+                    onRemoveRow: dlg.removeRefFrameSlot(index)
+                }
+            }
         }
 
         // 分隔线

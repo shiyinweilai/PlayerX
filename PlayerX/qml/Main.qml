@@ -2407,13 +2407,17 @@ Component {
         unratedChecker: function() {
             var miss = []
             var n = Engine.fileCount
-            // REF 参考视频通道（lane 目录名为 REF）只显示不评分：跳过所有评分完整性检查
+            // REF 参考视频通道（lane 目录名为 REF，或目录 === 多组对比面板配置的
+            // 参考视频目录 refVideoPath）只显示不评分：跳过所有评分完整性检查
             function _isRefLaneIdx(idx) {
                 try {
                     var fp = Engine.filePathAt(idx) || ""
                     var dir = fp.substring(0, fp.lastIndexOf("/"))
-                    return dir.length > 0 && dir.split("/").pop() === "REF"
-                } catch (e) { return false }
+                    if (dir.length > 0 && dir.split("/").pop() === "REF") return true
+                    var rp = (multiGroupDialog && multiGroupDialog.refVideoPath) || ""
+                    if (rp.length > 0 && dir === rp) return true
+                } catch (e) {}
+                return false
             }
             var dims = root.reviewDimensions
             // quality_slide 模式下只检查第一个维度（第二个维度是滑动对比专用）
@@ -2491,6 +2495,12 @@ Component {
             // 主窗在最前 → 快捷键能直接命中
             try { root.requestActivate() } catch (e) {}
         }
+        // 多组对比面板配置了参考图 / 提示词并成功启动 → 展开左侧参考图侧栏 + 底部提示词栏。
+        // 与测试源自动化 _tsImportAndStart 的行为一致（等价手动点左下角「图片」按钮），
+        // 修复"绑定成功但侧栏收起导致看不到参考图"的问题。
+        onRefResourcesBound: function() {
+            root.refSidebarVisible = true
+        }
         // 提醒弹窗内联评分写入：复用主窗 _writeRating，自动持久化 + Toast 反馈也走同一条路。
         setRatingAt: function(idx, score, dimKey) {
             try { RatingLogic._writeRating(idx, score, dimKey) } catch (e) {}
@@ -2548,6 +2558,8 @@ Component {
         reviewChecklist: root.reviewChecklist
         // 远程任务列表：供上传前的用户权限校验（防止串账号上传）。
         remoteTaskList: root._remoteAllConfigs
+        // 参考视频目录（多组对比面板配置）：该目录不参与上传完整性校验
+        refVideoPath: multiGroupDialog.refVideoPath
 
         // ── 外部"一键上传"的结果路由 ──
         // 目的：让"评分数据"按钮 → 二次确认 → 直接上传，全程不需要打开评分数据面板。

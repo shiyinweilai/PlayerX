@@ -41,6 +41,11 @@ Rectangle {
 
     // ─── 对外信号 ─────────────────────────────────
     signal removeRequested()
+    // 用户手动点勾选框时触发（参数为期望的新勾选态）。父级据此直接写回
+    // _rowsModel.selected —— 不在本组件内对 row.selected 赋值，避免打断
+    // delegate 层 `selected: model.selected` 的属性绑定（否则后续「全选 / 全不选」
+    // 改模型时无法再推回已被手动勾过的行，导致全选对这些行失效）。
+    signal selectToggled(bool want)
     // 任意输入变化时触发，让父级重新计算 canStart 等
     // 注：QML Item 自带 state 属性（并附带 stateChanged 信号），故这里不能再叫 stateChanged。
     signal laneChanged()
@@ -58,7 +63,7 @@ Rectangle {
     border.color: "#2c2c32"
     border.width: 1
     radius: 6
-    implicitHeight: 40
+    implicitHeight: 32
 
     // 自然序字符串比较：把串切成"文本/数字"片段，文本按字典序（忽略大小写），
     // 数字按数值比，从而保证 "1 < 2 < 10 < 11"，与 Finder/Explorer 一致。
@@ -200,8 +205,8 @@ Rectangle {
         anchors.fill: parent
         anchors.leftMargin: 10
         anchors.rightMargin: 10
-        anchors.topMargin: 6
-        anchors.bottomMargin: 6
+        anchors.topMargin: 3
+        anchors.bottomMargin: 3
         spacing: 8
 
         // 勾选框：仅勾选的行参与启动。外层根据勾选数分流：
@@ -212,7 +217,15 @@ Rectangle {
             Layout.preferredHeight: 24
             Layout.alignment: Qt.AlignVCenter
             checked: row.selected
-            onToggled: row.selected = checked
+            onToggled: {
+                // 关键：不要写 row.selected = checked —— 那会打断 delegate 的
+                // selected: model.selected 绑定。改为发信号让父级写回模型，
+                // 模型变化再经绑定推回本行，勾选态始终以模型为唯一数据源。
+                row.selectToggled(checked)
+                // 立即回弹到模型当前值，等父级写回后绑定会再刷新为正确态，
+                // 避免这一帧 UI 与模型短暂不一致。
+                checked = Qt.binding(function() { return row.selected })
+            }
             ToolTip.visible: hovered
             ToolTip.delay: 400
             ToolTip.text: row.selected ? "已参与启动（取消勾选可忽略本路）"
