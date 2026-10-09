@@ -375,93 +375,9 @@ Rectangle {
             ToolTip.text: row.currentPath()
         }
 
-        // 排序切换按钮：A↑ / A↓
-        Button {
-            id: sortBtn
-            text: row.sortMode === 1 ? "A↓" : "A↑"
-            Layout.preferredWidth: 32
-            Layout.preferredHeight: 28
-            Layout.alignment: Qt.AlignVCenter
-            hoverEnabled: true
-            ToolTip.visible: hovered
-            ToolTip.delay: 400
-            ToolTip.text: row.sortMode === 1 ? "当前：名称降序（点击切换为升序）"
-                                              : "当前：名称升序（点击切换为降序）"
-            onClicked: row.sortMode = (row.sortMode === 1 ? 0 : 1)
-            background: Rectangle {
-                color: sortBtn.down ? "#4a4a55"
-                      : sortBtn.hovered ? "#33333a"
-                                         : "#202024"
-                border.color: "#3a3a42"
-                border.width: 1
-                radius: 3
-            }
-            contentItem: Text {
-                text: sortBtn.text
-                color: "#e8e8ec"
-                font.pixelSize: 11
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-        }
-
-        // 列分隔
-        Rectangle {
-            Layout.preferredWidth: 1
-            Layout.preferredHeight: 22
-            Layout.alignment: Qt.AlignVCenter
-            color: "#2a2a32"
-        }
-
-        // 上一项 / 下一项
-        Button {
-            text: "↑"
-            Layout.preferredWidth: 28
-            Layout.preferredHeight: 28
-            Layout.alignment: Qt.AlignVCenter
-            enabled: row.visibleFiles.length > 0 && row.currentIndex > 0
-            onClicked: row.currentIndex = Math.max(0, row.currentIndex - 1)
-            background: Rectangle {
-                color: !parent.enabled ? "#1a1a1d"
-                      : parent.down ? "#4a4a55"
-                      : parent.hovered ? "#33333a"
-                                        : "#202024"
-                border.color: "#3a3a42"
-                border.width: 1
-                radius: 3
-            }
-            contentItem: Text {
-                text: parent.text
-                color: parent.enabled ? "#e8e8ec" : "#555"
-                font.pixelSize: 12
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-        }
-        Button {
-            text: "↓"
-            Layout.preferredWidth: 28
-            Layout.preferredHeight: 28
-            Layout.alignment: Qt.AlignVCenter
-            enabled: row.visibleFiles.length > 0 && row.currentIndex < row.visibleFiles.length - 1
-            onClicked: row.currentIndex = Math.min(row.visibleFiles.length - 1, row.currentIndex + 1)
-            background: Rectangle {
-                color: !parent.enabled ? "#1a1a1d"
-                      : parent.down ? "#4a4a55"
-                      : parent.hovered ? "#33333a"
-                                        : "#202024"
-                border.color: "#3a3a42"
-                border.width: 1
-                radius: 3
-            }
-            contentItem: Text {
-                text: parent.text
-                color: parent.enabled ? "#e8e8ec" : "#555"
-                font.pixelSize: 12
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-        }
+        // （原每行 A↑/A↓ 排序按钮、↑↓ 上一项/下一项按钮均已移除 ——
+        //   排序统一由顶部全局排序下拉控制，上一/下一项切换由顶部全局按钮控制，
+        //   sortMode 属性仍保留，由 MultiGroupDialog 注入全局值联动所有路。）
 
         // 删除本行
         Button {

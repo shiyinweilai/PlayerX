@@ -72,8 +72,10 @@ Rectangle {
     // 未锁定时 cell 边框 = 选中框（保持原视觉）。
     readonly property bool _phoneLocked: viewRoot && (viewRoot.phoneFixedActive || viewRoot.phoneAspectRatio > 0)
     border.color: cell._phoneLocked ? "#000"
+                : cell._isRefLane
+                  ? (cell._isActive ? "#d4a72c" : "#5c4718")
                 : (cell._isActive ? "#4a6fa5" : "#222")
-    border.width: 2
+    border.width: cell._isRefLane && !cell._phoneLocked ? 1 : 2
     Behavior on border.color { ColorAnimation { duration: 120 } }
 
 
@@ -102,6 +104,16 @@ Rectangle {
         var d = _dur()
         if (d <= 0) return false
         return (d - _pos()) <= _cellFrameDur() * 0.5
+    }
+
+    // REF 参考视频通道（lane 目录名为 REF）：只显示视频，不参与任何评分 UI。
+    // 依赖 Engine.filePathAt 的 NOTIFY（filesChanged），替换/切组后绑定自动重求值。
+    readonly property bool _isRefLane: {
+        try {
+            var fp = Engine.filePathAt(cell.playerIdx) || ""
+            var dir = fp.substring(0, fp.lastIndexOf("/"))
+            return dir.length > 0 && dir.split("/").pop() === "REF"
+        } catch (e) { return false }
     }
 
     // ─── 内容内框（手机比例 / 固定尺寸锁定）───────────────────
@@ -208,8 +220,9 @@ Rectangle {
         anchors.top: videoBox.top
         anchors.leftMargin: 6
         anchors.topMargin: 4
-        text: cell.playerIdx + 1
-        color: "#ffffff"
+        // REF 参考视频通道：数字换成金色 "REF"，一眼与普通评分通道区分
+        text: cell._isRefLane ? "REF" : (cell.playerIdx + 1)
+        color: cell._isRefLane ? "#f5c518" : "#ffffff"
         font.bold: true
         font.pixelSize: 12
         style: Text.Outline
@@ -327,6 +340,26 @@ Rectangle {
             hoverEnabled: true
             acceptedButtons: Qt.NoButton  // 仅悬停显示 ToolTip，不拦截点击
         }
+    }
+
+    // 【REF 通道专属标识】左上角第二行小字：紧跟路径胶囊下方换行显示，与左列对齐。
+    //   · 去掉胶囊底/描边，只留一行金色小字 + 描边阴影，避免与路径行抢视觉；
+    //   · 左边缘与序号徽标/路径胶囊同为 6px，整体左列两行整齐对齐；
+    //   · 跟随 effectiveChannelVisible（C 键）显隐，与其他 HUD 统一。
+    Text {
+        id: refBanner
+        anchors.left: videoBox.left
+        anchors.leftMargin: 6
+        anchors.top: pathBar.bottom
+        anchors.topMargin: 2
+        text: "◈ 参考视频 · 不参与评分"
+        color: "#f5c518"
+        font.pixelSize: 10
+        font.bold: true
+        style: Text.Outline
+        styleColor: "#99000000"
+        z: 5
+        visible: cell._isRefLane && viewRoot.effectiveChannelVisible
     }
 
     // 顶部右侧"通道信息"胶囊条：帧号 · 时间戳 · 文件名。
@@ -628,7 +661,9 @@ Rectangle {
             // ────── 第 3 行：多维评分行（multi_dim 模式，或其他模式有维度配置时）──────
             Column {
                 id: multiDimBlock
-                visible: viewRoot.reviewMode && (viewRoot.isMultiDimMode || viewRoot.cellReviewDimensions.length > 0)
+                // REF 参考视频通道不参与评分：整块隐藏（维度名 + 星星都不出现）
+                visible: !cell._isRefLane
+                         && viewRoot.reviewMode && (viewRoot.isMultiDimMode || viewRoot.cellReviewDimensions.length > 0)
                 spacing: 1
                 Layout.alignment: Qt.AlignRight
 

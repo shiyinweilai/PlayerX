@@ -752,6 +752,32 @@ ApplicationWindow {
     //        当勾选数 < 2 时仅走单文件夹打开，不会把 active 置 true。
     readonly property int kMinLanes: 2
 
+    // ─── 全局排序方式（手动模式所有通路共用）────────────────────
+    //   0 = 名称升序（默认，与原每路 A↑ 一致，保持当前设定）
+    //   1 = 名称降序
+    // 原每行的 A↑/A↓ 单独排序按钮已移除，统一由标题栏「排序」下拉控制。
+    // 变化时对所有已存在行批量生效，新行通过 delegate 绑定自动跟随。
+    // 持久化走 Rating QSettings（与"上次导入目录"同一机制，跨进程记忆）。
+    property int globalSortMode: {
+        var v = 0
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function") {
+                v = parseInt(Rating.loadString("mgd/globalSortMode", "0"), 10)
+            }
+        } catch (e) { v = 0 }
+        return (v === 1) ? 1 : 0
+    }
+    onGlobalSortModeChanged: {
+        // 写回 QSettings 持久化
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.saveString === "function") {
+                Rating.saveString("mgd/globalSortMode", String(globalSortMode))
+            }
+        } catch (e) { /* ignore */ }
+    }
+
     // ─── 对外属性 ───────────────────────────────────────────────────
     // 多组模式是否处于"已启动"状态：用户至少成功 start() 过一次，
     // 且 lanes 仍是当前打开的那一批（lanes 内容若被用户改动会自动失效）。
@@ -996,6 +1022,8 @@ ApplicationWindow {
         for (var li = 0; li < n; ++li) {
             var lane = _rowsModel.get(li)
             if (!lane || !lane.selected) continue
+            // REF 参考视频 lane（目录名 REF）只显示不评分，不参与完整性判定
+            if (String(lane.folderPath || "").split("/").pop() === "REF") continue
             var rt = _laneRuntime[li]
             if (!rt || !rt.visibleFiles) return false
             for (var fi = 0; fi < rt.visibleFiles.length; ++fi) {
@@ -3111,9 +3139,116 @@ ApplicationWindow {
             // 右上角操作按钮组：等高三连 + 统一圆角/边框样式，竖向居中对齐。
             // 全选/清空仅当 ≥1 路时启用；空态时禁用并降透明度，避免误操作。
             // 右上角固定位置让出最大可视空间给列表区，与底部状态栏分离。
-            RowLayout {
-                spacing: 8
+                RowLayout {
+                    spacing: 4
                 Layout.alignment: Qt.AlignVCenter
+                // ─── 全局排序下拉：控制所有通路的文件排序方式 ───
+                // 原每行 A↑/A↓ 按钮已移除；单路不再单独排序，统一由此控制。
+                // 点击弹出下拉（DarkMenu 深色主题），两项：名称升序 / 名称降序。
+                // 当前方式持久化到 Rating QSettings，下次打开保持上次选择。
+                Button {
+                    id: globalSortBtn
+                    text: "排序 " + (dlg.globalSortMode === 1 ? "A↓" : "A↑")
+                    hoverEnabled: true
+                    Layout.preferredHeight: 24
+                    Layout.preferredWidth: globalSortBtn.implicitWidth + 24
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: dlg.globalSortMode === 1
+                                  ? "所有通路：名称降序（点击切换）"
+                                  : "所有通路：名称升序（点击切换）"
+                    onClicked: {
+                        // sortModePopup 的父项就是这个按钮，x/y 必须相对按钮坐标系：
+                        // 右对齐按钮、弹在按钮正下方。之前误用 mapToItem(dlg.contentItem)
+                        // 把对话框坐标系的大坐标赋给弹层，弹到可视区外，表现为"点了没反应"。
+                        sortModePopup.x = globalSortBtn.width - sortModePopup.width
+                        sortModePopup.y = globalSortBtn.height + 4
+                        sortModePopup.open()
+                    }
+                    background: Rectangle {
+                        color: globalSortBtn.down ? "#4a4a55"
+                              : globalSortBtn.hovered ? "#33333a"
+                                                      : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: globalSortBtn.text
+                        color: "#e8e8ec"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    // 排序方式下拉（Popup + ListView，与 YuvSetupView 下拉风格一致；
+                    // 不用 Menu —— macOS 原生菜单路径下自定义 inline MenuItem 可能渲染为空白）
+                    Popup {
+                        id: sortModePopup
+                        width: 180
+                        height: sortList.contentHeight + 12
+                        padding: 6
+                        modal: false
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+
+                        background: Rectangle {
+                            color: "#14141a"
+                            border.color: "#3a3a44"
+                            border.width: 1
+                            radius: 6
+                        }
+                        contentItem: ListView {
+                            id: sortList
+                            clip: true
+                            implicitHeight: contentHeight
+                            interactive: false
+                            model: [ "名称升序 (A↑)", "名称降序 (A↓)" ]
+                            delegate: Item {
+                                id: sortDel
+                                width: sortList.width
+                                height: 30
+                                required property string modelData
+                                required property int index
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 4
+                                    color: sortRowMa.containsMouse ? "#2a2a32" : "transparent"
+                                }
+                                Text {
+                                    x: 10
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    // 注意：必须通过 delegate id 引用 modelData。
+                                    // parent.parent 是 ListView 的 contentItem，没有 modelData，
+                                    // 之前用 parent.parent.modelData 取到 undefined，文字全空。
+                                    text: sortDel.modelData
+                                    color: "#e8e8ec"
+                                    font.pixelSize: 12
+                                }
+                                // 当前生效项打 ✓
+                                Text {
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 10
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "✓"
+                                    color: "#7ec8ff"
+                                    font.pixelSize: 12
+                                    visible: dlg.globalSortMode === sortDel.index
+                                }
+                                MouseArea {
+                                    id: sortRowMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        dlg.globalSortMode = index
+                                        sortModePopup.close()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Button {
                     id: addLaneBtn
                     text: "➕ 新增"
@@ -3137,8 +3272,8 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
-                    Layout.preferredHeight: 30
-                    Layout.preferredWidth: 110
+                    Layout.preferredHeight: 24
+                    Layout.preferredWidth: addLaneBtn.implicitWidth + 24
                 }
                 Button {
                     id: selectAllBtn
@@ -3161,8 +3296,8 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
-                    Layout.preferredHeight: 30
-                    Layout.preferredWidth: 84
+                    Layout.preferredHeight: 24
+                    Layout.preferredWidth: selectAllBtn.implicitWidth + 24
                 }
                 Button {
                     id: deselectAllBtn
@@ -3185,9 +3320,9 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
-                    Layout.preferredHeight: 30
-                    // "清空"两字自适应宽度，避免被截断；保留富余 20px 防边距贴边。
-                    Layout.preferredWidth: deselectAllBtn.implicitWidth + 20
+                    Layout.preferredHeight: 24
+                    // 宽度按内容自适应 + 左右各 12px padding，与其余按钮统一规格。
+                    Layout.preferredWidth: deselectAllBtn.implicitWidth + 24
                 }
             }
         }
@@ -3221,6 +3356,8 @@ ApplicationWindow {
                         folderPath: model.folderPath
                         keyword: model.keyword
                         currentIndex: model.currentIndex
+                        // 全局排序：所有路共用一个排序方式（原每行 A↑ 按钮已移除）
+                        sortMode: dlg.globalSortMode
                         // 任何一路都允许删除（含最后一路）；删到 0 路后会显示空态占位卡。
                         removable: true
                         // 关键：让"📁 选择文件夹"对话框的起始目录跟随全局上一次导入目录。

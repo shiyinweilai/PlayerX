@@ -2407,6 +2407,14 @@ Component {
         unratedChecker: function() {
             var miss = []
             var n = Engine.fileCount
+            // REF 参考视频通道（lane 目录名为 REF）只显示不评分：跳过所有评分完整性检查
+            function _isRefLaneIdx(idx) {
+                try {
+                    var fp = Engine.filePathAt(idx) || ""
+                    var dir = fp.substring(0, fp.lastIndexOf("/"))
+                    return dir.length > 0 && dir.split("/").pop() === "REF"
+                } catch (e) { return false }
+            }
             var dims = root.reviewDimensions
             // quality_slide 模式下只检查第一个维度（第二个维度是滑动对比专用）
             if (root.isQualitySlideMode && dims && dims.length >= 2)
@@ -2415,6 +2423,7 @@ Component {
             if (hasDims) {
                 // 有维度配置时（不限于 multi_dim 模式）：每个通道的所有维度都 > 0 才算已评分
                 for (var i = 0; i < n; ++i) {
+                    if (_isRefLaneIdx(i)) continue  // REF 参考视频通道不参与评分校验
                     var v = root.cellRatings[i]
                     var allDone = true
                     if (typeof v !== "object" || v === null) {
@@ -2428,6 +2437,7 @@ Component {
                 }
             } else {
                 for (var j = 0; j < n; ++j) {
+                    if (_isRefLaneIdx(j)) continue  // REF 参考视频通道不参与评分校验
                     if (RatingLogic.ratingAt(j) <= 0) miss.push(j)
                 }
             }
@@ -2440,6 +2450,7 @@ Component {
             if (hasChecklist && typeof Rating !== "undefined") {
                 for (var k = 0; k < n; ++k) {
                     if (miss.indexOf(k) >= 0) continue  // 已在 miss 里，跳过
+                    if (_isRefLaneIdx(k)) continue     // REF 参考视频通道不参与评分校验
                     var fp = ""
                     try { fp = Engine.filePathAt(k) || "" } catch (e) { fp = "" }
                     if (fp.length === 0) { miss.push(k); continue }

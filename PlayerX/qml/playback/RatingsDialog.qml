@@ -867,6 +867,8 @@ Window {
                 if (!_isFolderChecked(d.key)) continue
                 // path 为空（"(未知文件夹)" 兜底）的不参与校验：它本来也不会上传
                 if (!d.path || d.path.length === 0) continue
+                // REF 参考视频文件夹（lane 目录名 REF）不参与评分，不拦截上传
+                if (d.path.split("/").pop() === "REF") continue
                 var rated = (d.ratedCount === undefined ? d.files.length : d.ratedCount)
                 var total = (d.totalVideos === undefined ? rated : d.totalVideos)
                 var ckMiss = (d.ckMissing === undefined ? 0 : d.ckMissing)
