@@ -1170,22 +1170,31 @@ function _tsImportAndStart(st, extractTarget) {
         if (legacyRef.length > 0) refDirs.push(legacyRef)
     }
     var csvRel = String(ts.promptCsv || "").trim()
-    var refAbs1 = refDirs.length > 0 ? effRoot + "/" + refDirs[0] : ""
-    var refAbs2 = refDirs.length > 1 ? effRoot + "/" + refDirs[1] : ""
+    // 参考图目录绝对路径列表：referenceDirs 数组每一项都绑定到对应槽位（1..N）
+    var refAbsList = []
+    for (var ri = 0; ri < refDirs.length; ++ri) {
+        refAbsList.push(refDirs[ri].length > 0 ? effRoot + "/" + refDirs[ri] : "")
+    }
     var csvAbs = csvRel.length > 0 ? effRoot + "/" + csvRel : ""
-    var bindRef1 = refAbs1.length > 0 && Fs.isDirectoryPath(refAbs1)
-    var bindRef2 = refAbs2.length > 0 && Fs.isDirectoryPath(refAbs2)
+    var bindRefList = []
+    for (var rb = 0; rb < refAbsList.length; ++rb) {
+        bindRefList.push(refAbsList[rb].length > 0 && Fs.isDirectoryPath(refAbsList[rb]))
+    }
     var bindCsv = csvAbs.length > 0 && Fs.fileExists(csvAbs)
-    // 绑定参考图（槽位 1/2）与提示词 CSV —— 绑定键是每路自己的文件夹
+    // 绑定参考图（槽位 1..N）与提示词 CSV —— 绑定键是每路自己的文件夹
     for (var k = 0; k < lanes.length; ++k) {
-        if (bindRef1) Reference.setReferenceFolder(lanes[k], refAbs1)
-        if (bindRef2) Reference.setReferenceFolder2(lanes[k], refAbs2)
+        for (var rb2 = 0; rb2 < bindRefList.length; ++rb2) {
+            if (bindRefList[rb2]) Reference.setReferenceFolderAt(lanes[k], refAbsList[rb2], rb2 + 1)
+        }
         if (bindCsv) Reference.setReferenceCsv(lanes[k], csvAbs)
+    }
+    var _boundRefNames = []
+    for (var rn = 0; rn < bindRefList.length; ++rn) {
+        if (bindRefList[rn]) _boundRefNames.push(refDirs[rn])
     }
     console.log("[TestSource] 根目录:", rootDir, " 组别:", st._chosenGroup || "(无)",
         " 路:", lanes.join(" | "),
-        " 参考图1:", bindRef1 ? refAbs1 : "(无)",
-        " 参考图2:", bindRef2 ? refAbs2 : "(无)",
+        " 参考图:", _boundRefNames.length > 0 ? _boundRefNames.join(",") : "(无)",
         " CSV:", bindCsv ? csvAbs : "(无)")
 
     // 导入并直接启动（loadFolders：仅勾选本次导入的路 → start → 进入打分界面；
@@ -1197,7 +1206,11 @@ function _tsImportAndStart(st, extractTarget) {
         return "导入失败：目录里没有可播放的视频，或路数已达 9 路上限"
     // 绑定到了参考图或提示词 → 自动展开左侧参考图侧栏 + 底部提示词栏
     // （等价于用户手动点左下角「图片」按钮）
-    if (bindRef1 || bindRef2 || bindCsv) _root.refSidebarVisible = true
+    var _anyRefBound = false
+    for (var ar = 0; ar < bindRefList.length; ++ar) {
+        if (bindRefList[ar]) { _anyRefBound = true; break }
+    }
+    if (_anyRefBound || bindCsv) _root.refSidebarVisible = true
     return ""
 }
 

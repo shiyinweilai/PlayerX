@@ -17,12 +17,10 @@ Item {
     property alias addDialog: addDialog
     property alias replaceDialog: replaceDialog
     property alias refSidebarCsvDlg: refSidebarCsvDlg
+    // 参考图三对话框（动态槽位版）：openForSlot(n) 指定目标槽位
     property alias refSidebarFileDlg: refSidebarFileDlg
     property alias refSidebarDirDlg: refSidebarDirDlg
     property alias refSidebarGroupedDlg: refSidebarGroupedDlg
-    property alias refSidebarFileDlg2: refSidebarFileDlg2
-    property alias refSidebarDirDlg2: refSidebarDirDlg2
-    property alias refSidebarGroupedDlg2: refSidebarGroupedDlg2
 
     FileDialog {
         id: addDialog
@@ -41,8 +39,6 @@ Item {
                     Engine.openFiles(selectedFiles)
                 } else if (selectedFiles.length > 1) {
                     // 多个文件：直接横向铺开（等价于拖拽多个文件到窗口）。
-                    // 不再走 loadFlatFiles（它只打开第 0 个并把布局切成 Single 单视图，
-                    // 导致"点击打开多文件"与"拖拽多文件"行为不一致）。
                     var arr = selectedFiles
                     if (arr.length > 9) arr = arr.slice(0, 9)
                     // 确保横向铺开：layoutMode=1（SideBySide）。若用户此前手动
@@ -60,8 +56,6 @@ Item {
     }
 
     // 「替换本路」对话框：单选文件，原地调用 Engine.replaceAt(idx, url)。
-    // 使用 root.pendingReplaceIdx 传递"哪一路要被替换"——FileDialog 不能绑定变量，
-    // 在 cell 点 🔁 时先写入该 idx，然后 open() 。
     FileDialog {
         id: replaceDialog
         title: "替换本路视频文件"
@@ -89,78 +83,59 @@ Item {
         }
     }
 
-    // 侧边栏：选择单张参考图（image 模式）
+    // ── 参考图三对话框（动态槽位版）────────────────────────────────
+    // openForSlot(slot)：先记住目标槽位再打开；onAccepted 按 slot 写入。
+    // slot=1 时走旧 API 名（kind/path），≥2 走 kindN/pathN —— 但持久化层已统一，
+    // 直接调 setReference*At 即可。
+
+    // 选择单张参考图（image 模式）
     FileDialog {
         id: refSidebarFileDlg
         title: "选择参考图（固定图）"
         nameFilters: [ "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.gif)" ]
         fileMode: FileDialog.OpenFile
+        property int targetSlot: 1
+        function openForSlot(slot) {
+            targetSlot = slot
+            open()
+        }
         onAccepted: {
             if (root.refCurrentFolder.length === 0) return
-            Reference.setReferenceUrl(root.refCurrentFolder, selectedFile)
+            Reference.setReferenceUrlAt(root.refCurrentFolder, selectedFile, targetSlot)
         }
     }
 
-    // 侧边栏：选择参考图文件夹（folder 模式 → 跟随对比组同步切换）
+    // 选择参考图文件夹（folder 模式 → 跟随对比组同步切换）
     FolderDialog {
         id: refSidebarDirDlg
         title: "选择参考图文件夹（跟随对比组）"
+        property int targetSlot: 1
+        function openForSlot(slot) {
+            targetSlot = slot
+            open()
+        }
         onAccepted: {
             if (root.refCurrentFolder.length === 0) return
-            // 不传 selectedFolder（QUrl）字符串截取，统一用 C++ 端的 URL → path 转换
-            if (!Reference.setReferenceFolderUrl(root.refCurrentFolder, selectedFolder)) {
-                // 选错了空文件夹时静默失败；提示文字过多反而干扰。
-                // 用户能从「占位提示」直接看到"未绑定"再次操作。
+            if (!Reference.setReferenceFolderUrlAt(root.refCurrentFolder, selectedFolder, targetSlot)) {
+                // 选错了空文件夹时静默失败；用户能从「占位提示」看到"未绑定"再次操作。
             }
         }
     }
 
-    // 侧边栏：选择「分组多图」根目录（grouped 模式）
+    // 选择「分组多图」根目录（grouped 模式）
     //   预期结构：root/组A/图1.jpg · root/组A/图2.jpg · root/组B/图1.jpg ...
-    //   跟随对比组切换时：按名称/索引对齐到同名子组的「组首」；◀▶在长队列上递归跨组。
     FolderDialog {
         id: refSidebarGroupedDlg
         title: "选择参考图根目录（分组多图、两级文件夹）"
+        property int targetSlot: 1
+        function openForSlot(slot) {
+            targetSlot = slot
+            open()
+        }
         onAccepted: {
             if (root.refCurrentFolder.length === 0) return
-            if (!Reference.setGroupedFolderUrl(root.refCurrentFolder, selectedFolder)) {
+            if (!Reference.setGroupedFolderUrlAt(root.refCurrentFolder, selectedFolder, targetSlot)) {
                 // 路径结构不符合（无子目录 / 子目录里无图片）时静默失败。
-            }
-        }
-    }
-
-    // 侧边栏（槽位 2）：选择单张参考图
-    FileDialog {
-        id: refSidebarFileDlg2
-        title: "选择参考图（固定图）"
-        nameFilters: [ "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.gif)" ]
-        fileMode: FileDialog.OpenFile
-        onAccepted: {
-            if (root.refCurrentFolder.length === 0) return
-            Reference.setReferenceUrl2(root.refCurrentFolder, selectedFile)
-        }
-    }
-
-    // 侧边栏（槽位 2）：选择参考图文件夹
-    FolderDialog {
-        id: refSidebarDirDlg2
-        title: "选择第 2 张参考图文件夹（跟随对比组）"
-        onAccepted: {
-            if (root.refCurrentFolder.length === 0) return
-            if (!Reference.setReferenceFolderUrl2(root.refCurrentFolder, selectedFolder)) {
-                // 静默失败
-            }
-        }
-    }
-
-    // 侧边栏（槽位 2）：选择「分组多图」根目录
-    FolderDialog {
-        id: refSidebarGroupedDlg2
-        title: "选择第 2 张参考图根目录（分组多图、两级文件夹）"
-        onAccepted: {
-            if (root.refCurrentFolder.length === 0) return
-            if (!Reference.setGroupedFolderUrl2(root.refCurrentFolder, selectedFolder)) {
-                // 静默失败
             }
         }
     }

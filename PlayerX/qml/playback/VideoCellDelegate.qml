@@ -200,22 +200,22 @@ Rectangle {
         }
     }
 
-    // 序号徽标（受全局"通道信息"开关控制，默认显示）
-    Rectangle {
+    // 序号数字（受全局"通道信息"开关控制，默认显示）：无背景矩形，仅纯数字，
+    // 与参考图窗口编号样式保持一致。
+    Label {
         id: idxBadge
         anchors.left: videoBox.left
         anchors.top: videoBox.top
-        anchors.margins: 6
-        width: 22; height: 22; radius: 4
-        color: "#cc000000"
+        anchors.leftMargin: 6
+        anchors.topMargin: 4
+        text: cell.playerIdx + 1
+        color: "#ffffff"
+        font.bold: true
+        font.pixelSize: 12
+        style: Text.Outline
+        styleColor: "#80000000"
         z: 5
         visible: viewRoot.effectiveChannelVisible
-        Label {
-            anchors.centerIn: parent
-            text: cell.playerIdx + 1
-            color: "white"
-            font.bold: true
-        }
     }
 
     // 顶部左上角"路径胶囊"：紧贴序号徽标右侧，显性显示 父目录/文件名。

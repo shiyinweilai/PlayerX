@@ -241,6 +241,7 @@ qt_add_qml_module(PlayerX
         # ── 主界面布局区块 ──
         qml/playback/TopBar.qml
         qml/playback/RefSidebar.qml
+        qml/playback/RefSidebarSlot.qml
         qml/playback/CsvBottomBar.qml
         qml/playback/RefSidebarHSplitter.qml
         qml/playback/CsvBottomVSplitter.qml

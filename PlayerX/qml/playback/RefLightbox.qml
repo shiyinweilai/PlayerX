@@ -18,7 +18,9 @@ Item {
     z: 999
     focus: visible
 
-    // ── 外部传入的参考图状态（由 Main.qml 绑定） ──
+    // ── 外部传入的参考图状态（由 Main.qml 绑定）──
+    // v4：任意槽位（1..9）。每槽位状态由 Main 层函数提供。
+    property var slotStateProvider: null   // function(slot) → {url,has,count,index,canNav,offset}
     property url  refCurrentUrl: ""
     property url  refCurrentUrl2: ""
     property bool refHasCurrent: false
@@ -32,6 +34,8 @@ Item {
     // 偏移写入回调（外部绑定到 root._refImgOffset / root._refImgOffset2）
     property int  refImgOffset: 0
     property int  refImgOffset2: 0
+    // N 槽位版：每槽位独立偏移由 Main 层管理，Lightbox 只发 bumpSlot 信号
+    signal bumpSlotOffset(int slot, int delta)
 
     // ── 缩放与平移状态 ────────────────────────────────────────
     property real zoom: 1.0
@@ -40,16 +44,34 @@ Item {
     property real panY: 0
     readonly property real minZoom: 1.0
     readonly property real maxZoom: 10.0
-    // 当前查看的是哪一槽位的参考图：1 = 上半（默认），2 = 下半
+    // 当前查看的是哪一槽位的参考图：1..9（默认 1）
     property int currentSlot: 1
-    readonly property url currentSrc: currentSlot === 2 ? refCurrentUrl2 : refCurrentUrl
-    readonly property bool currentHas: currentSlot === 2 ? refHasCurrent2 : refHasCurrent
-    readonly property int    currentCount: currentSlot === 2 ? refImageCount2 : refImageCount
-    readonly property int    currentIndex: currentSlot === 2 ? refCurrentImageIndex2 : refCurrentImageIndex
-    readonly property bool   currentCanNav: currentSlot === 2 ? refCanNav2 : refCanNav
+
+    // 当前槽位状态（优先走 slotStateProvider；未提供时回退旧双槽位属性）
+    readonly property url  currentSrc: {
+        if (slotStateProvider) return slotStateProvider(currentSlot).url
+        return currentSlot === 2 ? refCurrentUrl2 : refCurrentUrl
+    }
+    readonly property bool currentHas: {
+        if (slotStateProvider) return slotStateProvider(currentSlot).has
+        return currentSlot === 2 ? refHasCurrent2 : refHasCurrent
+    }
+    readonly property int  currentCount: {
+        if (slotStateProvider) return slotStateProvider(currentSlot).count
+        return currentSlot === 2 ? refImageCount2 : refImageCount
+    }
+    readonly property int  currentIndex: {
+        if (slotStateProvider) return slotStateProvider(currentSlot).index
+        return currentSlot === 2 ? refCurrentImageIndex2 : refCurrentImageIndex
+    }
+    readonly property bool currentCanNav: {
+        if (slotStateProvider) return slotStateProvider(currentSlot).canNav
+        return currentSlot === 2 ? refCanNav2 : refCanNav
+    }
 
     // 推进当前槽位的偏移
     function bumpOffset(delta) {
+        if (slotStateProvider) { bumpSlotOffset(currentSlot, delta); return }
         if (currentSlot === 2) refImgOffset2 += delta
         else                   refImgOffset  += delta
     }
@@ -60,7 +82,7 @@ Item {
 
     function open() { openSlot(1) }
     function openSlot(slot) {
-        currentSlot = (slot === 2 ? 2 : 1)
+        currentSlot = Math.max(1, Math.min(9, slot))
         if (!currentHas) return
         zoom = 1.0; panX = 0; panY = 0
         visible = true

@@ -1043,7 +1043,7 @@ ApplicationWindow {
     //     "rootDir":      "bench_xxx",                   // 可选：内容根目录（相对 workDir，"/" 开头
     //                                                    //   视为绝对路径；即 zip 内的顶层目录名）
     //     "laneDirs":     ["A", "B"],                    // 必填：参与对比的子目录（按顺序对应第 1..N 路）
-    //     "referenceDirs":["first_frames","second_frames"], // 可选：参考图目录（相对内容根，最多 2 个，
+    //     "referenceDirs":["refpic1","refpic2"],          // 可选：参考图目录（相对内容根，最多 2 个，
     //                                                    //   按顺序对应侧栏两个参考图窗口；旧写法 referenceDir 单串仍兼容）
     //     "promptCsv":    "prompt.csv"                   // 可选：提示词 CSV（相对内容根）
     //   }
@@ -1366,6 +1366,7 @@ ApplicationWindow {
         function onReferenceChanged(folder)     { root._refTick++ }
         function onReferenceTextChanged(folder) { root._refTick++ }
         function onReference2Changed(folder)    { root._refTick++ }
+        function onReferenceSlotChanged(folder, slot) { root._refTick++ }
     }
     Connections {
         target: Engine
@@ -1449,7 +1450,71 @@ ApplicationWindow {
             root._refImgOffset = 0
             root._refTextOffset = 0
             root._refImgOffset2 = 0
+            // N 槽位版：全部槽位偏移归零；窗口数回落到已绑定槽位数
+            for (var s = 0; s < root._refSlotOffsets.length; ++s)
+                root._refSlotOffsets[s] = 0
+            root._refSlotUiCount = 1
         }
+    }
+
+    // ─── 参考图：N 槽位状态（v4）───────────────────────────────────
+    // 每槽位独立的手动浏览偏移（index = slot-1）；切组归零。
+    // _refSlotUiCount：侧栏当前展开的窗口数（用户点「＋」增加；切组回落）。
+    // 侧栏实际窗口数 = max(已绑定槽位数, _refSlotUiCount)，见 RefSidebar。
+    property var _refSlotOffsets: [0, 0, 0, 0, 0, 0, 0, 0, 0]
+    property int _refSlotUiCount: 1
+
+    function _refSlotOffset(slot) {
+        var i = slot - 1
+        if (i < 0 || i >= _refSlotOffsets.length) return 0
+        return _refSlotOffsets[i]
+    }
+    // ◀▶ / Lightbox 翻图：推进某槽位偏移
+    function _refBumpSlotOffset(slot, delta) {
+        var i = slot - 1
+        if (i < 0 || i >= _refSlotOffsets.length) return
+        _refSlotOffsets[i] += delta
+        _refSlotOffsetsChanged()
+    }
+    // 「＋ 添加参考图」：展开一个新窗口（新槽位）
+    function _refAddSlotWindow() {
+        var target = Math.min(Reference.maxSlots(),
+                              Math.max(_refBoundSlotCount(), _refSlotUiCount) + 1)
+        _refSlotUiCount = target
+    }
+    // 当前文件夹已绑定的槽位数（0 起算用 slotCountOf）
+    function _refBoundSlotCount() {
+        if (!refCurrentFolder || refCurrentFolder.length === 0) return 0
+        return Reference.slotCountOf(refCurrentFolder)
+    }
+    // 每槽位状态汇总（供 RefLightbox slotStateProvider）
+    function _refSlotState(slot) {
+        var u = ""
+        var has = false
+        var cnt = 0
+        var idx = -1
+        var canNav = false
+        if (refCurrentVideo && refCurrentVideo.length > 0) {
+            u = Reference.referenceUrlForVideoOffsetAt(refCurrentVideo, _refSlotOffset(slot), slot)
+            has = String(u).length > 0
+            cnt = Reference.referenceImageCountForVideoAt(refCurrentVideo, slot)
+            var mode = ""
+            if (refCurrentFolder && refCurrentFolder.length > 0)
+                mode = Reference.kindOfAt(refCurrentFolder, slot)
+            canNav = (mode === "folder" || mode === "grouped")
+        }
+        if (has) {
+            // 从进度文本反解当前索引（"N / M"）
+            var t = Reference.referenceProgressForVideoOffsetAt(refCurrentVideo, _refSlotOffset(slot), slot)
+            if (t && t.length > 0) {
+                var slash = t.indexOf("/")
+                if (slash > 0) {
+                    var n = parseInt(t.substring(0, slash).trim(), 10)
+                    if (!isNaN(n)) idx = n - 1
+                }
+            }
+        }
+        return { url: u, has: has, count: cnt, index: idx, canNav: canNav, offset: _refSlotOffset(slot) }
     }
 
     // ─── 参考图（槽位 2）─────────────────────────────────────────────
@@ -1919,9 +1984,6 @@ ApplicationWindow {
         refSidebarFileDlg: fileDialogs.refSidebarFileDlg
         refSidebarDirDlg: fileDialogs.refSidebarDirDlg
         refSidebarGroupedDlg: fileDialogs.refSidebarGroupedDlg
-        refSidebarFileDlg2: fileDialogs.refSidebarFileDlg2
-        refSidebarDirDlg2: fileDialogs.refSidebarDirDlg2
-        refSidebarGroupedDlg2: fileDialogs.refSidebarGroupedDlg2
         refLightbox: refLightbox
         leftNavBar: leftNavBar
     }
@@ -2518,6 +2580,7 @@ Component {
     RefLightbox {
         id: refLightbox
         anchors.fill: parent
+        slotStateProvider: function(slot) { return root._refSlotState(slot) }
         refCurrentUrl: root.refCurrentUrl
         refCurrentUrl2: root.refCurrentUrl2
         refHasCurrent: root.refHasCurrent
@@ -2530,6 +2593,7 @@ Component {
         refCanNav2: root.refCanNav2
         onRefImgOffsetChanged: root._refImgOffset = refImgOffset
         onRefImgOffset2Changed: root._refImgOffset2 = refImgOffset2
+        onBumpSlotOffset: function(slot, delta) { root._refBumpSlotOffset(slot, delta) }
     }
 
     // ── YUV slot 数变 0（关闭全部 / 点 ← 返回）时，若仍在 YUV tab，
