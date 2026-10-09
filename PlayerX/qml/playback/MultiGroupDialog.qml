@@ -513,6 +513,10 @@ ApplicationWindow {
         for (var i = 0; i < _rowsModel.count; ++i) {
             var l = _rowsModel.get(i)
             if (!l) continue
+            // 参考视频是启动时临时追加的"不评分展示路"，不属于用户配置的通道，
+            // 不写入持久化——否则返回再打开会多出一条空的通道行（如"通道6 未导入"）。
+            if (l.isRefVideo === true) continue
+            if (_isRefLaneByPath(l.folderPath)) continue
             arr.push({
                 selected:    !!l.selected,
                 folderPath:  l.folderPath || "",
@@ -651,6 +655,13 @@ ApplicationWindow {
             // 否则启动阶段就会整树扫描并触发系统权限弹窗、拖慢启动。
             if (folder && _isHomeOrUserDir(folder)) {
                 console.warn("[MGD] _restoreLanes 跳过 home/user 根目录:", folder)
+                continue
+            }
+            // 历史脏数据：旧版本曾把启动时追加的"参考视频路"写进了持久化。
+            // 参考视频由参考资料区单独维护（refVideoPath），不应作为评分通道恢复，
+            // 否则会多出一条重复/空通道（如"通道6"）。命中则跳过。
+            if (folder && _isRefLaneByPath(folder)) {
+                console.warn("[MGD] _restoreLanes 跳过残留的参考视频路:", folder)
                 continue
             }
 
@@ -2331,7 +2342,8 @@ ApplicationWindow {
                                 currentPath: refVis[0] || "",
                                 currentIndex: 0,
                                 allCount: refFiles.length,
-                                visibleCount: refVis.length
+                                visibleCount: refVis.length,
+                                isRefVideo: true
                             })
                             _laneRuntime.push({ allFiles: refFiles, visibleFiles: refVis })
                         }
@@ -3049,6 +3061,22 @@ ApplicationWindow {
     //   · 合并后会触发一次 _persistLanes() 同步 lanes 持久化。
     // 返回：本次实际新追加的路径数。
     function _mergeFolderHistoryIntoLanes() {
+        // ★ 先清除启动时临时追加、残留在模型里的"参考视频行"。
+        //    参考视频由参考资料区（refVideoPath）单独维护，启动时才作为不评分的
+        //    REF 路临时追加进 _rowsModel 用于播放；但对话框再次打开时它不应作为
+        //    通道显示（会表现为多出的"通道N 未导入 —"）。这里按 isRefVideo 标志
+        //    或 _isRefLaneByPath 命中逐条移除，保证通道列表只含用户真实配置的路。
+        for (var rv = _rowsModel.count - 1; rv >= 0; --rv) {
+            var lrv = _rowsModel.get(rv)
+            if (!lrv) continue
+            if (lrv.isRefVideo === true || _isRefLaneByPath(lrv.folderPath)) {
+                _rowsModel.remove(rv)
+                if (rv < _laneRuntime.length) _laneRuntime.splice(rv, 1)
+                console.log("[MGD] 打开对话框：移除残留参考视频行 idx=", rv,
+                            " folder=", lrv.folderPath)
+            }
+        }
+
         // 自愈：已有但处于「未导入」空态的路（如恢复时文件夹为空、之后内容
         // 才被补齐），趁打开对话框重新扫描刷新，避免用户看到空路无从下手。
         // 与历史合并无关，无论历史是否为空都执行。
@@ -3075,6 +3103,9 @@ ApplicationWindow {
             if (_rowsModel.count >= kMaxLanes) break
             var folderPath = hist[k]
             if (!folderPath || existing[folderPath]) continue
+
+            // 参考视频路由参考资料区维护，不作为评分通道合并进来
+            if (_isRefLaneByPath(folderPath)) continue
 
             // 历史里若残留 home/user 根目录，恢复时也直接跳过（扫描前拦截），
             // 否则又会触发整树扫描 + 系统权限弹窗，拖慢每次打开对话框。
