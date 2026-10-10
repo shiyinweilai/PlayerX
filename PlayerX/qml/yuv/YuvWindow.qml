@@ -1662,10 +1662,36 @@ Item {
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: YuvBridge.fileName(slotWin.slotIdx)
+                                    // 显示「最后一级目录 / 文件名」：目录段冷色，文件名亮色。
+                                    // 从 YuvBridge.filePath 解析完整绝对路径的父目录名。
+                                    text: {
+                                        const full = YuvBridge.filePath(slotWin.slotIdx) || ""
+                                        const name = YuvBridge.fileName(slotWin.slotIdx) || ""
+                                        if (full.length === 0) return name
+                                        const norm = full.replace(/\\/g, "/")
+                                        const parts = norm.split("/")
+                                        const parent = parts.length > 1 ? parts[parts.length - 2] : ""
+                                        return parent.length > 0
+                                            ? ("<font color=\"#9fd3ff\">" + parent + "/</font><font color=\"#e8e8ec\">" + name + "</font>")
+                                            : ("<font color=\"#e8e8ec\">" + name + "</font>")
+                                    }
+                                    textFormat: Text.RichText
                                     color: "#c8c8d0"; font.pixelSize: 11
                                     elide: Text.ElideMiddle
                                     Layout.maximumWidth: slotScreen.width - 80
+
+                                    // 悬浮显示完整绝对路径
+                                    ToolTip.visible: slotNameHover.containsMouse
+                                                     && (YuvBridge.filePath(slotWin.slotIdx) || "").length > 0
+                                    ToolTip.delay: 400
+                                    ToolTip.timeout: 8000
+                                    ToolTip.text: YuvBridge.filePath(slotWin.slotIdx) || ""
+                                    MouseArea {
+                                        id: slotNameHover
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        acceptedButtons: Qt.NoButton
+                                    }
                                 }
 
                                 // 轮播模式：显示当前位置和总数
