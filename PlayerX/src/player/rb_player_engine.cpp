@@ -605,10 +605,12 @@ void RBPlayerEngine::rbSeek(double seconds) {
         // 各路独立 clamp 到自己的 duration；若超过则停在结尾
         double dur = p->rbDuration();
         double t   = (dur > 0.0) ? std::min(seconds, dur) : seconds;
+        fprintf(stderr, "[RBE-SEEK-LANE] idx-seek target=%.3f dur=%.3f clamped=%.3f file=%s\n",
+                seconds, dur, t, p->rbFilePath().c_str());
         p->rbSeekTo(t);
         // 暂停时主动刷新到 seek 后的首帧（多窗对齐）
         if (!m_playing.load()) {
-            p->rbRefreshPausedFrame(200);
+            p->rbRefreshPausedFrame(500);
         }
     }
 
@@ -653,7 +655,12 @@ void RBPlayerEngine::rbSeekRelative(double deltaSeconds) {    // ─────
     std::lock_guard<std::mutex> lk(m_mutex);
     if (m_players.empty()) return;
 
-    // 1) 主时钟那批路：算统一目标 + clamp，并更新主时钟锚点
+    // 1) 统一目标：以主时钟当前位置为基准 + delta。
+    //    << / >> / ←→ 等全局控制的语义是"所有路一起 ±N 秒并对齐"，
+    //    因此独立时钟路（如动态追加的参考视频、或曾被单路 ▶ 播放而脱离
+    //    主时钟的路）也要被重新拉回主时钟并对齐到统一目标 —— 与"拖拽全局
+    //    进度条"一致。否则会出现"只有主时钟那几路快进、独立路纹丝不动"
+    //    的分裂现象（参考视频追加路即走独立时钟，正是此 bug 的来源）。
     double masterCur    = rbComputeMasterLocked();
     double masterTarget = std::max(0.0, masterCur + deltaSeconds);
     m_anchorWall = rbWallTime();
@@ -662,24 +669,16 @@ void RBPlayerEngine::rbSeekRelative(double deltaSeconds) {    // ─────
 
     for (auto& p : m_players) {
         if (!p) continue;
-        if (p->rbUseMasterClock()) {
-            // 主时钟路：跳到统一目标（clamp 到自身 duration）
-            double dur = p->rbDuration();
-            double t   = (dur > 0.0) ? std::min(masterTarget, dur) : masterTarget;
-            p->rbSeekTo(t);
-            if (!m_playing.load()) {
-                p->rbRefreshPausedFrame(200);
-            }
-        } else {
-            // 独立时钟路：基于该路自身当前位置 ±delta
-            double cur = p->rbCurrentTime();
-            double dur = p->rbDuration();
-            double t   = std::max(0.0, cur + deltaSeconds);
-            if (dur > 0.0) t = std::min(t, dur);
-            p->rbSeekTo(t);
-            if (!p->rbIsPlaying()) {
-                p->rbRefreshPausedFrame(200);
-            }
+        // 独立时钟路重新并入主时钟，确保本次及后续播放都与其它路同步。
+        if (!p->rbUseMasterClock()) {
+            p->rbEnableMasterClock(true);
+            p->rbSetSpeed(m_speed);
+        }
+        double dur = p->rbDuration();
+        double t   = (dur > 0.0) ? std::min(masterTarget, dur) : masterTarget;
+        p->rbSeekTo(t);
+        if (!m_playing.load()) {
+            p->rbRefreshPausedFrame(200);
         }
     }
 

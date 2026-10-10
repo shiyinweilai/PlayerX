@@ -662,6 +662,36 @@ bool RBVideoPlayer::rbRefreshPausedFrame(int timeoutMs) {
     // 目标时间（rbSeekTo 已把 m_playStartPts 设为目标 seek 秒数）
     const double target = m_playStartPts.load();
 
+    // ─── 候选兜底帧 ──────────────────────────────────────────────────
+    // 根因修复（2026-10-10）：旧逻辑对所有 framePts+0.5<target 的帧直接
+    // 丢弃。当 seek 目标接近/超过视频末尾（如 target=5.0、素材末帧只到
+    // 4.5）时，末尾可解出的帧全部早于 target，被逐帧丢光 → 队列掏空 →
+    // 200ms 内再也等不到满足条件的帧 → 超时 → 画面停旧帧。
+    // 实测日志：A/B 侥幸拿到 got=4.500，C/REF 因串行排队尾在 200ms 内
+    // 等不到而 TIMEOUT。
+    //
+    // 新逻辑：遇到早于 target 的帧不立即丢，而是暂存为“最接近候选”，
+    // 保留 pts 最大（最接近 target）的一帧；只有确认后面还有更接近的帧
+    // 时才释放旧候选。拿到 >=target-0.5 的帧直接采用；若直到超时都只有
+    // 早于 target 的帧（典型的末尾 seek），用候选兜底而非放弃。
+    AVFrame* bestCandidate   = nullptr;
+    double   bestCandidatePts = -1.0;
+
+    auto adoptFrame = [&](AVFrame* f, double framePts) -> bool {
+        if (!f) return false;
+        rbUpdateFrameIndex(framePts);
+        rbReleaseCurrentFrame();
+        m_currentFrame    = f;
+        m_currentFramePts = framePts;
+        m_playStartPts.store(framePts);
+        m_playStartWallTime.store(rbWallTime());
+        m_currentTime.store(framePts);
+        m_seekPending.store(false);
+        fprintf(stderr, "[RBVP-REFRESH] OK file=%s target=%.3f got=%.3f\n",
+                m_filePath.c_str(), target, framePts);
+        return true;
+    };
+
     while (clock::now() < deadline) {
         AVFrame* peek = m_frameQueue->rbPeek();
         if (peek) {
@@ -672,31 +702,42 @@ bool RBVideoPlayer::rbRefreshPausedFrame(int timeoutMs) {
                 ? rawPts * av_q2d(m_videoTimeBase)
                 : 0.0;
 
-            // 与 rbGetCurrentFrame 保持一致：丢弃 seek 关键帧前的"前置帧"
-            if (m_seekPending.load() && framePts + 0.5 < target) {
-                AVFrame* drop = m_frameQueue->rbPop();
-                if (drop) av_frame_free(&drop);
+            // 命中目标（含 0.5s 容差内）→ 直接采用，释放候选
+            if (!m_seekPending.load() || framePts + 0.5 >= target) {
+                AVFrame* f = m_frameQueue->rbPop();
+                if (f) {
+                    if (bestCandidate) { av_frame_free(&bestCandidate); bestCandidate = nullptr; }
+                    return adoptFrame(f, framePts);
+                }
                 continue;
             }
 
-            // 弹出目标帧作为当前显示帧
+            // 早于目标的“前置帧”：留作候选（保留最接近 target 的一帧），
+            // 不再无条件丢弃。
             AVFrame* f = m_frameQueue->rbPop();
             if (f) {
-                rbUpdateFrameIndex(framePts);
-                rbReleaseCurrentFrame();
-                m_currentFrame    = f;
-                m_currentFramePts = framePts;
-                // 对齐时钟，但保持暂停状态：清除 seekPending，使 rbGetCurrentFrame
-                // 后续即便切到 Playing 也不会再丢这一帧
-                m_playStartPts.store(framePts);
-                m_playStartWallTime.store(rbWallTime());
-                m_currentTime.store(framePts);
-                m_seekPending.store(false);
-                return true;
+                if (framePts > bestCandidatePts) {
+                    if (bestCandidate) av_frame_free(&bestCandidate);
+                    bestCandidate    = f;
+                    bestCandidatePts = framePts;
+                } else {
+                    av_frame_free(&f);
+                }
             }
+            continue;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+
+    // 超时兜底：若收集到了早于目标的最接近帧（末尾 seek 典型场景），
+    // 采用它而非让画面停在 seek 前的旧帧。
+    if (bestCandidate) {
+        fprintf(stderr, "[RBVP-REFRESH] FALLBACK file=%s target=%.3f use-closest=%.3f\n",
+                m_filePath.c_str(), target, bestCandidatePts);
+        return adoptFrame(bestCandidate, bestCandidatePts);
+    }
+    fprintf(stderr, "[RBVP-REFRESH] TIMEOUT file=%s target=%.3f timeoutMs=%d (画面停旧帧)\n",
+            m_filePath.c_str(), target, timeoutMs);
     return false;
 }
 

@@ -1260,11 +1260,11 @@ ToolBar {
             visible: Engine.fileCount > 0
             Layout.preferredWidth: visible ? implicitWidth : 0
             enabled: Engine.duration > 0
-            // 相对快退：每路在自己当前位置 -5s，独立时钟的路不被对齐到主时钟
-            // 首帧短路：不改变按钮外观，用户连点也不会触发无效 seek，避免解码器空跑卡顿
+            // 与键盘 ← 键完全一致：全局绝对 seek 到 position-5，所有路
+            // （含独立时钟的参考视频路）统一对齐到同一时间点。
             onClicked: {
                 if (Logic._isAtFirstFrameNow()) return
-                Engine.seekRelative(-5)
+                Engine.seek(Math.max(0, Engine.position - 5))
             }
             ToolTip.visible: hovered
             ToolTip.delay: 400
@@ -1326,11 +1326,12 @@ ToolBar {
             visible: Engine.fileCount > 0
             Layout.preferredWidth: visible ? implicitWidth : 0
             enabled: Engine.duration > 0
-            // 相对快进：每路在自己当前位置 +5s，独立时钟的路不被对齐到主时钟
-            // 末帧短路：外观保持一致，用户连点也不会触发无效 seek
+            // 与键盘 → 键完全一致：全局绝对 seek 到 position+5，所有路
+            // （含独立时钟的参考视频路）统一对齐到同一时间点，避免
+            // seekRelative 下各路独立 +5s 导致的分帧不一致。
             onClicked: {
                 if (Logic._isAtLastFrameNow()) return
-                Engine.seekRelative(5)
+                Engine.seek(Math.min(Engine.duration, Engine.position + 5))
             }
             ToolTip.visible: hovered
             ToolTip.delay: 400
