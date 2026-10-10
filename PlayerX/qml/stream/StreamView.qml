@@ -153,6 +153,7 @@ property real panelSplitRatio: 0.5
     property int _exportFirst: 0
     property int _exportLast: -1
     property string _exportFrameFmt: "yuv"
+    property string _exportOutPath: ""   // 本次导出的输出文件/目录，完成弹窗用于「打开所在文件夹」
     property int _exportRangeFirstUi: 1
     property int _exportRangeLastUi: 1
 
@@ -178,11 +179,13 @@ property real panelSplitRatio: 0.5
             streamView._endExportUi(false, "没有待导出的文件")
             return
         }
-        streamView._beginExportUi("正在导出 0/" + paths.length + "…")
+        // 本次批量导出统一落在一个独立文件夹（后端按目录内是否重名自动去重 -2/-3）
+        streamView._beginExportUi("正在导出 0/" + paths.length + "…", outputDir)
 
         var done = 0
         var failed = 0
         var errorMsgs = []
+        var realDir = ""
         for (var i = 0; i < paths.length; ++i) {
             var srcPath = paths[i]
             var baseName = streamView._fileBasename(srcPath)
@@ -198,9 +201,11 @@ property real panelSplitRatio: 0.5
             streamView._updateExportUi("正在导出 (" + (i + 1) + "/" + paths.length + ") " + baseName + "…",
                                        (i + 1) / paths.length)
 
-            var result = StreamBridge.demuxToAnnexB(srcPath, outPath)
+            // 首个文件建立批次目录，其余文件复用（后端 demuxToAnnexB batchDir 参数）
+            var result = StreamBridge.demuxToAnnexB(srcPath, outPath, realDir)
             if (result.ok) {
                 ++done
+                if (result.outDir && result.outDir.length > 0) realDir = result.outDir
             } else {
                 ++failed
                 var err = result.error || "未知错误"
@@ -208,20 +213,48 @@ property real panelSplitRatio: 0.5
                 console.log("[Export] failed:", srcPath, err)
             }
         }
+        // 批量完成后补一份批次 README（多文件清单；单文件时后端已写，跳过）
+        if (realDir.length > 0 && done > 1) {
+            try {
+                var lines = []
+                for (var j = 0; j < paths.length; ++j) {
+                    var bn = streamView._fileBasename(paths[j])
+                    var di = bn.lastIndexOf(".")
+                    if (di > 0) bn = bn.substring(0, di)
+                    var inf = streamView._probeCache[paths[j]] || {}
+                    var cdc = inf.codec || "h264"
+                    var ex = (cdc === "vvc") ? ".vvc" : ((cdc === "hevc") ? ".265" : ".h264")
+                    lines.push("  " + bn + ex)
+                }
+                var readme = "PlayerX 码流分析导出 —— 裸码流批次（Annex-B）\n"
+                           + "==========================================\n\n"
+                           + "导出时间: " + Qt.formatDateTime(new Date(), "yyyy-MM-dd hh:mm:ss") + "\n"
+                           + "文件数  : " + done + "\n\n"
+                           + "本批文件\n--------\n"
+                           + lines.join("\n") + "\n\n"
+                           + "每个文件都是从容器中抽取的裸视频码流，NALU 使用\n"
+                           + "Annex-B 起始码分隔，无封装、无音频、无时间戳。\n"
+                Fs.writeTextFile(realDir + "/README.txt", readme)
+            } catch (e) { console.log("[Export] batch readme failed:", e) }
+        }
 
+        // 全部完成后：目录以上报为准，完成弹窗「打开所在文件夹」可用
+        if (realDir.length > 0) streamView._exportOutPath = realDir
         if (failed === 0)
-            streamView._endExportUi(true, "已导出 " + done + " 个裸码流文件到 " + outputDir)
+            streamView._endExportUi(true, "已导出 " + done + " 个裸码流文件"
+                + (realDir.length > 0 ? ("\n目录：" + realDir) : ""))
         else
             streamView._endExportUi(false, "导出完成：成功 " + done + " / 失败 " + failed
                 + (errorMsgs.length > 0 ? "（" + errorMsgs.join("; ") + "）" : ""))
     }
 
-    function _beginExportUi(msg) {
+    function _beginExportUi(msg, outPath) {
         streamView._exporting = true
         streamView._exportDone = false
         streamView._exportOk = true
         streamView._exportProgress = 0
         streamView._exportStatus = msg || "正在导出…"
+        streamView._exportOutPath = (outPath && String(outPath).length > 0) ? String(outPath) : ""
         exportProgressPopup.open()
     }
     function _updateExportUi(msg, ratio) {
@@ -238,8 +271,9 @@ property real panelSplitRatio: 0.5
         streamView._exportStatus = msg || (ok ? "导出完成" : "导出失败")
         if (ok && streamView._exportProgress < 1) streamView._exportProgress = 1
         if (!exportProgressPopup.opened) exportProgressPopup.open()
-        exportStatusClearTimer.interval = ok ? 2500 : 8000
-        exportStatusClearTimer.restart()
+        // 完成弹窗驻留：成功后不再自动关闭（用户可能要打开所在文件夹）；
+        // 失败也驻留，但保留 Esc / 点击外部 / 关闭按钮可手动关。
+        exportStatusClearTimer.stop()
     }
     function _normalizeExportRatio(message, ratio) {
         if (ratio > 0) return Math.min(1, Number(ratio))
@@ -297,8 +331,34 @@ property real panelSplitRatio: 0.5
         try { dir = Fs.downloadsDir() } catch (e) { dir = "" }
         if (!dir) { streamView._exportStatus = "无法定位下载目录"; return }
         const outPath = dir.replace(/\/+$/, "") + "/" + streamView._exportStem(src) + "_frames.csv"
-        streamView._beginExportUi("开始导出帧列表…")
+        streamView._beginExportUi("开始导出帧列表…", outPath)
         StreamBridge.startExportFrameList(src, outPath)
+    }
+
+    // 块级信息导出：先弹帧范围（默认全帧），确认后写 CSV。
+    // 输出文件名 <stem>_blocks_<first>-<last>.csv，落在所选目录。
+    function _openExportBlockRange() {
+        if (streamView._exporting) return
+        const src = streamView._primaryExportPath()
+        if (!src) { streamView._exportStatus = "请先选择文件"; return }
+        const n = streamView._probeFrameCount(src)
+        streamView._exportRangeFirstUi = 1
+        streamView._exportRangeLastUi = n > 0 ? n : 1
+        streamView._exportKind = "blocks"
+        exportRangePopup.open()
+    }
+
+    // 帧级统计汇总导出：全帧一行一帧，直接写下载目录。
+    function _exportFrameStats() {
+        if (streamView._exporting) return
+        const src = streamView._primaryExportPath()
+        if (!src) { streamView._exportStatus = "请先选择文件"; return }
+        var dir = ""
+        try { dir = Fs.downloadsDir() } catch (e) { dir = "" }
+        if (!dir) { streamView._exportStatus = "无法定位下载目录"; return }
+        const outPath = dir.replace(/\/+$/, "") + "/" + streamView._exportStem(src) + "_framestats.csv"
+        streamView._beginExportUi("开始导出帧统计…", outPath)
+        StreamBridge.startExportFrameStatsCsv(src, outPath)
     }
 
     Component.onCompleted: {
@@ -1307,15 +1367,32 @@ property real panelSplitRatio: 0.5
                             Menu {
                                 id: exportMenu
                                 y: parent.height + 4
-                                width: 200
+                                // 宽度自适应最长菜单项：内容行 implicitWidth + 左右
+                                // padding（12 左 + 8 右）+ 菜单自身 padding（4+4）。
+                                width: {
+                                    const items = [
+                                        "导出裸码流", "导出 YUV（全部）", "导出指定帧…",
+                                        "导出帧列表", "导出块级信息（划分/QP/预测/MV）…",
+                                        "导出帧统计汇总（层级/参考/码率/QP）…"
+                                    ]
+                                    let w = 0
+                                    for (const s of items) {
+                                        const m = fontMetrics_breadcrumb.advanceWidth(s)
+                                        w = Math.max(w, m)
+                                    }
+                                    return Math.ceil(w + 12 + 8 + 4 + 4 + 6)
+                                }
                                 background: Rectangle {
-                                    implicitWidth: 200
                                     color: "#cc1a1a1f"
                                     border.color: "#33ffffff"
                                     radius: 6
                                 }
                                 topPadding: 6; bottomPadding: 6
                                 leftPadding: 4; rightPadding: 4
+                                FontMetrics {
+                                    id: fontMetrics_breadcrumb
+                                    font.pixelSize: 12
+                                }
                                 MenuItem {
                                     text: "导出裸码流"
                                     height: 28
@@ -1347,9 +1424,34 @@ property real panelSplitRatio: 0.5
                                     background: Rectangle { color: parent.hovered ? "#803a3a3d" : "transparent"; radius: 4 }
                                 }
                                 MenuItem {
-                                    text: "导出帧列表 CSV"
+                                    text: "导出帧列表"
                                     height: 28
                                     onTriggered: streamView._exportFrameList()
+                                    contentItem: Text {
+                                        text: parent.text; color: "#e8e8ec"; font.pixelSize: 12
+                                        leftPadding: 12; verticalAlignment: Text.AlignVCenter
+                                    }
+                                    background: Rectangle { color: parent.hovered ? "#803a3a3d" : "transparent"; radius: 4 }
+                                }
+                                // 块级深度信息（划分 / QP / 预测 / MV）逐块明细：
+                                // 每块一行，含帧号/帧类型/位置尺寸/QP/深度/预测/参考/MV。
+                                // 深度分析用：可导入 pandas/Excel 做编码决策统计。
+                                MenuItem {
+                                    text: "导出块级信息（划分/QP/预测/MV）…"
+                                    height: 28
+                                    onTriggered: streamView._openExportBlockRange()
+                                    contentItem: Text {
+                                        text: parent.text; color: "#e8e8ec"; font.pixelSize: 12
+                                        leftPadding: 12; verticalAlignment: Text.AlignVCenter
+                                    }
+                                    background: Rectangle { color: parent.hovered ? "#803a3a3d" : "transparent"; radius: 4 }
+                                }
+                                // 帧级统计汇总：每帧一行（层级/参考/字节/QP/块占比），
+                                // 与块级明细互补：块级看空间决策，帧统计看时域节奏。
+                                MenuItem {
+                                    text: "导出帧统计汇总（层级/参考/码率/QP）…"
+                                    height: 28
+                                    onTriggered: streamView._exportFrameStats()
                                     contentItem: Text {
                                         text: parent.text; color: "#e8e8ec"; font.pixelSize: 12
                                         leftPadding: 12; verticalAlignment: Text.AlignVCenter
@@ -3272,14 +3374,23 @@ property real panelSplitRatio: 0.5
                 const h = info.height || 0
                 const pix = (info.pixFmt || "yuv").replace(/[^A-Za-z0-9]+/g, "")
                 const name = streamView._exportStem(src) + "_" + w + "x" + h + "_" + pix + ".yuv"
-                streamView._beginExportUi("开始导出 YUV…")
+                streamView._beginExportUi("开始导出 YUV…", outDir + "/" + name)
                 StreamBridge.startExportYuv(src, outDir + "/" + name,
                                             streamView._exportFirst, streamView._exportLast)
             } else if (streamView._exportKind === "frames") {
-                streamView._beginExportUi("开始导出指定帧…")
+                streamView._beginExportUi("开始导出指定帧…", outDir)
                 StreamBridge.startExportFrames(src, outDir,
                                                streamView._exportFirst, streamView._exportLast,
                                                streamView._exportFrameFmt)
+            } else if (streamView._exportKind === "blocks") {
+                const a = streamView._exportFirst + 1
+                const b = streamView._exportLast + 1
+                const name = streamView._exportStem(src)
+                             + "_blocks_" + a + "-" + b + ".csv"
+                streamView._beginExportUi("开始导出块级信息…", outDir + "/" + name)
+                StreamBridge.startExportBlockInfoCsv(src, outDir + "/" + name,
+                                                     streamView._exportFirst,
+                                                     streamView._exportLast)
             } else {
                 streamView._doExportRawBitstream(outDir)
             }
@@ -3303,11 +3414,18 @@ property real panelSplitRatio: 0.5
         }
         contentItem: Column {
             spacing: 10
-            Text { text: "导出指定帧"; color: "#e8e8ec"; font.pixelSize: 14; font.bold: true }
+            Text {
+                text: streamView._exportKind === "blocks" ? "导出块级信息" : "导出指定帧"
+                color: "#e8e8ec"; font.pixelSize: 14; font.bold: true
+            }
             Text {
                 text: {
                     const src = streamView._primaryExportPath()
                     const n = streamView._probeFrameCount(src)
+                    if (streamView._exportKind === "blocks") {
+                        return streamView._fileBasename(src)
+                               + (n > 0 ? ("  ·  共 " + n + " 帧（划分/QP/预测/MV 逐块 CSV）") : "")
+                    }
                     return streamView._fileBasename(src) + (n > 0 ? ("  ·  共 " + n + " 帧") : "")
                 }
                 color: "#9aa0a6"; font.pixelSize: 11
@@ -3338,6 +3456,7 @@ property real panelSplitRatio: 0.5
                 }
             }
             Row {
+                visible: streamView._exportKind !== "blocks"
                 spacing: 6
                 Repeater {
                     model: [
@@ -3386,6 +3505,20 @@ property real panelSplitRatio: 0.5
                             streamView._exportFirst = a - 1
                             streamView._exportLast = b - 1
                             exportRangePopup.close()
+                            if (streamView._exportKind === "blocks") {
+                                // 块级 CSV：直接写下载目录，免去目录弹窗
+                                var dir = ""
+                                try { dir = Fs.downloadsDir() } catch (e) { dir = "" }
+                                if (!dir) { streamView._exportStatus = "无法定位下载目录"; return }
+                                const name = streamView._exportStem(src)
+                                             + "_blocks_" + a + "-" + b + ".csv"
+                                streamView._beginExportUi("开始导出块级信息…",
+                                                          dir.replace(/\/+$/, "") + "/" + name)
+                                StreamBridge.startExportBlockInfoCsv(
+                                    src, dir.replace(/\/+$/, "") + "/" + name,
+                                    streamView._exportFirst, streamView._exportLast)
+                                return
+                            }
                             streamView._exportKind = streamView._exportFrameFmt === "yuv" ? "yuv" : "frames"
                             exportFolderDialog.title = "选择导出目录"
                             exportFolderDialog.open()
@@ -3500,6 +3633,22 @@ property real panelSplitRatio: 0.5
                         }
                     }
                 }
+                Rectangle {
+                    visible: streamView._exportDone
+                           && streamView._exportOk
+                           && streamView._exportOutPath !== ""
+                    width: 116; height: 28; radius: 5
+                    color: "#252528"
+                    border.color: "#3a3a44"
+                    Text { anchors.centerIn: parent; text: "打开所在文件夹"; color: "#cccccc"; font.pixelSize: 12 }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            try { Fs.revealInFileManager(streamView._exportOutPath) } catch (e) {}
+                        }
+                    }
+                }
             }
         }
         Keys.onEscapePressed: {
@@ -3514,6 +3663,11 @@ property real panelSplitRatio: 0.5
         target: StreamBridge
         function onExportJobProgress(message, ratio) {
             streamView._updateExportUi(message, ratio)
+        }
+        function onExportJobOutDir(dirPath) {
+            // 实际导出目录以 C++ 上报为准（独立文件夹，含 -2/-3 去重后缀）
+            if (dirPath && String(dirPath).length > 0)
+                streamView._exportOutPath = String(dirPath)
         }
         function onExportJobFinished(ok, message) {
             streamView._endExportUi(ok, message)

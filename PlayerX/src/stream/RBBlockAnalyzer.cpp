@@ -88,6 +88,26 @@ bool RBBlockAnalyzer::openDecoder() {
         m_frameCount = (fps > 0 && dur > 0)
                        ? static_cast<int>(std::llround(fps * dur)) : 0;
     }
+    // ★ 裸流兜底：裸 .265/.h264/.vvc 无容器元数据，nb_frames=0 且时长推不出，
+    //   上层（块级 CSV 导出）拿到 0 会直接报"无法确定帧数"。这里用一次
+    //   轻量包扫描数出视频包数（与 probe 元数据 / UI 弹窗"共 N 帧"同口径，
+    //   裸流中 1 包 = 1 帧）。只数不送解码，开销毫秒级；prefetchLoop 随后会
+    //   重新打开文件（不复用此读取位置），无污染；预解码完成后 m_frameCount
+    //   还会被真实输出帧数覆盖校正。
+    if (m_frameCount <= 0) {
+        AVPacket* pk = av_packet_alloc();
+        int n = 0;
+        while (pk && av_read_frame(m_fmt, pk) >= 0) {
+            if (pk->stream_index == m_videoStream) ++n;
+            av_packet_unref(pk);
+        }
+        av_packet_free(&pk);
+        if (n > 0) m_frameCount = n;
+        // 读到了 EOF：让 demuxer 回到起点，后续操作不受影响（防御性）。
+        if (av_seek_frame(m_fmt, -1, 0, AVSEEK_FLAG_BACKWARD) < 0) {
+            // seek 失败也无妨：prefetchLoop 会重新打开文件，此 ctx 不再用于读包。
+        }
+    }
 
     // 块级支持判定
     switch (m_codecId) {
@@ -757,6 +777,7 @@ void RBBlockAnalyzer::prefetchLoop() {
     auto commitFrame = [&](AVFrame* f) {
         auto fb = std::make_shared<RBFrameBlocks>();
         fb->frameIndex = outIndex;
+        fb->pictType = int(f->pict_type);
         extractBlocks(f, *fb);
         if (m_wantFrameImage)
             saveYuv(f, *fb);        // 零转换开销，仅平面 memcpy

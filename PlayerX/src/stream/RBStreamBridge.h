@@ -223,7 +223,8 @@ public:
     // 若源文件已是裸流（.h264/.265/.hevc），直接复制。
     // path: 输入文件路径  outPath: 输出文件路径（含文件名）
     // 返回 QVariantMap：{ ok(bool), frameCount(int), fileSize(qint64), error(QString) }
-    Q_INVOKABLE QVariantMap demuxToAnnexB(const QString& path, const QString& outPath);
+    Q_INVOKABLE QVariantMap demuxToAnnexB(const QString& path, const QString& outPath,
+                                          const QString& batchDir = QString());
 
     // ── 码流分析 setup 导出（不占 slot）──────────────────────────
     // first/last 为 0-based 输出序，含端点；last < 0 表示直到末帧。
@@ -238,6 +239,22 @@ public:
                                        int first, int last, const QString& format);
     Q_INVOKABLE void startExportFrameList(const QString& path, const QString& outPath);
     Q_INVOKABLE bool exportBusy() const { return m_exportBusy; }
+
+    // ── 块级深度信息 CSV 导出（划分/QP/预测/MV 逐块，跨帧批量）────
+    // 不占 slot：内部独立打开 RBBlockAnalyzer（软解 + side data），
+    // 从显示序 first 到 last（0-based，last<0 = 到末帧）逐帧取块，
+    // 每块一行：帧号 / 帧类型 / POC / x,y,w,h / QP / 深度 / 类型 / MV / 参考。
+    // 返回 { ok, frameCount, blockCount, error }；进度经 exportJobProgress 上报。
+    Q_INVOKABLE QVariantMap exportBlockInfoCsv(const QString& path, const QString& outPath,
+                                               int first, int last);
+    Q_INVOKABLE void startExportBlockInfoCsv(const QString& path, const QString& outPath,
+                                              int first, int last);
+
+    // ── 帧级统计汇总 CSV（每帧一行：层级/参考/字节/QP/块占比）────
+    // 数据源全部来自已有后台解析器（包扫描 + RefStructure + OrderMapper +
+    // BlockAnalyzer 逐帧块统计），导出本身不再新开解码器，速度影响小。
+    Q_INVOKABLE QVariantMap exportFrameStatsCsv(const QString& path, const QString& outPath);
+    Q_INVOKABLE void startExportFrameStatsCsv(const QString& path, const QString& outPath);
 
     // ── 底层原始画面（供 CU 网格叠加在真实渲染图上）──────────────
     // 返回该 slot 当前帧解码后的画面。QML 侧用量：
@@ -279,6 +296,8 @@ signals:
     void demuxProgress(const QString& path, double ratio);  // 裸码流导出进度
     void exportJobProgress(const QString& message, double ratio);
     void exportJobFinished(bool ok, const QString& message);
+    // 导出产物所在独立文件夹（成功时上报，QML 用于「打开所在文件夹」）
+    void exportJobOutDir(const QString& dirPath);
     // 帧图像就绪（画面解码完成，QML 需刷新 Image source）
     void frameImageChanged(int slot);
     // 编码顺序勾选变化（POC 展示口径切换，QML 需刷新帧列表绑定）

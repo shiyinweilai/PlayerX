@@ -75,6 +75,9 @@ struct RBFrameBlocks {
     int                    minQp = 0, maxQp = 0;
     bool                   valid = false;   // false 表示该帧无块级数据
 
+    // ── 帧级上下文（commitFrame 从 AVFrame 顺带提取，供导出/分析用）──
+    int                    pictType = 0;     // AVPictureType：I/P/B…
+
     // ── 底层原始画面（RGB24），供 UI 在真实画面上叠加 CU 网格 ──
     // 仅在需要显示原始画面时才填充（见 rbEnableFrameImage）。
     std::vector<uint8_t>   rgb;             // 宽*高*3，行主序；空表示不可用

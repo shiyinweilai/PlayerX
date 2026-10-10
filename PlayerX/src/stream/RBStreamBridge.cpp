@@ -22,6 +22,8 @@
 #include "stream/RBStreamBridge.h"
 #include "stream/RBBlockAnalyzer.h"
 #include "stream/RBSyntaxAnalyzer.h"
+#include "stream/RBFrameOrderMapper.h"
+#include "stream/RBRefStructureParser.h"
 #include "core/rb_demuxer.h"
 
 extern "C" {
@@ -38,6 +40,7 @@ extern "C" {
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
+#include <QDateTime>
 #include <QImage>
 #include <QTextStream>
 #include <QCryptographicHash>
@@ -219,6 +222,32 @@ int qtSplitDepth(int ctu, int w, int h) {
     int d = 0;
     for (int s = ctu; s > p2; s >>= 1) ++d;
     return d;
+}
+
+// ── 块级 CSV 导出辅助：预测类型 / 参考方向的人类可读标签 ──────────
+// 与 UI 详情卡片（StreamView.qml cardCol.predLabel/refLabel）语义一致：
+//   pred: Skip / Intra / Inter / IBC / Palette（VVC predMode 对齐；H.264 无专属值）
+//   ref : L0 / L1 / Bi（predFlag 位掩码：1=L0 2=L1 3=Bi；Intra 空）
+QString predModeLabel(const rb::RBBlockInfo& bi) {
+    if (bi.isSkip) return QStringLiteral("Skip");
+    if (bi.isIntra) return QStringLiteral("Intra");
+    switch (bi.predMode) {
+    case 3:  return QStringLiteral("Palette");
+    case 4:  return QStringLiteral("IBC");
+    default: return QStringLiteral("Inter");
+    }
+}
+
+QString predFlagLabel(const rb::RBBlockInfo& bi) {
+    if (bi.isIntra) return QString();
+    const int pf = bi.predFlag;
+    if (pf == 3) return QStringLiteral("Bi");
+    if (pf == 2) return QStringLiteral("L1");
+    if (pf == 1) return QStringLiteral("L0");
+    if (bi.refIdxL1 == 1) return QStringLiteral("L1");
+    if (bi.refIdx == 0 && bi.mvxL0 == 0.f && bi.mvyL0 == 0.f) return QString();
+    if (bi.refIdx >= 0) return QStringLiteral("L0");
+    return QString();
 }
 
 } // namespace
@@ -1985,7 +2014,45 @@ QVariantMap RBStreamBridge::probeFile(const QString& path) const {
 // 裸码流导出（解封装 AVCC → Annex-B）
 // ═════════════════════════════════════════════════════════════════════════
 
-QVariantMap RBStreamBridge::demuxToAnnexB(const QString& path, const QString& outPath) {
+// ═════════════════════════════════════════════════════════════════════════
+// 导出目录辅助：每次导出建立独立文件夹 + 自动生成 README（列说明）
+// ═════════════════════════════════════════════════════════════════════════
+static QString makeExportDir(const QString& parentDir, const QString& folderName,
+                             QString* errOut) {
+    if (errOut) *errOut = QString();
+    QDir parent(parentDir);
+    if (!parent.exists() && !QDir().mkpath(parentDir)) {
+        if (errOut) *errOut = "无法创建导出目录";
+        return QString();
+    }
+    // 同名目录已存在：附加 -2/-3… 避免覆盖上次导出
+    QString dirPath = parentDir + "/" + folderName;
+    for (int i = 2; QDir(dirPath).exists(); ++i)
+        dirPath = parentDir + "/" + folderName + "-" + QString::number(i);
+    if (!QDir().mkpath(dirPath)) {
+        if (errOut) *errOut = "无法创建导出目录";
+        return QString();
+    }
+    return dirPath;
+}
+
+static bool writeReadme(const QString& dirPath, const QString& readmeText,
+                        QString* errOut = nullptr) {
+    if (errOut) *errOut = QString();
+    QFile f(dirPath + "/README.txt");
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        if (errOut) *errOut = "无法写入 README";
+        return false;
+    }
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts << readmeText;
+    f.close();
+    return true;
+}
+
+QVariantMap RBStreamBridge::demuxToAnnexB(const QString& path, const QString& outPath,
+                                          const QString& batchDir) {
     QVariantMap result;
     result["ok"] = false;
     result["frameCount"] = 0;
@@ -2036,10 +2103,34 @@ QVariantMap RBStreamBridge::demuxToAnnexB(const QString& path, const QString& ou
         std::strcmp(fmt->iformat->name, "hevc") == 0 ||
         std::strcmp(fmt->iformat->name, "vvc") == 0));
 
-    QFile outFile(outPath);
+    // 独立文件夹：本次批量导出全部落在这里，不与历史混淆。
+    // batchDir 非空 = 同一批次已建好的目录（多文件批量导出共用一个文件夹），
+    // 此时不再新建，README 也只在第一个文件时写一次（由目录是否已有判定）。
+    const QFileInfo outFi(outPath);
+    QString dirPath;
+    if (!batchDir.isEmpty()) {
+        dirPath = batchDir;
+        if (!QDir().mkpath(dirPath)) {
+            avformat_close_input(&fmt);
+            result["error"] = "无法创建导出目录";
+            return result;
+        }
+    } else {
+        QString errD;
+        dirPath = makeExportDir(outFi.absolutePath(),
+                                QFileInfo(outFi.completeBaseName()).fileName() + "_raw",
+                                &errD);
+        if (dirPath.isEmpty()) {
+            avformat_close_input(&fmt);
+            result["error"] = errD;
+            return result;
+        }
+    }
+    const QString realOutPath = dirPath + "/" + outFi.fileName();
+    QFile outFile(realOutPath);
     if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         avformat_close_input(&fmt);
-        result["error"] = "无法创建输出文件：" + outPath;
+        result["error"] = "无法创建输出文件：" + realOutPath;
         return result;
     }
 
@@ -2171,6 +2262,36 @@ QVariantMap RBStreamBridge::demuxToAnnexB(const QString& path, const QString& ou
     result["ok"] = true;
     result["frameCount"] = frameCount;
     result["fileSize"] = qint64(bytesWritten);
+    result["outDir"] = dirPath;
+    // README：非批次模式（单文件导出）直接写；
+    // 批量模式由 QML 首个文件建立目录后传入 batchDir，README 也只写一次
+    if (batchDir.isEmpty()) {
+        writeReadme(dirPath, QString::fromUtf8(
+            R"README(PlayerX 码流分析导出 —— 裸码流（Annex-B）
+==========================================
+
+源文件 : %1
+导出时间: %2
+
+文件
+----
+%3
+    从容器（MP4/MKV/FLV 等）中抽取出的裸视频码流。
+    NALU 使用 Annex-B 起始码（00 00 01 / 00 00 00 01）分隔，
+    无容器封装、无音频、无时间戳。
+
+用途
+----
+- 送编码器（如 x264/x265/vvenc 的分析模式）做码流级诊断：
+      x265 --analysis-load xxx.txt ... / vvenc --parse
+- 送标准一致性测试工具（如 HEVC 的 HM/vtm 解码校验）。
+- 与原始文件对比确认抽取过程无损（文件大小与帧数应当对得上
+  容器中的视频 track）。
+)README")
+            .arg(QDir::toNativeSeparators(path))
+            .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+            .arg(outFi.fileName()));
+    }
     return result;
 }
 
@@ -2289,7 +2410,18 @@ QVariantMap RBStreamBridge::exportDecodedYuv(const QString& path, const QString&
         r["error"] = err;
         return r;
     }
-    QFile out(outPath);
+    // 独立文件夹 + README
+    const QFileInfo outFi(outPath);
+    QString errD;
+    const QString dirPath = makeExportDir(outFi.absolutePath(),
+                                          QFileInfo(outFi.completeBaseName()).fileName(),
+                                          &errD);
+    if (dirPath.isEmpty()) {
+        closeDec(o);
+        r["error"] = errD;
+        return r;
+    }
+    QFile out(dirPath + "/" + outFi.fileName());
     if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         closeDec(o);
         r["error"] = "无法创建输出文件";
@@ -2330,12 +2462,57 @@ QVariantMap RBStreamBridge::exportDecodedYuv(const QString& path, const QString&
     const int w = o.dec->width, h = o.dec->height;
     closeDec(o);
     out.close();
+    // README：YUV 读取方法
+    writeReadme(dirPath, QString::fromUtf8(
+        R"README(PlayerX 码流分析导出 —— 原始 YUV
+==================================
+
+源文件 : %1
+导出时间: %2
+帧范围  : 第 %3 - %4 帧（解码输出序，1 起；0 起 0=全部）
+
+文件
+----
+%5
+    所有帧按顺序拼接的单一大文件，无帧头无分隔。
+
+读取方法
+--------
+- 分辨率: %6 x %7，像素格式 %8
+- 每帧大小 = w × h × 像素字节数（yuv420p/yuvj420p = 1.5 字节/像素；
+  yuv422 = 2；yuv444 = 3；10bit 格式如 yuv420p10le 每分量 2 字节，
+  yuv420p10le 同样 1.5 像素/字节的 2 倍 = 3 字节/像素）
+- 第 n 帧（0 起）偏移 = n × 每帧大小，先 Y 平面（w×h），后 U、V
+  （各 w/2 × h/2，420 采样）
+- Python 快速读取（numpy）:
+      import numpy as np
+      w, h = %6, %7
+      fs = w * h * 3 // 2          # yuv420p 8bit
+      with open("%5", "rb") as f:
+          f.seek(k * fs)           # 第 k 帧
+          y = np.frombuffer(f.read(w*h), np.uint8).reshape(h, w)
+          u = np.frombuffer(f.read(w//2 * h//2), np.uint8).reshape(h//2, w//2)
+          v = np.frombuffer(f.read(w//2 * h//2), np.uint8).reshape(h//2, w//2)
+- ffmpeg 快速查看: ffmpeg -f rawvideo -pixel_format %8
+      -video_size %6x%7 -i %5 -frames:v 1 out.png
+
+用途
+----
+主观质量对比 / PSNR-SSIM 计算 / 送编码器重编码，都以这份原始
+YUV 为基准（解码链路决定，与容器封装无关）。
+)README")
+        .arg(QDir::toNativeSeparators(path))
+        .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+        .arg(first + 1).arg(last >= 0 ? last + 1 : -1)
+        .arg(outFi.fileName())
+        .arg(w).arg(h).arg(pix));
     r["ok"] = written > 0;
     r["frameCount"] = written;
     r["error"] = written > 0 ? QString() : "没有写出任何帧";
     r["pixFmt"] = pix;
     r["width"] = w;
     r["height"] = h;
+    r["outDir"] = dirPath;
     return r;
 }
 
@@ -2350,7 +2527,14 @@ QVariantMap RBStreamBridge::exportDecodedFrames(const QString& path, const QStri
     if (first < 0) first = 0;
     const QString fmt = format.toLower();
     const bool asPng = (fmt != "yuv");
-    QDir().mkpath(outDir);
+    // 独立文件夹 + README（文件夹名与单帧文件名同源：<stem>）
+    const QString stem = QFileInfo(path).completeBaseName();
+    QString errD;
+    const QString realDir = makeExportDir(outDir, stem + "_frames", &errD);
+    if (realDir.isEmpty()) {
+        r["error"] = errD;
+        return r;
+    }
     QString err;
     OpenedDec o;
     if (!openDec(path, o, &err)) {
@@ -2361,11 +2545,10 @@ QVariantMap RBStreamBridge::exportDecodedFrames(const QString& path, const QStri
     AVPacket* pkt = av_packet_alloc();
     AVFrame* fr = av_frame_alloc();
     int idx = 0, written = 0;
-    QString stem = QFileInfo(path).completeBaseName();
     auto handle = [&](AVFrame* f) {
         if (last >= 0 && idx > last) return;
         if (idx >= first && (last < 0 || idx <= last)) {
-            const QString name = QString("%1/%2_%3").arg(outDir, stem)
+            const QString name = QString("%1/%2_%3").arg(realDir, stem)
                                     .arg(idx, 6, 10, QChar('0'));
             bool ok = false;
             if (asPng) {
@@ -2413,8 +2596,38 @@ QVariantMap RBStreamBridge::exportDecodedFrames(const QString& path, const QStri
     av_packet_free(&pkt);
     av_frame_free(&fr);
     closeDec(o);
+    // README：文件命名规则
+    writeReadme(realDir, QString::fromUtf8(
+        R"README(PlayerX 码流分析导出 —— 指定帧序列
+====================================
+
+源文件 : %1
+导出时间: %2
+帧范围  : 第 %3 - %4 帧（解码输出序，1 起）
+格式    : %5
+
+文件命名
+--------
+%6_NNNNNN.%7
+    NNNNNN 为 6 位零填充的解码输出序帧号（0 起）。
+    PNG 为 RGB24 显示用图（已做色彩空间转换，供人眼检查）；
+    YUV 为原始平面数据（8bit 采样为 420 时 1.5 字节/像素，供工具
+    精确计算）。
+
+注意
+----
+帧号是「解码器输出顺序」，B 帧重排后与显示顺序可能不同。
+需要显示序对齐时，参考帧列表导出（frames.csv）中的 pts 列。
+)README")
+        .arg(QDir::toNativeSeparators(path))
+        .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+        .arg(first + 1).arg(last >= 0 ? last + 1 : -1)
+        .arg(asPng ? "PNG" : "YUV")
+        .arg(stem)
+        .arg(asPng ? "png" : "yuv"));
     r["ok"] = written > 0;
     r["frameCount"] = written;
+    r["outDir"] = realDir;
     r["error"] = written > 0 ? QString() : "没有写出任何帧";
     return r;
 }
@@ -2432,7 +2645,19 @@ QVariantMap RBStreamBridge::exportFrameListCsv(const QString& path, const QStrin
         r["error"] = err;
         return r;
     }
-    QFile out(outPath);
+    // 独立文件夹 + README（每次导出不覆盖历史）
+    const QFileInfo outFi(outPath);
+    QString errD;
+    const QString dirPath = makeExportDir(outFi.absolutePath(),
+                                          QFileInfo(outFi.completeBaseName()).fileName(),
+                                          &errD);
+    if (dirPath.isEmpty()) {
+        closeDec(o);
+        r["error"] = errD;
+        return r;
+    }
+    const QString csvPath = dirPath + "/" + outFi.fileName();
+    QFile out(csvPath);
     if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         closeDec(o);
         r["error"] = "无法创建 CSV";
@@ -2472,8 +2697,45 @@ QVariantMap RBStreamBridge::exportFrameListCsv(const QString& path, const QStrin
     av_frame_free(&fr);
     closeDec(o);
     out.close();
+    // README：列含义 + 阅读方法
+    writeReadme(dirPath, QString::fromUtf8(
+        R"README(PlayerX 码流分析导出 —— 帧列表
+====================================
+
+源文件 : %1
+导出时间: %2
+
+文件
+----
+%3
+    每行一帧，按解码器输出顺序（非显示顺序）排列。
+
+列说明（每行 = 1 帧）
+--------------------
+index     : 行号，从 0 起（解码输出序）
+type      : 帧类型 I / P / B（I=帧内，P=单向预测，B=双向预测）
+pts       : 显示时间戳（容器时基，非毫秒）
+pkt_dts   : 解码时间戳（容器时基；B 帧重排时 pts 与 dts 的差即重排深度）
+pkt_size  : 该帧压缩数据字节数（含起始码/长度前缀；flush 尾帧为 0）
+width     : 帧宽（像素）
+height    : 帧高（像素）
+md5       : 解码后 YUV 平面的 MD5（帧内容指纹，两路码流对比相同分辨率
+            帧是否逐像素一致时用它，不用看画面）
+
+阅读建议
+--------
+- 看码率分布：对 pkt_size 按帧类型分组统计，I 帧显著大是正常现象；
+  B 帧过大则说明时域冗余没吃干净。
+- 看重排：按 pts 排序即显示序，与 index 的错位量反映 GOP 中 B 帧数量。
+- 两版编码参数对比：相同源导出两份，逐行 join（index 对齐需确认两版
+  帧数与 GOP 结构一致），md5 相同的帧内容完全一致。
+)README")
+        .arg(QDir::toNativeSeparators(path))
+        .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+        .arg(outFi.fileName()));
     r["ok"] = idx > 0;
     r["frameCount"] = idx;
+    r["outDir"] = dirPath;
     r["error"] = idx > 0 ? QString() : "没有解码到帧";
     return r;
 }
@@ -2491,11 +2753,13 @@ void RBStreamBridge::startExportYuv(const QString& path, const QString& outPath,
         const bool ok = r.value("ok").toBool();
         QString msg = r.value("error").toString();
         if (ok) {
-            msg = QString("已导出 YUV %1 帧（%2x%3 %4）")
+            msg = QString("已导出 YUV %1 帧（%2x%3 %4）\n目录：%5")
                       .arg(r.value("frameCount").toInt())
                       .arg(r.value("width").toInt())
                       .arg(r.value("height").toInt())
-                      .arg(r.value("pixFmt").toString());
+                      .arg(r.value("pixFmt").toString())
+                      .arg(r.value("outDir").toString());
+            emit exportJobOutDir(r.value("outDir").toString());
         }
         QMetaObject::invokeMethod(this, [this, ok, msg]() {
             m_exportBusy = false;
@@ -2516,8 +2780,12 @@ void RBStreamBridge::startExportFrames(const QString& path, const QString& outDi
         const QVariantMap r = exportDecodedFrames(path, outDir, first, last, format);
         const bool ok = r.value("ok").toBool();
         QString msg = r.value("error").toString();
-        if (ok)
-            msg = QString("已导出 %1 帧到 %2").arg(r.value("frameCount").toInt()).arg(outDir);
+        if (ok) {
+            msg = QString("已导出 %1 帧到独立文件夹\n目录：%2")
+                      .arg(r.value("frameCount").toInt())
+                      .arg(r.value("outDir").toString());
+            emit exportJobOutDir(r.value("outDir").toString());
+        }
         QMetaObject::invokeMethod(this, [this, ok, msg]() {
             m_exportBusy = false;
             emit exportJobFinished(ok, msg);
@@ -2536,8 +2804,514 @@ void RBStreamBridge::startExportFrameList(const QString& path, const QString& ou
         const QVariantMap r = exportFrameListCsv(path, outPath);
         const bool ok = r.value("ok").toBool();
         QString msg = r.value("error").toString();
-        if (ok)
-            msg = QString("已导出帧列表 %1 行").arg(r.value("frameCount").toInt());
+        if (ok) {
+            msg = QString("已导出帧列表 %1 行\n目录：%2")
+                      .arg(r.value("frameCount").toInt())
+                      .arg(r.value("outDir").toString());
+            emit exportJobOutDir(r.value("outDir").toString());
+        }
+        QMetaObject::invokeMethod(this, [this, ok, msg]() {
+            m_exportBusy = false;
+            emit exportJobFinished(ok, msg);
+        }, Qt::QueuedConnection);
+    });
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 块级深度信息 CSV 导出：划分 / QP / 预测 / MV 逐块明细
+// ═════════════════════════════════════════════════════════════════════════
+QVariantMap RBStreamBridge::exportBlockInfoCsv(const QString& path, const QString& outPath,
+                                               int first, int last) {
+    QVariantMap r;
+    r["ok"] = false;
+    if (path.isEmpty() || outPath.isEmpty()) {
+        r["error"] = "路径为空";
+        return r;
+    }
+
+    // 独立打开块级分析器：软解 + enc_params/codec_block_info side data，
+    // 与任何 slot 的播放路径零共享，导出期间不干扰 UI。
+    rb::RBBlockAnalyzer ba;
+    if (!ba.rbOpen(path.toStdString())) {
+        r["error"] = "无法打开码流";
+        return r;
+    }
+    if (!ba.rbBlockSupport()) {
+        r["error"] = "该编码格式暂不支持块级分析（支持 H.264 / HEVC / VVC）";
+        return r;
+    }
+
+    const int total = ba.rbFrameCount();
+    if (total <= 0) {
+        r["error"] = "无法确定帧数";
+        return r;
+    }
+    int lo = first > 0 ? first : 0;
+    int hi = (last >= 0 && last < total) ? last : total - 1;
+    if (hi < lo) hi = lo;
+
+    // 独立文件夹 + README
+    const QFileInfo outFi(outPath);
+    QString errD;
+    const QString dirPath = makeExportDir(outFi.absolutePath(),
+                                          QFileInfo(outFi.completeBaseName()).fileName(),
+                                          &errD);
+    if (dirPath.isEmpty()) {
+        r["error"] = errD;
+        return r;
+    }
+    const QString csvPath = dirPath + "/" + outFi.fileName();
+    QFile out(csvPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        r["error"] = "无法创建 CSV";
+        return r;
+    }
+    QTextStream ts(&out);
+    ts.setEncoding(QStringConverter::Utf8);
+    // 列设计（每块一行）：
+    //   frame/type: 显示序帧号 / I、P、B（AVFrame::pict_type）
+    //   x,y,w,h   : 块位置与尺寸（像素，叶子 CU）
+    //   qp/depth  : 块 QP；深度用解码器记录的 cqtDepth（VVC/HEVC，-1=未导出）
+    //   pred/ref  : Skip / Intra / Inter / IBC / Palette；L0 / L1 / Bi
+    //   mv        : L0 与 L1 运动矢量（像素）
+    //   residual  : 是否携带残差（Skip=0；H.264 恒 1=有，见提取路径）
+    //   frameBytes: 该帧视频包字节，经 RBFrameOrderMapper 精确映射到显示序
+    ts << "frame,type,x,y,w,h,qp,depth,pred,ref,mvx,mvy,mvxL1,mvyL1,residual,frameBytes\n";
+
+    // ── 每帧字节（轻量包扫描 + 真实编码序→显示序映射）────────────
+    // 包序 = 编码序；一次顺序读包收齐 pkt->size，再用 RBFrameOrderMapper
+    // 的 dispToCode 把字节挂到正确的显示序帧上（B 帧重排精确归因）。
+    // mapper 与本导出器共用"pkt->pts=包序"技巧，双解码可接受：
+    // 导出本身已是后台线程软解，第二次解码无 side data，速度约为 1/3。
+    std::vector<int> dispBytes(total, -1);
+    {
+        rb::RBFrameOrderMapper::Result om = rb::RBFrameOrderMapper::build(
+            path.toStdString());
+        AVFormatContext* fm = nullptr;
+        if (avformat_open_input(&fm, path.toStdString().c_str(), nullptr, nullptr) >= 0) {
+            const int vs = av_find_best_stream(fm, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            if (vs >= 0) {
+                AVPacket* p2 = av_packet_alloc();
+                std::vector<int> codeBytes;      // 编码序（包序）字节
+                while (av_read_frame(fm, p2) >= 0) {
+                    if (p2->stream_index == vs)
+                        codeBytes.push_back(int(p2->size));
+                    av_packet_unref(p2);
+                }
+                av_packet_free(&p2);
+                // om.ok 且长度对得上：字节精确归因到显示序；
+                // 否则（罕见：mapper 失败）整列 -1，诚实缺失优于错误归因。
+                if (om.ok && int(om.dispToCode.size()) >= total) {
+                    for (int d = 0; d < total; ++d) {
+                        const int c = om.dispToCode[d];
+                        if (c >= 0 && c < int(codeBytes.size()))
+                            dispBytes[d] = codeBytes[c];
+                    }
+                }
+            }
+            avformat_close_input(&fm);
+        }
+    }
+
+    qint64 blockCount = 0;
+    int frameDone = 0;
+    const int frameTotal = hi - lo + 1;
+
+    for (int f = lo; f <= hi; ++f) {
+        const rb::RBFrameBlocks& fb = ba.rbBlockInfoAt(f);
+        if (!fb.valid || fb.blocks.empty()) {
+            ++frameDone;
+            emit exportJobProgress(
+                QString("块级信息 %1/%2 帧…").arg(frameDone).arg(frameTotal),
+                double(frameDone) / double(qMax(1, frameTotal)));
+            continue;   // 该帧无块级数据（如首帧 side data 缺失），跳过但不中断
+        }
+        const char* tname = "?";
+        switch (fb.pictType) {
+        case AV_PICTURE_TYPE_I:  tname = "I";  break;
+        case AV_PICTURE_TYPE_P:  tname = "P";  break;
+        case AV_PICTURE_TYPE_B:  tname = "B";  break;
+        default:                 tname = "?";  break;
+        }
+        for (const auto& bi : fb.blocks) {
+            ts << f << ',' << tname << ','
+               << bi.x << ',' << bi.y << ',' << bi.w << ',' << bi.h << ','
+               << bi.qp << ','
+               << bi.cqtDepth << ','
+               << predModeLabel(bi) << ','
+               << predFlagLabel(bi) << ','
+               << bi.mvxL0 << ',' << bi.mvyL0 << ','
+               << bi.mvxL1 << ',' << bi.mvyL1 << ','
+               << (bi.hasResidual ? 1 : 0) << ','
+               << (f < int(dispBytes.size()) ? dispBytes[f] : -1) << '\n';
+            ++blockCount;
+        }
+        ++frameDone;
+        emit exportJobProgress(QString("块级信息 %1/%2 帧…").arg(frameDone).arg(frameTotal),
+                               double(frameDone) / double(qMax(1, frameTotal)));
+    }
+    out.close();
+
+    // README：列含义 + 深度分析指引
+    writeReadme(dirPath, QString::fromUtf8(
+        R"README(PlayerX 码流分析导出 —— 块级信息明细
+========================================
+
+源文件 : %1
+导出时间: %2
+帧范围  : 第 %3 - %4 帧（显示序，1 起）
+
+文件
+----
+%5
+    每行一个编码块（叶子 CU，最小划分单元），按帧分组排列。
+
+列说明（每行 = 1 个块）
+----------------------
+frame     : 帧号（显示序，1 起）
+type      : 该帧类型 I / P / B
+x, y      : 块左上角坐标（像素，帧左上为原点）
+w, h      : 块宽高（像素）。非方形（如 64x16）说明启用了 MTT/AMP 非对称划分，
+            这是 HEVC/下一代编码压缩效率的关键来源之一
+qp        : 该块的量化参数。数值越大量化越粗、质量越差、码率越省。
+            相邻块 QP 差大通常意味着启用了局部 QP 自适应（暗区/平坦区抬高 QP）
+depth     : 划分深度（cqtDepth，H.265/266 解码器记录，-1 = 未导出）。
+            数值越大划分越细，纹理复杂区域的特征
+pred      : 预测模式：Skip（完全复制参考块，零运动补偿残差）
+                       Intra（帧内预测）
+                       Inter（帧间预测，带运动矢量）
+                       IBC（块复制，屏幕内容编码）
+                       Palette（调色板模式，屏幕内容编码）
+ref       : 参考方向：L0（前向）/ L1（后向）/ Bi（双向加权）。
+            Intra/Skip 帧内块无参考方向
+mvx, mvy  : L0 参考的运动矢量（像素，x 为横向 y 为纵向）。
+            Skip 且 MV=0 表示直接用参考块同位置，零运动搜索开销
+mvxL1,mvyL1: L1 参考的运动矢量（像素）。单向参考时为 0
+residual  : 是否携带残差数据（1=有变换系数，0=无）。Skip 块恒 0，
+            Inter 但 residual=0 的块预测已足够准确，无需修正
+frameBytes: 该帧整个视频包的字节数（含所有块与头信息）。
+            -1 表示码流包序与显示序映射失败，无法归因
+
+深度分析指引
+------------
+1. QP 空间分布：同帧内按 x,y 绘热力图，平坦区域 QP 高、纹理/运动区域
+   QP 低是良性决策；反之说明码控可能有问题。
+2. 划分开销 vs 收益：depth 深的块占比过高时，小尺寸块预测开销可能
+   超过残差节省，可尝试限制最大划分深度（RA/MERGE 模式限制）。
+3. 时域冗余：统计 Skip+residual=0 的面积占比。占比高说明时域预测
+   充分；骤降的帧通常是场景切换或参考帧失效。
+4. 非方形划分价值：统计 w≠h 的块占比与所在区域，评估 MTT 收益。
+5. 与帧统计（framestats）联用：按 frame 字段 join，先在帧级定位
+   码率异常帧，再回到块级看该帧的空间决策分布。
+)README")
+        .arg(QDir::toNativeSeparators(path))
+        .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+        .arg(lo + 1).arg(hi + 1)
+        .arg(outFi.fileName()));
+
+    r["ok"]         = blockCount > 0;
+    r["frameCount"] = frameTotal;
+    r["blockCount"] = double(blockCount);
+    r["outDir"]     = dirPath;
+    r["error"]      = blockCount > 0 ? QString() : "没有解出任何块级数据";
+    return r;
+}
+
+void RBStreamBridge::startExportBlockInfoCsv(const QString& path, const QString& outPath,
+                                              int first, int last) {
+    if (m_exportBusy) {
+        emit exportJobFinished(false, "已有导出任务在运行");
+        return;
+    }
+    m_exportBusy = true;
+    emit exportJobProgress("开始导出块级信息…", 0);
+    QtConcurrent::run([this, path, outPath, first, last]() {
+        const QVariantMap r = exportBlockInfoCsv(path, outPath, first, last);
+        const bool ok = r.value("ok").toBool();
+        QString msg = r.value("error").toString();
+        if (ok) {
+            msg = QString("已导出块级信息 %1 帧 / %2 块\n目录：%3")
+                      .arg(r.value("frameCount").toInt())
+                      .arg(qint64(r.value("blockCount").toDouble()))
+                      .arg(r.value("outDir").toString());
+            emit exportJobOutDir(r.value("outDir").toString());
+        }
+        QMetaObject::invokeMethod(this, [this, ok, msg]() {
+            m_exportBusy = false;
+            emit exportJobFinished(ok, msg);
+        }, Qt::QueuedConnection);
+    });
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 帧级统计汇总 CSV：每帧一行（层级 / 参考 / 字节 / QP / 块占比）
+// ═════════════════════════════════════════════════════════════════════════
+QVariantMap RBStreamBridge::exportFrameStatsCsv(const QString& path, const QString& outPath) {
+    QVariantMap r;
+    r["ok"] = false;
+    if (path.isEmpty() || outPath.isEmpty()) {
+        r["error"] = "路径为空";
+        return r;
+    }
+
+    // ── 数据源 1：包扫描（帧类型 / 字节 / GOP 边界，编码序）────────
+    // 复用 parseSlot 同款轻量扫描，零解码。
+    std::vector<int>   codeType;       // 0=I 1=P 2=B（真实类型来自 mapper，此处预填）
+    std::vector<long long> codeBytes;  // 包序字节
+    {
+        AVFormatContext* fm = nullptr;
+        if (avformat_open_input(&fm, path.toStdString().c_str(), nullptr, nullptr) < 0) {
+            r["error"] = "无法打开码流";
+            return r;
+        }
+        if (avformat_find_stream_info(fm, nullptr) >= 0) {
+            const int vs = av_find_best_stream(fm, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            if (vs >= 0) {
+                AVPacket* p = av_packet_alloc();
+                while (av_read_frame(fm, p) >= 0) {
+                    if (p->stream_index == vs) {
+                        codeBytes.push_back(p->size);
+                        codeType.push_back((p->flags & AV_PKT_FLAG_KEY) ? 0 : 1);
+                    }
+                    av_packet_unref(p);
+                }
+                av_packet_free(&p);
+            }
+        }
+        avformat_close_input(&fm);
+    }
+    const int nPkt = int(codeBytes.size());
+    if (nPkt == 0) {
+        r["error"] = "没有视频包";
+        return r;
+    }
+
+    // ── 数据源 2：编码序→显示序映射（真实帧类型 + 精确归因）────────
+    rb::RBFrameOrderMapper::Result om = rb::RBFrameOrderMapper::build(path.toStdString());
+    const int nDisp = om.ok ? om.frameCount : nPkt;   // 映射失败退化为包数=帧数
+    if (!om.ok) {
+        // 退化：显示序 = 编码序（无 B 帧或无法解出），仍可导出
+        om.dispToCode.assign(nPkt, -1);
+        om.codeToDisp.assign(nPkt, -1);
+        om.dispPictType.assign(nPkt, 1);
+        for (int c = 0; c < nPkt; ++c) {
+            om.dispToCode[c] = c;
+            om.codeToDisp[c] = c;
+        }
+    }
+
+    // ── 数据源 3：参考结构（层级 / 参考 POC 列表，解码序）─────────
+    const rb::RBRefStructureParser::Result rs =
+        rb::RBRefStructureParser::parse(path.toStdString());
+    // rs.frames 按解码序；通过 om.dispToCode[d] → 解码序 c → rs.frames[c]
+    const bool hasRs = rs.ok && int(rs.frames.size()) == nPkt;
+
+    // ── 数据源 4：块级统计（avgQp / skip、intra、inter 面积占比）──
+    // 独立打开块分析器（软解+side data）——导出大文件时这步是主要耗时，
+    // 但与 UI 播放零共享；对速度影响小=一次后台软解，与块级 CSV 相同量级。
+    rb::RBBlockAnalyzer ba;
+    const bool blockOk = ba.rbOpen(path.toStdString()) && ba.rbBlockSupport();
+    const int baTotal = blockOk ? ba.rbFrameCount() : 0;
+
+    // 独立文件夹 + README
+    const QFileInfo outFi(outPath);
+    QString errD;
+    const QString dirPath = makeExportDir(outFi.absolutePath(),
+                                          QFileInfo(outFi.completeBaseName()).fileName(),
+                                          &errD);
+    if (dirPath.isEmpty()) {
+        r["error"] = errD;
+        return r;
+    }
+    const QString csvPath = dirPath + "/" + outFi.fileName();
+    QFile out(csvPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        r["error"] = "无法创建 CSV";
+        return r;
+    }
+    QTextStream ts(&out);
+    ts.setEncoding(QStringConverter::Utf8);
+    // 列设计（每帧一行，按显示序）：
+    //   frame / type / bytes / bitsPerFrame / kbps
+    //   layer / refsPOC / gpb
+    //   avgQp / minQp / maxQp / blocks / skipPct / intraPct / interPct
+    //   refListBytes / ... （对齐码流分析仪专业口径）
+    ts << "frame,type,layer,bytes,bitsPerFrame,kbps,avgQp,minQp,maxQp,blocks,"
+          "skipPct,intraPct,interPct,refCount,refsPOC,isGpb\n";
+
+    // fps 供 kbps 换算（从 demuxer 拿不到时按 25 兜底，导出列仍诚实）
+    double fps = 25.0;
+    {
+        AVFormatContext* fm2 = nullptr;
+        if (avformat_open_input(&fm2, path.toStdString().c_str(), nullptr, nullptr) >= 0) {
+            if (avformat_find_stream_info(fm2, nullptr) >= 0) {
+                const int vs = av_find_best_stream(fm2, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+                if (vs >= 0) {
+                    AVRational fr = fm2->streams[vs]->avg_frame_rate;
+                    if (fr.num > 0 && fr.den > 0)
+                        fps = double(fr.num) / double(fr.den);
+                }
+            }
+            avformat_close_input(&fm2);
+        }
+    }
+
+    double totalBits = 0.0;
+    int frameDone = 0;
+    for (int d = 0; d < nDisp; ++d) {
+        const int c = (d < int(om.dispToCode.size())) ? om.dispToCode[d] : -1;
+        long long fbytes = (c >= 0 && c < nPkt) ? codeBytes[c] : -1;
+        const int ptype = (d < int(om.dispPictType.size())) ? om.dispPictType[d] : -1;
+        const char* tname = (ptype == 0) ? "I" : (ptype == 1) ? "P" : (ptype == 2) ? "B" : "?";
+
+        // 层级与参考（rs 按解码序）
+        int layer = -1;
+        bool isGpb = false;
+        QString refsPOC;
+        int refCount = 0;
+        if (hasRs && c >= 0 && c < int(rs.frames.size())) {
+            const auto& fr = rs.frames[size_t(c)];
+            layer  = fr.layer;
+            isGpb  = fr.isGpb;
+            refCount = int(fr.refs.size());
+            QStringList l;
+            for (int rc : fr.refs) {
+                // 解码序 → 显示序：codeToDisp 一跳（避免逐帧反查 O(n²)）
+                const int rd = (rc >= 0 && rc < int(om.codeToDisp.size()))
+                                   ? om.codeToDisp[rc] : -1;
+                l << QString::number(rd);
+            }
+            refsPOC = l.join(" ");
+        }
+
+        // 块级统计（显示序 d 直接对应 RBBlockAnalyzer 输出序）
+        double avgQp = -1.0;
+        int minQp = -1, maxQp = -1, blocks = 0;
+        double skipPct = -1.0, intraPct = -1.0, interPct = -1.0;
+        if (blockOk && d < baTotal) {
+            const rb::RBFrameBlocks& fb = ba.rbBlockInfoAt(d);
+            if (fb.valid && !fb.blocks.empty()) {
+                avgQp = fb.avgQp;
+                minQp = fb.minQp;
+                maxQp = fb.maxQp;
+                blocks = int(fb.blocks.size());
+                double area = 0.0, skipA = 0.0, intraA = 0.0, interA = 0.0;
+                for (const auto& bi : fb.blocks) {
+                    const double a = double(bi.w) * double(bi.h);
+                    area += a;
+                    if (bi.isSkip)          skipA  += a;
+                    else if (bi.isIntra)    intraA += a;
+                    else                    interA += a;
+                }
+                if (area > 0.0) {
+                    skipPct  = 100.0 * skipA  / area;
+                    intraPct = 100.0 * intraA / area;
+                    interPct = 100.0 * interA / area;
+                }
+            }
+        }
+
+        if (fbytes > 0) totalBits += double(fbytes) * 8.0;
+        ts << d << ',' << tname << ',' << layer << ','
+           << fbytes << ','
+           << (fbytes > 0 ? fbytes * 8 : -1) << ','
+           << (fbytes > 0 ? QString::number(double(fbytes) * 8.0 * fps / 1000.0, 'f', 1)
+                          : QString("-1")) << ','
+           << (avgQp >= 0.0 ? QString::number(avgQp, 'f', 2) : QString("-1")) << ','
+           << minQp << ',' << maxQp << ',' << blocks << ','
+           << (skipPct >= 0.0 ? QString::number(skipPct, 'f', 1) : QString("-1")) << ','
+           << (intraPct >= 0.0 ? QString::number(intraPct, 'f', 1) : QString("-1")) << ','
+           << (interPct >= 0.0 ? QString::number(interPct, 'f', 1) : QString("-1")) << ','
+           << refCount << ','
+           << '"' << refsPOC << '"' << ','
+           << (isGpb ? 1 : 0) << '\n';
+
+        ++frameDone;
+        if (frameDone % 25 == 0)
+            emit exportJobProgress(
+                QString("帧统计 %1/%2 帧…").arg(frameDone).arg(nDisp),
+                double(frameDone) / double(qMax(1, nDisp)));
+    }
+    out.close();
+
+    // README：列含义 + 时域分析指引
+    writeReadme(dirPath, QString::fromUtf8(
+        R"README(PlayerX 码流分析导出 —— 帧级统计汇总
+======================================
+
+源文件 : %1
+导出时间: %2
+
+文件
+----
+%3
+    每行一帧，按显示顺序（播放顺序）排列。
+
+列说明（每行 = 1 帧）
+--------------------
+frame        : 帧号（显示序，1 起）
+type         : 帧类型 I / P / B
+layer        : 时域层级（0 = GOP 锚点帧，越大层级越低）。层级越高
+               （数值大）的帧被参考的次数越少，通常码率也越小。
+               低延迟 GOP 中 layer=0 即时域锚点
+bytes        : 该帧视频包字节数
+bitsPerFrame : bytes × 8
+kbps         : 该帧等效码率 = bitsPerFrame × fps ÷ 1000（fps 取自容器；
+               容器无帧率信息时按 25 估算）
+avgQp        : 该帧所有块 QP 的平均值（面积加权与否见块级明细；
+               -1 = 该帧无块级数据）
+minQp/maxQp  : 该帧块 QP 的最小 / 最大值
+blocks       : 该帧块数
+skipPct      : Skip 模式块的面积占比（%，无块数据时 -1）
+intraPct     : Intra 模式块的面积占比（%）
+interPct     : Inter 模式块的面积占比（%）
+             （三者之和 ≈ 100；skip+inter 高 = 时域预测充分）
+refCount     : 该帧实际参考的帧数（解析参考列表得到）
+refsPOC      : 被参考帧的显示序号列表（空格分隔，双引号包裹）。
+               用于检查参考结构是否符合设计（如 LDP 的滑窗参考）
+isGpb        : 是否 GPB（广义 P-B 帧，低延迟场景中用 B 帧语法做
+               单向预测）。1 = 是。RA 结构中通常为 0
+
+深度分析指引
+------------
+1. 码率-QP 联合曲线：kbps 与 avgQp 逐帧对照。码率恒定时 QP 波动
+   说明码控抖动；QP 恒定时 kbps 尖峰通常是内容复杂度突变。
+2. 层级码率分布：按 layer 分组求 bytes 均值。健康结构中锚点层
+   显著最大且逐层递减；某一层异常肥大可考虑调整层间 QP 偏置。
+3. 参考结构核查：refsPOC 可还原每帧的参考拓扑，验证编码器
+   配置（层级数、滑窗长度）是否真正生效。
+4. 与块级明细（blocks）联用：frame 字段直接 join。先在此定位
+   异常帧，再去块级看空间分布。
+)README")
+        .arg(QDir::toNativeSeparators(path))
+        .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+        .arg(outFi.fileName()));
+
+    r["ok"]         = frameDone > 0;
+    r["frameCount"] = frameDone;
+    r["outDir"]     = dirPath;
+    r["error"]      = frameDone > 0 ? QString() : "没有解出任何帧";
+    Q_UNUSED(totalBits);
+    return r;
+}
+
+void RBStreamBridge::startExportFrameStatsCsv(const QString& path, const QString& outPath) {
+    if (m_exportBusy) {
+        emit exportJobFinished(false, "已有导出任务在运行");
+        return;
+    }
+    m_exportBusy = true;
+    emit exportJobProgress("开始导出帧统计…", 0);
+    QtConcurrent::run([this, path, outPath]() {
+        const QVariantMap r = exportFrameStatsCsv(path, outPath);
+        const bool ok = r.value("ok").toBool();
+        QString msg = r.value("error").toString();
+        if (ok) {
+            msg = QString("已导出帧统计 %1 帧\n目录：%2")
+                      .arg(r.value("frameCount").toInt())
+                      .arg(r.value("outDir").toString());
+            emit exportJobOutDir(r.value("outDir").toString());
+        }
         QMetaObject::invokeMethod(this, [this, ok, msg]() {
             m_exportBusy = false;
             emit exportJobFinished(ok, msg);
