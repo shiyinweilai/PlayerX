@@ -65,8 +65,38 @@ Item {
         return Engine.fileCount
     }
     // 第 i 个槽位实际对应的 player 索引
+    //
+    // 【REF 置顶显示重映射】(2026-10-10)
+    //   参考视频(REF)路底层作为最后一路 player 追加，但显示上要求固定在
+    //   最左（参考图侧栏右边、通道1 左边）。这里只做「显示位置 → player
+    //   索引」的重排，不改动底层 player 索引、评分、seek 等任何逻辑：
+    //     · 存在 REF 路时：显示槽 0 → REF 的 player 索引；
+    //       显示槽 1..N → 跳过 REF 后的其余 player 顺序填充。
+    //     · 无 REF 路时：原样返回 slot（恒等映射）。
+    function _refPlayerIndex() {
+        var n = Engine.fileCount
+        for (var i = 0; i < n; ++i) {
+            var fp = Engine.filePathAt(i) || ""
+            var dir = fp.substring(0, fp.lastIndexOf("/"))
+            if (dir.length > 0 && dir.split("/").pop() === "REF") return i
+            var rp = (videoArea.multiGroupDialog && videoArea.multiGroupDialog.refVideoPath) || ""
+            if (rp.length > 0 && dir === rp) return i
+        }
+        return -1
+    }
     function slotPlayerIndex(slot) {
         if (Engine.layoutMode === 0) return Engine.activeIndex
+        var refIdx = _refPlayerIndex()
+        if (refIdx < 0) return slot          // 无 REF：恒等映射
+        if (slot === 0) return refIdx        // 显示首位 = REF
+        // 其余位依次填充“跳过 REF 的其他 player”
+        var seen = 0
+        var n = Engine.fileCount
+        for (var i = 0; i < n; ++i) {
+            if (i === refIdx) continue
+            seen++
+            if (seen === slot) return i
+        }
         return slot
     }
 

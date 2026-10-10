@@ -59,6 +59,89 @@ Rectangle {
         styleColor: "#000000"
     }
 
+    // 路径信息胶囊：角标右侧显示「最后一级文件夹名 / 文件名」，
+    // 悬浮显示完整绝对路径。仅在有当前图时显示。
+    //   · 从 currentUrl（file:// url）解析出本地绝对路径，再拆最后一级目录 + 文件名；
+    //   · 文件名尾部省略，整条宽度跟随窗口自适应，不遮挡右上角操作按钮。
+    Rectangle {
+        id: slotPathBar
+        z: 5
+        anchors.left: slotBadge.right
+        anchors.leftMargin: 6
+        anchors.verticalCenter: slotBadge.verticalCenter
+        radius: 3
+        color: "#33000000"
+        visible: slotPane.hasCurrent && slotPathBar.absPath.length > 0
+
+        // 完整本地绝对路径（去掉 file:// 前缀并解码）
+        readonly property string absPath: {
+            var u = String(slotPane.currentUrl)
+            if (u.length === 0) return ""
+            return decodeURIComponent(u.replace(/^file:\/\//, ""))
+        }
+        // 拆「最后一级文件夹 / 文件名」
+        readonly property var pathInfo: {
+            var p = slotPathBar.absPath
+            if (p.length === 0) return { dir: "", file: "" }
+            var norm = p.replace(/\\/g, "/")
+            var parts = norm.split("/")
+            var fname  = parts.length > 0 ? parts[parts.length - 1] : norm
+            var parent = parts.length > 1 ? parts[parts.length - 2] : ""
+            return { dir: parent, file: fname }
+        }
+
+        // 宽度上限：角标右侧到右上角操作按钮组之间，留出安全间距避免遮挡
+        readonly property int _maxAvailWidth:
+            Math.max(60, slotPane.width - (slotBadge.width + 6 + 6) - 76)
+        implicitWidth:  slotPathRow.implicitWidth + 10
+        implicitHeight: slotPathRow.implicitHeight + 3
+        width:  Math.min(implicitWidth, _maxAvailWidth)
+        height: implicitHeight
+
+        Item {
+            id: slotPathRow
+            anchors.fill: parent
+            anchors.leftMargin: 5
+            anchors.rightMargin: 5
+            anchors.topMargin: 1
+            anchors.bottomMargin: 1
+            implicitHeight: 14
+            implicitWidth: slotDirLabel.implicitWidth + slotFileLabel.implicitWidth
+
+            Text {
+                id: slotDirLabel
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                color: "#9fd3ff"
+                font.pixelSize: 10
+                text: slotPathBar.pathInfo.dir.length > 0
+                      ? (slotPathBar.pathInfo.dir + "/")
+                      : ""
+            }
+            Text {
+                id: slotFileLabel
+                anchors.left: slotDirLabel.right
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                color: "#e8e8ec"
+                font.pixelSize: 10
+                elide: Text.ElideRight
+                text: slotPathBar.pathInfo.file
+            }
+        }
+
+        ToolTip.visible: slotPathHover.containsMouse && slotPathBar.absPath.length > 0
+        ToolTip.delay: 400
+        ToolTip.timeout: 8000
+        ToolTip.text: slotPathBar.absPath
+        MouseArea {
+            id: slotPathHover
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.NoButton
+        }
+    }
+
     // 中央图片区 + 拖拽接收 + 占位提示
     Rectangle {
         id: slotImageBox

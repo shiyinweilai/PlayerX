@@ -272,7 +272,7 @@ Rectangle {
         // channelBar 不可见时 (effectiveChannelVisible=false) 以 0 计，路径可独享整个顶部。
         readonly property int _channelOccupiedW: channelBar.visible ? (channelBar.width + 6 + 8) : 8
         readonly property int _maxAvailWidth:
-            Math.max(80, videoBox.width - (idxBadge.width + 6) - 6 - _channelOccupiedW)
+            Math.max(150, videoBox.width - (idxBadge.width + 6) - 6 - _channelOccupiedW)
         implicitWidth:  pathRow.implicitWidth + 12
         implicitHeight: pathRow.implicitHeight + 4
         width:  Math.min(implicitWidth, _maxAvailWidth)
