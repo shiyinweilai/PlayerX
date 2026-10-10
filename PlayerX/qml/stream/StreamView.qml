@@ -2708,9 +2708,9 @@ property real panelSplitRatio: 0.5
                             ctx.strokeRect(1.2, 5.2, 8.6, 6.2)
                             ctx.strokeRect(3.6, 2.4, 8.6, 6.2)
                             ctx.beginPath()
-                            ctx.moveTo(14.2, 9.2)
-                            ctx.lineTo(16.2, 6.4)
-                            ctx.lineTo(18.2, 9.2)
+                            ctx.moveTo(14.2, 6.4)
+                            ctx.lineTo(16.2, 9.2)
+                            ctx.lineTo(18.2, 6.4)
                             ctx.closePath()
                             ctx.fill()
                         }
@@ -2822,41 +2822,130 @@ property real panelSplitRatio: 0.5
                     Layout.preferredHeight: 12
                     Layout.alignment: Qt.AlignVCenter
                     color: "#3a3a44"
-                    visible: streamView.qpOverlayEnabled
                 }
 
-                Row {
-                    id: overlayModeBar
+                // ── 显示模式下拉：画面 / 划分 / QP / 预测 / MV ──
+                // 「画面」= overlayMode 0，隐藏网格与全部图层，只看解码画面。
+                // 快捷键 V 在「画面 ⇄ 上次图层」间切换（GlobalShortcuts.qml）。
+                // 下拉始终可见：overlayMode=0 时只看画面，仍可从此下拉切换模式。
+                // 选项点击后不自动收起，由 Esc / 点击外部收回（closePolicy 已覆盖）。
+                Item {
+                    id: overlayModeCombo
                     Layout.alignment: Qt.AlignVCenter
-                    visible: streamView.qpOverlayEnabled
-                    spacing: 3
-                    Repeater {
-                        model: [
-                            { m: 1, t: "划分" },
-                            { m: 2, t: "QP" },
-                            { m: 3, t: "Pred" },
-                            { m: 4, t: "MV" }
-                        ]
-                        delegate: Rectangle {
-                            required property var modelData
-                            width: ovBarLab.implicitWidth + 10
-                            height: 18
-                            radius: 3
-                            color: streamView.overlayMode === modelData.m ? "#2a3f5a" : "#80252528"
-                            border.color: streamView.overlayMode === modelData.m ? "#42A5FF" : "#3a3a44"
-                            Text {
-                                id: ovBarLab
-                                anchors.centerIn: parent
-                                text: modelData.t
-                                color: streamView.overlayMode === modelData.m ? "#e6f0ff" : "#9aa0a6"
-                                font.pixelSize: 10
-                                font.bold: streamView.overlayMode === modelData.m
-                            }
-                            MouseArea {
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: streamView.overlayMode = modelData.m
+                    implicitHeight: 18
+                    implicitWidth: comboHead.implicitWidth + 8
+
+                    readonly property var modeNames: [ "画面", "划分", "QP", "预测", "MV" ]
+                    readonly property string currentLabel:
+                        modeNames[streamView.overlayMode] || "划分"
+
+                    // 幽灵样式：默认无底无框，仅悬浮/展开时出现淡色底衬。
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        visible: overlayComboMa.containsMouse || overlayComboPopup.visible
+                        color: "#402a3f5a"
+                        border.width: 0
+                    }
+                    Row {
+                        id: comboHead
+                        anchors.centerIn: parent
+                        spacing: 3
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: overlayModeCombo.currentLabel
+                            color: streamView.overlayMode === 0 ? "#7ec8ff" : "#e6f0ff"
+                            font.pixelSize: 10
+                            font.bold: true
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "▾"
+                            color: "#9aa0a6"
+                            font.pixelSize: 12
+                        }
+                    }
+                    MouseArea {
+                        id: overlayComboMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: overlayComboPopup.visible ? overlayComboPopup.close()
+                                                              : overlayComboPopup.open()
+                    }
+                    ToolTip.visible: overlayComboMa.containsMouse && !overlayComboPopup.visible
+                    ToolTip.text: qsTr("显示模式：画面 / 划分 / QP / 预测 / MV（V 键 ⇄ 画面）")
+
+                    Popup {
+                        id: overlayComboPopup
+                        x: 0
+                        y: -implicitHeight - 4
+                        padding: 6
+                        modal: false
+                        dim: false
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                        background: Rectangle {
+                            color: "#1a1d22"
+                            border.color: "#2a2e33"
+                            radius: 4
+                        }
+                        contentItem: Column {
+                            spacing: 2
+                            Repeater {
+                                model: [
+                                    { m: 0, t: "画面" },
+                                    { m: 1, t: "划分" },
+                                    { m: 2, t: "QP" },
+                                    { m: 3, t: "预测" },
+                                    { m: 4, t: "MV" }
+                                ]
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    width: comboRow.implicitWidth + 10
+                                    height: 22
+                                    radius: 3
+                                    color: comboRowMa.containsMouse ? "#2a3f5a" : "transparent"
+                                    Row {
+                                        id: comboRow
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 5
+                                        spacing: 6
+                                        Rectangle {
+                                            width: 12; height: 12; radius: 2
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            color: streamView.overlayMode === modelData.m ? "#2a5fc0" : "#252528"
+                                            border.color: streamView.overlayMode === modelData.m ? "#3d7adf" : "#3a3a44"
+                                            border.width: 1
+                                            Text {
+                                                anchors.centerIn: parent
+                                                visible: streamView.overlayMode === modelData.m
+                                                text: "✓"
+                                                color: "#fff"; font.pixelSize: 9
+                                            }
+                                        }
+                                        Text {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: modelData.t
+                                            color: "#e8e8ec"; font.pixelSize: 12
+                                        }
+                                    }
+                                    MouseArea {
+                                        id: comboRowMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (modelData.m > 0) {
+                                                streamView.overlayMode = modelData.m
+                                                streamView.overlayModeSaved = modelData.m
+                                            } else if (streamView.overlayMode > 0) {
+                                                streamView.overlayModeSaved = streamView.overlayMode
+                                                streamView.overlayMode = 0
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

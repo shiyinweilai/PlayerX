@@ -59,6 +59,18 @@ Shortcut {
             YuvBridge.pixelInfoVisible = !YuvBridge.pixelInfoVisible
             return
         }
+        // 码流分析 tab：V = 「仅画面 ⇄ 上次图层」切换（隐藏/恢复 CU 网格等图层）
+        if (root.currentTab === "stream" && typeof streamViewComp !== "undefined"
+                && streamViewComp && streamViewComp.slotActive) {
+            if (streamViewComp.overlayMode > 0) {
+                streamViewComp.overlayModeSaved = streamViewComp.overlayMode
+                streamViewComp.overlayMode = 0
+            } else {
+                streamViewComp.overlayMode = streamViewComp.overlayModeSaved > 0
+                                             ? streamViewComp.overlayModeSaved : 1
+            }
+            return
+        }
         if (root.fullscreenSuppressInfo) {
             root.fullscreenSuppressInfo = false
             root.globalInfoVisible = true
