@@ -911,8 +911,16 @@ ApplicationWindow {
             }
         } catch (e) { /* ignore */ }
     }
-    function setRefVideoEnabled(on) { refVideoEnabled = !!on; _saveRefRes() }
-    function setRefPromptEnabled(on) { refPromptEnabled = !!on; _saveRefRes() }
+    function setRefVideoEnabled(on) {
+        refVideoEnabled = !!on
+        if (on) refResEnabled = true   // 勾选任一单项即自动启用参考资料总开关
+        _saveRefRes()
+    }
+    function setRefPromptEnabled(on) {
+        refPromptEnabled = !!on
+        if (on) refResEnabled = true
+        _saveRefRes()
+    }
     function setRefVideo(p) {
         var np = (p || "").trim()
         // 即时纠偏：参考视频栏若填入的是纯图片目录（无视频、有图片），
@@ -954,6 +962,7 @@ ApplicationWindow {
         if (idx < 0 || idx >= arr.length) return
         arr[idx].enabled = !!on
         refFramePaths = arr
+        if (on) refResEnabled = true   // 勾选任一单项即自动启用参考资料总开关
         _saveRefRes()
     }
     // 新增一个参考帧槽（上限 kMaxRefFrames）
@@ -4057,8 +4066,11 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 implicitHeight: 28
                 radius: 4
-                opacity: dlg.refResEnabled ? 1.0 : 0.45
-                enabled: dlg.refResEnabled
+                // 行始终可交互：即使总开关未启用，也允许单独勾选 / 改路径。
+                // 勾选任意单项会自动打开总开关（见各行 onToggleChecked）。
+                // 未启用时仅做轻度变暗提示，不禁用，确保勾选框清晰可点。
+                opacity: dlg.refResEnabled ? 1.0 : 0.72
+                enabled: true
                 color: refDrop.containsDrag ? "#23281f" : "#1a1a1f"
                 border.color: refDrop.containsDrag ? "#b8952e" : "#2c2c32"
                 border.width: 1
