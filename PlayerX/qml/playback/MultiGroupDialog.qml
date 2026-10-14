@@ -2458,18 +2458,20 @@ ApplicationWindow {
                     if (Fs.isDirectoryPath(refVideoPath)) {
                         var refFiles = Fs.scanVideoFolderPath(refVideoPath, true) || []
                         if (refFiles.length > 0) {
-                            var refVis = _filterAndSort(refFiles, "")
-                            _rowsModel.append({
-                                selected: true,
-                                folderPath: refVideoPath,
-                                keyword: "",
-                                currentPath: refVis[0] || "",
-                                currentIndex: 0,
-                                allCount: refFiles.length,
-                                visibleCount: refVis.length,
-                                isRefVideo: true
-                            })
-                            _laneRuntime.push({ allFiles: refFiles, visibleFiles: refVis })
+                        var refVis = _filterAndSort(refFiles, "")
+                        // 先写 runtime 再 append（理由同 loadStartHistory）：
+                        // delegate 在 append 调用栈内同步创建并读 _laneRuntime
+                        _laneRuntime.push({ allFiles: refFiles, visibleFiles: refVis })
+                        _rowsModel.append({
+                            selected: true,
+                            folderPath: refVideoPath,
+                            keyword: "",
+                            currentPath: refVis[0] || "",
+                            currentIndex: 0,
+                            allCount: refFiles.length,
+                            visibleCount: refVis.length,
+                            isRefVideo: true
+                        })
                         }
                     }
                 } catch (e) { console.warn("[MGD] 参考视频目录注入失败:", e) }
@@ -2640,6 +2642,9 @@ ApplicationWindow {
                 // 绑定了参考资料 → 自动展开左侧参考图侧栏 + 底部提示词栏
                 // （与测试源自动化 _tsImportAndStart 的行为一致：等价于手动点左下角「图片」按钮）
                 if (_anyRefResConfigured()) dlg.refResourcesBound()
+                // 启动历史：记录本次配置（来源由 _histPendingSource 决定）
+                appendStartHistory(_histPendingSource)
+                _histPendingSource = "manual"
             }
             return ok1
         }
@@ -2665,6 +2670,9 @@ ApplicationWindow {
             if (Engine.layoutMode === 0 && urls.length > 1) Engine.layoutMode = 1
             // 绑定了参考资料 → 自动展开左侧参考图侧栏 + 底部提示词栏
             if (_anyRefResConfigured()) dlg.refResourcesBound()
+            // 启动历史：记录本次配置（来源由 _histPendingSource 决定）
+            appendStartHistory(_histPendingSource)
+            _histPendingSource = "manual"
         }
         return ok
     }
@@ -2807,8 +2815,247 @@ ApplicationWindow {
         onTriggered: dlg._refResInvalidNotice = ""
     }
 
+    // ─── 启动历史（右侧栏）：记录每一次「启动对比」的完整配置 ──────
+    // 来源两种：① 本地手动点「启动对比」；② 左下角🔔接受远程任务后自动启动。
+    // 每次「成功启动」都追加一条记录，ID 全局自增（持久化到 QSettings），
+    // 即使内容与历史记录完全相同也会新增一条——用户意图是"每次启动都是一次
+    // 独立的会话记录"，随时可从右侧栏加载任意历史配置再次启动（再启动又会
+    // 追加新记录）。
+    // 快照内容：参与启动的各路（folderPath/keyword/currentPath/currentIndex/
+    // selected）、参考资料区全套（refVideo/refFrames/refPrompt/开关）、
+    // 评分模式、时间戳。评分记录本身由 Rating 模块按 lane 目录持久化，
+    // 加载历史配置重新启动后自然继续读到同一目录的已有评分（即"接着评分"）。
+    property var startHistory: []
+    // 【不能】用绑定初始化从磁盘读：绑定求值晚于 onStartHistoryNextIdChanged
+    // 的首次触发窗口，且"从 0(默认) → 读到磁盘值 3"这一跳会触发 changed 信号
+    // → _saveStartHistory() 在 startHistory 还是空数组时执行 → 把 "[]" 写盘，
+    // 覆盖掉已有历史记录（重启后历史"消失"的根因）。改为 Component.onCompleted
+    // 里显式赋值：先 _loadStartHistory() 填充 startHistory，再赋 nextId，
+    // 最后才允许保存副作用生效。
+    property int startHistoryNextId: 1
+    property bool _histSaveArmed: false   // 初始化完成前不落盘
+    onStartHistoryNextIdChanged: {
+        if (_histSaveArmed) _saveStartHistory()
+    }
+    // 评分记录目录锚点：快照里存各路目录，评分数据物理存储在 <lane目录>/ratings.json
+    // （Rating 模块管理），加载配置重启后 Rating 自动按目录恢复进度。
+    property string _histDbPrefix: "mgd/startHist/"
+
+    function _saveStartHistory() {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.saveString === "function") {
+                // 只留最近 50 条，避免无限膨胀；ID 已单调递增，被裁掉的记录不影响自增序
+                var keep = (startHistory || []).slice(-50)
+                Rating.saveString("mgd/startHistV2", JSON.stringify(keep))
+                Rating.saveString("mgd/startHistNextId", String(startHistoryNextId))
+            }
+        } catch (e) { console.warn("[MGD] 保存启动历史失败:", e) }
+    }
+    function _loadStartHistory() {
+        var arr = []
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function") {
+                var s = Rating.loadString("mgd/startHistV2", "") || ""
+                if (s.length > 0) {
+                    var raw = JSON.parse(s)
+                    if (raw && Array.isArray(raw)) {
+                        for (var i = 0; i < raw.length; ++i) {
+                            var it = raw[i] || {}
+                            if (typeof it.id === "number") arr.push(it)
+                        }
+                    }
+                }
+            }
+        } catch (e) { arr = [] }
+        startHistory = arr
+    }
+    // 采集当前「将要启动」的完整配置快照（不含运行态）。返回 null = 无有效路。
+    function _collectStartSnapshot() {
+        var lanes = []
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var l = _rowsModel.get(i)
+            if (!l) continue
+            if (!l.selected) continue
+            if (!l.currentPath || l.currentPath.length === 0) continue
+            lanes.push({
+                folderPath: String(l.folderPath || ""),
+                keyword: String(l.keyword || ""),
+                currentPath: String(l.currentPath || ""),
+                currentIndex: (typeof l.currentIndex === "number") ? l.currentIndex : 0,
+                isRefVideo: l.isRefVideo === true
+            })
+        }
+        if (lanes.length === 0) return null
+        // 参考资料区快照（仅存路径与开关，加载时逐一校验存在性）
+        var frames = []
+        var fa = refFramePaths || []
+        for (var f = 0; f < fa.length; ++f) {
+            frames.push({ path: String((fa[f] || {}).path || ""),
+                          enabled: (fa[f] || {}).enabled !== false })
+        }
+        return {
+            lanes: lanes,
+            refResEnabled: refResEnabled,
+            refVideoPath: refVideoPath,
+            refVideoEnabled: refVideoEnabled,
+            refPromptPath: refPromptPath,
+            refPromptEnabled: refPromptEnabled,
+            refFrames: frames,
+            reviewMode: (typeof Rating !== "undefined" && Rating)
+                        ? String(Rating.currentMode || "off") : "off",
+            startedAt: new Date().toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm:ss")
+        }
+    }
+    // 启动成功后调用：把本次配置追加为一条历史记录（ID 自增，同配置也新记录）。
+    // source: "manual"=本地手动启动 / "remote"=远程接受自动启动
+    function appendStartHistory(source) {
+        var snap = _collectStartSnapshot()
+        if (!snap) return -1
+        var id = startHistoryNextId
+        var rec = { id: id, source: source === "remote" ? "remote" : "manual", snapshot: snap }
+        var arr = (startHistory || []).slice()
+        arr.push(rec)
+        startHistory = arr
+        startHistoryNextId = id + 1
+        return id
+    }
+    // 加载一条历史记录到当前界面（不启动）：恢复勾选/当前文件/参考资料区，
+    // 由用户检查后自行点「启动对比」（启动后又追加新记录）。
+    // 返回错误信息（"" = 成功）。
+    function loadStartHistory(rec) {
+        if (!rec || !rec.snapshot) return "记录损坏"
+        var snap = rec.snapshot
+        var lanes = snap.lanes || []
+        if (lanes.length === 0) return "记录里没有有效路"
+        // 先校验全部路径存在性，把失效的挑出来提示（不阻塞加载，跳过失效路）
+        var alive = []
+        var dead = []
+        for (var i = 0; i < lanes.length; ++i) {
+            var ln = lanes[i]
+            var ok = false
+            try { ok = (ln.currentPath.length > 0 && Fs.fileExists(ln.currentPath)) }
+            catch (e) { ok = false }
+            if (ok) alive.push(ln)
+            else dead.push(ln)
+        }
+        if (alive.length === 0) return "所有路都失效（目录/文件已被删除）"
+        // 重建 lanes：清掉全部现有行，按快照逐路重建
+        _rowsModel.clear()
+        _laneRuntime = []
+        for (var a = 0; a < alive.length; ++a) {
+            var al = alive[a]
+            var files = []
+            try {
+                if (al.folderPath.length > 0) {
+                    files = Fs.scanVideoFolderPath(al.folderPath, true) || []
+                }
+            } catch (e) { files = [] }
+            if (files.length === 0) files = [ al.currentPath ]   // 散文件/目录已变
+            var vis = _filterAndSort(files, al.keyword)
+            var curIdx = al.currentIndex
+            // 钳位：快照里的索引可能超出当前可见列表（目录内容变化），取安全值
+            if (!(typeof curIdx === "number") || curIdx < 0) curIdx = 0
+            if (curIdx >= vis.length) curIdx = vis.length - 1
+            // 【关键】必须先写 _laneRuntime 再 _rowsModel.append：
+            // Repeater 的 delegate 在 append 调用栈内同步创建，其
+            // Component.onCompleted 立即读 _laneRuntime[index] 注入 allFiles；
+            // 若 push 在 append 之后，行创建瞬间读到 undefined → allFiles 空
+            // → 行内显示「（未导入）」且不再自愈（与 _restoreLanes 的顺序对齐）。
+            _laneRuntime.push({ allFiles: files, visibleFiles: vis })
+            _rowsModel.append({
+                selected: true,
+                folderPath: al.folderPath,
+                keyword: al.keyword,
+                currentPath: al.currentPath,
+                currentIndex: curIdx,
+                allCount: files.length,
+                visibleCount: vis.length,
+                isRefVideo: al.isRefVideo === true
+            })
+        }
+        _ensureRuntimeLen(_rowsModel.count)
+        _bumpState()
+        _persistLanes()
+        // 目录固化进「文件夹历史」：与拖拽导入语义一致，下次打开对话框
+        // 这些目录仍可作为候选路出现（即使当前 lanes 被覆盖重置）
+        try {
+            var histPaths = []
+            for (var hp = 0; hp < alive.length; ++hp) {
+                var hpPath = alive[hp].folderPath
+                if (hpPath && hpPath.length > 0 && histPaths.indexOf(hpPath) < 0)
+                    histPaths.push(hpPath)
+            }
+            if (histPaths.length > 0) _appendToFolderHistory(histPaths)
+        } catch (e) { console.warn("[MGD] 历史加载固化文件夹历史失败:", e) }
+        // 恢复参考资料区（先清后填；加载的路径若已失效会被随后 open 校验清掉）
+        refResEnabled = snap.refResEnabled === true
+        refVideoEnabled = snap.refVideoEnabled !== false
+        refPromptEnabled = snap.refPromptEnabled !== false
+        refVideoPath = String(snap.refVideoPath || "")
+        refPromptPath = String(snap.refPromptPath || "")
+        var fa2 = snap.refFrames || []
+        var faNew = []
+        for (var r = 0; r < fa2.length; ++r)
+            faNew.push({ path: String((fa2[r] || {}).path || ""),
+                         enabled: (fa2[r] || {}).enabled !== false })
+        if (faNew.length === 0) faNew.push({ path: "", enabled: true })
+        refFramePaths = faNew
+        _saveRefRes()
+        // 评分模式还原（Rating.currentMode 由 Main.qml 顶部菜单管理，这里只写回）
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.setCurrentMode === "function"
+                && String(snap.reviewMode || "off") !== String(Rating.currentMode))
+                Rating.setCurrentMode(snap.reviewMode)
+        } catch (e) { console.warn("[MGD] 历史配置评分模式还原失败:", e) }
+        _refResValidated = true   // 已校验过存在性，本次打开不再重复校验
+        _histLoadNotice = (dead.length > 0)
+            ? "⚠ 已加载配置 #" + rec.id + "，其中 " + dead.length + " 路已失效被跳过"
+            : "✓ 已加载配置 #" + rec.id + "，点「启动对比」重新开始"
+        _histLoadTimer.restart()
+        console.log("[MGD] 加载启动历史 #" + rec.id, "alive=", alive.length, "dead=", dead.length)
+        return ""
+    }
+    // 加载提示（状态栏显示，自动消失）
+    property string _histLoadNotice: ""
+    // start() 内部按此标记历史来源；loadFolders（远程接受链路）入口先置为
+    // "remote"，手动路径保持默认 "manual"。start() 成功后消费并复位。
+    property string _histPendingSource: "manual"
+    // 启动历史侧栏可见性（默认展开；可收起成窄条）
+    property bool _histPanelVisible: true
+
+    // 历史卡片摘要：评分模式中文名
+    function _histModeLabel(mode) {
+        var m = String(mode || "off")
+        if (m === "off") return "无评分"
+        if (m.indexOf("subjective") >= 0) return "主观评分"
+        if (m.indexOf("quality") >= 0) return "质量比较"
+        return m
+    }
+    // 历史卡片摘要：首路「目录 basename · 当前文件名」
+    function _histLaneSummary(lane) {
+        if (!lane) return ""
+        var fp = String(lane.folderPath || "")
+        var cp = String(lane.currentPath || "")
+        var base = fp.length > 0 ? fp.split("/").pop() : ""
+        var fn = cp.length > 0 ? cp.split("/").pop() : ""
+        if (base.length > 0 && fn.length > 0) return base + " · " + fn
+        return fn || base
+    }
+    Timer {
+        id: _histLoadTimer
+        interval: 8000
+        onTriggered: dlg._histLoadNotice = ""
+    }
+
     function loadFolders(urls) {
         if (!urls || urls.length === 0) return false
+
+        // 远程接受链路（_tsImportAndStart → loadFolders）启动的历史记录来源
+        // 标记为 remote；start() 成功后消费并复位为 manual
+        _histPendingSource = "remote"
 
         // 1) 先把这一批文件夹追加到历史 lanes（去重 + 持久化）
         var addedPaths = addFoldersToHistory(urls)
@@ -3288,6 +3535,8 @@ ApplicationWindow {
         // 参考资料路径一次性校验：本地持久化的参考视频/提示词/参考帧目录
         // 可能已被用户在磁盘上删除，打开即校验并清掉失效项
         try { _validateRefResPaths() } catch (e) { console.warn("[MGD] 参考资料校验异常:", e) }
+        // 启动历史：每次打开刷新（可能在其它窗口/上一会话有新记录）
+        _loadStartHistory()
         show()
         raise()
         requestActivate()
@@ -3606,6 +3855,23 @@ ApplicationWindow {
     Component.onCompleted: {
         // 启动即加载"全局上次导入目录"（轻量、可空，不影响主流程）
         _loadLastImportFolder()
+        // 启动历史恢复（先于 nextId 赋值，保证保存副作用不会用空数组覆盖磁盘）
+        _loadStartHistory()
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function") {
+                var nid = parseInt(Rating.loadString("mgd/startHistNextId", "1"), 10) || 1
+                // startHistory 已就绪后才赋值；id 池取"磁盘值 vs 已加载记录最大 id+1"较大者，
+                // 兼容旧版本只写了 V2 数组、nextId 丢失/回退的情况
+                var maxId = 0
+                var ha = startHistory || []
+                for (var hi = 0; hi < ha.length; ++hi) {
+                    if (typeof ha[hi].id === "number" && ha[hi].id > maxId) maxId = ha[hi].id
+                }
+                startHistoryNextId = Math.max(nid, maxId + 1)
+            }
+        } catch (e) { console.warn("[MGD] 启动历史 nextId 恢复失败:", e) }
+        _histSaveArmed = true
         // 优先从本地记忆还原上次配置；首次启动或还原失败时才创建默认 2 路。
         if (_rowsModel.count === 0) {
             if (!_restoreLanes()) {
@@ -3685,219 +3951,233 @@ ApplicationWindow {
         anchors.margins: 14
         spacing: 10
 
-        // 标题 + 右侧操作按钮（新增 / 全选 / 清空）
-        // 三个动作都搬到这里：底部原来「+新增一行 (最多 9 路)」RowLayout 已删除。
+        // ── 主体：左（行列表+参考资料）/ 右（启动历史侧栏）两栏 ──
         RowLayout {
+            id: bodySplit
             Layout.fillWidth: true
-            spacing: 10
+            Layout.fillHeight: true
+            spacing: 12
+
+            // ── 左栏：行列表 + 参考资料区（原有内容原样包裹）──
             ColumnLayout {
+                id: mainColumn
                 Layout.fillWidth: true
-                spacing: 4
-                Label {
-                    text: "🗂️ 打开文件夹 / 多组对比"
-                    color: "#e8e8ec"
-                    font.pixelSize: 16
-                    font.bold: true
-                }
-                Label {
-                    text: "勾选 1 路 = 单视频浏览（用上一组/下一组在该文件夹内循环切换）；勾选 ≥2 路 = 多组对比"
-                    color: "#c2c2cc"
-                    font.pixelSize: 11
+                Layout.fillHeight: true
+                spacing: 10
+
+            // 标题 + 右侧操作按钮（新增 / 全选 / 清空）
+            // 三个动作都搬到这里：底部原来「+新增一行 (最多 9 路)」RowLayout 已删除。
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                ColumnLayout {
                     Layout.fillWidth: true
-                    elide: Text.ElideRight
-                }
-            }
-
-            // 右上角操作按钮组：等高三连 + 统一圆角/边框样式，竖向居中对齐。
-            // 全选/清空仅当 ≥1 路时启用；空态时禁用并降透明度，避免误操作。
-            // 右上角固定位置让出最大可视空间给列表区，与底部状态栏分离。
-                RowLayout {
                     spacing: 4
-                Layout.alignment: Qt.AlignVCenter
-                // ─── 全局排序下拉：控制所有通路的文件排序方式 ───
-                // 原每行 A↑/A↓ 按钮已移除；单路不再单独排序，统一由此控制。
-                // 点击弹出下拉（DarkMenu 深色主题），两项：名称升序 / 名称降序。
-                // 当前方式持久化到 Rating QSettings，下次打开保持上次选择。
-                Button {
-                    id: globalSortBtn
-                    text: "排序 " + (dlg.globalSortMode === 1 ? "A↓" : "A↑")
-                    hoverEnabled: true
-                    Layout.preferredHeight: 24
-                    Layout.preferredWidth: globalSortBtn.implicitWidth + 24
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 400
-                    ToolTip.text: dlg.globalSortMode === 1
-                                  ? "所有通路：名称降序（点击切换）"
-                                  : "所有通路：名称升序（点击切换）"
-                    onClicked: {
-                        // sortModePopup 的父项就是这个按钮，x/y 必须相对按钮坐标系：
-                        // 右对齐按钮、弹在按钮正下方。之前误用 mapToItem(dlg.contentItem)
-                        // 把对话框坐标系的大坐标赋给弹层，弹到可视区外，表现为"点了没反应"。
-                        sortModePopup.x = globalSortBtn.width - sortModePopup.width
-                        sortModePopup.y = globalSortBtn.height + 4
-                        sortModePopup.open()
-                    }
-                    background: Rectangle {
-                        color: globalSortBtn.down ? "#4a4a55"
-                              : globalSortBtn.hovered ? "#33333a"
-                                                      : "#202024"
-                        border.color: "#3a3a42"
-                        border.width: 1
-                        radius: 4
-                    }
-                    contentItem: Text {
-                        text: globalSortBtn.text
+                    Label {
+                        text: "🗂️ 打开文件夹 / 多组对比"
                         color: "#e8e8ec"
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                        font.pixelSize: 16
+                        font.bold: true
                     }
+                    Label {
+                        text: "勾选 1 路 = 单视频浏览（用上一组/下一组在该文件夹内循环切换）；勾选 ≥2 路 = 多组对比"
+                        color: "#c2c2cc"
+                        font.pixelSize: 11
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                    }
+                }
 
-                    // 排序方式下拉（Popup + ListView，与 YuvSetupView 下拉风格一致；
-                    // 不用 Menu —— macOS 原生菜单路径下自定义 inline MenuItem 可能渲染为空白）
-                    Popup {
-                        id: sortModePopup
-                        width: 180
-                        height: sortList.contentHeight + 12
-                        padding: 6
-                        modal: false
-                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
-
-                        background: Rectangle {
-                            color: "#14141a"
-                            border.color: "#3a3a44"
-                            border.width: 1
-                            radius: 6
+                // 右上角操作按钮组：等高三连 + 统一圆角/边框样式，竖向居中对齐。
+                // 全选/清空仅当 ≥1 路时启用；空态时禁用并降透明度，避免误操作。
+                // 右上角固定位置让出最大可视空间给列表区，与底部状态栏分离。
+                    RowLayout {
+                        spacing: 4
+                    Layout.alignment: Qt.AlignVCenter
+                    // ─── 全局排序下拉：控制所有通路的文件排序方式 ───
+                    // 原每行 A↑/A↓ 按钮已移除；单路不再单独排序，统一由此控制。
+                    // 点击弹出下拉（DarkMenu 深色主题），两项：名称升序 / 名称降序。
+                    // 当前方式持久化到 Rating QSettings，下次打开保持上次选择。
+                    Button {
+                        id: globalSortBtn
+                        text: "排序 " + (dlg.globalSortMode === 1 ? "A↓" : "A↑")
+                        hoverEnabled: true
+                        Layout.preferredHeight: 24
+                        Layout.preferredWidth: globalSortBtn.implicitWidth + 24
+                        ToolTip.visible: hovered
+                        ToolTip.delay: 400
+                        ToolTip.text: dlg.globalSortMode === 1
+                                      ? "所有通路：名称降序（点击切换）"
+                                      : "所有通路：名称升序（点击切换）"
+                        onClicked: {
+                            // sortModePopup 的父项就是这个按钮，x/y 必须相对按钮坐标系：
+                            // 右对齐按钮、弹在按钮正下方。之前误用 mapToItem(dlg.contentItem)
+                            // 把对话框坐标系的大坐标赋给弹层，弹到可视区外，表现为"点了没反应"。
+                            sortModePopup.x = globalSortBtn.width - sortModePopup.width
+                            sortModePopup.y = globalSortBtn.height + 4
+                            sortModePopup.open()
                         }
-                        contentItem: ListView {
-                            id: sortList
-                            clip: true
-                            implicitHeight: contentHeight
-                            interactive: false
-                            model: [ "名称升序 (A↑)", "名称降序 (A↓)" ]
-                            delegate: Item {
-                                id: sortDel
-                                width: sortList.width
-                                height: 30
-                                required property string modelData
-                                required property int index
+                        background: Rectangle {
+                            color: globalSortBtn.down ? "#4a4a55"
+                                  : globalSortBtn.hovered ? "#33333a"
+                                                          : "#202024"
+                            border.color: "#3a3a42"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: globalSortBtn.text
+                            color: "#e8e8ec"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
 
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: 4
-                                    color: sortRowMa.containsMouse ? "#2a2a32" : "transparent"
-                                }
-                                Text {
-                                    x: 10
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    // 注意：必须通过 delegate id 引用 modelData。
-                                    // parent.parent 是 ListView 的 contentItem，没有 modelData，
-                                    // 之前用 parent.parent.modelData 取到 undefined，文字全空。
-                                    text: sortDel.modelData
-                                    color: "#e8e8ec"
-                                    font.pixelSize: 12
-                                }
-                                // 当前生效项打 ✓
-                                Text {
-                                    anchors.right: parent.right
-                                    anchors.rightMargin: 10
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: "✓"
-                                    color: "#7ec8ff"
-                                    font.pixelSize: 12
-                                    visible: dlg.globalSortMode === sortDel.index
-                                }
-                                MouseArea {
-                                    id: sortRowMa
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        dlg.globalSortMode = index
-                                        sortModePopup.close()
+                        // 排序方式下拉（Popup + ListView，与 YuvSetupView 下拉风格一致；
+                        // 不用 Menu —— macOS 原生菜单路径下自定义 inline MenuItem 可能渲染为空白）
+                        Popup {
+                            id: sortModePopup
+                            width: 180
+                            height: sortList.contentHeight + 12
+                            padding: 6
+                            modal: false
+                            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+
+                            background: Rectangle {
+                                color: "#14141a"
+                                border.color: "#3a3a44"
+                                border.width: 1
+                                radius: 6
+                            }
+                            contentItem: ListView {
+                                id: sortList
+                                clip: true
+                                implicitHeight: contentHeight
+                                interactive: false
+                                model: [ "名称升序 (A↑)", "名称降序 (A↓)" ]
+                                delegate: Item {
+                                    id: sortDel
+                                    width: sortList.width
+                                    height: 30
+                                    required property string modelData
+                                    required property int index
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: 4
+                                        color: sortRowMa.containsMouse ? "#2a2a32" : "transparent"
+                                    }
+                                    Text {
+                                        x: 10
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        // 注意：必须通过 delegate id 引用 modelData。
+                                        // parent.parent 是 ListView 的 contentItem，没有 modelData，
+                                        // 之前用 parent.parent.modelData 取到 undefined，文字全空。
+                                        text: sortDel.modelData
+                                        color: "#e8e8ec"
+                                        font.pixelSize: 12
+                                    }
+                                    // 当前生效项打 ✓
+                                    Text {
+                                        anchors.right: parent.right
+                                        anchors.rightMargin: 10
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: "✓"
+                                        color: "#7ec8ff"
+                                        font.pixelSize: 12
+                                        visible: dlg.globalSortMode === sortDel.index
+                                    }
+                                    MouseArea {
+                                        id: sortRowMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            dlg.globalSortMode = index
+                                            sortModePopup.close()
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                Button {
-                    id: addLaneBtn
-                    text: "➕ 新增"
-                    enabled: _rowsModel.count < kMaxLanes
-                    // 点击【多选】：弹出多选文件夹对话框，选中 N 个后一次性追加 N 路。
-                    // 取消时退化为原来的「加一条空行」语义，用户仍可在空行内点 📁 逐个选。
-                    onClicked: _pickFoldersAndAddLanes("addEmpty")
-                    background: Rectangle {
-                        color: !addLaneBtn.enabled ? "#1a1a1d"
-                              : addLaneBtn.down ? "#4a4a55"
-                              : addLaneBtn.hovered ? "#33333a"
-                                                : "#202024"
-                        border.color: "#3a3a42"
-                        border.width: 1
-                        radius: 4
+                    Button {
+                        id: addLaneBtn
+                        text: "➕ 新增"
+                        enabled: _rowsModel.count < kMaxLanes
+                        // 点击【多选】：弹出多选文件夹对话框，选中 N 个后一次性追加 N 路。
+                        // 取消时退化为原来的「加一条空行」语义，用户仍可在空行内点 📁 逐个选。
+                        onClicked: _pickFoldersAndAddLanes("addEmpty")
+                        background: Rectangle {
+                            color: !addLaneBtn.enabled ? "#1a1a1d"
+                                  : addLaneBtn.down ? "#4a4a55"
+                                  : addLaneBtn.hovered ? "#33333a"
+                                                    : "#202024"
+                            border.color: "#3a3a42"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: addLaneBtn.text
+                            color: addLaneBtn.enabled ? "#e8e8ec" : "#555"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Layout.preferredHeight: 24
+                        Layout.preferredWidth: addLaneBtn.implicitWidth + 24
                     }
-                    contentItem: Text {
-                        text: addLaneBtn.text
-                        color: addLaneBtn.enabled ? "#e8e8ec" : "#555"
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                    Button {
+                        id: selectAllBtn
+                        text: "全选"
+                        enabled: _rowsModel.count > 0
+                        onClicked: selectAllLanes()
+                        background: Rectangle {
+                            color: !selectAllBtn.enabled ? "#1a1a1d"
+                                  : selectAllBtn.down ? "#4a4a55"
+                                  : selectAllBtn.hovered ? "#33333a"
+                                                       : "#202024"
+                            border.color: "#3a3a42"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: selectAllBtn.text
+                            color: selectAllBtn.enabled ? "#e8e8ec" : "#555"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Layout.preferredHeight: 24
+                        Layout.preferredWidth: selectAllBtn.implicitWidth + 24
                     }
-                    Layout.preferredHeight: 24
-                    Layout.preferredWidth: addLaneBtn.implicitWidth + 24
-                }
-                Button {
-                    id: selectAllBtn
-                    text: "全选"
-                    enabled: _rowsModel.count > 0
-                    onClicked: selectAllLanes()
-                    background: Rectangle {
-                        color: !selectAllBtn.enabled ? "#1a1a1d"
-                              : selectAllBtn.down ? "#4a4a55"
-                              : selectAllBtn.hovered ? "#33333a"
-                                                   : "#202024"
-                        border.color: "#3a3a42"
-                        border.width: 1
-                        radius: 4
+                    Button {
+                        id: deselectAllBtn
+                        text: "清空"
+                        enabled: _rowsModel.count > 0
+                        onClicked: clearAllLanes()
+                        background: Rectangle {
+                            color: !deselectAllBtn.enabled ? "#1a1a1d"
+                                  : deselectAllBtn.down ? "#4a4a55"
+                                  : deselectAllBtn.hovered ? "#33333a"
+                                                         : "#202024"
+                            border.color: "#3a3a42"
+                            border.width: 1
+                            radius: 4
+                        }
+                        contentItem: Text {
+                            text: deselectAllBtn.text
+                            color: deselectAllBtn.enabled ? "#c8c8d0" : "#555"
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        Layout.preferredHeight: 24
+                        // 宽度按内容自适应 + 左右各 12px padding，与其余按钮统一规格。
+                        Layout.preferredWidth: deselectAllBtn.implicitWidth + 24
                     }
-                    contentItem: Text {
-                        text: selectAllBtn.text
-                        color: selectAllBtn.enabled ? "#e8e8ec" : "#555"
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    Layout.preferredHeight: 24
-                    Layout.preferredWidth: selectAllBtn.implicitWidth + 24
-                }
-                Button {
-                    id: deselectAllBtn
-                    text: "清空"
-                    enabled: _rowsModel.count > 0
-                    onClicked: clearAllLanes()
-                    background: Rectangle {
-                        color: !deselectAllBtn.enabled ? "#1a1a1d"
-                              : deselectAllBtn.down ? "#4a4a55"
-                              : deselectAllBtn.hovered ? "#33333a"
-                                                     : "#202024"
-                        border.color: "#3a3a42"
-                        border.width: 1
-                        radius: 4
-                    }
-                    contentItem: Text {
-                        text: deselectAllBtn.text
-                        color: deselectAllBtn.enabled ? "#c8c8d0" : "#555"
-                        font.pixelSize: 12
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    Layout.preferredHeight: 24
-                    // 宽度按内容自适应 + 左右各 12px padding，与其余按钮统一规格。
-                    Layout.preferredWidth: deselectAllBtn.implicitWidth + 24
                 }
             }
-        }
 
         // 行列表
         ScrollView {
@@ -4415,6 +4695,202 @@ ApplicationWindow {
             }
         }
 
+            }   // ← 左栏 mainColumn 结束
+
+            // ── 右栏：启动历史（每次「启动对比」的配置记录）──────────
+            // 记录来源：① 手动点「启动对比」；② 🔔接受远程任务自动启动。
+            // 每条记录 ID 自增；点击「加载」把该配置恢复到左侧界面（不自动启动），
+            // 检查/调整后再次点「启动对比」会追加为新记录（新 ID）。
+            ColumnLayout {
+                id: histColumn
+                Layout.preferredWidth: 240
+                Layout.maximumWidth: 240
+                Layout.fillHeight: true
+                spacing: 6
+                visible: _histPanelVisible
+
+                // 标题行：启动历史 + 计数
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Label {
+                        text: "🕘 启动历史"
+                        color: "#ffd84d"
+                        font.pixelSize: 12
+                        font.bold: true
+                    }
+                    Label {
+                        text: (startHistory ? startHistory.length : 0) + " 条"
+                        color: "#8a8a92"
+                        font.pixelSize: 11
+                    }
+                    Item { Layout.fillWidth: true }
+                    // 收起/展开侧栏
+                    MouseArea {
+                        Layout.preferredWidth: 20
+                        Layout.preferredHeight: 20
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: dlg._histPanelVisible = false
+                        Text {
+                            anchors.centerIn: parent
+                            text: "»"
+                            color: parent.containsMouse ? "#ff9090" : "#8a8a92"
+                            font.pixelSize: 14
+                        }
+                    }
+                }
+
+                // 历史列表（可滚动）
+                ScrollView {
+                    id: histScroll
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+
+                    ListView {
+                        anchors.fill: parent
+                        model: (startHistory && startHistory.length > 0)
+                               ? startHistory.length : 0
+                        spacing: 6
+                        // 新记录在上：delegate 按倒序展示（数组尾部 = 最新）
+                        delegate: Rectangle {
+                            width: histScroll.availableWidth
+                            height: 68
+                            radius: 4
+                            color: histRowMa.containsMouse ? "#23232a" : "#1a1a1f"
+                            border.color: "#2c2c32"
+                            border.width: 1
+
+                            property var rec: startHistory
+                                ? startHistory[startHistory.length - 1 - index] : null
+
+                            MouseArea {
+                                id: histRowMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (!rec) return
+                                    var err = dlg.loadStartHistory(rec)
+                                    if (err && err.length > 0) {
+                                        dlg._histLoadNotice = "⚠ " + err
+                                        dlg._histLoadTimer.restart()
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                spacing: 2
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    Label {
+                                        text: "#" + (rec ? rec.id : "?")
+                                        color: "#7ec8ff"
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                    }
+                                    Label {
+                                        // remote=🔔接受 / manual=本地启动
+                                        text: rec && rec.source === "remote" ? "🔔远程" : "本地"
+                                        color: rec && rec.source === "remote" ? "#ffd84d" : "#8a8a92"
+                                        font.pixelSize: 10
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Label {
+                                        text: rec && rec.snapshot ? rec.snapshot.startedAt || "" : ""
+                                        color: "#6a6a72"
+                                        font.pixelSize: 9
+                                    }
+                                }
+                                Label {
+                                    // 路数 + 评分模式摘要
+                                    text: rec && rec.snapshot
+                                          ? ((rec.snapshot.lanes ? rec.snapshot.lanes.length : 0)
+                                             + " 路 · " + _histModeLabel(rec.snapshot.reviewMode))
+                                          : ""
+                                    color: "#c8c8d0"
+                                    font.pixelSize: 10
+                                }
+                                Label {
+                                    // 首路目录摘要（各路 basename + 当前文件名）
+                                    text: rec && rec.snapshot && rec.snapshot.lanes
+                                          && rec.snapshot.lanes.length > 0
+                                          ? _histLaneSummary(rec.snapshot.lanes[0])
+                                          : ""
+                                    color: "#8a8a92"
+                                    font.pixelSize: 9
+                                    elide: Text.ElideMiddle
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+                        // 空态：ListView 数据为空时显示（放在 contentItem 外层直接盖住）
+                        Label {
+                            visible: !startHistory || startHistory.length === 0
+                            anchors.centerIn: histScroll
+                            text: "暂无启动记录\n点「启动对比」或🔔接受任务后生成"
+                            color: "#6a6a72"
+                            font.pixelSize: 11
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                    }
+                }
+
+                // 底部：清空全部历史
+                Button {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    text: "🗑 清空历史"
+                    visible: startHistory && startHistory.length > 0
+                    onClicked: {
+                        startHistory = []
+                        _saveStartHistory()
+                    }
+                    background: Rectangle {
+                        radius: 3
+                        color: parent.down ? "#5a3a3a" : parent.hovered ? "#3a2a2a" : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#d08a8a"
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+
+            // ── 右栏收起态：边缘窄条，点击展开 ──────────────────────
+            Rectangle {
+                visible: !_histPanelVisible
+                Layout.preferredWidth: 18
+                Layout.fillHeight: true
+                color: "#1a1a1f"
+                border.color: "#2c2c32"
+                border.width: 1
+                radius: 3
+                MouseArea {
+                    id: histExpandMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: dlg._histPanelVisible = true
+                    Text {
+                        anchors.centerIn: parent
+                        text: "«"
+                        color: histExpandMa.containsMouse ? "#7fe5cc" : "#8a8a92"
+                        font.pixelSize: 14
+                    }
+                }
+            }
+        }   // ← bodySplit 结束
+
         // 分隔线
         Rectangle {
             Layout.fillWidth: true
@@ -4509,6 +4985,8 @@ ApplicationWindow {
                     if (dlg._evictNotice.length > 0) return dlg._evictNotice
                     // 参考资料失效清理提示次优先（自动消失）
                     if (dlg._refResInvalidNotice.length > 0) return dlg._refResInvalidNotice
+                    // 历史配置加载提示（自动消失）
+                    if (dlg._histLoadNotice.length > 0) return dlg._histLoadNotice
                     if (active) return "已启动 · 当前组 " + (groupIndex() + 1) + " / " + groupCount()
                     if (canStart) {
                         if (effectiveCount === 1) return "✓ 已就绪：将打开当前选中视频，可用上一组/下一组循环切换"
