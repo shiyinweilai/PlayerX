@@ -2852,6 +2852,19 @@ ApplicationWindow {
             }
         } catch (e) { console.warn("[MGD] 保存启动历史失败:", e) }
     }
+    // 删除单条启动历史（按唯一 id 定位）。其他记录编号不变；仅「清空历史」才重置编号。
+    function _removeStartHistory(rec) {
+        if (!rec || typeof rec.id !== "number") return
+        var out = []
+        var src = startHistory || []
+        for (var i = 0; i < src.length; ++i) {
+            if (src[i] && src[i].id === rec.id) continue
+            out.push(src[i])
+        }
+        startHistory = out
+        // nextId 不回退：已删除的编号不复用，后续新记录继续单调递增
+        _saveStartHistory()
+    }
     function _loadStartHistory() {
         var arr = []
         try {
@@ -4887,7 +4900,7 @@ ApplicationWindow {
                             // 新记录在上：delegate 按倒序展示（数组尾部 = 最新）
                             delegate: Rectangle {
                             width: histScroll.availableWidth
-                            height: 44
+                            height: 40
                             radius: 4
                             color: histRowMa.containsMouse ? "#23232a" : "#1a1a1f"
                             border.color: "#2c2c32"
@@ -4912,45 +4925,85 @@ ApplicationWindow {
                                 }
                             }
 
-                            ColumnLayout {
+                            RowLayout {
                                 anchors.fill: parent
                                 anchors.margins: 6
-                                spacing: 2
-                                RowLayout {
+                                spacing: 8
+
+                                // 左侧：两行信息（#ID+来源+时间 / 汉字模式·tag）
+                                ColumnLayout {
                                     Layout.fillWidth: true
-                                    spacing: 4
-                                    Label {
-                                        text: "#" + (rec ? rec.id : "?")
-                                        color: "#7ec8ff"
-                                        font.pixelSize: 11
-                                        font.bold: true
+                                    spacing: 2
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        Label {
+                                            text: "#" + (rec ? rec.id : "?")
+                                            color: "#7ec8ff"
+                                            font.pixelSize: 11
+                                            font.bold: true
+                                        }
+                                        Label {
+                                            // remote=🔔接受 / manual=本地启动
+                                            text: rec && rec.source === "remote" ? "🔔远程" : "本地"
+                                            color: rec && rec.source === "remote" ? "#ffd84d" : "#8a8a92"
+                                            font.pixelSize: 10
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                        Label {
+                                            // 时间戳：点击加载后左侧已有完整路信息，卡片只留时间
+                                            text: rec && rec.snapshot ? rec.snapshot.startedAt || "" : ""
+                                            color: "#6a6a72"
+                                            font.pixelSize: 9
+                                        }
                                     }
                                     Label {
-                                        // remote=🔔接受 / manual=本地启动
-                                        text: rec && rec.source === "remote" ? "🔔远程" : "本地"
-                                        color: rec && rec.source === "remote" ? "#ffd84d" : "#8a8a92"
+                                        // 汉字模式 · tag 合并一行（无 tag 只显示模式；
+                                        // 路数/文件摘要已去掉：点击加载后左侧都有）
+                                        text: rec && rec.snapshot
+                                              ? (_histModeLabel(rec.snapshot.reviewMode)
+                                                 + ((rec.snapshot.tag && rec.snapshot.tag.length > 0)
+                                                    ? " · " + rec.snapshot.tag : ""))
+                                              : ""
+                                        color: "#c8c8d0"
                                         font.pixelSize: 10
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    Label {
-                                        // 时间戳：点击加载后左侧已有完整路信息，卡片只留时间
-                                        text: rec && rec.snapshot ? rec.snapshot.startedAt || "" : ""
-                                        color: "#6a6a72"
-                                        font.pixelSize: 9
+                                        elide: Text.ElideMiddle
+                                        Layout.fillWidth: true
                                     }
                                 }
-                                Label {
-                                    // 汉字模式 · tag 合并一行（无 tag 只显示模式；
-                                    // 路数/文件摘要已去掉：点击加载后左侧都有）
-                                    text: rec && rec.snapshot
-                                          ? (_histModeLabel(rec.snapshot.reviewMode)
-                                             + ((rec.snapshot.tag && rec.snapshot.tag.length > 0)
-                                                ? " · " + rec.snapshot.tag : ""))
-                                          : ""
-                                    color: "#c8c8d0"
-                                    font.pixelSize: 10
-                                    elide: Text.ElideMiddle
-                                    Layout.fillWidth: true
+
+                                // 右侧：垃圾桶删除按钮（规格与左侧视频行删除按钮一致）
+                                Rectangle {
+                                    id: histDelBtn
+                                    Layout.preferredWidth: 28
+                                    Layout.preferredHeight: 22
+                                    Layout.alignment: Qt.AlignVCenter
+                                    radius: 3
+                                    color: histDelMa.containsMouse ? "#3a2a2a" : "#202024"
+                                    border.color: "#3a3a42"
+                                    border.width: 1
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "🗑"
+                                        color: "#d08a8a"
+                                        font.pixelSize: 11
+                                    }
+
+                                    // 吃掉点击，不透传到卡片本体（避免触发「加载」）
+                                    MouseArea {
+                                        id: histDelMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            mouse.accepted = true
+                                            if (rec) dlg._removeStartHistory(rec)
+                                        }
+                                    }
+                                    ToolTip.visible: histDelMa.containsMouse
+                                    ToolTip.delay: 400
+                                    ToolTip.text: "删除本条记录（其他编号不变）"
                                 }
                             }
                         }
