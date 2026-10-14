@@ -2905,6 +2905,10 @@ ApplicationWindow {
             refFrames: frames,
             reviewMode: (typeof Rating !== "undefined" && Rating)
                         ? String(Rating.currentMode || "off") : "off",
+            // tag：远程接受的任务由配置下发（已灌入 Rating.uploadTag）；
+            // 本地启动取用户手动配置的 tag，未配置则为空（卡片上不显示 tag 行）
+            tag: (typeof Rating !== "undefined" && Rating && Rating.uploadTag)
+                 ? String(Rating.uploadTag).trim() : "",
             startedAt: new Date().toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm:ss")
         }
     }
@@ -3020,29 +3024,69 @@ ApplicationWindow {
     }
     // 加载提示（状态栏显示，自动消失）
     property string _histLoadNotice: ""
-    // start() 内部按此标记历史来源；loadFolders（远程接受链路）入口先置为
+    // start() 内部按此标记历史来源；loadFolders（远程接受链路）启动前先置为
     // "remote"，手动路径保持默认 "manual"。start() 成功后消费并复位。
     property string _histPendingSource: "manual"
     // 启动历史侧栏可见性（默认展开；可收起成窄条）
     property bool _histPanelVisible: true
+    // 历史搜索词：空串显示全部；非空按 tag / 模式 / #ID / 来源 / 时间过滤
+    property string _histSearchText: ""
 
-    // 历史卡片摘要：评分模式中文名
+    // 过滤视图：startHistory 的子集（保序，尾部 = 最新）。
+    // 搜索词为空时直接返回全量，非空时按 _histMatch 逐条匹配。
+    readonly property var _histFiltered: {
+        var src = startHistory || []
+        var kw = (_histSearchText || "").trim().toLowerCase()
+        if (kw.length === 0) return src
+        var out = []
+        for (var i = 0; i < src.length; ++i) {
+            if (_histMatch(src[i], kw)) out.push(src[i])
+        }
+        return out
+    }
+
+    // 单条记录是否匹配搜索词（不区分大小写）。
+    // 可命中字段：tag、评分模式（含中文名）、#ID、来源（远程/本地）、时间戳
+    function _histMatch(rec, kw) {
+        if (!rec) return false
+        var snap = rec.snapshot || {}
+        // tag
+        var tag = String(snap.tag || "").toLowerCase()
+        if (tag.indexOf(kw) >= 0) return true
+        // 评分模式：同时匹配原始值（multi_dim）与中文名（多维评分）
+        var mode = String(snap.reviewMode || "").toLowerCase()
+        if (mode.indexOf(kw) >= 0) return true
+        var modeCn = _histModeLabel(snap.reviewMode).toLowerCase()
+        if (modeCn.indexOf(kw) >= 0) return true
+        // #ID（支持「#3」或直接输入「3」）
+        if (String(rec.id).indexOf(kw.replace(/^#+/, "")) >= 0
+            && kw.replace(/^#+/, "").length > 0) return true
+        // 来源（远程/本地）
+        var src = String(rec.source || "").toLowerCase()
+        if (kw === "远程" && src === "remote") return true
+        if (kw === "本地" && src === "manual") return true
+        if (src.indexOf(kw) >= 0) return true
+        // 时间戳
+        var ts = String(snap.startedAt || "").toLowerCase()
+        if (ts.indexOf(kw) >= 0) return true
+        return false
+    }
+
+    // 历史卡片摘要：评分模式中文名（与 TaskUpdateCard 的映射保持一致）
     function _histModeLabel(mode) {
         var m = String(mode || "off")
-        if (m === "off") return "无评分"
+        var map = {
+            "off": "无评分",
+            "multi_dim": "多维评分",
+            "subjective": "主观评分",
+            "quality": "质量比较",
+            "quality_slide": "质量比较2",
+            "test": "测试模式"
+        }
+        if (map[m]) return map[m]
         if (m.indexOf("subjective") >= 0) return "主观评分"
         if (m.indexOf("quality") >= 0) return "质量比较"
         return m
-    }
-    // 历史卡片摘要：首路「目录 basename · 当前文件名」
-    function _histLaneSummary(lane) {
-        if (!lane) return ""
-        var fp = String(lane.folderPath || "")
-        var cp = String(lane.currentPath || "")
-        var base = fp.length > 0 ? fp.split("/").pop() : ""
-        var fn = cp.length > 0 ? cp.split("/").pop() : ""
-        if (base.length > 0 && fn.length > 0) return base + " · " + fn
-        return fn || base
     }
     Timer {
         id: _histLoadTimer
@@ -4709,22 +4753,82 @@ ApplicationWindow {
                 spacing: 6
                 visible: _histPanelVisible
 
-                // 标题行：启动历史 + 计数
+                // 标题行：启动历史 + 搜索框（同行，无条数统计——卡片已有 #ID）
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
+
                     Label {
                         text: "🕘 启动历史"
                         color: "#ffd84d"
                         font.pixelSize: 12
                         font.bold: true
                     }
-                    Label {
-                        text: (startHistory ? startHistory.length : 0) + " 条"
-                        color: "#8a8a92"
-                        font.pixelSize: 11
+
+                    // 搜索框：按 tag / 模式 / ID / 来源 / 时间过滤历史记录
+                    // 与标题共用一行，剩余宽度都给输入框（可以窄一些）
+                    Rectangle {
+                        id: histSearchBox
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 24
+                        radius: 3
+                        color: "#1a1a1f"
+                        border.color: histSearchInput.activeFocus
+                                       ? "#7ec8ff" : "#2c2c32"
+                        border.width: 1
+                        visible: startHistory && startHistory.length > 0
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 5
+                            anchors.rightMargin: 4
+                            anchors.topMargin: 0
+                            anchors.bottomMargin: 0
+                            spacing: 3
+                            Text {
+                                text: "🔍"
+                                font.pixelSize: 10
+                                color: "#8a8a92"
+                            }
+                            TextField {
+                                id: histSearchInput
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: parent.height
+                                color: "#e0e0e8"
+                                font.pixelSize: 11
+                                selectByMouse: true
+                                verticalAlignment: TextInput.AlignVCenter
+                                placeholderText: "搜索…"
+                                // 外层 Rectangle 已是背景，TextField 自带背景置空
+                                background: null
+                                leftPadding: 0
+                                rightPadding: 0
+                                topPadding: 0
+                                bottomPadding: 0
+                                // 输入即过滤（实时）
+                                onTextChanged: dlg._histSearchText = text
+                            }
+                            // 一键清空搜索词
+                            MouseArea {
+                                visible: histSearchInput.text.length > 0
+                                Layout.preferredWidth: 14
+                                Layout.preferredHeight: 14
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    histSearchInput.clear()
+                                    dlg._histSearchText = ""
+                                }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "✕"
+                                    color: parent.containsMouse ? "#ff9090" : "#8a8a92"
+                                    font.pixelSize: 10
+                                }
+                            }
+                        }
                     }
-                    Item { Layout.fillWidth: true }
+
                     // 收起/展开侧栏
                     MouseArea {
                         Layout.preferredWidth: 20
@@ -4741,29 +4845,44 @@ ApplicationWindow {
                     }
                 }
 
-                // 历史列表（可滚动）
-                ScrollView {
-                    id: histScroll
+                // 历史列表（可滚动）：外层 Item 便于空态提示覆盖居中
+                Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    clip: true
 
-                    ListView {
+                    ScrollView {
+                        id: histScroll
                         anchors.fill: parent
-                        model: (startHistory && startHistory.length > 0)
-                               ? startHistory.length : 0
-                        spacing: 6
-                        // 新记录在上：delegate 按倒序展示（数组尾部 = 最新）
-                        delegate: Rectangle {
+                        clip: true
+                        // 触摸板双指滑动（macOS 触控手势）
+                        ScrollBar.vertical: ScrollBar {
+                            policy: ScrollBar.AsNeeded
+                            interactive: true
+                        }
+
+                        ListView {
+                            id: histList
+                            anchors.fill: parent
+                            // 过滤视图：搜索词匹配 tag / 模式 / ID / 来源 / 时间。
+                            // _histFiltered 是 startHistory 的过滤子集（保持原数组不动），
+                            // 展示层继续做倒序（数组尾部 = 最新）
+                            model: _histFiltered.length
+                            spacing: 6
+                            // 记录多时支持上下滑动浏览：超出可视区自动出滚动条，
+                            // 滚轮/触摸板/触摸手势均可滚动
+                            boundsBehavior: Flickable.StopAtBounds
+                            // 新记录在上：delegate 按倒序展示（数组尾部 = 最新）
+                            delegate: Rectangle {
                             width: histScroll.availableWidth
-                            height: 68
+                            height: 44
                             radius: 4
                             color: histRowMa.containsMouse ? "#23232a" : "#1a1a1f"
                             border.color: "#2c2c32"
                             border.width: 1
 
-                            property var rec: startHistory
-                                ? startHistory[startHistory.length - 1 - index] : null
+                            property var rec: _histFiltered.length > index
+                                               ? _histFiltered[_histFiltered.length - 1 - index]
+                                               : null
 
                             MouseArea {
                                 id: histRowMa
@@ -4801,46 +4920,45 @@ ApplicationWindow {
                                     }
                                     Item { Layout.fillWidth: true }
                                     Label {
+                                        // 时间戳：点击加载后左侧已有完整路信息，卡片只留时间
                                         text: rec && rec.snapshot ? rec.snapshot.startedAt || "" : ""
                                         color: "#6a6a72"
                                         font.pixelSize: 9
                                     }
                                 }
                                 Label {
-                                    // 路数 + 评分模式摘要
+                                    // 汉字模式 · tag 合并一行（无 tag 只显示模式；
+                                    // 路数/文件摘要已去掉：点击加载后左侧都有）
                                     text: rec && rec.snapshot
-                                          ? ((rec.snapshot.lanes ? rec.snapshot.lanes.length : 0)
-                                             + " 路 · " + _histModeLabel(rec.snapshot.reviewMode))
+                                          ? (_histModeLabel(rec.snapshot.reviewMode)
+                                             + ((rec.snapshot.tag && rec.snapshot.tag.length > 0)
+                                                ? " · " + rec.snapshot.tag : ""))
                                           : ""
                                     color: "#c8c8d0"
                                     font.pixelSize: 10
-                                }
-                                Label {
-                                    // 首路目录摘要（各路 basename + 当前文件名）
-                                    text: rec && rec.snapshot && rec.snapshot.lanes
-                                          && rec.snapshot.lanes.length > 0
-                                          ? _histLaneSummary(rec.snapshot.lanes[0])
-                                          : ""
-                                    color: "#8a8a92"
-                                    font.pixelSize: 9
                                     elide: Text.ElideMiddle
                                     Layout.fillWidth: true
                                 }
                             }
                         }
-                        // 空态：ListView 数据为空时显示（放在 contentItem 外层直接盖住）
-                        Label {
-                            visible: !startHistory || startHistory.length === 0
-                            anchors.centerIn: histScroll
-                            text: "暂无启动记录\n点「启动对比」或🔔接受任务后生成"
-                            color: "#6a6a72"
-                            font.pixelSize: 11
-                            horizontalAlignment: Text.AlignHCenter
-                        }
                     }
+
                 }
 
-                // 底部：清空全部历史
+                    // 空态：无任何记录 vs 有记录但搜索无匹配（覆盖在列表上方居中，不随滚动）
+                    Label {
+                        visible: _histFiltered.length === 0
+                        anchors.centerIn: parent
+                        text: (startHistory && startHistory.length > 0)
+                              ? "无匹配记录\n换个关键词试试"
+                              : "暂无启动记录\n点「启动对比」或🔔接受任务后生成"
+                        color: "#6a6a72"
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }   // ← 外层 Item（列表+空态）结束
+
+                // 底部：清空全部历史（histColumn 直接子项，排在列表下方，不再遮挡列表）
                 Button {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
@@ -4848,6 +4966,8 @@ ApplicationWindow {
                     visible: startHistory && startHistory.length > 0
                     onClicked: {
                         startHistory = []
+                        // 清空 = 重置：编号退回 1，下次从 #1 重新开始
+                        startHistoryNextId = 1
                         _saveStartHistory()
                     }
                     background: Rectangle {
@@ -4864,6 +4984,7 @@ ApplicationWindow {
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
+
             }
 
             // ── 右栏收起态：边缘窄条，点击展开 ──────────────────────
