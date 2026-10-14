@@ -1196,6 +1196,9 @@ function _tsImportAndStart(st, extractTarget) {
     // 参考帧目录 / 提示词 CSV 写回 refFramePaths / refPromptPath 并持久化，
     // 这样用户返回对话框再次「启动对比」时，下方展示的就是当前组的真实路径，
     // 不再停留在上一次手动指定的旧路径（消除流程歧义）。
+    // ★ 即使本次任务未绑定任何参考资料（effFrames 空 + CSV 空）也要调用：
+    //   applyAutoRefResources 会清空上次任务回填的残留路径（含参考视频），
+    //   远程接受情况优先，避免旧任务的参考视频在本次启动时被注入。
     try {
         if (_multiGroupDialog && typeof _multiGroupDialog.applyAutoRefResources === "function") {
             var effFrames = []

@@ -53,6 +53,14 @@ ApplicationWindow {
             // 隐藏时复位，下次打开重新合并（确保期间被拖入的新文件夹也能浮现）
             _folderHistMerged = false
         }
+        // 兜底：即使不走 showAndRefresh()（如直接 show()）也校验参考资料路径；
+        // 用守卫保证一次打开周期只校验一次，避免与 showAndRefresh 重复清理
+        if (visible && !_refResValidated) {
+            _refResValidated = true
+            try { _validateRefResPaths() } catch (e) { console.warn("[MGD] 参考资料校验异常:", e) }
+        } else if (!visible) {
+            _refResValidated = false
+        }
     }
 
     // ─── 评分模式切换时按新槽位重载 lanes ─────────────────────────
@@ -1018,14 +1026,113 @@ ApplicationWindow {
         refPromptPath = (p || "").trim()
         _saveRefRes()
     }
+
+    // ─── 打开 Dialog 时的一次性参考资料路径校验（本地模式）──────────
+    // 用户可能在 Finder/终端里删除了某个参考目录或 CSV 文件，界面上仍显示旧路径，
+    // 到点「启动对比」才静默失效。这里在 Dialog 每次打开时校验全部已填路径：
+    //   · 参考视频 refVideoPath     → 必须是存在的目录（Fs.isDirectoryPath）
+    //   · 提示词  refPromptPath     → 必须是存在的文件（Fs.fileExists）
+    //   · 参考帧  refFramePaths[i]  → 必须是存在的目录（Fs.isDirectoryPath）
+    // 失效路径直接清空（置 ""），让行回到未配置态；只有全部路径均有效或本就为空时
+    // 不做任何写操作。清理结果通过状态栏提示 + 控制台日志告知。
+    // 注：自动化回填（applyAutoRefResources）的路径在回填时已确保存在，此函数
+    //     兜底覆盖所有来源（历史持久化 / 手动残留）。
+    function _validateRefResPaths() {
+        var removed = []
+        var changed = false
+
+        // 1) 参考视频目录
+        if (refVideoPath.length > 0) {
+            var rvOk = false
+            try { rvOk = Fs.isDirectoryPath(refVideoPath) } catch (e) { rvOk = false }
+            if (!rvOk) {
+                console.warn("[MGD] 参考视频目录已失效，清空:", refVideoPath)
+                removed.push("参考视频 " + refVideoPath)
+                refVideoPath = ""
+                changed = true
+            }
+        }
+
+        // 2) 提示词 CSV
+        if (refPromptPath.length > 0) {
+            var cpOk = false
+            try { cpOk = Fs.fileExists(refPromptPath) } catch (e) { cpOk = false }
+            if (!cpOk) {
+                console.warn("[MGD] 提示词 CSV 已失效，清空:", refPromptPath)
+                removed.push("提示词 " + refPromptPath)
+                refPromptPath = ""
+                changed = true
+            }
+        }
+
+        // 3) 参考帧目录（逐槽校验；全部为空时不动）
+        var fa = refFramePaths || []
+        var dirtyFrames = false
+        for (var i = 0; i < fa.length; ++i) {
+            var fp = String((fa[i] && fa[i].path) || "")
+            if (fp.length === 0) continue
+            var fOk = false
+            try { fOk = Fs.isDirectoryPath(fp) } catch (e) { fOk = false }
+            if (!fOk) {
+                console.warn("[MGD] 参考帧", (i + 1), "目录已失效，清空:", fp)
+                removed.push("参考帧" + (i + 1) + " " + fp)
+                fa[i].path = ""
+                dirtyFrames = true
+            }
+        }
+        if (dirtyFrames) {
+            // 重建数组触发绑定刷新（参考帧行是 Repeater model，直接改元素不刷新）
+            var newFa = []
+            for (var j = 0; j < fa.length; ++j)
+                newFa.push({ path: String(fa[j].path || ""), enabled: fa[j].enabled !== false })
+            refFramePaths = newFa
+            changed = true
+        }
+
+        if (changed) {
+            // 若清理后参考资料区已完全空置，把总开关一并复位，避免空配置仍占状态
+            if (refVideoPath.length === 0 && refPromptPath.length === 0) {
+                var anyFrame = false
+                for (var k = 0; k < (refFramePaths || []).length; ++k) {
+                    if (String((refFramePaths[k] || {}).path || "").length > 0) {
+                        anyFrame = true; break
+                    }
+                }
+                if (!anyFrame) refResEnabled = false
+            }
+            _saveRefRes()
+            _refResInvalidNotice = "⚠ 参考资料含失效路径，已自动清空 " + removed.length
+                                  + " 项（原目录/文件已被删除或移动）"
+            _refResInvalidTimer.restart()
+            console.log("[MGD] 参考资料路径校验完成，清理:", removed.join(" | "))
+        }
+        return removed.length
+    }
     // 由自动化流程（_tsImportAndStart）回填：把本次实际绑定的参考帧目录列表与
     // 提示词 CSV 写回参考资料区并持久化，使返回对话框时展示与当前组一致，
     // 消除「显示旧手动路径」的歧义。回填时自动开启总开关并把这些帧全部置勾。
+    // ★ 远程接受情况优先：自动化接受远程任务时，参考资料区全量以【本次任务】
+    //   的 testSource 配置为准——本次没带任何参考资料（无参考帧且无提示词）时，
+    //   清空上次回填/手动残留的全部路径（含参考视频），避免上一次任务的目录
+    //   在本次 start() 时被注入为额外一路参考视频。
     //   · frameDirs: 字符串数组（已绑定、已存在的参考帧绝对目录，按侧栏槽位顺序）
     //   · csvPath:   提示词 CSV 绝对路径（空串表示本次未绑定 CSV）
     function applyAutoRefResources(frameDirs, csvPath) {
         var fd = (frameDirs && frameDirs.length) ? frameDirs : []
-        if (fd.length === 0 && (!csvPath || csvPath.length === 0)) return
+        var cp = (csvPath && csvPath.length > 0) ? String(csvPath).trim() : ""
+        // 本次远程任务未携带任何参考资料 → 清空上次残留，参考资料区回到未配置态
+        if (fd.length === 0 && cp.length === 0) {
+            refFramePaths = [{ path: "", enabled: true }]
+            refPromptPath = ""
+            // 参考视频残留同样清空：远程任务的参考视频由 laneDirs 里的 REF 目录
+            // 承载（导入为一路显示、不评分），refVideoPath 只服务用户手动配置；
+            // 旧任务残留路径若不清，start() 会把它注入为本次对比的额外一路。
+            refVideoPath = ""
+            refResEnabled = false
+            _saveRefRes()
+            console.log("[MGD] 本次远程任务无参考资料，已清空上次残留（帧/CSV/参考视频）")
+            return
+        }
         var arr = []
         for (var i = 0; i < fd.length && i < kMaxRefFrames; ++i) {
             var p = String(fd[i] || "").trim()
@@ -1033,9 +1140,17 @@ ApplicationWindow {
         }
         if (arr.length === 0) arr.push({ path: "", enabled: true })
         refFramePaths = arr
-        if (csvPath && csvPath.length > 0) {
-            refPromptPath = String(csvPath).trim()
+        if (cp.length > 0) {
+            refPromptPath = cp
             refPromptEnabled = true
+        } else {
+            refPromptPath = ""
+        }
+        // 帧与 CSV 至少有一项来自本次任务 → 参考视频栏同步清掉旧任务残留
+        // （本次任务的参考视频走 REF lane 机制，不经 refVideoPath）
+        if (refVideoPath.length > 0) {
+            console.log("[MGD] 自动化回填：清掉旧参考视频残留", refVideoPath)
+            refVideoPath = ""
         }
         // 自动化来源带了参考资料 → 顺带把总开关打开，保证返回后状态自洽
         refResEnabled = true
@@ -2682,6 +2797,15 @@ ApplicationWindow {
         interval: 6000
         onTriggered: dlg._evictNotice = ""
     }
+    // 参考资料路径校验提示（打开 Dialog 时发现失效路径被清理后显示，自动消失）
+    property string _refResInvalidNotice: ""
+    // 一次打开周期内参考资料只校验一次的守卫（防 showAndRefresh + onVisibleChanged 双触发）
+    property bool _refResValidated: false
+    Timer {
+        id: _refResInvalidTimer
+        interval: 8000
+        onTriggered: dlg._refResInvalidNotice = ""
+    }
 
     function loadFolders(urls) {
         if (!urls || urls.length === 0) return false
@@ -3161,6 +3285,9 @@ ApplicationWindow {
         // 每次打开自动清理空槽位（未导入的占位行）与死路（目录已失效），
         // 避免它们长期占用 kMaxLanes 名额堵死新导入
         _pruneStaleLanes()
+        // 参考资料路径一次性校验：本地持久化的参考视频/提示词/参考帧目录
+        // 可能已被用户在磁盘上删除，打开即校验并清掉失效项
+        try { _validateRefResPaths() } catch (e) { console.warn("[MGD] 参考资料校验异常:", e) }
         show()
         raise()
         requestActivate()
@@ -4380,6 +4507,8 @@ ApplicationWindow {
                 text: {
                     // 腾位置提示优先显示（几秒后由 _evictNoticeTimer 自动清空恢复）
                     if (dlg._evictNotice.length > 0) return dlg._evictNotice
+                    // 参考资料失效清理提示次优先（自动消失）
+                    if (dlg._refResInvalidNotice.length > 0) return dlg._refResInvalidNotice
                     if (active) return "已启动 · 当前组 " + (groupIndex() + 1) + " / " + groupCount()
                     if (canStart) {
                         if (effectiveCount === 1) return "✓ 已就绪：将打开当前选中视频，可用上一组/下一组循环切换"
