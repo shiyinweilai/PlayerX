@@ -4009,28 +4009,63 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 spacing: 10
 
-            // 标题 + 右侧操作按钮（新增 / 全选 / 清空）
-            // 三个动作都搬到这里：底部原来「+新增一行 (最多 9 路)」RowLayout 已删除。
+            // 单行工具栏：左「全选」勾选框 + 右侧按钮组（排序 / 新增 / 清空）。
+            // 标题行已按需求移除，不再显示。
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 10
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 4
-                    Label {
-                        text: "🗂️ 打开文件夹 / 多组对比"
-                        color: "#e8e8ec"
-                        font.pixelSize: 16
-                        font.bold: true
+
+                // 「全选」勾选框：三态（全勾=绿色✓ / 部分勾=✓无底色 / 全不勾=空）。
+                // 点击 toggle：当前有任一勾选 → 全部取消；全部未勾 → 全部勾上。
+                CheckBox {
+                    id: selectAllChk
+                    Layout.preferredWidth: 24
+                    Layout.preferredHeight: 24
+                    Layout.alignment: Qt.AlignVCenter
+                    // 三态由 selectedCount 与 _rowsModel.count 驱动，不在 onToggled 里改
+                    checked: selectedCount > 0
+                    onToggled: {
+                        // 关键：不要直接改绑定源，回弹等绑定刷新
+                        checked = Qt.binding(function() { return selectedCount > 0 })
+                        // toggle 语义：当前有任一勾选 → 全部取消；全部未勾 → 全部勾上
+                        if (selectedCount > 0) clearAllLanes()
+                        else selectAllLanes()
                     }
-                    Label {
-                        text: "勾选 1 路 = 单视频浏览（用上一组/下一组在该文件夹内循环切换）；勾选 ≥2 路 = 多组对比"
-                        color: "#c2c2cc"
-                        font.pixelSize: 11
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                    ToolTip.text: selectedCount === 0 ? "全选所有通道"
+                                 : (selectedCount === _rowsModel.count ? "取消全选" : "点击取消全部勾选")
+                    indicator: Rectangle {
+                        implicitWidth: 16
+                        implicitHeight: 16
+                        x: (selectAllChk.width - width) / 2
+                        y: (selectAllChk.height - height) / 2
+                        radius: 3
+                        // 半选态：✓ 显示但底色不亮（用边框高亮区分）
+                        color: selectAllChk.checked && selectedCount === _rowsModel.count
+                               ? "#0fa085" : "#101013"
+                        border.color: selectAllChk.checked ? "#0fa085"
+                                     : (selectAllChk.hovered ? "#5a8fd8" : "#3a3a45")
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            visible: selectAllChk.checked
+                            text: "✓"
+                            color: "#ffffff"
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
                     }
                 }
+
+                Label {
+                    text: "全选"
+                    color: "#c2c2cc"
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                Item { Layout.fillWidth: true }
 
                 // 右上角操作按钮组：等高三连 + 统一圆角/边框样式，竖向居中对齐。
                 // 全选/清空仅当 ≥1 路时启用；空态时禁用并降透明度，避免误操作。
@@ -4171,30 +4206,8 @@ ApplicationWindow {
                         Layout.preferredHeight: 24
                         Layout.preferredWidth: addLaneBtn.implicitWidth + 24
                     }
-                    Button {
-                        id: selectAllBtn
-                        text: "全选"
-                        enabled: _rowsModel.count > 0
-                        onClicked: selectAllLanes()
-                        background: Rectangle {
-                            color: !selectAllBtn.enabled ? "#1a1a1d"
-                                  : selectAllBtn.down ? "#4a4a55"
-                                  : selectAllBtn.hovered ? "#33333a"
-                                                       : "#202024"
-                            border.color: "#3a3a42"
-                            border.width: 1
-                            radius: 4
-                        }
-                        contentItem: Text {
-                            text: selectAllBtn.text
-                            color: selectAllBtn.enabled ? "#e8e8ec" : "#555"
-                            font.pixelSize: 12
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        Layout.preferredHeight: 24
-                        Layout.preferredWidth: selectAllBtn.implicitWidth + 24
-                    }
+                    // 「全选」已改为左侧行列表上方的勾选框（selectAllCheckbox），
+                    // 不再作为右侧文字按钮存在。
                     Button {
                         id: deselectAllBtn
                         text: "清空"
