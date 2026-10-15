@@ -4,7 +4,7 @@
  * 第 2 阶段：注册 EngineBridge 单例给 QML，使所有视频窗共享同一引擎。
  *
  * 启动早期会把 stderr 与 Qt 日志（qDebug/qInfo/qWarning/...）一同写入
- *   <appCacheDir>/logs/playerx_YYYYMMDD_HHmmss.log
+ *   <appCacheDir>/logs/playerx_latest_yyyyMMdd_HHmmss.log（latest=当前最新一次运行）
  * 用于事后排查问题（用户可在「设置」菜单里点「打开日志目录」直达）。
  */
 
@@ -99,66 +99,70 @@ static QString g_logFilePath;
 // 计算并准备好日志目录与本次运行的日志文件路径。
 // 路径与 FsUtils::appLogDir 保持一致：<CacheLocation>/logs。
 //
-// 文件名格式：playerx_<unix_timestamp>_<NN>.log
-//   - <unix_timestamp>：秒级时间戳，天然单调递增，一眼可看出"哪个最新"
-//   - <NN>：两位十进制序号（00~99），同一秒内多次启动时递增，确保不撞名
-//   示例：playerx_1755900000_03.log（第 3 次启动且时间戳为 1755900000）
+// 文件名格式：
+//   最新一份（当前运行）：playerx_latest_yyyyMMdd_HHmmss.log
+//   历史日志（曾经最新）：playerx_yyyyMMdd_HHmmss.log
+//   - latest 前缀：标记“当前活跃日志”，一眼可辨；启动时自动转移给新日志
+//   - yyyyMMdd_HHmmss：人眼可读时间（如 20261015_083639），字典序与时间序一致，
+//     排序/裁剪逻辑无需改变
+//   示例：playerx_latest_20261015_083639.log（当前）/ playerx_20261015_083637.log（历史）
 //
-// 日志轮转策略（最多保留 kKeepCount 份）：
-//   ① 扫描目录下所有 playerx_*.log，按文件名中的时间戳+序号降序排列（最新在前）
-//   ② 保留前 kKeepCount 个，其余全部删除
-//   ③ 总大小上限兜底：即使文件数 ≤ kKeepCount，若总和超过 kMaxTotalBytes，
+// 日志轮转策略（最多保留 kKeepCount 份 = 最新 1 份 + 历史 kKeepCount-1 份）：
+//   ① 先把旧的 playerx_latest_*.log 改名去掉 latest 标记（“最新”让位给本次新日志）
+//   ② 扫描历史日志，按文件名中的时间戳降序排列（最新在前），
+//      保留前 kKeepCount-1 份，其余全部删除
+//   ③ 总大小上限兜底：即使文件数 ≤ 上限，若总和超过 kMaxTotalBytes，
 //      从最旧的开始删，直到总和 ≤ 上限
-// 这样既满足"最多 10 份日志"的硬上限，又能防止单份日志过大撑爆磁盘。
+// 这样既满足"最多 3 份日志"的硬上限，latest 标记又永远只属于当前活跃日志。
 static QString prepareLogFilePath() {
     QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
     if (cache.isEmpty()) cache = QDir::homePath() + "/.playerx_cache";
     QString logDir = cache + "/logs";
     QDir().mkpath(logDir);
 
-    // ── 计算本次序号：取已有日志中的最大序号 +1，每次启动序号都递增 ──
-    //   旧逻辑只在"同一秒内多次启动"时才递增，正常使用间隔超过 1 秒 → 永远是 00。
-    //   新逻辑扫描所有 playerx_*.log 的序号，取最大值 +1，使每次启动序号都不同。
-    //   序号范围 00~99，溢出后回绕到 00（约 100 次启动才回绕一次，此时时间戳已不同，不会撞名）。
-    qint64 nowSecs = QDateTime::currentSecsSinceEpoch();
-    int seq = 0;
+    // ── latest 标记转移：playerx_latest_*.log → playerx_*.log ──
+    //   上一次运行的“最新”日志退化为普通历史日志，latest 标记留给本次新文件，
+    //   保证目录里任何时刻最多只有一份带 latest 的日志（新日志覆盖更新标记）。
     {
         QDir d(logDir);
-        int maxSeq = -1;
-        for (const QFileInfo& fi : d.entryInfoList({"playerx_*.log"}, QDir::Files | QDir::NoSymLinks)) {
-            QString base = fi.completeBaseName();   // e.g. "playerx_1755900000_03"
-            int lastUnderscore = base.lastIndexOf('_');
-            if (lastUnderscore >= 0) {
-                QString seqStr = base.mid(lastUnderscore + 1);
-                bool ok = false;
-                int s = seqStr.toInt(&ok);
-                if (ok && s > maxSeq) maxSeq = s;
-            }
+        const QFileInfoList olds = d.entryInfoList({"playerx_latest_*.log"},
+                                                   QDir::Files | QDir::NoSymLinks);
+        for (const QFileInfo& fi : olds) {
+            // playerx_latest_20261015_083639.log → playerx_20261015_083639.log
+            QString newName = fi.fileName();
+            newName.replace(QStringLiteral("_latest_"), QStringLiteral("_"));
+            const QString newPath = fi.absolutePath() + "/" + newName;
+            // 防御撞名（同一秒内连续启动两次）：撞了就删旧留新路径
+            if (QFile::exists(newPath)) QFile::remove(fi.absoluteFilePath());
+            else QFile::rename(fi.absoluteFilePath(), newPath);
         }
-        seq = (maxSeq + 1) % 100;  // 00~99 循环递增
     }
 
-    // ── 旧日志清理 ──
+    // 人眼可读时间戳：yyyyMMdd_HHmmss（如 20261015_083639），
+    // 字典序 == 时间序，降序排序/裁剪逻辑不受影响
+    const QString tsStr = QDateTime::currentDateTime()
+                              .toString(QStringLiteral("yyyyMMdd_HHmmss"));
+
+    // ── 旧日志清理（历史日志上限 kKeepCount-1 份）──
     {
-        constexpr int    kKeepCount     = 10;                  // 最多保留 10 份日志
+        constexpr int    kKeepCount     = 3;                   // 最多保留 3 份日志（1 latest + 2 历史）
         constexpr qint64 kMaxTotalBytes = 20LL * 1024 * 1024;  // 总大小不超过 20 MB
 
         QDir d(logDir);
-        QFileInfoList all = d.entryInfoList({"playerx_*.log"},
-                                            QDir::Files | QDir::NoSymLinks,
-                                            QDir::Name);  // 按文件名升序
-
-        // 按文件名降序排列（时间戳+序号大的在前 = 最新在前）
+        QFileInfoList all = d.entryInfoList({"playerx_*.log"},   // 通配只吃普通历史日志，
+                                            QDir::Files | QDir::NoSymLinks,  // playerx_latest_* 已在上方
+                                            QDir::Name);                     // 改名退化为历史
+        // 按文件名降序排列（时间戳大的在前 = 最新在前）
         std::sort(all.begin(), all.end(), [](const QFileInfo& a, const QFileInfo& b) {
             return a.fileName() > b.fileName();
         });
 
-        // ① 数量裁剪：保留前 kKeepCount 个，其余删除
-        if (all.size() > kKeepCount) {
-            for (int i = kKeepCount; i < all.size(); ++i) {
+        // ① 数量裁剪：保留前 kKeepCount-1 个历史，其余删除（+本次 latest = 共 3 份）
+        if (all.size() > kKeepCount - 1) {
+            for (int i = kKeepCount - 1; i < all.size(); ++i) {
                 QFile::remove(all.at(i).absoluteFilePath());
             }
-            all = all.mid(0, kKeepCount);
+            all = all.mid(0, kKeepCount - 1);
         }
 
         // ② 总大小裁剪：从最新往最旧累计；累计值首次超过上限的那一刻起，
@@ -175,8 +179,8 @@ static QString prepareLogFilePath() {
         }
     }
 
-    QString seqStr = QString("%1").arg(seq, 2, 10, QChar('0'));   // 两位补零
-    return logDir + "/playerx_" + QString::number(nowSecs) + "_" + seqStr + ".log";
+    // 当前运行日志带 latest 标记：playerx_latest_yyyyMMdd_HHmmss.log
+    return logDir + "/playerx_latest_" + tsStr + ".log";
 }
 
 // Qt 日志 handler：把 qDebug/qInfo/qWarning/... 同时输出到 stderr（已被重定向到文件）。
