@@ -798,6 +798,21 @@ Rectangle {
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         z: 210
 
+        // 【切组残留修复】上一组的 checklist 弹窗随组切换残留：
+        // 底部按钮点击时鼠标必然落在 Popup 外 → 触发 CloseOnPressOutside 自动关闭；
+        // 而快捷键（Ctrl+↓）无鼠标事件 → Popup 保持打开，翻组后仍悬浮在旧位置。
+        // 统一修复：文件列表变化（翻组 / 切宫格 / 关闭通道等）时，若本弹窗仍开着，
+        // 直接关闭——两个入口行为对齐，且覆盖单路浏览翻页等其他切组路径。
+        Connections {
+            target: Engine
+            function onFilesChanged() {
+                if (checklistPopup.visible) {
+                    console.log("[Checklist] filesChanged → 关闭残留的 checklist 弹窗")
+                    checklistPopup.close()
+                }
+            }
+        }
+
         property string _filePath: ""
         // 当前勾选的 key 集合（JS 对象当 Set 用）
         property var _checked: ({})

@@ -1769,9 +1769,14 @@ ApplicationWindow {
                         // 把 _collectResumeInfo 推荐的 idx 写回 row，
                         // 让 start() 从"上次最后一次评分的下一个"开始播放。
                         // 仅当推荐 idx 比当前 row.currentIndex 大时才覆盖（不回退）。
+                        // 【组对齐续播】当 info._aligned 为 true 时（存在未评完的路，
+                        // 已按最小推荐 idx 对齐全组），改为"强制覆盖"：即使某路
+                        // 推荐位置比当前小（如已评完的路要退回来对齐），也写入。
+                        // 否则对齐白算，播放画面仍会错位。
                         try {
                             var info = resumeChoiceDialog._info || {}
                             var its = info.items || []
+                            var forceOverwrite = (info._aligned === true)
                             for (var ii = 0; ii < its.length; ++ii) {
                                 var it = its[ii] || {}
                                 var li = (typeof it._laneIndex === "number") ? it._laneIndex : -1
@@ -1783,7 +1788,9 @@ ApplicationWindow {
                                 var rt = _laneRuntime[li]
                                 if (!rt || !rt.visibleFiles) continue
                                 if (ri >= rt.visibleFiles.length) continue
-                                if (typeof lane.currentIndex === "number" && lane.currentIndex >= ri) continue
+                                if (!forceOverwrite
+                                        && typeof lane.currentIndex === "number"
+                                        && lane.currentIndex >= ri) continue
                                 _rowsModel.set(li, {
                                     selected:    lane.selected,
                                     folderPath:  lane.folderPath || "",
@@ -2274,17 +2281,60 @@ ApplicationWindow {
                 total: total,
                 // 给"接着评分"分支用：把推荐 idx 同步回 row 时需要它
                 _laneIndex: i,
-                _recommendIdx: idx
+                _recommendIdx: idx,
+                // 给"组对齐"用：该路最后评到的可见索引（-1 = 没评过 / 模式关）；
+                // _isRef：参考视频路不参与评分，对齐取最小值时不能拖住全组
+                _lastRated: lastRated,
+                _isRef: (l.isRefVideo === true)
+                        || ((l.folderPath || "").length > 0 && _isRefLaneByPath(l.folderPath))
             })
             if (idx > 0) hasProgress = true
+        }
+
+        // 【组对齐续播】多路对比里"一组" = 各路同索引的视频集合；只要组内
+        // 任意一路还没评（或没评完），这一组就不算完成。旧逻辑各路独立按
+        // "自己最后评到的 +1" 推进续播，会出现"两路已切到下一组、没评的
+        // 那路还停在原组"的错位画面（A/C 跳到 5.mp4 而 B 留在 4.mp4）。
+        // 规则：在"未评完"的路（_lastRated 没到 total-1，参考视频路除外）
+        // 里取最小的推荐 idx 作为全组统一续播位置；已评完的路不参与取最小
+        // （不拖住别人），但播放位置也对齐过去，保证"接着评分"打开后各路
+        // 画面同组、进度一致。
+        var alignIdx = -1
+        if (items.length >= 2) {
+            for (var ai = 0; ai < items.length; ++ai) {
+                var aIt = items[ai] || {}
+                if (aIt._isRef === true) continue   // 参考视频路不评分，不参与取最小
+                var aLr = (typeof aIt._lastRated === "number") ? aIt._lastRated : -1
+                var aTt = (typeof aIt.total === "number") ? aIt.total : 0
+                if (aTt > 0 && aLr >= aTt - 1) continue   // 该路已全部评完，不参与取最小
+                if (alignIdx < 0 || aIt._recommendIdx < alignIdx) alignIdx = aIt._recommendIdx
+            }
+        }
+        if (alignIdx >= 0) {
+            for (var bi = 0; bi < items.length; ++bi) {
+                var bIt = items[bi] || {}
+                var bIdx = Math.min(alignIdx, Math.max(0, (bIt.total || 1) - 1))
+                bIt.idx = bIdx
+                bIt._recommendIdx = bIdx
+                // 列表展示的文件名同步为"续播将真正打开的那个文件"，
+                // 避免"显示 4.mp4 但进度却是 5/6"的错位观感。
+                var bRt = _laneRuntime[bIt._laneIndex]
+                var bVis = (bRt && bRt.visibleFiles) ? bRt.visibleFiles : []
+                if (bIdx >= 0 && bIdx < bVis.length) {
+                    var bPath = bVis[bIdx] || ""
+                    var bK = Math.max(bPath.lastIndexOf("/"), bPath.lastIndexOf("\\"))
+                    bIt.fileName = (bK >= 0) ? bPath.substring(bK + 1) : bPath
+                }
+            }
         }
         // 调试日志：定位"为什么没弹窗"问题。看 Qt 控制台输出即可。
         try {
             console.log("[MGD] _collectResumeInfo mode=", (Rating ? Rating.currentMode : "?"),
                         " items=", JSON.stringify(items),
-                        " hasProgress=", hasProgress)
+                        " hasProgress=", hasProgress,
+                        " alignIdx=", alignIdx)
         } catch (e) { /* ignore */ }
-        return { hasProgress: hasProgress, items: items }
+        return { hasProgress: hasProgress, items: items, _aligned: alignIdx >= 0 }
     }
 
     // 重置当前模式下「参与启动」的这些文件夹的评分进度。
