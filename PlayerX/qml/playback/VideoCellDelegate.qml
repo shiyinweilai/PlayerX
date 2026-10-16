@@ -770,6 +770,15 @@ Rectangle {
                                                 // 优先显示在左侧；若左侧空间不足则显示在右侧
                                                 var px = mapped.x - popW - 6
                                                 if (px < 0) px = mapped.x + dimRow.width + 6
+                                                // 水平钳制到窗口范围内：Popup 内容不被 cell 裁剪，
+                                                // 向左溢出可见，但向右超出窗口会被窗口裁掉（最右通道看不见）
+                                                var cellInWin = cell.mapToItem(null, 0, 0)
+                                                var winW = cell.Window.window ? cell.Window.window.width : 0
+                                                if (winW > 0) {
+                                                    var absX = cellInWin.x + px
+                                                    if (absX + popW > winW - 4) px = winW - 4 - popW - cellInWin.x
+                                                    if (cellInWin.x + px < 4) px = 4 - cellInWin.x
+                                                }
                                                 // 垂直居中对齐 dimRow
                                                 var py = mapped.y + (dimRow.height - popH) / 2
                                                 py = Math.max(4, Math.min(py, cell.height - popH - 4))
