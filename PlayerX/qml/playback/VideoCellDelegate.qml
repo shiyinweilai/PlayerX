@@ -61,6 +61,9 @@ Rectangle {
     // 手机固定尺寸模式下 videoBox 可能比 cell 还大（以保持"任何窗口大小都等于真机像素"），
     // 必须裁剪到 cell 边界，避免溢出绘到隔壁 cell。常态下 clip 也无功能副作用。
     clip: true
+    // 【通道拖拽重排】拖起时半透明 + 淡蓝边框（视觉反馈）
+    opacity: cell._dragOpacity
+    Behavior on opacity { NumberAnimation { duration: 120 } }
     // 选中边框：跟随 viewRoot.selectedIdx（QML 层显式选中状态），不跟
     // Engine.activeIndex —— 这样默认 selectedIdx=-1 时不会有任何
     // cell 被高亮，避免视觉干扰；点击空白也能取消选中。
@@ -71,7 +74,8 @@ Rectangle {
     // 锁定手机比例时，cell 自身边框淡化为黑（黑边里看不见），选中框由内框 videoBox 绘制；
     // 未锁定时 cell 边框 = 选中框（保持原视觉）。
     readonly property bool _phoneLocked: viewRoot && (viewRoot.phoneFixedActive || viewRoot.phoneAspectRatio > 0)
-    border.color: cell._phoneLocked ? "#000"
+    border.color: cell._dragBorder.length > 0 ? cell._dragBorder
+                : cell._phoneLocked ? "#000"
                 : cell._isRefLane
                   ? (cell._isActive ? "#d4a72c" : "#5c4718")
                 : (cell._isActive ? "#4a6fa5" : "#222")
@@ -1004,6 +1008,75 @@ Rectangle {
         implicitHeight: 28 + (viewRoot.reviewChecklist ? viewRoot.reviewChecklist.length * 28 : 0) + 6
     }
 
+    // ─── 【通道拖拽重排】拖起本 cell → 悬浮到其它通道格子上松手交换位置 ───
+    // 设计：
+    //   · 仅在多路布局（非 Single）下可用；REF 通道不可拖动也不可作目标。
+    //   · 只改 VideoArea._laneOrder（显示槽位→player 索引映射），底层
+    //     player 索引、评分、seek 全部不动，保证数据不错位。
+    //   · 实现复用 cellMouse（左键分支）：左键按下后移动超过 12px 即进入
+    //     拖拽态（拖起半透明 + 淡蓝边框），松手在目标格子上完成交换；
+    //     未超过阈值 = 普通单击选中，与既有交互零冲突。右键拖拽平移不受影响。
+    property real _dragOpacity: 1.0
+    property string _dragBorder: ""
+    property bool _laneDragging: false
+    // 左键拖拽过程中的最新全局位置（cell 坐标系），松手时用于落点判定
+    property real _dragLastX: 0
+    property real _dragLastY: 0
+    property var _dragTimer: null
+    // 进入拖拽态（左键按住移动超阈值时由 cellMouse 调用）
+    function _beginLaneDrag() {
+        if (cell._laneDragging) return
+        console.log("[LaneDrag] BEGIN drag cell=" + cell.playerIdx)
+        cell._laneDragging = true
+        cell._dragOpacity = 0.55
+        cell._dragBorder = "#3b8ef2"
+        // 拖拽中给个抓手光标
+        cellMouse.cursorShape = Qt.ClosedHandCursor
+    }
+    function _endLaneDrag(dropAtX, dropAtY) {
+        var wasDragging = cell._laneDragging
+        cell._laneDragging = false
+        cell._dragOpacity = 1.0
+        cell._dragBorder = ""
+        cellMouse.cursorShape = Qt.ArrowCursor
+        if (wasDragging) _dropAtScenePoint(dropAtX, dropAtY)
+    }
+    // 全局坐标 → 目标槽位 → 交换 laneOrder
+    function _dropAtScenePoint(sx, sy) {
+        if (!viewRoot || typeof viewRoot.slotPlayerIndex !== "function") return
+        // 遍历 Grid 中的所有 cell（Repeater 兄弟），找到包含落点的那个
+        var g = cell.parent        // Grid
+        if (!g) return
+        var target = null
+        for (var i = 0; i < g.children.length; ++i) {
+            var ch = g.children[i]
+            if (!ch || ch === cell) continue
+            if (typeof ch.playerIdx === "undefined" || ch.playerIdx < 0) continue
+            var p = ch.mapToItem(null, 0, 0)
+            if (sx >= p.x && sx < p.x + ch.width
+                    && sy >= p.y && sy < p.y + ch.height) {
+                target = ch
+                break
+            }
+        }
+        console.log("[LaneDrag] drop 判定: cell=" + cell.playerIdx
+            + " 落点(" + sx.toFixed(0) + "," + sy.toFixed(0) + ")"
+            + " → target=" + (target ? target.playerIdx : "无"))
+        if (!target) return
+        // 按"显示槽位 s：slotPlayerIndex(s) === playerIdx"反查双方槽位
+        var mySlot = -1, targetSlot = -1
+        for (var s = 0; s < Engine.fileCount && s < 9; ++s) {
+            var pi = viewRoot.slotPlayerIndex(s)
+            if (pi === cell.playerIdx) mySlot = s
+            if (pi === target.playerIdx) targetSlot = s
+        }
+        if (mySlot < 0 || targetSlot < 0) return
+        if (mySlot === targetSlot) return
+        // REF 槽保护 + 交换
+        if (typeof viewRoot.swapLaneOrder === "function")
+            viewRoot.swapLaneOrder(mySlot, targetSlot)
+    }
+
     // ─── 主交互层：左键选中/双击暂停 + 右键拖拽平移/单击信息面板 ──────────
     // 设计说明：
     //   · 单一 MouseArea 同时接 LeftButton | RightButton，彻底消除层级竞争。
@@ -1023,29 +1096,70 @@ Rectangle {
         property real _rLastX: 0
         property real _rLastY: 0
         property bool _rMoved: false
+        // 左键拖拽重排状态：按下起点 + 拖拽刚结束标志
+        property real _lLastX: 0
+        property real _lLastY: 0
+        property bool _justDragged: false
 
         onPressed: function(mouse) {
             if (mouse.button === Qt.RightButton) {
                 _rLastX = mouse.x
                 _rLastY = mouse.y
                 _rMoved = false
+            } else if (mouse.button === Qt.LeftButton) {
+                _lLastX = mouse.x
+                _lLastY = mouse.y
+                _justDragged = false
+                console.log("[LaneDrag] press cell=" + cell.playerIdx
+                    + " layoutMode=" + Engine.layoutMode
+                    + " isRef=" + cell._isRefLane
+                    + " tab=" + (viewRoot ? viewRoot.currentTab : "null")
+                    + " x=" + mouse.x + " y=" + mouse.y)
             }
         }
         onPositionChanged: function(mouse) {
-            if (!(pressedButtons & Qt.RightButton)) return
-            var dx = mouse.x - _rLastX
-            var dy = mouse.y - _rLastY
-            _rLastX = mouse.x
-            _rLastY = mouse.y
-            if (Math.abs(dx) + Math.abs(dy) < 0.5) return
-            _rMoved = true
-            // 以 videoBox（画面区）归一化：锁定手机比例后拖拽在黑边/画面中表现一致。
-            var w = Math.max(1, videoBox.width)
-            var h = Math.max(1, videoBox.height)
-            Engine.panBy(dx / w, dy / h)
+            if (pressedButtons & Qt.RightButton) {
+                var dx = mouse.x - _rLastX
+                var dy = mouse.y - _rLastY
+                _rLastX = mouse.x
+                _rLastY = mouse.y
+                if (Math.abs(dx) + Math.abs(dy) < 0.5) return
+                _rMoved = true
+                // 以 videoBox（画面区）归一化：锁定手机比例后拖拽在黑边/画面中表现一致。
+                var w = Math.max(1, videoBox.width)
+                var h = Math.max(1, videoBox.height)
+                Engine.panBy(dx / w, dy / h)
+                return
+            }
+            // 左键拖拽重排：移动超阈值（12px）且非 REF/非 Single 时进入拖拽态
+            if ((pressedButtons & Qt.LeftButton) && !cell._laneDragging) {
+                var ldx = mouse.x - _lLastX
+                var ldy = mouse.y - _lLastY
+                if (Math.abs(ldx) + Math.abs(ldy) >= 12) {
+                    console.log("[LaneDrag] move超阈值 cell=" + cell.playerIdx
+                        + " dist=" + (Math.abs(ldx) + Math.abs(ldy))
+                        + " playerIdxOK=" + (cell.playerIdx >= 0)
+                        + " layoutOK=" + (Engine.layoutMode !== 0)
+                        + " isRef=" + cell._isRefLane
+                        + " tabOK=" + (viewRoot && viewRoot.currentTab === "play"))
+                }
+                if (Math.abs(ldx) + Math.abs(ldy) >= 12
+                        && cell.playerIdx >= 0
+                        && viewRoot && viewRoot.currentTab === "play"
+                        && Engine.layoutMode !== 0
+                        && !cell._isRefLane) {
+                    cell._beginLaneDrag()
+                }
+            }
+            if ((pressedButtons & Qt.LeftButton) && cell._laneDragging) {
+                // 持续记录最新全局位置（cell 坐标），供松手落点判定
+                var gp = cell.mapToItem(null, mouse.x, mouse.y)
+                cell._dragLastX = gp.x
+                cell._dragLastY = gp.y
+            }
         }
         onClicked: function(mouse) {
-            if (mouse.button === Qt.LeftButton) {
+            if (mouse.button === Qt.LeftButton && !cell._laneDragging && !_justDragged) {
                 Engine.activeIndex = cell.playerIdx
                 viewRoot.selectedIdx = cell.playerIdx
                 viewRoot.focusVideoArea()
@@ -1053,6 +1167,10 @@ Rectangle {
             // 右键单击由 onReleased 处理（需区分是否拖拽）
         }
         onReleased: function(mouse) {
+            if (mouse.button === Qt.LeftButton && cell._laneDragging) {
+                cellMouse._justDragged = true
+                cell._endLaneDrag(cell._dragLastX, cell._dragLastY)
+            }
             if (mouse.button === Qt.RightButton && !_rMoved) {
                 cell.localInfoVisible = !cell.localInfoVisible
             }

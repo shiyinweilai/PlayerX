@@ -84,20 +84,114 @@ Item {
         }
         return -1
     }
-    function slotPlayerIndex(slot) {
-        if (Engine.layoutMode === 0) return Engine.activeIndex
-        var refIdx = _refPlayerIndex()
-        if (refIdx < 0) return slot          // 无 REF：恒等映射
-        if (slot === 0) return refIdx        // 显示首位 = REF
-        // 其余位依次填充“跳过 REF 的其他 player”
-        var seen = 0
+    // ── 【通道拖拽重排】显示槽位 → player 索引的自定义映射 ──
+    // 默认恒等（显示槽 i 显示 player i）；用户拖拽交换后记录新的对应关系。
+    // 仅作用于"显示层"（宫格顺序 + 外部通道号/路径），不改动底层 player
+    // 索引、评分、seek、快捷键等任何逻辑——评分按 player 索引存储，
+    // 交换位置不会导致评分错位。翻组/换文件列表时自动重置为恒等。
+    property var _laneOrder: []
+    property int _laneOrderBump: 0   // 惰性求值依赖：交换后 +1 触发重渲染
+
+    // 构建/重建 laneOrder：REF 仍固定占显示槽 0，其余 player 按当前
+    // _laneOrder 中"非 REF 部分"的旧顺序（若有）或默认顺序填充。
+    // 语义：重排只针对"非 REF 路"；REF 永远第一。
+    function _rebuildLaneOrder() {
         var n = Engine.fileCount
-        for (var i = 0; i < n; ++i) {
-            if (i === refIdx) continue
-            seen++
-            if (seen === slot) return i
+        var refIdx = _refPlayerIndex()
+        var old = videoArea._laneOrder || []
+        // 从旧顺序里取出"仍然存在且非 REF"的 player 索引（保持旧相对顺序）
+        var kept = []
+        for (var i = 0; i < old.length; ++i) {
+            var p = old[i]
+            if (typeof p === "number" && p >= 0 && p < n && p !== refIdx
+                    && kept.indexOf(p) < 0)
+                kept.push(p)
         }
+        // 补上新增的（旧顺序里没有的）非 REF player
+        for (var j = 0; j < n; ++j) {
+            if (j !== refIdx && kept.indexOf(j) < 0) kept.push(j)
+        }
+        var arr = []
+        if (refIdx >= 0) arr.push(refIdx)
+        for (var k = 0; k < kept.length; ++k) arr.push(kept[k])
+        videoArea._laneOrder = arr
+    }
+
+    // 显示槽 slotA ↔ slotB 交换（拖拽落点判定后调用）。
+    // REF 槽（0）不可拖走：若任一为 REF 槽则直接忽略。
+    function swapLaneOrder(slotA, slotB) {
+        if (slotA === slotB) return
+        if (slotA < 0 || slotB < 0) return
+        var arr = videoArea._laneOrder
+        if (!arr || arr.length === 0) return
+        if (slotA >= arr.length || slotB >= arr.length) return
+        var refIdx = _refPlayerIndex()
+        if (refIdx >= 0 && (arr[slotA] === refIdx || arr[slotB] === refIdx)) {
+            console.log("[LaneDrag] swap 被拒：涉及 REF 槽 slot" + slotA + "↔slot" + slotB)
+            return
+        }
+        var t = arr[slotA]
+        arr[slotA] = arr[slotB]
+        arr[slotB] = t
+        videoArea._laneOrder = arr
+        videoArea._laneOrderBump++
+        console.log("[LaneDrag] SWAP 完成: slot" + slotA + "↔slot" + slotB
+            + " 新顺序=" + JSON.stringify(arr))
+        _persistLaneOrder()
+    }
+
+    // 持久化：写入 Rating QSettings（跨重启保留；不同模式独立）。
+    function _persistLaneOrder() {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.saveString === "function")
+                Rating.saveString("playbackLaneOrder/" + Engine.layoutMode,
+                                  JSON.stringify(videoArea._laneOrder))
+        } catch (e) { /* 持久化失败不影响本次会话 */ }
+    }
+    function _loadLaneOrder() {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function") {
+                var s = Rating.loadString("playbackLaneOrder/" + Engine.layoutMode, "")
+                if (s && s.length > 0) {
+                    var arr = JSON.parse(s)
+                    if (arr && arr.length > 0) return arr
+                }
+            }
+        } catch (e) {}
+        return null
+    }
+
+    function slotPlayerIndex(slot) {
+        videoArea._laneOrderBump   // 依赖：交换后强制重求值
+        if (Engine.layoutMode === 0) return Engine.activeIndex
+        var arr = videoArea._laneOrder
+        if (arr && arr.length > 0 && slot >= 0 && slot < arr.length)
+            return arr[slot]
         return slot
+    }
+
+    // 【通道拖拽重排】文件列表/布局变化时重建映射：
+    //   · filesChanged（翻组/换文件/关通道）：保留旧相对顺序，REF 仍置顶。
+    //     若无持久化旧顺序则默认恒等。
+    //   · layoutMode 变化：不同布局的持久化顺序各自独立，切换时按
+    //     该布局自己的存档恢复（无存档则恒等）。
+    // Component.onCompleted：首次进入时尝试恢复上次布局的存档。
+    Connections {
+        target: Engine
+        function onFilesChanged() { videoArea._rebuildLaneOrder() }
+        function onLayoutModeChanged() {
+            var saved = videoArea._loadLaneOrder()
+            videoArea._laneOrder = saved ? saved : []
+            videoArea._laneOrderBump++
+            if (!saved) videoArea._rebuildLaneOrder()
+        }
+    }
+    Component.onCompleted: {
+        var saved = videoArea._loadLaneOrder()
+        videoArea._laneOrder = saved ? saved : []
+        if (!saved) videoArea._rebuildLaneOrder()
     }
 
     // 「空白处点击取消选中」底层 MouseArea。

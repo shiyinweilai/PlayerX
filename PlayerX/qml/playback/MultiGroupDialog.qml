@@ -3551,12 +3551,17 @@ ApplicationWindow {
         // ★ 先清除启动时临时追加、残留在模型里的"参考视频行"。
         //    参考视频由参考资料区（refVideoPath）单独维护，启动时才作为不评分的
         //    REF 路临时追加进 _rowsModel 用于播放；但对话框再次打开时它不应作为
-        //    通道显示（会表现为多出的"通道N 未导入 —"）。这里按 isRefVideo 标志
-        //    或 _isRefLaneByPath 命中逐条移除，保证通道列表只含用户真实配置的路。
+        //    通道显示（会表现为多出的"通道N 未导入 —"）。
+        //    【只认 isRefVideo 标志】不能按路径名（目录 === REF）判定：
+        //    测试源自动化下发的 laneDirs 本身含 REF 目录，loadFolders 会把它作为
+        //    正常 lane 导入（无 isRefVideo 标志）——若按路径删，会误删本次刚导入、
+        //    还没启动的 REF lane，导致参考视频一路消失。临时 REF 行创建时一律带
+        //    isRefVideo=true 且不写持久化（_persistLanes 跳过），重启后不存在
+        //    "丢失标志的临时行"，因此只删 isRefVideo === true 是完备且安全的。
         for (var rv = _rowsModel.count - 1; rv >= 0; --rv) {
             var lrv = _rowsModel.get(rv)
             if (!lrv) continue
-            if (lrv.isRefVideo === true || _isRefLaneByPath(lrv.folderPath)) {
+            if (lrv.isRefVideo === true) {
                 _rowsModel.remove(rv)
                 if (rv < _laneRuntime.length) _laneRuntime.splice(rv, 1)
                 console.log("[MGD] 打开对话框：移除残留参考视频行 idx=", rv,

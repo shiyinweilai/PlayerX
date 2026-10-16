@@ -304,18 +304,23 @@ function _toggleCompareSlider() {
     }
 }
 function _toggleOne(idx) {
-    if (idx < 0 || idx >= Engine.fileCount) return
+    // idx：显示槽位（1..9 键对应的视觉位置）→ 先映射回 player 索引。
+    // 【通道拖拽重排】交换后，数字键仍指向"视觉上第 idx+1 个格子"。
+    var playerIdx = idx
+    if (typeof _root.slotPlayerIndex === "function")
+        playerIdx = _root.slotPlayerIndex(idx)
+    if (playerIdx < 0 || playerIdx >= Engine.fileCount) return
     // 已经在该单路视图：再次按下 -> 回多路
-    if (Engine.layoutMode === 0 && Engine.activeIndex === idx) {
+    if (Engine.layoutMode === 0 && Engine.activeIndex === playerIdx) {
         var v = _root.lastMultiLayout
         if (v === 0) v = 1   // 保险：永远不会回到 Single
         Engine.layoutMode = v
         return
     }
     // 否则进入 Single 并聚焦到该窗口；同时把 UI 选中态也设上，让快捷评分有目标
-    Engine.activeIndex = idx
+    Engine.activeIndex = playerIdx
     Engine.layoutMode  = 0  // LayoutSingle
-    _root.selectedIdx   = idx
+    _root.selectedIdx   = playerIdx
 }
 function _resolveRatingTarget() {
     if (Engine.fileCount <= 0) return -1
@@ -413,14 +418,26 @@ function _clearRatingForActive() {
 function _shiftActive(dir) {
     // dir: -1 上一路 / +1 下一路；循环。
     // 同时同步 Engine.activeIndex，让 Single 模式下的渲染也跟着切。
+    // 【通道拖拽重排】按"显示槽位顺序"遍历：先算出当前选中路的显示槽位，
+    // 在显示顺序上 ±1，再映射回 player 索引——交换后 ] 仍指向视觉上的下一个格子。
     var n = Engine.fileCount
     if (n <= 0) return
+    var curSlot = -1
     var cur = _root.selectedIdx
-    if (cur < 0) {
-        // 未选中场景：进入选中态，从 0（往后切）或末尾（往前切）开始
-        cur = (dir > 0) ? -1 : n   // 让下面 (cur+dir) 落到 0 / n-1
+    if (cur >= 0 && typeof _root.slotPlayerIndex === "function") {
+        for (var s = 0; s < n; ++s) {
+            if (_root.slotPlayerIndex(s) === cur) { curSlot = s; break }
+        }
     }
-    var nxt = ((cur + dir) % n + n) % n
+    var nxtSlot
+    if (curSlot < 0) {
+        // 未选中场景：进入选中态，从显示槽 0（往后切）或末尾（往前切）开始
+        nxtSlot = (dir > 0) ? 0 : (n - 1)
+    } else {
+        nxtSlot = ((curSlot + dir) % n + n) % n
+    }
+    var nxt = (typeof _root.slotPlayerIndex === "function")
+              ? _root.slotPlayerIndex(nxtSlot) : nxtSlot
     _root.selectedIdx = nxt
     Engine.activeIndex = nxt
 }

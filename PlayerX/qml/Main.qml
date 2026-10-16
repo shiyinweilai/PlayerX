@@ -548,6 +548,10 @@ ApplicationWindow {
         // 等价于原 delegate 内 videoArea.slotPlayerIndex(index)
         return videoArea.slotPlayerIndex(slot)
     }
+    // 【通道拖拽重排】cell 拖拽落点交换显示槽位（透传 videoArea.swapLaneOrder）
+    function swapLaneOrder(slotA, slotB) {
+        videoArea.swapLaneOrder(slotA, slotB)
+    }
     function focusVideoArea() {
         // 等价于原 delegate 内 videoArea.forceActiveFocus()
         videoArea.forceActiveFocus()
@@ -2312,10 +2316,13 @@ Component {
                         anchors.left: parent.left
                         anchors.leftMargin: 10
                         Repeater {
+                            // 按显示顺序遍历：laneOrderBump 变化时重排 pill 顺序
                             model: Engine.fileCount
                             delegate: Rectangle {
                                 required property int index
-                                property bool isSel: panelRoot.selectedIdx === index
+                                // 显示槽位 index 对应的 player 索引（跟随拖拽重排）
+                                readonly property int playerIdx: root.slotPlayerIndex(index)
+                                property bool isSel: panelRoot.selectedIdx === playerIdx
                                 radius: 11
                                 height: 22
                                 implicitWidth: laneLabel.implicitWidth + 18
@@ -2326,7 +2333,7 @@ Component {
                                 Label {
                                     id: laneLabel
                                     anchors.centerIn: parent
-                                    text: "通道 " + (index + 1)
+                                    text: "通道 " + (playerIdx + 1)
                                     color: parent.isSel ? "#ffffff" : "#c8c8d0"
                                     font.pixelSize: 11
                                 }
@@ -2335,7 +2342,7 @@ Component {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: panelRoot.selectedIdx = index
+                                    onClicked: panelRoot.selectedIdx = playerIdx
                                 }
                             }
                         }
