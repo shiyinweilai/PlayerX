@@ -770,14 +770,21 @@ Rectangle {
                                                 // 优先显示在左侧；若左侧空间不足则显示在右侧
                                                 var px = mapped.x - popW - 6
                                                 if (px < 0) px = mapped.x + dimRow.width + 6
-                                                // 水平钳制到窗口范围内：Popup 内容不被 cell 裁剪，
-                                                // 向左溢出可见，但向右超出窗口会被窗口裁掉（最右通道看不见）
-                                                var cellInWin = cell.mapToItem(null, 0, 0)
-                                                var winW = cell.Window.window ? cell.Window.window.width : 0
-                                                if (winW > 0) {
-                                                    var absX = cellInWin.x + px
-                                                    if (absX + popW > winW - 4) px = winW - 4 - popW - cellInWin.x
-                                                    if (cellInWin.x + px < 4) px = 4 - cellInWin.x
+                                                // 水平钳制到 Popup 实际可视边界（Overlay）内：
+                                                // Popup 显示在覆盖整个窗口的 overlay 上，其可见范围
+                                                // 由 overlay 决定。cell.Window 在 Windows 上不稳，
+                                                // 改用 overlay 宽度 + cell→overlay 坐标映射，跨平台一致。
+                                                var ov = checklistPopup.Overlay.overlay
+                                                if (ov && ov.width > 0) {
+                                                    var cellInOv = cell.mapToItem(ov, 0, 0)
+                                                    var ovW = ov.width
+                                                    var absX = cellInOv.x + px
+                                                    // 右溢出：整体左移贴右边（留 4px 余量）
+                                                    if (absX + popW > ovW - 4)
+                                                        px = ovW - 4 - popW - cellInOv.x
+                                                    // 左溢出：贴左边
+                                                    if (cellInOv.x + px < 4)
+                                                        px = 4 - cellInOv.x
                                                 }
                                                 // 垂直居中对齐 dimRow
                                                 var py = mapped.y + (dimRow.height - popH) / 2
