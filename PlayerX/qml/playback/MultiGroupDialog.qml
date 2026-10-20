@@ -2912,6 +2912,10 @@ ApplicationWindow {
             out.push(src[i])
         }
         startHistory = out
+        // 若删除的是当前选中条目，同步清除列表高亮（避免残留）
+        if (histList && typeof histList._selectedHistId === "number"
+                && histList._selectedHistId === rec.id)
+            histList._selectedHistId = -1
         // nextId 不回退：已删除的编号不复用，后续新记录继续单调递增
         _saveStartHistory()
     }
@@ -4951,14 +4955,18 @@ ApplicationWindow {
                             spacing: 6
                             // 记录多时支持上下滑动浏览：超出可视区自动出滚动条，
                             // 滚轮/触摸板/触摸手势均可滚动
-                            boundsBehavior: Flickable.StopAtBounds
-                            // 新记录在上：delegate 按倒序展示（数组尾部 = 最新）
-                            delegate: Rectangle {
+                        boundsBehavior: Flickable.StopAtBounds
+                        // 新记录在上：delegate 按倒序展示（数组尾部 = 最新）
+                        // 选中态：记录当前已恢复到左侧界面的历史条目 ID（-1 = 无选中）
+                        property int _selectedHistId: -1
+                        delegate: Rectangle {
                             width: histScroll.availableWidth
                             height: 40
                             radius: 4
-                            color: histRowMa.containsMouse ? "#23232a" : "#1a1a1f"
-                            border.color: "#2c2c32"
+                            property bool _selected: rec && rec.id === histList._selectedHistId
+                            color: _selected ? "#24324a"
+                                  : histRowMa.containsMouse ? "#23232a" : "#1a1a1f"
+                            border.color: _selected ? "#7ec8ff" : "#2c2c32"
                             border.width: 1
 
                             property var rec: _histFiltered.length > index
@@ -4974,10 +4982,25 @@ ApplicationWindow {
                                     if (!rec) return
                                     var err = dlg.loadStartHistory(rec)
                                     if (err && err.length > 0) {
+                                        histList._selectedHistId = -1
                                         dlg._histLoadNotice = "⚠ " + err
                                         dlg._histLoadTimer.restart()
+                                    } else {
+                                        histList._selectedHistId = rec.id
                                     }
                                 }
+                            }
+
+                            // 选中标识：左侧蓝色高亮条（与边框同色系，醒目但不刺眼）
+                            Rectangle {
+                                visible: parent._selected
+                                anchors.left: parent.left
+                                anchors.leftMargin: 0
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                width: 3
+                                radius: 1.5
+                                color: "#7ec8ff"
                             }
 
                             RowLayout {
@@ -5089,6 +5112,7 @@ ApplicationWindow {
                         startHistory = []
                         // 清空 = 重置：编号退回 1，下次从 #1 重新开始
                         startHistoryNextId = 1
+                        histList._selectedHistId = -1
                         _saveStartHistory()
                     }
                     background: Rectangle {
