@@ -44,7 +44,7 @@ endforeach()
 # macOS 用 NSOpenPanel（FsUtils_mac.mm），完全不依赖 QtWidgets。
 # Windows / Linux 等平台依赖 Qt 自绘 QFileDialog 作为多选目录对话框的实现，
 # 需要链入 Qt6::Widgets。
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Concurrent)
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Network Concurrent Multimedia)
 if(NOT APPLE)
     find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
 endif()
@@ -246,6 +246,8 @@ qt_add_qml_module(PlayerX
         qml/playback/RefSidebarHSplitter.qml
         qml/playback/CsvBottomVSplitter.qml
         qml/playback/VideoArea.qml
+        # 播放对比空态教程视频面板（公告/教学区，自动播放静音循环）
+        qml/playback/TutorialVideoPanel.qml
         qml/LeftNavBar.qml
         qml/yuv/YuvStatsPanel.qml
         # ── 码流分析模块（拆分至独立子目录 qml/stream/） ──
@@ -318,6 +320,7 @@ target_link_libraries(PlayerX PRIVATE
 Qt6::QuickControls2
 Qt6::Network
 Qt6::Concurrent
+Qt6::Multimedia
     # FFmpeg 静态库
     avformat avcodec avfilter avutil swscale swresample
 )

@@ -273,73 +273,38 @@ Item {
         }
 
         ColumnLayout {
-            anchors.centerIn: parent
-            spacing: 24
-            width: Math.min(parent.width - 80, 720)
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.topMargin: 28
+            anchors.bottomMargin: 24
+            spacing: 18
+            width: Math.min(parent.width - 80, 880)
 
-            // ── 标题组（参考设计稿）：PlayerX（X 品牌蓝）+ 蓝色发光装饰线 ──
-            //   装饰线：水平渐变（两端透明、中间饱和）+ 微弱外发光，
-            //   纤细不抢眼，仅用于衬托 X 标识，宽度略小于文字总宽。
+            // ── 标题组（压缩版）：品牌标识靠上，把面积让给教程窗口 ──
             ColumnLayout {
                 Layout.alignment: Qt.AlignHCenter
-                spacing: 10
+                spacing: 6
 
                 Row {
                     id: titleRow
                     Layout.alignment: Qt.AlignHCenter
-                    Text { text: "Player"; color: "#f4f6fa"; font.pixelSize: 36; font.bold: true }
-                    Text { text: "X";      color: "#3b8ef2"; font.pixelSize: 36; font.bold: true }
+                    spacing: 2
+                    Text { text: "Player"; color: "#f4f6fa"; font.pixelSize: 24; font.bold: true }
+                    Text { text: "X";      color: "#3b8ef2"; font.pixelSize: 24; font.bold: true }
                 }
 
-                // 装饰线本体 + 光晕：三层同中心渐变线叠出"发光"观感
-                //（Qt5Compat.GraphicalEffects 的运行库在本应用部署中不可用，
-                //  Glow 会导致启动失败；改用零依赖叠层模拟，效果等价）
-                Item {
+                // 装饰线：标题正下方的渐变下划线（两端透明、中间饱和）
+                Rectangle {
                     Layout.alignment: Qt.AlignHCenter
-                    implicitWidth: titleRow.implicitWidth * 0.9
-                    implicitHeight: 10
-
-                    // 外层光晕（最宽最淡）
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: parent.width
-                        height: 10
-                        radius: 5
-                        gradient: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: "#003b8ef2" }
-                            GradientStop { position: 0.3; color: "#223b8ef2" }
-                            GradientStop { position: 0.7; color: "#223b8ef2" }
-                            GradientStop { position: 1.0; color: "#003b8ef2" }
-                        }
-                    }
-                    // 中层光晕
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: parent.width
-                        height: 6
-                        radius: 3
-                        gradient: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: "#003b8ef2" }
-                            GradientStop { position: 0.3; color: "#553b8ef2" }
-                            GradientStop { position: 0.7; color: "#553b8ef2" }
-                            GradientStop { position: 1.0; color: "#003b8ef2" }
-                        }
-                    }
-                    // 核心亮线
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: parent.width
-                        height: 3
-                        radius: 1.5
-                        gradient: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: "#003b8ef2" }
-                            GradientStop { position: 0.3; color: "#3b8ef2" }
-                            GradientStop { position: 0.7; color: "#3b8ef2" }
-                            GradientStop { position: 1.0; color: "#003b8ef2" }
-                        }
+                    width: titleRow.implicitWidth * 0.9
+                    height: 3
+                    radius: 1.5
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: "#003b8ef2" }
+                        GradientStop { position: 0.5; color: "#883b8ef2" }
+                        GradientStop { position: 1.0; color: "#003b8ef2" }
                     }
                 }
             }
@@ -347,20 +312,20 @@ Item {
                 Layout.alignment: Qt.AlignHCenter
                 text: "多路视频对比 · 同步播放 · 评分采集"
                 color: "#9aa0a6"
-                font.pixelSize: 14
+                font.pixelSize: 12
             }
 
-            // ── 两个大按钮 ─────────────────────────────────────
+            // ── 两个入口按钮（压缩为紧凑横向小按钮）─────────────
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
-                spacing: 18
+                spacing: 12
 
                 // ① 打开文件
                 Rectangle {
                     id: heroBtnFile
-                    Layout.preferredWidth: 240
-                    Layout.preferredHeight: 132
-                    radius: 10
+                    Layout.preferredWidth: 190
+                    Layout.preferredHeight: 84
+                    radius: 8
                     color: heroBtnFileMA.containsMouse ? "#2a3a55"
                           : heroBtnFileMA.pressed     ? "#1e2a40"
                                                       : "#1e1e22"
@@ -369,26 +334,15 @@ Item {
                     Behavior on color { ColorAnimation { duration: 120 } }
                     Behavior on border.color { ColorAnimation { duration: 120 } }
 
-                    ColumnLayout {
+                    Row {
                         anchors.centerIn: parent
-                        spacing: 8
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: "🎬"
-                            font.pixelSize: 36
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: "打开文件"
-                            color: "#e8e8ec"
-                            font.pixelSize: 16
-                            font.bold: true
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: "选择 1-9 个视频文件"
-                            color: "#9aa0a6"
-                            font.pixelSize: 12
+                        spacing: 10
+                        Text { text: "🎬"; font.pixelSize: 24; anchors.verticalCenter: parent.verticalCenter }
+                        Column {
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 2
+                            Text { text: "打开文件"; color: "#e8e8ec"; font.pixelSize: 13; font.bold: true }
+                            Text { text: "选择 1-9 个视频文件"; color: "#9aa0a6"; font.pixelSize: 11 }
                         }
                     }
 
@@ -404,9 +358,9 @@ Item {
                 // ② 打开文件夹 / 多组对比
                 Rectangle {
                     id: heroBtnFolder
-                    Layout.preferredWidth: 240
-                    Layout.preferredHeight: 132
-                    radius: 10
+                    Layout.preferredWidth: 190
+                    Layout.preferredHeight: 84
+                    radius: 8
                     color: heroBtnFolderMA.containsMouse ? "#2a3a55"
                           : heroBtnFolderMA.pressed     ? "#1e2a40"
                                                         : "#1e1e22"
@@ -415,26 +369,15 @@ Item {
                     Behavior on color { ColorAnimation { duration: 120 } }
                     Behavior on border.color { ColorAnimation { duration: 120 } }
 
-                    ColumnLayout {
+                    Row {
                         anchors.centerIn: parent
-                        spacing: 8
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: "📁"
-                            font.pixelSize: 36
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: "打开文件夹"
-                            color: "#e8e8ec"
-                            font.pixelSize: 16
-                            font.bold: true
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: "整文件夹载入 / 多组对比"
-                            color: "#9aa0a6"
-                            font.pixelSize: 12
+                        spacing: 10
+                        Text { text: "📁"; font.pixelSize: 24; anchors.verticalCenter: parent.verticalCenter }
+                        Column {
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 2
+                            Text { text: "打开文件夹"; color: "#e8e8ec"; font.pixelSize: 13; font.bold: true }
+                            Text { text: "整文件夹载入 / 多组对比"; color: "#9aa0a6"; font.pixelSize: 11 }
                         }
                     }
 
@@ -446,160 +389,20 @@ Item {
                         onClicked: multiGroupDialog.showAndRefresh()
                     }
                 }
-
-                
             }
 
-            // ── 操作说明 ──────────────────────────────────────
-            // 设计说明（图1 → 当前版本）：
-            //   旧版仅展示 4 行"打开 / 播放 / 视图 / 路·速"的极简速览，再用一个
-            //   「查看全部快捷键 →（F1）」链接跳转到 shortcutsDialog。
-            //   现在快捷键数量稳定（≤5 组、共十几行），首页空态有足够留白，干脆
-            //   直接平铺展示全部分组，无需二次跳转；同时保留 F1 入口，便于
-            //   未来扩展更多快捷键时仍可单独打开速查面板。
-            //   组件复用：直接使用 root 顶层定义的 ScSection / ScRow，与 F1
-            //   对话框 100% 一致；这样以后只要维护一份内容，两处自动同步。
-            Rectangle {
+            // ── 教程视频渲染窗口（主体，最大化占据剩余面积） ──
+            //   专业软件（Premiere / Resolve）的空态做法：放一个自动播放的
+            //   教程视频（静音、循环），比静态图/GIF 更清晰、体积更小、可换源。
+            //   视频缺失时组件内部自动回退为标题占位，不报错。
+            TutorialVideoPanel {
+                id: tutorialPanel
                 Layout.alignment: Qt.AlignHCenter
-                // 宽度 720：与 shortcutsDialog 的两列网格留白接近，
-                // 单行最长描述「切换通道信息叠加（序号 + 文件名）」也能一行放下。
-                Layout.preferredWidth: 720
-                color: "#14141820"
-                radius: 8
-                border.color: "#2a2a32"
-                border.width: 1
-                implicitHeight: tipsCol.implicitHeight + 24
-
-                ColumnLayout {
-                    id: tipsCol
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: 16
-                    anchors.rightMargin: 16
-                    spacing: 6
-
-                    Text {
-                        text: emptyHero.dragHover
-                              ? "🎯 松开鼠标即可载入"
-                              : "💡 也可以直接把视频文件或文件夹 拖入此窗口"
-                        color: emptyHero.dragHover ? "#6aa8ff" : "#cfd2d6"
-                        font.pixelSize: 13
-                        font.bold: emptyHero.dragHover
-                    }
-                    Text {
-                        text: "·  支持 mp4 / mov / mkv / avi / webm / flv / ts / m4v / wmv，最多同时载入 9 路"
-                        color: "#9aa0a6"
-                        font.pixelSize: 12
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
-
-                    // 分隔线：让"拖拽提示文案"与"快捷键分组"的视觉层级清晰一些
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.topMargin: 6
-                        Layout.bottomMargin: 2
-                        height: 1
-                        color: "#2a2a32"
-                    }
-
-                    // ── 全量快捷键：两列 × 多分组（与 F1 对话框完全一致）──
-                    //   左列：播放 / 倍速 / 多组对比
-                    //   右列：视图 / 单路 · 多路
-                    //   使用 ScSection + ScRow（root 顶层 inline component），
-                    //   保证视觉与 shortcutsDialog 完全一致；后续扩展只需改两处之一。
-                    GridLayout {
-                        Layout.fillWidth: true
-                        Layout.topMargin: 4
-                        columns: 2
-                        columnSpacing: 28
-                        rowSpacing: 12
-
-                        // 左列 1：播放
-                        ScSection {
-                            title: qsTr("播放")
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignTop
-                            ScRow { keys: "Space";    desc: qsTr("暂停 / 继续") }
-                            ScRow { keys: "←  /  →";  desc: qsTr("后退 / 前进 5 秒") }
-                            ScRow { keys: ",  /  .";  desc: qsTr("上一帧 / 下一帧") }
-                            ScRow { keys: "R";        desc: qsTr("回到开头") }
-                        }
-                        // 右列 1：视图
-                        ScSection {
-                            title: qsTr("视图")
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignTop
-                            ScRow { keys: "F"; desc: qsTr("切换全屏") }
-                            ScRow { keys: "V"; desc: qsTr("切换视频信息叠加") }
-                            ScRow { keys: "C"; desc: qsTr("切换通道信息叠加（序号 + 文件名）") }
-                            ScRow { keys: "S"; desc: qsTr("多路视频时切换布局如1xN / 2x2 / 3x3") }
-                            ScRow { keys: "B"; desc: qsTr("滑动对比模式（仅 2 路）") }
-                        }
-                        // 左列 2：倍速
-                        ScSection {
-                            title: qsTr("倍速")
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignTop
-                            ScRow { keys: "-";        desc: qsTr("减速一档") }
-                            ScRow { keys: "=  /  +";  desc: qsTr("加速一档") }
-                            ScRow { keys: "0";        desc: qsTr("复位为 1.0×") }
-                        }
-                        // 右列 2：单路 / 多路
-                        ScSection {
-                            title: qsTr("单路 / 多路")
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignTop
-                            ScRow { keys: "1 … 9"; desc: qsTr("切到第 N 路单路；再次按下回到上次的多路布局") }
-                            ScRow { keys: "⤢ / ⤡"; desc: qsTr("放大 / 还原本路（每路 hover 工具栏，等同数字键）") }
-                            ScRow { keys: "⋯";     desc: qsTr("替换本路视频（hover 显示完整路径）") }
-                            ScRow { keys: "✕";     desc: qsTr("关闭本路视频") }
-                        }
-                        // 左列 3：多组对比
-                        ScSection {
-                            title: qsTr("多组对比（仅当多组对比窗口激活时）")
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignTop
-                            ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组") }
-                            ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组") }
-                        }
-                        // 右列 3：视图缩放 / 平移（所有路同步）
-                        ScSection {
-                            title: qsTr("视图缩放 / 平移（所有路同步）")
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignTop
-                            ScRow { keys: qsTr("鼠标滚轮");    desc: qsTr("以鼠标位置为锚点缩放（0.2× ~ 8×）") }
-                            ScRow { keys: qsTr("右键拖拽");    desc: qsTr("同步平移所有路（画面跟随鼠标方向）") }
-                            ScRow { keys: qsTr("Ctrl+双击");   desc: qsTr("视图复位（缩放/平移归零）") }
-                            ScRow { keys: "⊙";              desc: qsTr("底部工具栏 视图复位按钮") }
-                        }
-                    }
-
-                    // 入口：跳转到「快捷键…」对话框
-                    // 当前所有快捷键已经在上方平铺展示，这里仍保留 F1 入口，
-                    // 一是兼容老用户的 F1 习惯，二是为将来"快捷键变多需要滚动的弹窗"留出口。
-                    Item {
-                        Layout.fillWidth: true
-                        Layout.topMargin: 4
-                        implicitHeight: 18
-                        Text {
-                            id: shortcutsLink
-                            anchors.right: parent.right
-                            text: "查看全部快捷键 →   (F1)"
-                            color: shortcutsLinkMA.containsMouse ? "#6aa8ff" : "#7a7f86"
-                            font.pixelSize: 12
-                            font.underline: shortcutsLinkMA.containsMouse
-                        }
-                        MouseArea {
-                            id: shortcutsLinkMA
-                            anchors.fill: shortcutsLink
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: shortcutsAboutDialogs.openShortcuts()
-                        }
-                    }
-                }
+                Layout.fillHeight: true
+                // 宽度：尽量占满列宽（列已限制为窗口-80、最大880）
+                Layout.preferredWidth: parent.width
+                // 教程视频：在线 URL（验证渲染流程用，后续可换本地资源）
+                tutorialSource: "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-%E8%AF%84%E5%88%86%E7%B3%BB%E7%BB%9F.mp4"
             }
         }
 

@@ -2353,7 +2353,10 @@ Component {
             // ── 视频信息面板（独立可复用面板块）──
             // 顶部紧贴切换器（单路时切换器高度为 0，直接顶到 body 顶部），
             // 底部/左/右全部锚定 parent，自动撑满整个面板剩余高度。
+            // 【公告/教学区改造】未打开视频时，此处改为快捷键速查面板
+            // （原主界面空态的快捷键平铺整体迁入，滚动承载，F1 弹窗保留）。
             VideoInfoBlock {
+                visible: Engine.fileCount > 0
                 anchors.top: laneSwitcherBox.bottom
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
@@ -2364,6 +2367,118 @@ Component {
                 showFileName: true
                 filePath: panelRoot.selectedPath
                 hasContent: true
+            }
+
+            // ── 空态：快捷键速查面板（无视频时占满右栏） ──
+            Flickable {
+                visible: Engine.fileCount <= 0
+                anchors.top: laneSwitcherBox.bottom
+                anchors.bottom: parent.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                contentWidth: width
+                contentHeight: scCol.implicitHeight + 16
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                ColumnLayout {
+                    id: scCol
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    anchors.topMargin: 8
+                    spacing: 10
+
+                    Text {
+                        text: "快捷键速查"
+                        color: "#e8e8ec"
+                        font.pixelSize: 13
+                        font.bold: true
+                    }
+                    Text {
+                        text: "按 F1 可随时打开此速查弹窗"
+                        color: "#7a7f86"
+                        font.pixelSize: 11
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 1
+                        columnSpacing: 0
+                        rowSpacing: 12
+
+                        ScSection {
+                            Layout.fillWidth: true
+                            title: qsTr("播放")
+                            ScRow { keys: "Space";    desc: qsTr("暂停 / 继续") }
+                            ScRow { keys: "←  /  →";  desc: qsTr("后退 / 前进 5 秒") }
+                            ScRow { keys: ",  /  .";  desc: qsTr("上一帧 / 下一帧") }
+                            ScRow { keys: "R";        desc: qsTr("回到开头") }
+                        }
+                        ScSection {
+                            Layout.fillWidth: true
+                            title: qsTr("视图")
+                            ScRow { keys: "F"; desc: qsTr("切换全屏") }
+                            ScRow { keys: "V"; desc: qsTr("切换视频信息叠加") }
+                            ScRow { keys: "C"; desc: qsTr("切换通道信息叠加（序号 + 文件名）") }
+                            ScRow { keys: "S"; desc: qsTr("多路视频时切换布局如1xN / 2x2 / 3x3") }
+                            ScRow { keys: "B"; desc: qsTr("滑动对比模式（仅 2 路）") }
+                        }
+                        ScSection {
+                            Layout.fillWidth: true
+                            title: qsTr("倍速")
+                            ScRow { keys: "-";        desc: qsTr("减速一档") }
+                            ScRow { keys: "=  /  +";  desc: qsTr("加速一档") }
+                            ScRow { keys: "0";        desc: qsTr("复位为 1.0×") }
+                        }
+                        ScSection {
+                            Layout.fillWidth: true
+                            title: qsTr("单路 / 多路")
+                            ScRow { keys: "1 … 9"; desc: qsTr("切到第 N 路单路；再次按下回到上次的多路布局") }
+                            ScRow { keys: "⤢ / ⤡"; desc: qsTr("放大 / 还原本路（每路 hover 工具栏，等同数字键）") }
+                            ScRow { keys: "⋯";     desc: qsTr("替换本路视频（hover 显示完整路径）") }
+                            ScRow { keys: "✕";     desc: qsTr("关闭本路视频") }
+                        }
+                        ScSection {
+                            Layout.fillWidth: true
+                            title: qsTr("多组对比（仅当多组对比窗口激活时）")
+                            ScRow { keys: "Ctrl+↑"; desc: qsTr("上一组") }
+                            ScRow { keys: "Ctrl+↓"; desc: qsTr("下一组") }
+                        }
+                        ScSection {
+                            Layout.fillWidth: true
+                            title: qsTr("视图缩放 / 平移（所有路同步）")
+                            ScRow { keys: qsTr("鼠标滚轮");    desc: qsTr("以鼠标位置为锚点缩放（0.2× ~ 8×）") }
+                            ScRow { keys: qsTr("右键拖拽");    desc: qsTr("同步平移所有路（画面跟随鼠标方向）") }
+                            ScRow { keys: qsTr("Ctrl+双击");   desc: qsTr("视图复位（缩放/平移归零）") }
+                            ScRow { keys: "⊙";              desc: qsTr("底部工具栏 视图复位按钮") }
+                        }
+                    }
+
+                    Item {
+                        Layout.fillWidth: true
+                        implicitHeight: 18
+                        Text {
+                            id: scLink
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "查看全部快捷键 →   (F1)"
+                            color: scLinkMA.containsMouse ? "#6aa8ff" : "#7a7f86"
+                            font.pixelSize: 12
+                            font.underline: scLinkMA.containsMouse
+                        }
+                        MouseArea {
+                            id: scLinkMA
+                            anchors.fill: scLink
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: shortcutsAboutDialogs.openShortcuts()
+                        }
+                    }
+                }
             }
         }
     }
