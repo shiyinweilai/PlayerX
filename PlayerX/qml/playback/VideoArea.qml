@@ -279,7 +279,8 @@ Item {
             anchors.topMargin: 28
             anchors.bottomMargin: 24
             spacing: 18
-            width: Math.min(parent.width - 80, 880)
+            // 宽度随窗口自适应：占可用宽的 ~88%，上限 1280，窄屏时留 80px 边距
+            width: Math.min(parent.width - 80, Math.max(560, parent.width * 0.88))
 
             // ── 标题组（压缩版）：品牌标识靠上，把面积让给教程窗口 ──
             ColumnLayout {

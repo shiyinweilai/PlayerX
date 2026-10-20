@@ -45,6 +45,7 @@
 #include "qt/RatingStore.h"
 #include "qt/ReferenceStore.h"
 #include "qt/ScreenProbe.h"
+#include "qt/CursorProbe.h"
 #include "qt/NoticeBarBridge.h"
 #include "qt/Updater.h"
 #include "yuv/YuvBridge.h"
@@ -314,6 +315,9 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty("ImageBridge",  &imageBridge);
     // 标题栏公告条显隐控制（QML 按当前 tab 调用；非 mac 平台为空操作）。
     engine.rootContext()->setContextProperty("NoticeBar",    &noticeBarBridge);
+    // 全局光标位置探针（窗口边缘拖拽缩放用）
+    rbqt::CursorProbe cursorProbe;
+    engine.rootContext()->setContextProperty("CursorProbe",  &cursorProbe);
 
     // 注册码流分析"底层原始画面"图像提供者：
     // QML 用 image://streamframe/<slot>_<frame>_<version> 取当前帧真实画面，

@@ -34,8 +34,10 @@ ApplicationWindow {
     flags: Qt.Window | (Qt.platform.os === "windows" ? Qt.FramelessWindowHint : 0)
 
 
-    // Windows 无边框：窗口左 / 右 / 下边缘 + 底部两角的缩放条
-    //（顶边与顶部两角在 menuBar 背景里，因为 menuBar 占据窗口 y=0 区域）
+    // Windows 无边框：边缘缩放由 C++ 原生路线接管（WinTitleBar.cpp 补回
+    // WS_THICKFRAME + 拦截 WM_NCHITTEST，系统自行缩放）。这里的 ResizeEdge
+    // 已是 enabled:false 的空壳（见 common/ResizeEdge.qml），不拦截鼠标，
+    // 仅保留声明兼容。位置用 anchors 即可，不参与任何逻辑。
     ResizeEdge { root: root; edges: Qt.LeftEdge;   anchors.left: parent.left;   anchors.top: parent.top; anchors.bottom: parent.bottom; width: 5;  z: 998 }
     ResizeEdge { root: root; edges: Qt.RightEdge;  anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 5;  z: 998 }
     ResizeEdge { root: root; edges: Qt.BottomEdge; anchors.left: parent.left;   anchors.right: parent.right; anchors.bottom: parent.bottom; height: 5; z: 998 }
