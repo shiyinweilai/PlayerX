@@ -34,6 +34,9 @@ Rectangle {
     property var  multiGroupDialog: null
     property var  ratingsDialog: null
     property var  ratingToast: null
+    // VideoArea 引用：用于监听 lanesSwapped 交换特效信号（信号定义在
+    // videoArea 上，viewRoot（Main root）上只有透传函数没有该信号）
+    property var  videoAreaRef: null
 
     id: cell
 
@@ -75,11 +78,13 @@ Rectangle {
     // 未锁定时 cell 边框 = 选中框（保持原视觉）。
     readonly property bool _phoneLocked: viewRoot && (viewRoot.phoneFixedActive || viewRoot.phoneAspectRatio > 0)
     border.color: cell._dragBorder.length > 0 ? cell._dragBorder
+                : cell._dropTarget ? "#3b8ef2"
                 : cell._phoneLocked ? "#000"
                 : cell._isRefLane
                   ? (cell._isActive ? "#d4a72c" : "#5c4718")
                 : (cell._isActive ? "#4a6fa5" : "#222")
-    border.width: cell._isRefLane && !cell._phoneLocked ? 1 : 2
+    border.width: cell._isRefLane && !cell._phoneLocked ? 1
+                 : cell._dropTarget ? 3 : 2
     Behavior on border.color { ColorAnimation { duration: 120 } }
 
 
@@ -1039,14 +1044,23 @@ Rectangle {
     property real _dragLastX: 0
     property real _dragLastY: 0
     property var _dragTimer: null
+    // ── 【拖拽抬起缩影】拖拽中原格子作为占位变暗 ──
+    // 缩影（跟随鼠标的快照）由 VideoArea 顶层统一渲染；本格只负责
+    // 变暗 + 边框提示，让用户明白"原位置已空出"。
+    // 目标格高亮：拖拽经过可交换格子时边框常亮（提前暗示"松手会交换到这里"）
+    property bool _dropTarget: false
     // 进入拖拽态（左键按住移动超阈值时由 cellMouse 调用）
     function _beginLaneDrag() {
         if (cell._laneDragging) return
         console.log("[LaneDrag] BEGIN drag cell=" + cell.playerIdx)
         cell._laneDragging = true
-        cell._dragOpacity = 0.55
+        // 先对本格画面拍快照（生成跟随鼠标的"抬起缩影"），再变暗原格：
+        // 顺序不能反，否则缩影会拍下变暗后的画面
+        if (cell.videoAreaRef && typeof cell.videoAreaRef._startDragGhost === "function")
+            cell.videoAreaRef._startDragGhost(videoBox, cell.playerIdx + 1)
+        // 半透明+蓝框标记原位置空出（占位提示）
+        cell._dragOpacity = 0.35
         cell._dragBorder = "#3b8ef2"
-        // 拖拽中给个抓手光标
         cellMouse.cursorShape = Qt.ClosedHandCursor
     }
     function _endLaneDrag(dropAtX, dropAtY) {
@@ -1055,7 +1069,21 @@ Rectangle {
         cell._dragOpacity = 1.0
         cell._dragBorder = ""
         cellMouse.cursorShape = Qt.ArrowCursor
+        // 结束缩影跟随（淡出）+ 清除所有格子的目标高亮
+        if (cell.videoAreaRef && typeof cell.videoAreaRef._endDragGhost === "function")
+            cell.videoAreaRef._endDragGhost()
+        _clearAllDropTargets()
         if (wasDragging) _dropAtScenePoint(dropAtX, dropAtY)
+    }
+    // 清除全部兄弟格子的 _dropTarget 高亮
+    function _clearAllDropTargets() {
+        var g = cell.parent
+        if (!g) return
+        for (var i = 0; i < g.children.length; ++i) {
+            var ch = g.children[i]
+            if (ch && ch !== cell && typeof ch._dropTarget !== "undefined")
+                ch._dropTarget = false
+        }
     }
     // 全局坐标 → 目标槽位 → 交换 laneOrder
     function _dropAtScenePoint(sx, sy) {
@@ -1091,6 +1119,8 @@ Rectangle {
         // REF 槽保护 + 交换
         if (typeof viewRoot.swapLaneOrder === "function")
             viewRoot.swapLaneOrder(mySlot, targetSlot)
+        // 交换成功后 _laneOrderBump 触发重渲染，两个格子画面直接换位；
+        // 缩影淡出（_endLaneDrag 已处理）后视觉变化一目了然
     }
 
     // ─── 主交互层：左键选中/双击暂停 + 右键拖拽平移/单击信息面板 ──────────
@@ -1168,10 +1198,30 @@ Rectangle {
                 }
             }
             if ((pressedButtons & Qt.LeftButton) && cell._laneDragging) {
-                // 持续记录最新全局位置（cell 坐标），供松手落点判定
+                // 持续记录最新全局位置（cell 坐标系），供松手落点判定
                 var gp = cell.mapToItem(null, mouse.x, mouse.y)
                 cell._dragLastX = gp.x
                 cell._dragLastY = gp.y
+                // 缩影跟随鼠标移动（VideoArea 顶层渲染）
+                if (cell.videoAreaRef && typeof cell.videoAreaRef._moveDragGhost === "function")
+                    cell.videoAreaRef._moveDragGhost(gp.x, gp.y)
+                // 拖拽经过的格子常亮蓝框（提前暗示"松手会交换到这里"）；
+                // REF 格与自身不高亮。只遍历 Grid 兄弟 cell，代价极小。
+                var g2 = cell.parent
+                if (g2) {
+                    for (var ci = 0; ci < g2.children.length; ++ci) {
+                        var ch2 = g2.children[ci]
+                        if (!ch2 || ch2 === cell) continue
+                        if (typeof ch2.playerIdx === "undefined" || ch2.playerIdx < 0) continue
+                        var isOver = false
+                        if (!ch2._isRefLane) {
+                            var p2 = ch2.mapToItem(null, 0, 0)
+                            isOver = (gp.x >= p2.x && gp.x < p2.x + ch2.width
+                                      && gp.y >= p2.y && gp.y < p2.y + ch2.height)
+                        }
+                        ch2._dropTarget = isOver
+                    }
+                }
             }
         }
         onClicked: function(mouse) {

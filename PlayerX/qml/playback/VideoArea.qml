@@ -92,6 +92,38 @@ Item {
     property var _laneOrder: []
     property int _laneOrderBump: 0   // 惰性求值依赖：交换后 +1 触发重渲染
 
+    // ── 【拖拽抬起缩影】拖拽通道重排时，生成跟随鼠标的半透明缩略图 ──
+    // 快照来源 = 被拖 cell 的 videoBox（ShaderEffectSource 拍静态帧），
+    // 微缩(0.85) + 柔和阴影 + 半透明，营造"视频被抬起来"的手感；
+    // 原格子同时变暗作为占位。松手后缩影快速淡出。
+    property bool  _ghostActive: false
+    property real  _ghostX: 0     // scene 坐标（cell.mapToItem(null) 产物）
+    property real  _ghostY: 0
+    property var   _ghostSource: null
+    property int   _ghostChannel: 0   // 被拖的通道号（1 起），缩略图徽标用
+
+    function _startDragGhost(srcItem, channelNo) {
+        videoArea._ghostChannel = channelNo
+        videoArea._ghostSource = srcItem
+        videoArea._ghostActive = true
+        // 防止拖起瞬间缩影闪现在上次拖拽的旧位置：先藏起来，
+        // 等 delegate 第一次 _moveDragGhost 传入真实鼠标位置后再显示
+        videoArea._ghostX = -9999
+        videoArea._ghostY = -9999
+    }
+    function _moveDragGhost(sx, sy) {
+        // delegate 传入的是 scene 坐标（mapToItem(null) 产物），而 dragGhost
+        // 的 x/y 是 videoArea 本地坐标——VideoArea 在窗口中不位于原点
+        // （左侧有通道栏等），直接混用会导致缩影整体向右下错位。
+        var p = videoArea.mapFromItem(null, sx, sy)
+        videoArea._ghostX = p.x
+        videoArea._ghostY = p.y
+    }
+    function _endDragGhost() {
+        videoArea._ghostActive = false
+        ghostClear.restart()         // 淡出动画播完后再清引用
+    }
+
     // 构建/重建 laneOrder：REF 仍固定占显示槽 0，其余 player 按当前
     // _laneOrder 中"非 REF 部分"的旧顺序（若有）或默认顺序填充。
     // 语义：重排只针对"非 REF 路"；REF 永远第一。
@@ -119,16 +151,18 @@ Item {
 
     // 显示槽 slotA ↔ slotB 交换（拖拽落点判定后调用）。
     // REF 槽（0）不可拖走：若任一为 REF 槽则直接忽略。
+    // 返回值：成功 → [playerA, playerB]（两路 player 索引，供交换特效广播）；
+    //         失败/被拒 → null。
     function swapLaneOrder(slotA, slotB) {
-        if (slotA === slotB) return
-        if (slotA < 0 || slotB < 0) return
+        if (slotA === slotB) return null
+        if (slotA < 0 || slotB < 0) return null
         var arr = videoArea._laneOrder
-        if (!arr || arr.length === 0) return
-        if (slotA >= arr.length || slotB >= arr.length) return
+        if (!arr || arr.length === 0) return null
+        if (slotA >= arr.length || slotB >= arr.length) return null
         var refIdx = _refPlayerIndex()
         if (refIdx >= 0 && (arr[slotA] === refIdx || arr[slotB] === refIdx)) {
             console.log("[LaneDrag] swap 被拒：涉及 REF 槽 slot" + slotA + "↔slot" + slotB)
-            return
+            return null
         }
         var t = arr[slotA]
         arr[slotA] = arr[slotB]
@@ -138,6 +172,7 @@ Item {
         console.log("[LaneDrag] SWAP 完成: slot" + slotA + "↔slot" + slotB
             + " 新顺序=" + JSON.stringify(arr))
         _persistLaneOrder()
+        return [arr[slotA], arr[slotB]]
     }
 
     // 持久化：写入 Rating QSettings（跨重启保留；不同模式独立）。
@@ -225,6 +260,7 @@ Item {
                 //   · viewRoot ：把 ApplicationWindow root 整个传入，子组件通过它访问 fmtTime / 评分 / 选中等共享状态
                 playerIdx: viewRoot.slotPlayerIndex(index)
                 viewRoot: root
+                videoAreaRef: videoArea
                 multiGroupDialog: videoArea.multiGroupDialog
                 ratingsDialog: videoArea.ratingsDialog
                 ratingToast: videoArea.ratingToast
@@ -716,5 +752,82 @@ Item {
             repeat: false
             onTriggered: fadeOut.restart()
         }
+    }
+
+    // ─── 拖拽抬起缩影（跟随鼠标的小缩略图）─────────────
+    //   拖起某 cell 时对其 videoBox 拍静态快照，按固定小宽度（120px）、
+    //   保持画面比例缩放成小缩略图，挂在鼠标右下侧（不挡原格与目标格）。
+    //   带通道序号徽标，一眼可辨"手里拿的是哪一路"。松手后淡出。
+    //   不拦截鼠标事件（无 MouseArea），拖拽交互仍由原 cell 处理。
+    Item {
+        id: dragGhost
+        z: 1000
+        // 小缩略图固定宽度，高度按源画面比例换算
+        readonly property real thumbW: 120
+        width:  thumbW
+        height: videoArea._ghostSource
+                ? thumbW * videoArea._ghostSource.height / Math.max(1, videoArea._ghostSource.width)
+                : 0
+        // 以鼠标为中心定位（伪影块中心跟随光标）
+        x: Math.max(0, Math.min(videoArea.width  - width,
+                                videoArea._ghostX - width / 2))
+        y: Math.max(0, Math.min(videoArea.height - height,
+                                videoArea._ghostY - height / 2))
+        visible: videoArea._ghostActive && videoArea._ghostSource !== null
+        // 透明度由拖拽状态直接驱动：拖起时立即不透明，松手时 150ms 淡出。
+        // （此前用 NumberAnimation on opacity + running 绑定，应用启动时
+        //   动画会先跑完一遍把 opacity 永久定格为 0，导致缩影完全看不见）
+        opacity: videoArea._ghostActive ? 0.95 : 0
+        Behavior on opacity {
+            NumberAnimation {
+                duration: videoArea._ghostActive ? 0 : 150
+                easing.type: Easing.InCubic
+            }
+        }
+
+        // 柔和投影：小卡片的悬浮感
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width  + 12
+            height: parent.height + 12
+            radius: 8
+            color: "#4d000000"
+        }
+
+        // 快照本体：对被拖 cell 的 videoBox 拍一帧静态快照，缩到小卡片里
+        ShaderEffectSource {
+            id: ghostSnap
+            anchors.fill: parent
+            sourceItem: videoArea._ghostActive ? videoArea._ghostSource : null
+            live: false
+            // 拖起瞬间拍一次；之后纹理不随视频刷新（拖拽中画面冻结即可）
+            onSourceItemChanged: scheduleUpdate()
+        }
+
+        // 通道序号徽标：缩略图左上角，标明"手里拿的是哪一路"
+        Rectangle {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: -4
+            width: chanBadgeText.width + 12
+            height: chanBadgeText.height + 6
+            radius: 4
+            color: "#e63b8ef2"
+            z: 2
+            Text {
+                id: chanBadgeText
+                anchors.centerIn: parent
+                text: qsTr("%1 号").arg(videoArea._ghostChannel)
+                color: "#ffffff"
+                font.pixelSize: 11
+                font.bold: true
+            }
+        }
+    }
+    // 淡出后清空快照引用（释放纹理）
+    Timer {
+        id: ghostClear
+        interval: 180
+        onTriggered: { videoArea._ghostSource = null; videoArea._ghostChannel = 0 }
     }
 }
