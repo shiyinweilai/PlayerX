@@ -2344,10 +2344,68 @@ Component {
             anchors.topMargin: 8
             anchors.bottomMargin: 8
 
+            // ── 顶部 Tips 强提醒卡片（评分中断恢复指引）──
+            // 黄橙高亮 + 左侧色条 + ⚠ 图标：醒目但不用红色（避免误读为错误提示），
+            // 无渐变无闪烁，关键操作词（铃铛接受 / 直接开始 / 重新下载）纯色高亮。
+            Rectangle {
+                id: tipsCard
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: tipsCol.implicitHeight + 22
+                radius: 6
+                color: "#211d10"
+                border.color: "#4d3f17"
+                border.width: 1
+
+                // 左侧高亮色条（视觉锚点，强化"这是提示"的第一印象）
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 1
+                    width: 3
+                    radius: 2
+                    color: "#f5a623"
+                }
+
+                Column {
+                    id: tipsCol
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.leftMargin: 16
+                    anchors.rightMargin: 12
+                    anchors.topMargin: 10
+                    spacing: 6
+
+                    Text {
+                        text: "⚠  评分中断提示"
+                        color: "#ffc04d"
+                        font.pixelSize: 15
+                        font.bold: true
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        width: tipsCard.width - 28
+                        textFormat: Text.RichText
+                        wrapMode: Text.WordWrap
+                        color: "#c8c8d0"
+                        font.pixelSize: 13
+                        lineHeight: 1.25
+                        text: "如果评分中断，请直接重新点击左下角 " +
+                              "<b style=\"color:#ffc04d\">🔔 铃铛 接受任务</b>，" +
+                              "弹出后点击<b style=\"color:#ffc04d\">「直接开始」</b>继续评分；" +
+                              "<b style=\"color:#ffc04d\">切勿点击「重新下载」</b>，会重置评分进度。"
+                    }
+                }
+            }
+
             // ── 多路时显示通道切换器（pill 风格）──
             Item {
                 id: laneSwitcherBox
-                anchors.top: parent.top
+                anchors.top: tipsCard.bottom
+                anchors.topMargin: 8
                 anchors.left: parent.left
                 anchors.right: parent.right
                 height: Engine.fileCount > 1 ? 28 : 0
@@ -2406,8 +2464,7 @@ Component {
             // 底部/左/右全部锚定 parent，自动撑满整个面板剩余高度。
             // 【公告/教学区改造】未打开视频时，此处改为快捷键速查面板
             // （原主界面空态的快捷键平铺整体迁入，滚动承载，F1 弹窗保留）。
-            VideoInfoBlock {
-                visible: Engine.fileCount > 0
+            VideoInfoBlock {                visible: Engine.fileCount > 0
                 anchors.top: laneSwitcherBox.bottom
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
