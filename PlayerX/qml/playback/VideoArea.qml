@@ -25,6 +25,10 @@ Item {
     // immersive 模式下 leftNavBar 宽度变为 0，refSidebar 自然贴左边。
     anchors.left: refSidebar.right
     anchors.right: parent.right
+    // 右侧栏挤占模式（playSidebarFloating=false 且侧栏展开）时右缘让出侧栏宽度；
+    // 悬浮模式或侧栏收起时铺满（旧行为：侧栏浮在画面上层）。
+    anchors.rightMargin: (root.rightSidebarOpen && !root.playSidebarFloating)
+                         ? 320 : 0
     anchors.top: parent.top
     // 顶部余白 2px（避免与上方元素视觉粘连 + 给 cell 2px 选中边框留位）；
     // 播放 tab 顶部还有一条公告条（noticeBar，自绘黄色滚动文字），

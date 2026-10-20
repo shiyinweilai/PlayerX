@@ -125,6 +125,10 @@ ApplicationWindow {
     // 自动收起，避免露出空白面板。
     onCurrentTabChanged: {
         if (root.currentTab === "home") root.rightSidebarOpen = false
+        // 播放对比 tab：空态（未启动对比）默认展开右侧栏的快捷键速查；
+        // 已在播放中则保持用户当前侧栏状态不变（由 fileCount 跃迁逻辑管理）。
+        if (root.currentTab === "play" && Engine.fileCount <= 0)
+            root.rightSidebarOpen = true
         // 切到 YUV tab 时同步右侧栏状态到 YuvBridge
         if (root.currentTab === "yuv") {
             YuvBridge.rightSidebarOpen = root.rightSidebarOpen
@@ -217,7 +221,11 @@ ApplicationWindow {
     function _onTitleBarSidebarToggle() {
         root.rightSidebarOpen = !root.rightSidebarOpen
     }
-    property bool rightSidebarOpen: false
+    property bool rightSidebarOpen: true
+    // 启动对比（fileCount 0→N）/ 回到空态（N→0）跃迁前的 fileCount 快照：
+    // 用于区分"启动对比时默认收起侧栏"与"用户播放中手动开关侧栏"，
+    // 单路关闭/替换等 N→N-1 场景不打扰用户当前侧栏状态。
+    property int _prevFileCount: 0
     // 右侧栏展开/收起时同步到 YuvBridge，控制播放期间是否实时计算帧级统计。
     // 右侧栏展开 → 播放时也计算统计（兼顾实时渲染直方图）
     // 右侧栏收起 → 播放时跳过统计（保证最大帧率）
@@ -1878,12 +1886,18 @@ ApplicationWindow {
             if (root.cellRatings.length > Engine.fileCount) {
                 root.cellRatings = root.cellRatings.slice(0, Engine.fileCount)
             }
-            // 播放 tab 关闭全部视频 → 自动收起右侧栏。
-            // 触发源：底部「✕ 关闭」/ 菜单「关闭所有」/ 快捷键 ⌘W / 单路 ✕。
-            // 目的：回到主界面时右侧栏（视频信息面板）不再"挂"在那，避免
-            // 用户在空播放界面上看到一个无意义的"视频信息"面板。
-            if (Engine.fileCount <= 0 && root.currentTab === "play" && root.rightSidebarOpen)
-                root.rightSidebarOpen = false
+            // ── 播放 tab 侧栏跟随"是否启动对比"自动展开/收起 ──
+            //   · 0→N（启动对比）  ：默认收起侧栏，把画面空间全部让给视频；
+            //     用户随后手动打开的侧栏状态不受后续 N→N±1（关路/换路/翻组）影响。
+            //   · N→0（关闭全部）  ：回到主界面空态，自动展开侧栏的快捷键速查。
+            if (root.currentTab === "play") {
+                if (Engine.fileCount > 0 && root._prevFileCount <= 0
+                        && root.rightSidebarOpen)
+                    root.rightSidebarOpen = false
+                else if (Engine.fileCount <= 0 && root._prevFileCount > 0)
+                    root.rightSidebarOpen = true
+            }
+            root._prevFileCount = Engine.fileCount
         }
         // 翻组 / 切宫格 / 重新打开文件后，按新文件路径重建 cellRatings —
         // 避免上一组的评分残留到下一组（同一 idx 但 path 已变）。
@@ -2264,6 +2278,41 @@ Component {
             color: "#26262e"
         }
 
+        // ── 悬浮/挤占模式切换（右上角，与 YuvStatsPanel 的 ◫/▣ 一致）──
+        // 挤占（默认）：侧栏直接占窗口宽度，视频区右缘让位；
+        // 悬浮：侧栏浮在画面上层，画面铺满整行。
+        Rectangle {
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.topMargin: 8
+            anchors.rightMargin: 8
+            width: 22
+            height: 22
+            radius: 4
+            z: 10
+            color: playFloatMa.pressed ? "#2a3f5a" : "#1a1d22"
+            border.color: "#2a2e33"
+            border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: root.playSidebarFloating ? "◫" : "▣"
+                color: "#9aa0a6"
+                font.pixelSize: 12
+            }
+            MouseArea {
+                id: playFloatMa
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.playSidebarFloating = !root.playSidebarFloating
+                ToolTip.visible: containsMouse
+                ToolTip.delay: 400
+                ToolTip.text: root.playSidebarFloating
+                              ? "切换为挤占模式（视频区让出右侧栏）"
+                              : "切换为悬浮模式（浮于画面上层）"
+            }
+        }
+
         // 当前面板要显示哪一路：用户主动选择；默认跟随 Engine.activeIndex
         // 多路时显示切换器；单路时无切换器直接显示。
         property int selectedIdx: Engine.activeIndex >= 0 && Engine.activeIndex < Engine.fileCount
@@ -2493,6 +2542,10 @@ Component {
     // floating=false 时为腾位栏，StreamView 右缘左移 streamSidebarUserWidth 让出空间。
     property bool streamSidebarFloating: false
     property bool yuvSidebarFloating: false
+    // ── 播放对比右侧栏（快捷键速查 / 视频信息）──
+    //   floating=false（默认，挤占模式）：videoArea/csvBottomBar 右缘让出侧栏宽度；
+    //   floating=true（悬浮模式）：侧栏浮在画面上层，画面铺满整行（旧行为）。
+    property bool playSidebarFloating: false
     // ── 右侧栏宽度（stream / yuv 腾位时画面右缘锚到侧栏左缘）────────
     property int streamSidebarUserWidth: 320
     property int yuvSidebarUserWidth: 320

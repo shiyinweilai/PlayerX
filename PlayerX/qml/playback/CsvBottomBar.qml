@@ -19,6 +19,10 @@ Rectangle {
     // 与 videoArea 保持一致，始终跟随 refSidebar 右侧。
     anchors.left: refSidebar.right
     anchors.right: parent.right
+    // 右侧栏挤占模式下与 videoArea 同步让位（播放 tab 且侧栏展开），
+    // 避免 CSV 底栏比视频区宽出一截被侧栏盖住。
+    anchors.rightMargin: (root.rightSidebarOpen && !root.playSidebarFloating)
+                         ? 320 : 0
     anchors.bottom: parent.bottom
     readonly property bool hasContent: root.refTextHasCurrent
     readonly property bool hasBinding: root.refTextKind === "csv"
