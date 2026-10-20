@@ -402,8 +402,9 @@ Item {
                 Layout.fillHeight: true
                 // 宽度：尽量占满列宽（列已限制为窗口-80、最大880）
                 Layout.preferredWidth: parent.width
-                // 教程视频：在线 URL（验证渲染流程用，后续可换本地资源）
-                tutorialSource: "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/PlayerX-%E8%AF%84%E5%88%86%E7%B3%BB%E7%BB%9F.mp4"
+                // 教程视频在线源：首次访问自动缓存到本地实现秒开，
+                // 之后启动直接播本地缓存，后台检测远端更新
+                tutorialSource: "https://tvp-76917.gzc.vod.tencent-cloud.com/rbyang/PlayerX/%E6%92%AD%E6%94%BE%E5%AF%B9%E6%AF%94_%E6%97%A0%E8%BE%B9%E6%A1%86%E7%89%88.mp4"
             }
         }
 
