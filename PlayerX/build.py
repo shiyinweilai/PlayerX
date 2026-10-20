@@ -1011,7 +1011,18 @@ def deploy_qt_for_windows(qt_dir: str, install_dir: str):
         "d3dcompiler_47.dll", "opengl32sw.dll",
     ]
 
-    core_dlls = qt6_dlls + runtime_dlls
+    # ── FFmpeg 运行时（plugins/multimedia/ffmpegmediaplugin.dll 的依赖） ──
+    # QtMultimedia 的 FFmpeg 后端插件 import avcodec/avformat/avutil/
+    # swresample/swscale，这些 dll 不带 Qt6 前缀、上面的 Qt6*.dll 筛选
+    # 捕获不到。漏掉时插件 LoadLibrary 失败，运行日志报
+    # "No QtMultimedia backends found"，QMediaPlayer/QVideoSink 全部
+    # "Not available"，教程视频与视频对比播放全部不可用。
+    ffmpeg_dlls = [
+        "avcodec-61.dll", "avformat-61.dll", "avutil-59.dll",
+        "swresample-5.dll", "swscale-8.dll",
+    ]
+
+    core_dlls = qt6_dlls + runtime_dlls + ffmpeg_dlls
     copied = 0
     for name in core_dlls:
         src = os.path.join(bin_src, name)
@@ -1040,6 +1051,10 @@ def deploy_qt_for_windows(qt_dir: str, install_dir: str):
         # QML LocalStorage（车道缓存兜底 KV）走 QSQLITE 驱动；
         # 漏部署会报 "can not load requested driver 'QSQLITE'"
         "sqldrivers": ["qsqlite.dll"],
+        # QtMultimedia（视频播放）运行时必须加载媒体后端插件，
+        # 漏部署 ffmpegmediaplugin.dll 时 QMediaPlayer 找不到可用后端，
+        # 教程视频/视频对比播放全部静默失败（占位符永远出不来画面）。
+        "multimedia": ["*"],
     }
     for group, dlls in plugin_groups.items():
         sg = os.path.join(plugins_src, group)
@@ -1064,7 +1079,7 @@ def deploy_qt_for_windows(qt_dir: str, install_dir: str):
                 sp = os.path.join(sg, name)
                 if os.path.isfile(sp):
                     shutil.copy2(sp, dg)
-    info(f"已复制平台/图像/样式/TLS 插件 → {os.path.join(bin_dst, 'plugins')}")
+    info(f"已复制平台/图像/样式/TLS/媒体插件 → {os.path.join(bin_dst, 'plugins')}")
 
     # ── 2.1 OpenSSL 运行时（必需，用于 HTTPS / 自动更新）──
     #    aqt 装的 win64_llvm_mingw 包里 tls/qopensslbackend.dll 存在，
