@@ -628,7 +628,18 @@ Item {
                             color: "#6a6f76"; font.pixelSize: 11
                         }
 
-                        Item { Layout.fillWidth: true }
+                        // 顶部中间提示：按住 Ctrl / Shift 可多选（显眼黄色高亮）
+                        Item {
+                            Layout.fillWidth: true
+                            Text {
+                                anchors.centerIn: parent
+                                visible: yuvSetupView.fileList.length > 0
+                                text: "按住 Ctrl / Shift 可选择多个文件"
+                                color: "#f0b429"
+                                font.pixelSize: 13
+                                font.bold: true
+                            }
+                        }
 
                         // 右侧：排序 + 添加 + 文件夹 + 清空（使用 StreamFlatButton 对齐码流分析风格）
                         StreamFlatButton {
