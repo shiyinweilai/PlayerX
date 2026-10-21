@@ -1149,13 +1149,22 @@ function _tsImportAndStart(st, extractTarget) {
         }
     }
 
-    // 收集 lane 绝对路径并校验存在性
+    // 收集 lane 绝对路径并校验存在性。
+    // REF 参考视频目录单独拆出：不再作为评分 lane 传给 loadFolders（否则它会
+    // 作为普通 lane 行出现在「打开文件夹」上方通路列表里），改经参考资料区
+    // refVideoPath 由 start() 以「参考视频路」机制追加（isRefVideo 临时行，
+    // 只显示不评分）——返回对话框时 REF 就显示在底部参考视频栏，与手动配置
+    // 的展示位置保持一致。
     var lanes = []
+    var refVideoDir = ""
     for (var j = 0; j < laneDirs.length; ++j) {
         var p = effRoot + "/" + laneDirs[j]
         if (!Fs.isDirectoryPath(p)) return "缺少对比目录：" + p
+        if (String(laneDirs[j]).split("/").pop() === "REF") { refVideoDir = p; continue }
         lanes.push(p)
     }
+    if (lanes.length === 0)
+        return "testSource 配置缺少参与评分的 laneDirs（REF 参考视频除外）"
 
     // 参考图目录列表：新写法 referenceDirs（数组，最多 2 个，对应侧栏两个参考图窗口）；
     // 兼容旧写法 referenceDir（单字符串，视为第 1 个）。
@@ -1205,7 +1214,7 @@ function _tsImportAndStart(st, extractTarget) {
             for (var ef = 0; ef < refAbsList.length; ++ef) {
                 if (bindRefList[ef]) effFrames.push(refAbsList[ef])
             }
-            _multiGroupDialog.applyAutoRefResources(effFrames, bindCsv ? csvAbs : "")
+            _multiGroupDialog.applyAutoRefResources(effFrames, bindCsv ? csvAbs : "", refVideoDir)
         }
     } catch (eRefill) { console.warn("[TestSource] 回填参考资料失败:", eRefill) }
 

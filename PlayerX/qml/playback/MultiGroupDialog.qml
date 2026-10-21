@@ -1117,16 +1117,19 @@ ApplicationWindow {
     //   在本次 start() 时被注入为额外一路参考视频。
     //   · frameDirs: 字符串数组（已绑定、已存在的参考帧绝对目录，按侧栏槽位顺序）
     //   · csvPath:   提示词 CSV 绝对路径（空串表示本次未绑定 CSV）
-    function applyAutoRefResources(frameDirs, csvPath) {
+    //   · refVideoDir: 参考视频绝对目录（空串表示本次无参考视频）。远程任务
+    //     的参考视频由 laneDirs 里的 REF 目录承载，改经 refVideoPath 走
+    //     「参考视频路」机制追加，返回对话框时显示在底部参考视频栏。
+    function applyAutoRefResources(frameDirs, csvPath, refVideoDir) {
         var fd = (frameDirs && frameDirs.length) ? frameDirs : []
         var cp = (csvPath && csvPath.length > 0) ? String(csvPath).trim() : ""
+        var rv = (refVideoDir && refVideoDir.length > 0) ? String(refVideoDir).trim() : ""
         // 本次远程任务未携带任何参考资料 → 清空上次残留，参考资料区回到未配置态
-        if (fd.length === 0 && cp.length === 0) {
+        if (fd.length === 0 && cp.length === 0 && rv.length === 0) {
             refFramePaths = [{ path: "", enabled: true }]
             refPromptPath = ""
-            // 参考视频残留同样清空：远程任务的参考视频由 laneDirs 里的 REF 目录
-            // 承载（导入为一路显示、不评分），refVideoPath 只服务用户手动配置；
-            // 旧任务残留路径若不清，start() 会把它注入为本次对比的额外一路。
+            // 参考视频残留同样清空：旧任务残留路径若不清，start() 会把它注入为
+            // 本次对比的额外一路参考视频。
             refVideoPath = ""
             refResEnabled = false
             _saveRefRes()
@@ -1146,9 +1149,13 @@ ApplicationWindow {
         } else {
             refPromptPath = ""
         }
-        // 帧与 CSV 至少有一项来自本次任务 → 参考视频栏同步清掉旧任务残留
-        // （本次任务的参考视频走 REF lane 机制，不经 refVideoPath）
-        if (refVideoPath.length > 0) {
+        // 参考视频：本次任务的 REF 目录 → 写入 refVideoPath（start() 以
+        // 「参考视频路」机制追加，isRefVideo 临时行、只显示不评分）；无 REF
+        // 目录 → 清掉旧任务残留，避免 start() 把它注入为额外一路。
+        if (rv.length > 0) {
+            refVideoPath = rv
+            refVideoEnabled = true
+        } else if (refVideoPath.length > 0) {
             console.log("[MGD] 自动化回填：清掉旧参考视频残留", refVideoPath)
             refVideoPath = ""
         }
@@ -1156,7 +1163,8 @@ ApplicationWindow {
         refResEnabled = true
         _saveRefRes()
         console.log("[MGD] 已回填自动化参考资料：帧",
-                    arr.length, "个, CSV=", refPromptPath || "(无)")
+                    arr.length, "个, CSV=", refPromptPath || "(无)",
+                    " 参考视频=", refVideoPath || "(无)")
     }
     // 判断某 lane 是否为参考视频路（文件夹路径 === refVideoPath，
     // 或目录名恰为 REF —— 兼容服务端 testSource 下发的 REF 目录）
@@ -2946,6 +2954,11 @@ ApplicationWindow {
             if (!l) continue
             if (!l.selected) continue
             if (!l.currentPath || l.currentPath.length === 0) continue
+            // 参考视频临时行不入快照：参考视频由下方 refVideoPath 字段单独
+            // 记录（参考资料区），恢复时 start() 会按 refVideoPath 重新注入
+            // 临时行。若把 isRefVideo 行也记进 lanes，loadStartHistory 会把它
+            // 作为普通行重建，上方通路列表出现重复的 REF 路。
+            if (l.isRefVideo === true) continue
             lanes.push({
                 folderPath: String(l.folderPath || ""),
                 keyword: String(l.keyword || ""),
@@ -3005,6 +3018,10 @@ ApplicationWindow {
         var dead = []
         for (var i = 0; i < lanes.length; ++i) {
             var ln = lanes[i]
+            // 旧版本快照可能把 REF 参考视频临时行也记进了 lanes；跳过之，
+            // 参考视频统一由参考资料区（refVideoPath）恢复，避免上方通路
+            // 列表重复显示 REF。
+            if (ln.isRefVideo === true) continue
             var ok = false
             try { ok = (ln.currentPath.length > 0 && Fs.fileExists(ln.currentPath)) }
             catch (e) { ok = false }
