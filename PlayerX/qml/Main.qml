@@ -129,6 +129,14 @@ ApplicationWindow {
         // 已在播放中则保持用户当前侧栏状态不变（由 fileCount 跃迁逻辑管理）。
         if (root.currentTab === "play" && Engine.fileCount <= 0)
             root.rightSidebarOpen = true
+        // 其他模块（YUV/图片/码流）：未加载内容时右侧栏默认收起，不继承
+        // 播放 tab 空态展开的快捷键速查状态。已有的 slotCount===0 自动收起
+        // 只在 slotCount "变化"时触发，切 tab 时 slotCount 早已是 0，不会
+        // 触发，因此这里必须补一次显式收起。
+        if ((root.currentTab === "yuv" && YuvBridge.slotCount === 0)
+                || (root.currentTab === "image" && ImageBridge.slotCount === 0)
+                || (root.currentTab === "stream" && StreamBridge.slotCount === 0))
+            root.rightSidebarOpen = false
         // 切到 YUV tab 时同步右侧栏状态到 YuvBridge
         if (root.currentTab === "yuv") {
             YuvBridge.rightSidebarOpen = root.rightSidebarOpen
