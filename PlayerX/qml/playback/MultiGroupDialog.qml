@@ -2992,18 +2992,74 @@ ApplicationWindow {
             startedAt: new Date().toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm:ss")
         }
     }
-    // 启动成功后调用：把本次配置追加为一条历史记录（ID 自增，同配置也新记录）。
+    // 启动成功后调用：把本次配置追加为一条历史记录。
     // source: "manual"=本地手动启动 / "remote"=远程接受自动启动
+    // 去重：对本次配置计算 sha 指纹（configKey），若已有记录指纹相同，
+    // 不再新增编号，只刷新该记录的时间戳与来源（评分进度按目录持久化，不受影响）。
     function appendStartHistory(source) {
         var snap = _collectStartSnapshot()
         if (!snap) return -1
-        var id = startHistoryNextId
-        var rec = { id: id, source: source === "remote" ? "remote" : "manual", snapshot: snap }
+        var key = _histConfigKey(snap)
         var arr = (startHistory || []).slice()
+        // 同指纹 → 复用原记录：刷新时间戳与来源，编号不变
+        for (var i = 0; i < arr.length; ++i) {
+            if (arr[i] && arr[i].configKey && arr[i].configKey === key) {
+                arr[i] = { id: arr[i].id,
+                           source: source === "remote" ? "remote" : "manual",
+                           configKey: key, snapshot: snap }
+                startHistory = arr
+                _saveStartHistory()
+                console.log("[MGD] 启动历史命中同配置 #" + arr[i].id + "，刷新时间戳")
+                return arr[i].id
+            }
+        }
+        var id = startHistoryNextId
+        var rec = { id: id, source: source === "remote" ? "remote" : "manual",
+                    configKey: key, snapshot: snap }
         arr.push(rec)
         startHistory = arr
         startHistoryNextId = id + 1
         return id
+    }
+
+    // 计算配置指纹（16 位 hex）：参与字段 = 各路 folderPath/keyword/currentPath
+    // （不含 currentIndex：同目录内切换当前文件视为同一配置的延续）、参考资料区
+    // 全部开关与路径、评分模式、tag。两次启动只要这些字段一致即视为同一配置。
+    function _histConfigKey(snap) {
+        if (!snap) return ""
+        var parts = []
+        var lanes = snap.lanes || []
+        for (var i = 0; i < lanes.length; ++i) {
+            var ln = lanes[i] || {}
+            parts.push(String(ln.folderPath || "") + "|" + String(ln.keyword || "")
+                       + "|" + String(ln.currentPath || ""))
+        }
+        parts.push("ref:" + (snap.refResEnabled === true ? "1" : "0")
+                   + "|" + String(snap.refVideoPath || "")
+                   + (snap.refVideoEnabled !== false ? "1" : "0")
+                   + "|" + String(snap.refPromptPath || "")
+                   + (snap.refPromptEnabled !== false ? "1" : "0"))
+        var fr = snap.refFrames || []
+        for (var f = 0; f < fr.length; ++f)
+            parts.push("frame:" + String((fr[f] || {}).path || "")
+                       + ((fr[f] || {}).enabled !== false ? "1" : "0"))
+        parts.push("mode:" + String(snap.reviewMode || "off"))
+        parts.push("tag:" + String(snap.tag || ""))
+        // FNV-1a 32bit × 2（不同初始值）拼 16 位 hex：无需引入后端哈希，
+        // 冲突概率对几十条本地记录足够低
+        var s = parts.join("\n")
+        var h1 = 0x811c9dc5, h2 = 0x01000193
+        for (var c = 0; c < s.length; ++c) {
+            var ch = s.charCodeAt(c)
+            h1 = (h1 ^ ch) * 0x01000193
+            h1 = (h1 ^ (h1 >>> 16)) * 0x01000193
+            h2 = (h2 + ch) * 0x85ebca6b
+            h2 = (h2 ^ (h2 >>> 13)) >>> 0
+            h1 = h1 >>> 0
+        }
+        var hex = ("00000000" + h1.toString(16)).slice(-8)
+                 + ("00000000" + (h2 >>> 0).toString(16)).slice(-8)
+        return hex
     }
     // 加载一条历史记录到当前界面（不启动）：恢复勾选/当前文件/参考资料区，
     // 由用户检查后自行点「启动对比」（启动后又追加新记录）。
