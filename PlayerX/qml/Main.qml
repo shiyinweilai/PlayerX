@@ -2141,7 +2141,8 @@ ApplicationWindow {
         z: 199
         visible: root.rightSidebarOpen
                  && !((root.currentTab === "stream" && root.streamSidebarFloating)
-                      || (root.currentTab === "yuv" && root.yuvSidebarFloating))
+                      || (root.currentTab === "yuv" && root.yuvSidebarFloating)
+                      || (root.currentTab === "image" && root.imageSidebarFloating))
         acceptedButtons: Qt.NoButton  // 不拦截任何点击，透传给下方
         onWheel: function(wheel) {
             // 消费滚轮事件，阻止穿透到 ImageView
@@ -2165,10 +2166,12 @@ ApplicationWindow {
         // 命中区中心与 sidebar 左边缘对齐
         x: rightSidebarLoader.x - 3
         width: 6
-        visible: (root.currentTab === "stream" || root.currentTab === "yuv")
+        visible: (root.currentTab === "stream" || root.currentTab === "yuv"
+                  || root.currentTab === "image")
                  && root.rightSidebarOpen
                  && !(root.currentTab === "stream" ? root.streamSidebarFloating
-                                                   : root.yuvSidebarFloating)
+                     : root.currentTab === "yuv" ? root.yuvSidebarFloating
+                                                 : root.imageSidebarFloating)
         z: 201
         color: streamSidebarSplitterMA.pressed
                ? "#42A5FF"
@@ -2236,12 +2239,16 @@ ApplicationWindow {
                 const clamped = Math.max(root.streamSidebarMinW, Math.min(maxW, nw))
                 if (root.currentTab === "yuv")
                     root.yuvSidebarUserWidth = clamped
+                else if (root.currentTab === "image")
+                    root.imageSidebarUserWidth = clamped
                 else
                     root.streamSidebarUserWidth = clamped
             }
             onDoubleClicked: {
                 if (root.currentTab === "yuv")
                     root.yuvSidebarUserWidth = 320
+                else if (root.currentTab === "image")
+                    root.imageSidebarUserWidth = 320
                 else
                     root.streamSidebarUserWidth = 320
             }
@@ -2263,6 +2270,8 @@ ApplicationWindow {
         ImageInfoCard {
             slot: (typeof imageViewComp !== "undefined" && imageViewComp.effectiveSlot !== undefined)
                   ? imageViewComp.effectiveSlot : 0
+            floating: root.imageSidebarFloating
+            onFloatingChanged: root.imageSidebarFloating = floating
         }
     }
 
@@ -2607,18 +2616,21 @@ Component {
     // floating=false 时为腾位栏，StreamView 右缘左移 streamSidebarUserWidth 让出空间。
     property bool streamSidebarFloating: false
     property bool yuvSidebarFloating: false
+    property bool imageSidebarFloating: false
     // ── 播放对比右侧栏（快捷键速查 / 视频信息）──
     //   floating=false（默认，挤占模式）：videoArea/csvBottomBar 右缘让出侧栏宽度；
     //   floating=true（悬浮模式）：侧栏浮在画面上层，画面铺满整行（旧行为）。
     property bool playSidebarFloating: false
-    // ── 右侧栏宽度（stream / yuv 腾位时画面右缘锚到侧栏左缘）────────
+    // ── 右侧栏宽度（stream / yuv / image 腾位时画面右缘锚到侧栏左缘）────────
     property int streamSidebarUserWidth: 320
     property int yuvSidebarUserWidth: 320
+    property int imageSidebarUserWidth: 320
     readonly property int streamSidebarMinW: 260
     readonly property int streamSidebarMaxW: 640
     readonly property int streamSidebarEffectiveW: {
         if (root.currentTab === "stream") return root.streamSidebarUserWidth
         if (root.currentTab === "yuv") return root.yuvSidebarUserWidth
+        if (root.currentTab === "image") return root.imageSidebarUserWidth
         return 320
     }
     Component {
@@ -2862,28 +2874,53 @@ Component {
     }
 
     // ── YUV slot 数变 0（关闭全部 / 点 ← 返回）时，若仍在 YUV tab，
-    //    直方图面板无画面可统计，自动收起右侧栏。──
+    //    直方图面板无画面可统计，自动收起右侧栏。
+    //    反向：开始渲染（0→N）时自动展开右侧栏显示统计；之后的 N→N±1
+    //    （加/关路）不打扰用户手动开关的侧栏状态，与播放 tab 行为一致。──
+    property int _prevYuvSlots: 0
     Connections {
         target: YuvBridge
         function onSlotCountChanged() {
-            if (YuvBridge.slotCount === 0 && root.currentTab === "yuv" && root.rightSidebarOpen)
-                root.rightSidebarOpen = false
+            if (root.currentTab === "yuv") {
+                if (YuvBridge.slotCount === 0 && root.rightSidebarOpen)
+                    root.rightSidebarOpen = false
+                else if (YuvBridge.slotCount > 0 && root._prevYuvSlots <= 0
+                         && !root.rightSidebarOpen)
+                    root.rightSidebarOpen = true
+            }
+            root._prevYuvSlots = YuvBridge.slotCount
         }
     }
-    // ── StreamBridge 同上：码流文件全关时收起右侧统计卡片。──
+    // ── StreamBridge 同上：码流文件全关时收起右侧统计卡片；
+    //    开始分析（0→N）时展开。──
+    property int _prevStreamSlots: 0
     Connections {
         target: StreamBridge
         function onSlotCountChanged() {
-            if (StreamBridge.slotCount === 0 && root.currentTab === "stream" && root.rightSidebarOpen)
-                root.rightSidebarOpen = false
+            if (root.currentTab === "stream") {
+                if (StreamBridge.slotCount === 0 && root.rightSidebarOpen)
+                    root.rightSidebarOpen = false
+                else if (StreamBridge.slotCount > 0 && root._prevStreamSlots <= 0
+                         && !root.rightSidebarOpen)
+                    root.rightSidebarOpen = true
+            }
+            root._prevStreamSlots = StreamBridge.slotCount
         }
     }
-    // ── ImageBridge 同上：图片全关时收起右侧信息卡片。──
+    // ── ImageBridge 同上：图片全关时收起右侧信息卡片；
+    //    开始分析（0→N）时展开。──
+    property int _prevImageSlots: 0
     Connections {
         target: ImageBridge
         function onSlotCountChanged() {
-            if (ImageBridge.slotCount === 0 && root.currentTab === "image" && root.rightSidebarOpen)
-                root.rightSidebarOpen = false
+            if (root.currentTab === "image") {
+                if (ImageBridge.slotCount === 0 && root.rightSidebarOpen)
+                    root.rightSidebarOpen = false
+                else if (ImageBridge.slotCount > 0 && root._prevImageSlots <= 0
+                         && !root.rightSidebarOpen)
+                    root.rightSidebarOpen = true
+            }
+            root._prevImageSlots = ImageBridge.slotCount
         }
     }
 
@@ -2960,6 +2997,10 @@ Component {
         id: imageViewComp
         anchors.left: (ImageBridge.slotCount > 0) ? parent.left : leftNavBar.right
         anchors.right: parent.right
+        // 挤占模式（默认）且侧栏打开时，画面右缘让出侧栏宽度；悬浮模式下铺满整行
+        anchors.rightMargin: (root.currentTab === "image" && root.rightSidebarOpen
+                              && !root.imageSidebarFloating)
+                             ? root.imageSidebarUserWidth : 0
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         visible: root.currentTab === "image"

@@ -1301,9 +1301,9 @@ Item {
 
                     Rectangle {
                         width: 64; height: 22; radius: 3
-                        color: clearMa.containsMouse ? "#80c87070" : "#80b85a5a"
+                        color: clearMa.containsMouse ? "#803a5fc0" : "#802a5fc0"
                         border.color: "#803a3a44"; border.width: 1
-                        Text { anchors.centerIn: parent; text: "清空"; color: "#fff"; font.pixelSize: 11 }
+                        Text { anchors.centerIn: parent; text: "返回"; color: "#fff"; font.pixelSize: 11 }
                         MouseArea {
                             id: clearMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: {

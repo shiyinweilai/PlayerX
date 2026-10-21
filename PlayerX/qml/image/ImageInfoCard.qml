@@ -11,8 +11,13 @@ import QtQuick.Layouts
 
 Rectangle {
     id: panel
-    color: "#121417"
+    // floating=false（默认，挤占/腾位模式）：整栏铺满侧栏区域，左侧 1px 分隔线；
+    // floating=true（悬浮模式）：半透明圆角卡片浮于画面上层（对齐 YuvStatsPanel）。
+    color: panel.floating ? "transparent" : "#121417"
     anchors.fill: parent
+
+    property bool floating: false
+    function toggleFloating() { panel.floating = !panel.floating }
 
     property int slot: 0
     property int ver: 0
@@ -35,13 +40,30 @@ Rectangle {
     property var pixelData: ({})
     property bool statsLoading: false
 
-    // 左侧 1px 分隔线
+    // 挤占模式：左侧 1px 分隔线
     Rectangle {
+        visible: !panel.floating
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: 1
         color: "#2a2e33"
+    }
+
+    // 悬浮模式背景框：贴右缘、圆角半透明（对齐 YuvStatsPanel 悬浮样式）
+    Rectangle {
+        visible: panel.floating
+        anchors.right: parent.right
+        anchors.rightMargin: 12
+        anchors.top: parent.top
+        anchors.topMargin: 12
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 12
+        width: 304
+        radius: 8
+        color: "#f0121417"
+        border.color: "#2a2e33"
+        border.width: 1
     }
 
     // 当 slot/ver 变化时重新获取统计
@@ -79,10 +101,16 @@ Rectangle {
     }
 
     Flickable {
-        anchors.fill: parent
-        anchors.leftMargin: 0
-        anchors.rightMargin: 0
-        anchors.topMargin: 0
+        id: flickHost
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        anchors.left: panel.floating ? undefined : parent.left
+        // 悬浮模式：限定在右侧 304px 卡片内并留边距（对齐悬浮背景框）
+        anchors.topMargin: panel.floating ? 12 : 0
+        anchors.bottomMargin: panel.floating ? 12 : 0
+        anchors.rightMargin: panel.floating ? 12 : 0
+        width: panel.floating ? 304 : undefined
         contentWidth: width
         contentHeight: contentCol.implicitHeight
         clip: true
@@ -109,6 +137,29 @@ Rectangle {
                         id: chanIndicator; anchors.centerIn: parent
                         text: "CH" + (slot + 1) + "/" + ImageBridge.slotCount
                         color: "#6fa0ff"; font.pixelSize: 9; font.bold: true
+                    }
+                }
+                // 悬浮/挤占模式切换（对齐 YuvStatsPanel 同款按钮）
+                Rectangle {
+                    Layout.preferredWidth: 22; Layout.preferredHeight: 22; radius: 4
+                    color: floatModeMa.pressed ? "#2a3f5a" : "#1a1d22"
+                    border.color: "#2a2e33"; border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: panel.floating ? "◫" : "▣"
+                        color: "#9aa0a6"; font.pixelSize: 12
+                    }
+                    MouseArea {
+                        id: floatModeMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: panel.toggleFloating()
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 400
+                        ToolTip.text: panel.floating
+                                      ? "切换为挤占模式（画面让出右侧栏）"
+                                      : "切换为悬浮模式（浮于画面上层）"
                     }
                 }
             }
