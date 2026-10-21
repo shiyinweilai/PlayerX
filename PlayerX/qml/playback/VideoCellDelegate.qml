@@ -817,7 +817,7 @@ Rectangle {
     // ─── Checklist Popup（打完总分后弹出，多维评分模式专用）──────────────
     Popup {
         id: checklistPopup
-        width: 160
+        width: 180
         padding: 0
         modal: false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
