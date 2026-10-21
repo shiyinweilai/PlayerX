@@ -3172,17 +3172,45 @@ ApplicationWindow {
     // 历史搜索词：空串显示全部；非空按 tag / 模式 / #ID / 来源 / 时间过滤
     property string _histSearchText: ""
 
-    // 过滤视图：startHistory 的子集（保序，尾部 = 最新）。
-    // 搜索词为空时直接返回全量，非空时按 _histMatch 逐条匹配。
+    // 过滤视图：startHistory 的子集，直接排好展示序：
+    // 置顶组在前（组内新的在上），其余在后（新的在上）。
+    // delegate 必须正序取 _histFiltered[index]，不要再叠加倒序。
     readonly property var _histFiltered: {
         var src = startHistory || []
         var kw = (_histSearchText || "").trim().toLowerCase()
-        if (kw.length === 0) return src
         var out = []
         for (var i = 0; i < src.length; ++i) {
-            if (_histMatch(src[i], kw)) out.push(src[i])
+            if (kw.length === 0 || _histMatch(src[i], kw)) out.push(src[i])
         }
-        return out
+        var pinned = [], normal = []
+        for (var j = 0; j < out.length; ++j) {
+            if (out[j] && out[j].pinned === true) pinned.push(out[j])
+            else normal.push(out[j])
+        }
+        var rev = function(a) {
+            var r = []
+            for (var k = a.length - 1; k >= 0; --k) r.push(a[k])
+            return r
+        }
+        return rev(pinned).concat(rev(normal))
+    }
+
+    // 置顶/取消置顶一条启动历史（hover 浮层按钮点击触发，再次点击即取消）。
+    function _togglePinStartHistory(rec) {
+        if (!rec || typeof rec.id !== "number") return
+        var arr = (startHistory || []).slice()
+        for (var i = 0; i < arr.length; ++i) {
+            if (arr[i] && arr[i].id === rec.id) {
+                arr[i] = { id: arr[i].id, pinned: arr[i].pinned === true ? false : true,
+                           source: arr[i].source, configKey: arr[i].configKey || "",
+                           snapshot: arr[i].snapshot }
+                startHistory = arr
+                _saveStartHistory()
+                console.log("[MGD] 启动历史 #" + rec.id
+                            + (arr[i].pinned ? " 已置顶" : " 已取消置顶"))
+                return
+            }
+        }
     }
 
     // 单条记录是否匹配搜索词（不区分大小写）。
@@ -5034,16 +5062,23 @@ ApplicationWindow {
                         property int _selectedHistId: -1
                         delegate: Rectangle {
                             width: histScroll.availableWidth
-                            height: 40
+                            height: 44
                             radius: 4
                             property bool _selected: rec && rec.id === histList._selectedHistId
+                            property bool _pinned: rec && rec.pinned === true
+                            // 卡片 hover 高亮：卡片本体或浮层按钮 hover 时均保持
+                            property bool _rowHover: histRowMa.containsMouse
+                                   || (histHoverBtnLayer && histHoverBtnLayer._anyHover)
+                            // 置顶暖金背景区分；选中蓝优先级最高
                             color: _selected ? "#24324a"
-                                  : histRowMa.containsMouse ? "#23232a" : "#1a1a1f"
+                                  : _pinned ? (_rowHover ? "#3a3320" : "#322b18")
+                                  : _rowHover ? "#23232a" : "#1a1a1f"
                             border.color: _selected ? "#7ec8ff" : "#2c2c32"
                             border.width: 1
 
+                            // 正序取数：_histFiltered 已排好展示序（置顶在前、新的在上）
                             property var rec: _histFiltered.length > index
-                                               ? _histFiltered[_histFiltered.length - 1 - index]
+                                               ? _histFiltered[index]
                                                : null
 
                             MouseArea {
@@ -5076,60 +5111,146 @@ ApplicationWindow {
                                 color: "#7ec8ff"
                             }
 
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 6
-                                spacing: 8
+                            // 底层：两行信息占满整个卡片宽度（不预留按钮空间）
+                            ColumnLayout {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                anchors.topMargin: 5
+                                anchors.bottomMargin: 5
+                                spacing: 2
 
-                                // 左侧：两行信息（#ID+来源+时间 / 汉字模式·tag）
-                                ColumnLayout {
+                                RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 2
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 4
-                                        Label {
-                                            text: "#" + (rec ? rec.id : "?")
-                                            color: "#7ec8ff"
-                                            font.pixelSize: 11
-                                            font.bold: true
-                                        }
-                                        Label {
-                                            // remote=🔔接受 / manual=本地启动
-                                            text: rec && rec.source === "remote" ? "🔔远程" : "本地"
-                                            color: rec && rec.source === "remote" ? "#ffd84d" : "#8a8a92"
-                                            font.pixelSize: 10
-                                        }
-                                        Item { Layout.fillWidth: true }
-                                        Label {
-                                            // 时间戳：点击加载后左侧已有完整路信息，卡片只留时间
-                                            text: rec && rec.snapshot ? rec.snapshot.startedAt || "" : ""
-                                            color: "#6a6a72"
-                                            font.pixelSize: 9
-                                        }
+                                    spacing: 4
+                                    Label {
+                                        text: "#" + (rec ? rec.id : "?")
+                                        color: "#7ec8ff"
+                                        font.pixelSize: 11
+                                        font.bold: true
                                     }
                                     Label {
-                                        // 汉字模式 · tag 合并一行（无 tag 只显示模式；
-                                        // 路数/文件摘要已去掉：点击加载后左侧都有）
-                                        text: rec && rec.snapshot
-                                              ? (_histModeLabel(rec.snapshot.reviewMode)
-                                                 + ((rec.snapshot.tag && rec.snapshot.tag.length > 0)
-                                                    ? " · " + rec.snapshot.tag : ""))
-                                              : ""
-                                        color: "#c8c8d0"
+                                        // remote=🔔接受 / manual=本地启动
+                                        text: rec && rec.source === "remote" ? "🔔远程" : "本地"
+                                        color: rec && rec.source === "remote" ? "#ffd84d" : "#8a8a92"
                                         font.pixelSize: 10
-                                        elide: Text.ElideMiddle
-                                        Layout.fillWidth: true
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Label {
+                                        // 时间戳：点击加载后左侧已有完整路信息，卡片只留时间
+                                        text: rec && rec.snapshot ? rec.snapshot.startedAt || "" : ""
+                                        color: "#6a6a72"
+                                        font.pixelSize: 9
                                     }
                                 }
+                                Label {
+                                    // 汉字模式 · tag 合并一行（无 tag 只显示模式）
+                                    text: rec && rec.snapshot
+                                          ? (_histModeLabel(rec.snapshot.reviewMode)
+                                             + ((rec.snapshot.tag && rec.snapshot.tag.length > 0)
+                                                ? " · " + rec.snapshot.tag : ""))
+                                          : ""
+                                    color: "#c8c8d0"
+                                    font.pixelSize: 10
+                                    elide: Text.ElideMiddle
+                                    Layout.fillWidth: true
+                                }
+                            }
 
-                                // 右侧：垃圾桶删除按钮（规格与左侧视频行删除按钮一致）
+                            // 浮层：hover 时才显示的按钮行（置顶在删除左侧）。
+                            // 叠加在信息层之上，不参与底层布局——未 hover 时底层
+                            // 信息可占满整个卡片宽度，充足展示。
+                            Row {
+                                id: histHoverBtnLayer
+                                anchors.right: parent.right
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 4
+                                // hover 判定必须包含按钮自身的 MouseArea：
+                                // 按钮是独立的 hover 接收者，鼠标移上按钮时卡片
+                                // histRowMa 会收到 hoverLeave（Qt 只投递给最上层），
+                                // 若只看卡片 containsMouse 会出现
+                                // 「按钮消失 → hover 回卡片 → 按钮重现」的闪烁死循环
+                                property bool _anyHover: histRowMa.containsMouse
+                                       || histPinMa.containsMouse || histDelMa.containsMouse
+                                opacity: _anyHover ? 1.0 : 0.0
+                                visible: opacity > 0.01
+                                Behavior on opacity { NumberAnimation { duration: 120 } }
+
+                                // 置顶按钮：Canvas 自绘图钉图标（未置顶灰色 / 已置顶亮黄）
+                                Rectangle {
+                                    id: histPinBtn
+                                    width: 24
+                                    height: 24
+                                    radius: 4
+                                    color: histPinMa.containsMouse ? "#2e2e36" : "#202024"
+                                    border.color: (rec && rec.pinned === true)
+                                                  ? "#ffd84d" : "#3a3a42"
+                                    border.width: 1
+
+                                    Canvas {
+                                        anchors.centerIn: parent
+                                        width: 12
+                                        height: 16
+                                        // 图钉：圆头 + 针杆 + 底部横线，自绘避免 emoji 渲染差异
+                                        onPaint: {
+                                            var ctx = getContext("2d")
+                                            ctx.reset()
+                                            ctx.strokeStyle = parent._pinnedColor()
+                                            ctx.fillStyle = parent._pinnedColor()
+                                            ctx.lineWidth = 1.6
+                                            // 针杆（竖线）
+                                            ctx.beginPath()
+                                            ctx.moveTo(width / 2, 6)
+                                            ctx.lineTo(width / 2, height - 1)
+                                            ctx.stroke()
+                                            // 底部横线
+                                            ctx.beginPath()
+                                            ctx.moveTo(1, height - 1)
+                                            ctx.lineTo(width - 1, height - 1)
+                                            ctx.stroke()
+                                            // 圆头
+                                            ctx.beginPath()
+                                            ctx.arc(width / 2, 3.5, 3.2, 0, Math.PI * 2)
+                                            ctx.fill()
+                                        }
+                                        // pinned 状态变化时重绘颜色
+                                        Connections {
+                                            target: rec
+                                            function onPinnedChanged() { requestPaint() }
+                                        }
+                                        Component.onCompleted: requestPaint()
+                                    }
+                                    function _pinnedColor() {
+                                        return (rec && rec.pinned === true) ? "#ffd84d" : "#8a8a92"
+                                    }
+
+                                    MouseArea {
+                                        id: histPinMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            mouse.accepted = true
+                                            if (rec) dlg._togglePinStartHistory(rec)
+                                        }
+                                    }
+                                    ToolTip.visible: histPinMa.containsMouse
+                                    ToolTip.delay: 400
+                                    ToolTip.text: rec && rec.pinned === true
+                                                  ? "取消置顶（移回普通排序）"
+                                                  : "置顶到列表最上方"
+                                }
+
+                                // 删除按钮（垃圾桶）
                                 Rectangle {
                                     id: histDelBtn
-                                    Layout.preferredWidth: 28
-                                    Layout.preferredHeight: 22
-                                    Layout.alignment: Qt.AlignVCenter
-                                    radius: 3
+                                    width: 24
+                                    height: 24
+                                    radius: 4
                                     color: histDelMa.containsMouse ? "#3a2a2a" : "#202024"
                                     border.color: "#3a3a42"
                                     border.width: 1
