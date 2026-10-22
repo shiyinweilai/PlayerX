@@ -49,9 +49,9 @@ ApplicationWindow {
         if (visible && !_folderHistMerged) {
             _folderHistMerged = true
             try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
-        // 每次打开设置页：参考资料区勾选态复位为「未选」—— 只能通过右侧
-        // 历史点击加载勾选，或用户手动勾选；路径保留、不清空。
-        try { _resetRefResChecks() } catch (e) { /* ignore */ }
+        // 每次打开设置页：恢复「未选中」基线 —— 通路 = 所有历史导入路径并集
+        // （未勾选），参考资料 = 当前 + 历史路径并集（未勾选）。
+        try { _restoreBaselineLanes(); _restoreBaselineRefRes() } catch (e) { /* ignore */ }
         // 历史选中态同样重置（兜底路径：不走 showAndRefresh 直接 show() 时）
         if (typeof histList !== "undefined" && histList
             && typeof histList._selectedHistId === "number")
@@ -2796,8 +2796,119 @@ ApplicationWindow {
         _saveRefRes()
     }
 
+    // ─── 未选中基线：从全部启动历史恢复「所有历史导入」的通路 ──────
+    // 触发时机：取消历史选中（再次点击同一卡片）/ 每次打开设置页。
+    // 语义：未选中状态 = 所有历史记录导入过的视频路径（含散文件路），
+    // 一律未勾选；选中状态 = 只显示所选记录对应的（loadStartHistory
+    // 会整体重建列表，本函数负责把被覆盖掉的历史路径全部找回来）。
+    // 去重：文件夹路按 folderPath、散文件路按 currentPath；从新到旧遍历，
+    // 共享目录时较新配置的 keyword/进度优先占位。
+    function _restoreBaselineLanes() {
+        var existFolder = {}, existFile = {}
+        for (var i0 = 0; i0 < _rowsModel.count; ++i0) {
+            var r0 = _rowsModel.get(i0)
+            if (!r0) continue
+            if (r0.folderPath && r0.folderPath.length > 0) existFolder[r0.folderPath] = true
+            else if (r0.currentPath && r0.currentPath.length > 0) existFile[r0.currentPath] = true
+        }
+        var hist = startHistory || []
+        var added = 0
+        for (var i = hist.length - 1; i >= 0; --i) {
+            var snap = (hist[i] || {}).snapshot || {}
+            var lanes = snap.lanes || []
+            for (var j = 0; j < lanes.length; ++j) {
+                if (_rowsModel.count >= kMaxLanes) break
+                var ln = lanes[j] || {}
+                if (ln.isRefVideo === true) continue
+                if (ln.folderPath && ln.folderPath.length > 0) {
+                    if (existFolder[ln.folderPath]) continue
+                    var files = []
+                    try { files = Fs.scanVideoFolderPath(ln.folderPath, true) || [] } catch (e) { files = [] }
+                    if (!files || files.length === 0) {
+                        // 目录已失效：currentPath 还在就按散文件兜底，否则跳过
+                        var cpOk = false
+                        try { cpOk = ln.currentPath && Fs.fileExists(ln.currentPath) } catch (e2) { cpOk = false }
+                        if (!cpOk) continue
+                        files = [ ln.currentPath ]
+                    }
+                    var vis = _filterAndSort(files, ln.keyword || "")
+                    // 原 currentPath 仍在可见列表则保留原位置，否则取首个
+                    var keepIdx = (ln.currentPath && vis.length > 0) ? vis.indexOf(ln.currentPath) : -1
+                    if (keepIdx < 0) keepIdx = vis.length > 0 ? 0 : -1
+                    _laneRuntime.push({ allFiles: files, visibleFiles: vis })
+                    _rowsModel.append({
+                        selected:     false,
+                        folderPath:   ln.folderPath,
+                        keyword:      ln.keyword || "",
+                        currentPath:  keepIdx >= 0 ? vis[keepIdx] : "",
+                        currentIndex: keepIdx,
+                        allCount:     files.length,
+                        visibleCount: vis.length
+                    })
+                    existFolder[ln.folderPath] = true
+                    added++
+                } else if (ln.currentPath && ln.currentPath.length > 0 && !existFile[ln.currentPath]) {
+                    var ok2 = false
+                    try { ok2 = Fs.fileExists(ln.currentPath) } catch (e3) { ok2 = false }
+                    if (!ok2) continue
+                    _laneRuntime.push({ allFiles: [ ln.currentPath ], visibleFiles: [ ln.currentPath ] })
+                    _rowsModel.append({
+                        selected:     false,
+                        folderPath:   "",
+                        keyword:      ln.keyword || "",
+                        currentPath:  ln.currentPath,
+                        currentIndex: 0,
+                        allCount:     1,
+                        visibleCount: 1
+                    })
+                    existFile[ln.currentPath] = true
+                    added++
+                }
+            }
+        }
+        if (added > 0) { _bumpState(); _persistLanes() }
+        return added
+    }
+
+    // ─── 未选中基线：参考资料区从全部启动历史做并集 ────────────────
+    // 参考帧：当前已配 + 全部历史快照的路径并集（新记录在前），上限
+    // kMaxRefFrames；参考视频/提示词只有单槽：当前值优先，空则取最新
+    // 历史的。所有项一律未勾选（只能通过右侧历史点击或手动勾选启用）。
+    function _restoreBaselineRefRes() {
+        var refV = refVideoPath, refP = refPromptPath
+        var seen = {}, frames = []
+        var cur = _cloneRefFrames()
+        for (var c = 0; c < cur.length; ++c) {
+            var p0 = String((cur[c] || {}).path || "")
+            if (p0.length > 0 && !seen[p0]) { seen[p0] = true; frames.push(p0) }
+        }
+        var hist = startHistory || []
+        for (var i = hist.length - 1; i >= 0; --i) {
+            var snap = (hist[i] || {}).snapshot || {}
+            if (!refV && snap.refVideoPath) refV = String(snap.refVideoPath)
+            if (!refP && snap.refPromptPath) refP = String(snap.refPromptPath)
+            var fa = snap.refFrames || []
+            for (var f = 0; f < fa.length && frames.length < kMaxRefFrames; ++f) {
+                var p = String((fa[f] || {}).path || "")
+                if (p.length > 0 && !seen[p]) { seen[p] = true; frames.push(p) }
+            }
+            if (frames.length >= kMaxRefFrames) break
+        }
+        refResEnabled = false
+        refVideoEnabled = false
+        refPromptEnabled = false
+        refVideoPath = refV
+        refPromptPath = refP
+        var arr = []
+        for (var k = 0; k < frames.length; ++k) arr.push({ path: frames[k], enabled: false })
+        if (arr.length === 0) arr.push({ path: "", enabled: true })
+        refFramePaths = arr
+        _saveRefRes()
+    }
+
     // 取消历史选中（再次点击同一卡片触发）：
-    // 恢复「什么都不选」基线 —— 全部普通通路未勾选、参考资料区复位未勾选，
+    // 恢复「未选中」基线 —— 显示所有历史导入过的视频路径（通路并集，
+    // 全部未勾选）与参考资料并集（路径全量、一律未勾选），
     // 与启动后返回设置页 / 软件重启后的状态一致。
     function _cancelHistSelection() {
         for (var i = 0; i < _rowsModel.count; ++i) {
@@ -2805,9 +2916,10 @@ ApplicationWindow {
             if (!l || l.isRefVideo === true) continue
             if (l.selected) _rowsModel.setProperty(i, "selected", false)
         }
+        _restoreBaselineLanes()
+        _restoreBaselineRefRes()
         _bumpState()
         _persistLanes()
-        _resetRefResChecks()
         _histLoadNotice = "✓ 已取消选中，恢复未选状态"
         _histLoadTimer.restart()
     }
@@ -3878,9 +3990,10 @@ ApplicationWindow {
         if (typeof histList !== "undefined" && histList
             && typeof histList._selectedHistId === "number")
             histList._selectedHistId = -1
-        // 每次打开设置页：参考资料区勾选态复位为「未选」—— 只能通过右侧
-        // 历史点击加载勾选，或用户手动勾选；路径保留、不清空。
-        try { _resetRefResChecks() } catch (e) { /* ignore */ }
+        // 每次打开设置页：恢复「未选中」基线 —— 左侧通路 = 所有历史导入过的
+        // 视频路径并集（全部未勾选）；参考资料 = 当前 + 全部历史的路径并集
+        // （一律未勾选）。勾选只能通过右侧历史点击加载，或用户手动勾选。
+        try { _restoreBaselineLanes(); _restoreBaselineRefRes() } catch (e) { console.warn("[MGD] 基线恢复异常:", e) }
         _folderHistMerged = true
         // 每次打开自动清理空槽位（未导入的占位行）与死路（目录已失效），
         // 避免它们长期占用 kMaxLanes 名额堵死新导入
