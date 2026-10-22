@@ -3253,8 +3253,19 @@ ApplicationWindow {
     property string _histSearchText: ""
 
     // 过滤视图：startHistory 的子集，直接排好展示序：
-    // 置顶组在前（组内新的在上），其余在后（新的在上）。
+    // 置顶组永远在最前（组内最新置顶的在上），其余按时间戳倒序（最新在上）。
     // delegate 必须正序取 _histFiltered[index]，不要再叠加倒序。
+    // _histNewestTs：全部记录中最大的时间戳（与是否置顶无关），
+    // 命中的那条卡片时间戳着色并加「最新」徽标。
+    readonly property string _histNewestTs: {
+        var src = startHistory || []
+        var mx = ""
+        for (var i = 0; i < src.length; ++i) {
+            var ts = (src[i] && src[i].snapshot) ? (src[i].snapshot.startedAt || "") : ""
+            if (ts.length > 0 && ts > mx) mx = ts
+        }
+        return mx
+    }
     readonly property var _histFiltered: {
         var src = startHistory || []
         var kw = (_histSearchText || "").trim().toLowerCase()
@@ -3267,11 +3278,6 @@ ApplicationWindow {
             if (out[j] && out[j].pinned === true) pinned.push(out[j])
             else normal.push(out[j])
         }
-        var rev = function(a) {
-            var r = []
-            for (var k = a.length - 1; k >= 0; --k) r.push(a[k])
-            return r
-        }
         // 置顶组按「置顶时间」倒序：最新置顶的永远在最上面。
         // 无 pinAt 的旧记录（视为最早置顶）排组内最后。
         pinned.sort(function(a, b) {
@@ -3279,7 +3285,17 @@ ApplicationWindow {
             var tb = (b && typeof b.pinAt === "number") ? b.pinAt : 0
             return tb - ta
         })
-        return pinned.concat(rev(normal))
+        // 普通组按「时间戳」倒序：最新的记录在最上面（不再按插入序反转，
+        // 因为同配置去重刷新时间戳后插入序 ≠ 时间序）。时间戳相同再按 id 倒序。
+        normal.sort(function(a, b) {
+            var ta = (a && a.snapshot) ? (a.snapshot.startedAt || "") : ""
+            var tb2 = (b && b.snapshot) ? (b.snapshot.startedAt || "") : ""
+            if (ta !== tb2) return ta > tb2 ? -1 : 1
+            var ia = (a && typeof a.id === "number") ? a.id : 0
+            var ib = (b && typeof b.id === "number") ? b.id : 0
+            return ib - ia
+        })
+        return pinned.concat(normal)
     }
 
     // 置顶/取消置顶一条启动历史（hover 浮层按钮点击触发，再次点击即取消）。
@@ -5277,10 +5293,34 @@ ApplicationWindow {
                                         font.pixelSize: 10
                                     }
                                     Item { Layout.fillWidth: true }
+                                    // 「最新」徽标：全表时间戳最大的那条记录，
+                                    // 放在时间戳左侧小字标识（置顶与否不影响判定）
                                     Label {
-                                        // 时间戳：点击加载后左侧已有完整路信息，卡片只留时间
+                                        visible: rec && rec.snapshot
+                                                 && (rec.snapshot.startedAt || "") === dlg._histNewestTs
+                                                 && dlg._histNewestTs.length > 0
+                                        text: "最新"
+                                        color: "#f5c66b"
+                                        font.pixelSize: 8
+                                        padding: 1
+                                        leftPadding: 4
+                                        rightPadding: 4
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            anchors.margins: 0
+                                            color: "#3a3320"
+                                            radius: 2
+                                            z: -1
+                                        }
+                                    }
+                                    Label {
+                                        // 时间戳：点击加载后左侧已有完整路信息，卡片只留时间。
+                                        // 全表最新的那条时间戳着色（暖金），其余保持灰。
                                         text: rec && rec.snapshot ? rec.snapshot.startedAt || "" : ""
-                                        color: "#6a6a72"
+                                        color: rec && rec.snapshot
+                                               && (rec.snapshot.startedAt || "") === dlg._histNewestTs
+                                               && dlg._histNewestTs.length > 0
+                                               ? "#f5c66b" : "#6a6a72"
                                         font.pixelSize: 9
                                     }
                                 }
