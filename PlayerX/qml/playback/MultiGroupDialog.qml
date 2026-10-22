@@ -49,6 +49,13 @@ ApplicationWindow {
         if (visible && !_folderHistMerged) {
             _folderHistMerged = true
             try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
+        // 每次打开设置页：参考资料区勾选态复位为「未选」—— 只能通过右侧
+        // 历史点击加载勾选，或用户手动勾选；路径保留、不清空。
+        try { _resetRefResChecks() } catch (e) { /* ignore */ }
+        // 历史选中态同样重置（兜底路径：不走 showAndRefresh 直接 show() 时）
+        if (typeof histList !== "undefined" && histList
+            && typeof histList._selectedHistId === "number")
+            histList._selectedHistId = -1
         } else if (!visible) {
             // 隐藏时复位，下次打开重新合并（确保期间被拖入的新文件夹也能浮现）
             _folderHistMerged = false
@@ -1192,6 +1199,9 @@ ApplicationWindow {
             if (Engine.fileCount <= 0 && dlg.active) {
                 console.log("[MGD][debug] reset active to false because fileCount=0")
                 dlg.active = false
+                // 退出播放：清掉本次启动参与路快照（与 active 生命周期对齐，
+                // 避免下次未启动时残留影响 groupCount/groupIndex）
+                dlg._startedLaneIdxs = []
             }
         }
     }
@@ -1200,6 +1210,12 @@ ApplicationWindow {
     // 当前每路在自己 visibleFiles 中的索引（仅用于"上一组/下一组"导航；start() 时刷新）
     property var laneSnapshotPaths: []   // 上次启动时各路的 currentPath，用于检测是否需要重新 start
     property var laneSnapshotIndexes: [] // 上次启动时各路的 currentIndex
+    // 本次启动「实际参与」的路下标列表（start() 里 selIdx 的快照）。
+    // 背景：启动后 _deselectAllAfterStart 会把全部路取消勾选（返回设置页不保留
+    // 勾选），而播放期的组号显示（groupCount/groupIndex）与翻组（navigate 多组
+    // 分支）旧实现都依赖 selected —— 取消勾选后它们全部失效（组号显示 – / –、
+    // ⏮⏭ 翻组无响应）。改为启动时记下参与路的下标，播放期一律以本列表为准。
+    property var _startedLaneIdxs: []
 
     // ─── 评分模式（review mode）────────────────────────────────────
     // 由 Main.qml 注入回调；reviewMode = true 时，翻上一组/下一组前要求当前组所有通道都已评分。
@@ -2678,6 +2694,9 @@ ApplicationWindow {
         }
         if (finalSel.length === 0) return false
         selIdx = finalSel
+        // 记录本次启动实际参与的路（播放期组号 / 翻组以它为准，
+        // 不再依赖启动后会被清掉的 selected 勾选态）
+        _startedLaneIdxs = selIdx.slice()
 
         // 仅有效 1 路：单视频浏览模式 —— 只打开当前选中那个视频，可用上一组/下一组循环切换
         if (selIdx.length === 1) {
@@ -2703,6 +2722,8 @@ ApplicationWindow {
                 // 启动历史：记录本次配置（来源由 _histPendingSource 决定）
                 appendStartHistory(_histPendingSource)
                 _histPendingSource = "manual"
+                // 启动即接管：返回设置页时不保留勾选（同多路分支）
+                _deselectAllAfterStart()
             }
             return ok1
         }
@@ -2731,8 +2752,64 @@ ApplicationWindow {
             // 启动历史：记录本次配置（来源由 _histPendingSource 决定）
             appendStartHistory(_histPendingSource)
             _histPendingSource = "manual"
+            // 启动即接管：返回设置页时不保留任何勾选（一律以右侧历史
+            // 点击为准）；同时移除参考视频临时行（isRefVideo 行不持久化，
+            // 留着会在下次直接启动时被误当成勾选路）。
+            _deselectAllAfterStart()
         }
         return ok
+    }
+
+    // 启动后清空勾选：全部行 selected=false；isRefVideo 临时行直接移除。
+    // 行本身保留（用户返回后仍能看到所有通路，可重新勾选或点历史加载）。
+    // 参考资料区同步复位为「未勾选」：路径保留，勾选态不保留 —— 重启/返回后
+    // 参考资料一律从「未选」开始，与上方通路「启动即接管」原则一致。自动化
+    // （applyAutoRefResources → start）的参考绑定发生在 start() 内部，早于
+    // 本复位执行，不受影响；启动历史快照在 appendStartHistory 时已先采集，
+    // 点右侧历史仍可整体恢复勾选态。
+    function _deselectAllAfterStart() {
+        for (var i = _rowsModel.count - 1; i >= 0; --i) {
+            var l = _rowsModel.get(i)
+            if (!l) continue
+            if (l.isRefVideo === true) {
+                _rowsModel.remove(i)
+                continue
+            }
+            if (l.selected) _rowsModel.setProperty(i, "selected", false)
+        }
+        _ensureRuntimeLen(_rowsModel.count)
+        _bumpState()
+        _persistLanes()
+        _resetRefResChecks()
+    }
+
+    // 复位参考资料区勾选态：总开关 + 参考视频 / 提示词 / 全部参考帧一律未勾选。
+    // 仅动勾选、不清路径（路径继续持久化展示）；恢复勾选的唯一途径是点击
+    // 右侧启动历史（loadStartHistory 按快照整体还原）或用户手动勾选。
+    function _resetRefResChecks() {
+        refResEnabled = false
+        refVideoEnabled = false
+        refPromptEnabled = false
+        var arr = _cloneRefFrames()
+        for (var i = 0; i < arr.length; ++i) arr[i].enabled = false
+        refFramePaths = arr
+        _saveRefRes()
+    }
+
+    // 取消历史选中（再次点击同一卡片触发）：
+    // 恢复「什么都不选」基线 —— 全部普通通路未勾选、参考资料区复位未勾选，
+    // 与启动后返回设置页 / 软件重启后的状态一致。
+    function _cancelHistSelection() {
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var l = _rowsModel.get(i)
+            if (!l || l.isRefVideo === true) continue
+            if (l.selected) _rowsModel.setProperty(i, "selected", false)
+        }
+        _bumpState()
+        _persistLanes()
+        _resetRefResChecks()
+        _histLoadNotice = "✓ 已取消选中，恢复未选状态"
+        _histLoadTimer.restart()
     }
 
     // ─── 「添加文件」走的扁平接管入口 ──────────────────────────────
@@ -3195,7 +3272,14 @@ ApplicationWindow {
             for (var k = a.length - 1; k >= 0; --k) r.push(a[k])
             return r
         }
-        return rev(pinned).concat(rev(normal))
+        // 置顶组按「置顶时间」倒序：最新置顶的永远在最上面。
+        // 无 pinAt 的旧记录（视为最早置顶）排组内最后。
+        pinned.sort(function(a, b) {
+            var ta = (a && typeof a.pinAt === "number") ? a.pinAt : 0
+            var tb = (b && typeof b.pinAt === "number") ? b.pinAt : 0
+            return tb - ta
+        })
+        return pinned.concat(rev(normal))
     }
 
     // 置顶/取消置顶一条启动历史（hover 浮层按钮点击触发，再次点击即取消）。
@@ -3204,7 +3288,9 @@ ApplicationWindow {
         var arr = (startHistory || []).slice()
         for (var i = 0; i < arr.length; ++i) {
             if (arr[i] && arr[i].id === rec.id) {
-                arr[i] = { id: arr[i].id, pinned: arr[i].pinned === true ? false : true,
+                var nowPinned = !(arr[i].pinned === true)
+                arr[i] = { id: arr[i].id, pinned: nowPinned,
+                           pinAt: nowPinned ? Date.now() : 0,
                            source: arr[i].source, configKey: arr[i].configKey || "",
                            snapshot: arr[i].snapshot, name: arr[i].name || "" }
                 startHistory = arr
@@ -3216,32 +3302,34 @@ ApplicationWindow {
         }
     }
 
-    // 重命名一条启动历史：name 为空 = 恢复默认显示（远程/本地）。
+    // 重命名一条启动历史：直接修改其 tag（卡片第二行显示的内容）。
     function _renameStartHistory(rec, name) {
         if (!rec || typeof rec.id !== "number") return
         var arr = (startHistory || []).slice()
         for (var i = 0; i < arr.length; ++i) {
             if (arr[i] && arr[i].id === rec.id) {
+                var snap = arr[i].snapshot || {}
+                // 快照整体替换才能触发 ListView 重新求值
+                var newSnap = {}
+                for (var k in snap) newSnap[k] = snap[k]
+                newSnap.tag = String(name || "").trim()
                 arr[i] = { id: arr[i].id, pinned: arr[i].pinned === true,
                            source: arr[i].source, configKey: arr[i].configKey || "",
-                           snapshot: arr[i].snapshot, name: String(name || "").trim() }
+                           snapshot: newSnap, name: arr[i].name || "" }
                 startHistory = arr
                 _saveStartHistory()
-                console.log("[MGD] 启动历史 #" + rec.id + " 已重命名为: "
-                            + (String(name || "").trim() || "(默认)"))
+                console.log("[MGD] 启动历史 #" + rec.id + " tag 已改为: "
+                            + (String(name || "").trim() || "(空)"))
                 return
             }
         }
     }
 
     // 单条记录是否匹配搜索词（不区分大小写）。
-    // 可命中字段：自定义名称、tag、评分模式（含中文名）、#ID、来源（远程/本地）、时间戳
+    // 可命中字段：tag、评分模式（含中文名）、#ID、时间戳
     function _histMatch(rec, kw) {
         if (!rec) return false
         var snap = rec.snapshot || {}
-        // 自定义名称
-        var nm = String(rec.name || "").toLowerCase()
-        if (nm.length > 0 && nm.indexOf(kw) >= 0) return true
         // tag
         var tag = String(snap.tag || "").toLowerCase()
         if (tag.indexOf(kw) >= 0) return true
@@ -3769,6 +3857,14 @@ ApplicationWindow {
     // 再叠加 onVisibleChanged 作为兜底。
     function showAndRefresh() {
         try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
+        // 每次打开设置页：右侧历史选中态一并重置 —— 上一次点选的高亮/加载痕迹
+        // 不应跨打开周期残留，重新打开一律回到「未选中任何历史」的基线。
+        if (typeof histList !== "undefined" && histList
+            && typeof histList._selectedHistId === "number")
+            histList._selectedHistId = -1
+        // 每次打开设置页：参考资料区勾选态复位为「未选」—— 只能通过右侧
+        // 历史点击加载勾选，或用户手动勾选；路径保留、不清空。
+        try { _resetRefResChecks() } catch (e) { /* ignore */ }
         _folderHistMerged = true
         // 每次打开自动清理空槽位（未导入的占位行）与死路（目录已失效），
         // 避免它们长期占用 kMaxLanes 名额堵死新导入
@@ -3826,7 +3922,7 @@ ApplicationWindow {
     // 与 addFoldersToHistory 的关键区别：
     //   · folderPath = ""     —— 不参与文件夹历史、不被 _mergeFolderHistoryIntoLanes 还原
     //   · 不调 scanVideoFolder —— 跳过扫描，避免触发系统权限弹窗、避免无谓 IO
-    //   · 默认 selected = true —— 用户主动拖入的散文件本身就是想加入对比
+    //   · 默认 selected = false —— 任何时候不替用户勾选（一律以右侧历史点击为准）
     //   · 不触发"重复目录"确认 —— 散文件没"目录"概念，多个同名散文件也允许并存
     function addAnonymousFiles(fileUrls) {
         if (!fileUrls || fileUrls.length === 0) return
@@ -3854,7 +3950,7 @@ ApplicationWindow {
             }
 
             _rowsModel.append({
-                selected: true,
+                selected: false,
                 folderPath: "",
                 keyword: "",
                 currentIndex: 0,
@@ -3988,18 +4084,22 @@ ApplicationWindow {
         }
 
         // ── 多组对比：每路 ±1 循环（保留旧逻辑） ────────────────────
+        // 以本次启动参与路为准（启动后勾选会被清空，不能再依赖 selected）
         var anyMoved = false
-        for (var k = 0; k < _rowsModel.count; ++k) {
-            var laneM = _rowsModel.get(k)
-            if (!laneM.selected) continue
-            var rtM = _laneRuntime[k]
+        var navIdxs = _startedLaneIdxs || []
+        for (var k = 0; k < navIdxs.length; ++k) {
+            var nk = navIdxs[k]
+            if (nk < 0 || nk >= _rowsModel.count) continue
+            var laneM = _rowsModel.get(nk)
+            if (!laneM) continue
+            var rtM = _laneRuntime[nk]
             if (!rtM || rtM.visibleFiles.length === 0) continue
             var nM = rtM.visibleFiles.length
             var curM = laneM.currentIndex
             var nextM = ((curM + dir) % nM + nM) % nM
             if (nextM !== curM) {
                 anyMoved = true
-                _rowsModel.set(k, {
+                _rowsModel.set(nk, {
                     selected: laneM.selected,
                     folderPath: laneM.folderPath,
                     keyword: laneM.keyword,
@@ -4012,9 +4112,11 @@ ApplicationWindow {
         }
         if (!anyMoved) return false
         var paths = []
-        for (var j = 0; j < _rowsModel.count; ++j) {
-            var ln = _rowsModel.get(j)
-            if (!ln.selected) continue
+        for (var j = 0; j < navIdxs.length; ++j) {
+            var pj = navIdxs[j]
+            if (pj < 0 || pj >= _rowsModel.count) continue
+            var ln = _rowsModel.get(pj)
+            if (!ln) continue
             if (!ln.currentPath || ln.currentPath.length === 0) continue
             paths.push(ln.currentPath)
         }
@@ -4052,12 +4154,14 @@ ApplicationWindow {
             var step = Math.max(1, viewCount)
             return Math.ceil(rt.visibleFiles.length / step)
         }
+        // 多组模式：以本次启动参与的路为准（启动后勾选会被清空，
+        // 不能再看 selected，否则组号显示 – / –）
         var maxN = 0
-        var n = Math.min(_rowsModel.count, _laneRuntime.length)
-        for (var k = 0; k < n; ++k) {
-            var lane = _rowsModel.get(k)
-            if (!lane || !lane.selected) continue
-            var rtM = _laneRuntime[k]
+        var idxs = _startedLaneIdxs || []
+        for (var k = 0; k < idxs.length; ++k) {
+            var kk = idxs[k]
+            if (kk < 0 || kk >= _rowsModel.count) continue
+            var rtM = _laneRuntime[kk]
             if (rtM && rtM.visibleFiles && rtM.visibleFiles.length > maxN)
                 maxN = rtM.visibleFiles.length
         }
@@ -4073,10 +4177,12 @@ ApplicationWindow {
             var step = Math.max(1, viewCount)
             return Math.floor(Math.max(0, lane.currentIndex) / step)
         }
-        // 多组模式：取第一个「已勾选且 currentIndex>=0」的路当前位置
-        for (var j = 0; j < _rowsModel.count; ++j) {
-            var ln = _rowsModel.get(j)
-            if (ln && ln.selected && ln.currentIndex >= 0) return ln.currentIndex
+        // 多组模式：取本次启动参与路中第一个 currentIndex>=0 的当前位置
+        var idxs = _startedLaneIdxs || []
+        for (var j = 0; j < idxs.length; ++j) {
+            if (idxs[j] < 0 || idxs[j] >= _rowsModel.count) continue
+            var ln = _rowsModel.get(idxs[j])
+            if (ln && ln.currentIndex >= 0) return ln.currentIndex
         }
         if (_rowsModel.count === 0) return -1
         return _rowsModel.get(0).currentIndex
@@ -5112,6 +5218,13 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
                                     if (!rec) return
+                                    // 再次点击已选中的历史 = 取消选中：
+                                    // 清除加载痕迹，勾选全部普通通路（显示当前所有视频通路）。
+                                    if (histList._selectedHistId === rec.id) {
+                                        histList._selectedHistId = -1
+                                        dlg._cancelHistSelection()
+                                        return
+                                    }
                                     var err = dlg.loadStartHistory(rec)
                                     if (err && err.length > 0) {
                                         histList._selectedHistId = -1
@@ -5157,25 +5270,11 @@ ApplicationWindow {
                                         font.bold: true
                                     }
                                     Label {
-                                        // 自定义名称优先；无名称时默认显示来源
-                                        // remote=🔔接受 / manual=本地启动
-                                        text: {
-                                            if (!rec) return ""
-                                            if (rec.name && rec.name.length > 0)
-                                                return rec.name
-                                            return rec.source === "remote" ? "🔔远程" : "本地"
-                                        }
-                                        color: {
-                                            if (!rec) return "#8a8a92"
-                                            if (rec.name && rec.name.length > 0)
-                                                return "#7ec8ff"
-                                            return rec.source === "remote" ? "#ffd84d" : "#8a8a92"
-                                        }
+                                        // 评分模式（汉字）紧跟编号
+                                        text: rec && rec.snapshot
+                                              ? _histModeLabel(rec.snapshot.reviewMode) : ""
+                                        color: "#c8c8d0"
                                         font.pixelSize: 10
-                                        // 有自定义名时加粗提示可识别
-                                        font.bold: rec && rec.name && rec.name.length > 0
-                                        elide: Text.ElideRight
-                                        Layout.maximumWidth: 140
                                     }
                                     Item { Layout.fillWidth: true }
                                     Label {
@@ -5186,13 +5285,9 @@ ApplicationWindow {
                                     }
                                 }
                                 Label {
-                                    // 汉字模式 · tag 合并一行（无 tag 只显示模式）
-                                    text: rec && rec.snapshot
-                                          ? (_histModeLabel(rec.snapshot.reviewMode)
-                                             + ((rec.snapshot.tag && rec.snapshot.tag.length > 0)
-                                                ? " · " + rec.snapshot.tag : ""))
-                                          : ""
-                                    color: "#c8c8d0"
+                                    // 第二行：tag（可通过编辑按钮直接修改；空则留空）
+                                    text: rec && rec.snapshot ? (rec.snapshot.tag || "") : ""
+                                    color: "#8a8a92"
                                     font.pixelSize: 10
                                     elide: Text.ElideMiddle
                                     Layout.fillWidth: true
@@ -5221,14 +5316,14 @@ ApplicationWindow {
                                 Behavior on opacity { NumberAnimation { duration: 120 } }
 
                                 // 编辑名称按钮：Canvas 自绘铅笔图标（在置顶左侧）
+                                // 直接编辑该记录的 tag
                                 Rectangle {
                                     id: histEditBtn
                                     width: 24
                                     height: 24
                                     radius: 4
                                     color: histEditMa.containsMouse ? "#2e2e36" : "#202024"
-                                    border.color: (rec && rec.name && rec.name.length > 0)
-                                                  ? "#7ec8ff" : "#3a3a42"
+                                    border.color: "#3a3a42"
                                     border.width: 1
 
                                     // 自绘铅笔：笔杆 + 笔尖 + 顶部橡皮擦横线
@@ -5239,9 +5334,8 @@ ApplicationWindow {
                                         onPaint: {
                                             var ctx = getContext("2d")
                                             ctx.reset()
-                                            var col = (rec && rec.name
-                                                       && rec.name.length > 0)
-                                                      ? "#7ec8ff" : "#8a8a92"
+                                            // 统一灰色，不做状态着色（与其他两按钮风格一致）
+                                            var col = "#8a8a92"
                                             ctx.strokeStyle = col
                                             ctx.fillStyle = col
                                             ctx.lineWidth = 1.5
@@ -5266,11 +5360,7 @@ ApplicationWindow {
                                             ctx.closePath()
                                             ctx.fill()
                                         }
-                                        // 名称变化时重绘（颜色随有无自定义名切换）
-                                        Connections {
-                                            target: rec
-                                            function onNameChanged() { requestPaint() }
-                                        }
+                                        // delegate 重建时会重新求值，无需监听变更
                                         Component.onCompleted: requestPaint()
                                     }
 
@@ -5283,25 +5373,25 @@ ApplicationWindow {
                                             mouse.accepted = true
                                             if (rec) {
                                                 histRenamePopup._editRecId = rec.id
-                                                histRenamePopup._editText = rec.name || ""
+                                                histRenamePopup._editText = (rec.snapshot && rec.snapshot.tag) || ""
                                                 histRenamePopup.open()
                                             }
                                         }
                                     }
                                     ToolTip.visible: histEditMa.containsMouse
                                     ToolTip.delay: 400
-                                    ToolTip.text: "编辑记录名称（留空恢复默认）"
+                                    ToolTip.text: "编辑 tag（显示在卡片第二行）"
                                 }
 
-                                // 置顶按钮：Canvas 自绘图钉图标（未置顶灰色 / 已置顶亮黄）
+                                // 置顶按钮：Canvas 自绘图钉图标（任何状态均不着色，
+                                // 已置顶由卡片背景色区分）
                                 Rectangle {
                                     id: histPinBtn
                                     width: 24
                                     height: 24
                                     radius: 4
                                     color: histPinMa.containsMouse ? "#2e2e36" : "#202024"
-                                    border.color: (rec && rec.pinned === true)
-                                                  ? "#ffd84d" : "#3a3a42"
+                                    border.color: "#3a3a42"
                                     border.width: 1
 
                                     Canvas {
@@ -5312,8 +5402,9 @@ ApplicationWindow {
                                         onPaint: {
                                             var ctx = getContext("2d")
                                             ctx.reset()
-                                            ctx.strokeStyle = parent._pinnedColor()
-                                            ctx.fillStyle = parent._pinnedColor()
+                                            // 统一灰色，不做状态着色（与其他两按钮风格一致）
+                                            ctx.strokeStyle = "#8a8a92"
+                                            ctx.fillStyle = "#8a8a92"
                                             ctx.lineWidth = 1.6
                                             // 针杆（竖线）
                                             ctx.beginPath()
@@ -5330,15 +5421,7 @@ ApplicationWindow {
                                             ctx.arc(width / 2, 3.5, 3.2, 0, Math.PI * 2)
                                             ctx.fill()
                                         }
-                                        // pinned 状态变化时重绘颜色
-                                        Connections {
-                                            target: rec
-                                            function onPinnedChanged() { requestPaint() }
-                                        }
                                         Component.onCompleted: requestPaint()
-                                    }
-                                    function _pinnedColor() {
-                                        return (rec && rec.pinned === true) ? "#ffd84d" : "#8a8a92"
                                     }
 
                                     MouseArea {
@@ -5421,7 +5504,7 @@ ApplicationWindow {
                                     spacing: 8
 
                                     Label {
-                                        text: "记录名称"
+                                        text: "编辑 tag"
                                         color: "#e8e8ec"
                                         font.pixelSize: 11
                                         font.bold: true
