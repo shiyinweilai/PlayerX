@@ -3002,11 +3002,14 @@ ApplicationWindow {
         var key = _histConfigKey(snap)
         var arr = (startHistory || []).slice()
         // 同指纹 → 复用原记录：刷新时间戳与来源，编号不变
+        // （置顶状态与自定义名称是用户对"这条记录"的标记，随记录保留）
         for (var i = 0; i < arr.length; ++i) {
             if (arr[i] && arr[i].configKey && arr[i].configKey === key) {
                 arr[i] = { id: arr[i].id,
+                           pinned: arr[i].pinned === true,
                            source: source === "remote" ? "remote" : "manual",
-                           configKey: key, snapshot: snap }
+                           configKey: key, snapshot: snap,
+                           name: arr[i].name || "" }
                 startHistory = arr
                 _saveStartHistory()
                 console.log("[MGD] 启动历史命中同配置 #" + arr[i].id + "，刷新时间戳")
@@ -3015,7 +3018,7 @@ ApplicationWindow {
         }
         var id = startHistoryNextId
         var rec = { id: id, source: source === "remote" ? "remote" : "manual",
-                    configKey: key, snapshot: snap }
+                    configKey: key, snapshot: snap, name: "" }
         arr.push(rec)
         startHistory = arr
         startHistoryNextId = id + 1
@@ -3203,7 +3206,7 @@ ApplicationWindow {
             if (arr[i] && arr[i].id === rec.id) {
                 arr[i] = { id: arr[i].id, pinned: arr[i].pinned === true ? false : true,
                            source: arr[i].source, configKey: arr[i].configKey || "",
-                           snapshot: arr[i].snapshot }
+                           snapshot: arr[i].snapshot, name: arr[i].name || "" }
                 startHistory = arr
                 _saveStartHistory()
                 console.log("[MGD] 启动历史 #" + rec.id
@@ -3213,11 +3216,32 @@ ApplicationWindow {
         }
     }
 
+    // 重命名一条启动历史：name 为空 = 恢复默认显示（远程/本地）。
+    function _renameStartHistory(rec, name) {
+        if (!rec || typeof rec.id !== "number") return
+        var arr = (startHistory || []).slice()
+        for (var i = 0; i < arr.length; ++i) {
+            if (arr[i] && arr[i].id === rec.id) {
+                arr[i] = { id: arr[i].id, pinned: arr[i].pinned === true,
+                           source: arr[i].source, configKey: arr[i].configKey || "",
+                           snapshot: arr[i].snapshot, name: String(name || "").trim() }
+                startHistory = arr
+                _saveStartHistory()
+                console.log("[MGD] 启动历史 #" + rec.id + " 已重命名为: "
+                            + (String(name || "").trim() || "(默认)"))
+                return
+            }
+        }
+    }
+
     // 单条记录是否匹配搜索词（不区分大小写）。
-    // 可命中字段：tag、评分模式（含中文名）、#ID、来源（远程/本地）、时间戳
+    // 可命中字段：自定义名称、tag、评分模式（含中文名）、#ID、来源（远程/本地）、时间戳
     function _histMatch(rec, kw) {
         if (!rec) return false
         var snap = rec.snapshot || {}
+        // 自定义名称
+        var nm = String(rec.name || "").toLowerCase()
+        if (nm.length > 0 && nm.indexOf(kw) >= 0) return true
         // tag
         var tag = String(snap.tag || "").toLowerCase()
         if (tag.indexOf(kw) >= 0) return true
@@ -5133,10 +5157,25 @@ ApplicationWindow {
                                         font.bold: true
                                     }
                                     Label {
+                                        // 自定义名称优先；无名称时默认显示来源
                                         // remote=🔔接受 / manual=本地启动
-                                        text: rec && rec.source === "remote" ? "🔔远程" : "本地"
-                                        color: rec && rec.source === "remote" ? "#ffd84d" : "#8a8a92"
+                                        text: {
+                                            if (!rec) return ""
+                                            if (rec.name && rec.name.length > 0)
+                                                return rec.name
+                                            return rec.source === "remote" ? "🔔远程" : "本地"
+                                        }
+                                        color: {
+                                            if (!rec) return "#8a8a92"
+                                            if (rec.name && rec.name.length > 0)
+                                                return "#7ec8ff"
+                                            return rec.source === "remote" ? "#ffd84d" : "#8a8a92"
+                                        }
                                         font.pixelSize: 10
+                                        // 有自定义名时加粗提示可识别
+                                        font.bold: rec && rec.name && rec.name.length > 0
+                                        elide: Text.ElideRight
+                                        Layout.maximumWidth: 140
                                     }
                                     Item { Layout.fillWidth: true }
                                     Label {
@@ -5176,9 +5215,83 @@ ApplicationWindow {
                                 // 「按钮消失 → hover 回卡片 → 按钮重现」的闪烁死循环
                                 property bool _anyHover: histRowMa.containsMouse
                                        || histPinMa.containsMouse || histDelMa.containsMouse
+                                       || histEditMa.containsMouse
                                 opacity: _anyHover ? 1.0 : 0.0
                                 visible: opacity > 0.01
                                 Behavior on opacity { NumberAnimation { duration: 120 } }
+
+                                // 编辑名称按钮：Canvas 自绘铅笔图标（在置顶左侧）
+                                Rectangle {
+                                    id: histEditBtn
+                                    width: 24
+                                    height: 24
+                                    radius: 4
+                                    color: histEditMa.containsMouse ? "#2e2e36" : "#202024"
+                                    border.color: (rec && rec.name && rec.name.length > 0)
+                                                  ? "#7ec8ff" : "#3a3a42"
+                                    border.width: 1
+
+                                    // 自绘铅笔：笔杆 + 笔尖 + 顶部橡皮擦横线
+                                    Canvas {
+                                        anchors.centerIn: parent
+                                        width: 12
+                                        height: 12
+                                        onPaint: {
+                                            var ctx = getContext("2d")
+                                            ctx.reset()
+                                            var col = (rec && rec.name
+                                                       && rec.name.length > 0)
+                                                      ? "#7ec8ff" : "#8a8a92"
+                                            ctx.strokeStyle = col
+                                            ctx.fillStyle = col
+                                            ctx.lineWidth = 1.5
+                                            ctx.lineCap = "round"
+                                            // 笔杆（对角线，从右上到左下）
+                                            ctx.beginPath()
+                                            ctx.moveTo(8.5, 2)
+                                            ctx.lineTo(2.5, 8)
+                                            ctx.stroke()
+                                            // 顶部橡皮擦段（右上角加粗短线）
+                                            ctx.lineWidth = 2.4
+                                            ctx.beginPath()
+                                            ctx.moveTo(10, 0.5)
+                                            ctx.lineTo(11.5, 2)
+                                            ctx.stroke()
+                                            // 笔尖三角（左下角）
+                                            ctx.lineWidth = 1.5
+                                            ctx.beginPath()
+                                            ctx.moveTo(2.5, 8)
+                                            ctx.lineTo(0.5, 11.5)
+                                            ctx.lineTo(4, 9.5)
+                                            ctx.closePath()
+                                            ctx.fill()
+                                        }
+                                        // 名称变化时重绘（颜色随有无自定义名切换）
+                                        Connections {
+                                            target: rec
+                                            function onNameChanged() { requestPaint() }
+                                        }
+                                        Component.onCompleted: requestPaint()
+                                    }
+
+                                    MouseArea {
+                                        id: histEditMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            mouse.accepted = true
+                                            if (rec) {
+                                                histRenamePopup._editRecId = rec.id
+                                                histRenamePopup._editText = rec.name || ""
+                                                histRenamePopup.open()
+                                            }
+                                        }
+                                    }
+                                    ToolTip.visible: histEditMa.containsMouse
+                                    ToolTip.delay: 400
+                                    ToolTip.text: "编辑记录名称（留空恢复默认）"
+                                }
 
                                 // 置顶按钮：Canvas 自绘图钉图标（未置顶灰色 / 已置顶亮黄）
                                 Rectangle {
@@ -5276,6 +5389,118 @@ ApplicationWindow {
                                     ToolTip.visible: histDelMa.containsMouse
                                     ToolTip.delay: 400
                                     ToolTip.text: "删除本条记录（其他编号不变）"
+                                }
+                            }
+                            // hover 浮层：删除按钮（垃圾桶）
+                            // （编辑/置顶/删除三按钮布局见 histHoverBtnLayer）
+
+                            // 重命名弹窗：半透明深底 + 亮白字，风格对齐排序下拉菜单
+                            Popup {
+                                id: histRenamePopup
+                                // 挂在卡片右侧偏下弹出
+                                x: parent.width - width - 8
+                                y: 34
+                                width: 200
+                                height: 88
+                                padding: 0
+                                modal: true
+                                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                                z: 320
+
+                                property int _editRecId: -1
+                                property string _editText: ""
+
+                                background: Rectangle {
+                                    color: "#14141acc"
+                                    border.color: "#3a3a42"
+                                    border.width: 1
+                                    radius: 6
+                                }
+
+                                contentItem: ColumnLayout {
+                                    spacing: 8
+
+                                    Label {
+                                        text: "记录名称"
+                                        color: "#e8e8ec"
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                        Layout.leftMargin: 12
+                                        Layout.topMargin: 10
+                                    }
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.leftMargin: 10
+                                        Layout.rightMargin: 10
+                                        Layout.preferredHeight: 26
+                                        radius: 4
+                                        color: "#1a1d22"
+                                        border.color: renameInput.activeFocus ? "#7ec8ff" : "#3a3a42"
+                                        border.width: 1
+
+                                        TextInput {
+                                            id: renameInput
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 6
+                                            anchors.rightMargin: 6
+                                            text: histRenamePopup._editText
+                                            color: "#e8e8ec"
+                                            font.pixelSize: 11
+                                            clip: true
+                                            verticalAlignment: TextInput.AlignVCenter
+                                            selectByMouse: true
+                                            onAccepted: {
+                                                var t = text.trim()
+                                                var arr = (dlg.startHistory || []).slice()
+                                                for (var i = 0; i < arr.length; ++i) {
+                                                    if (arr[i] && arr[i].id === histRenamePopup._editRecId) {
+                                                        dlg._renameStartHistory(arr[i], t)
+                                                        break
+                                                    }
+                                                }
+                                                histRenamePopup.close()
+                                            }
+                                        }
+                                    }
+
+                                    Row {
+                                        Layout.alignment: Qt.AlignRight
+                                        Layout.rightMargin: 10
+                                        Layout.bottomMargin: 8
+                                        spacing: 6
+
+                                        Rectangle {
+                                            width: 50; height: 20; radius: 3
+                                            color: renameCancelMa.containsMouse ? "#2e2e36" : "#202024"
+                                            border.color: "#3a3a42"; border.width: 1
+                                            Text { anchors.centerIn: parent; text: "取消"
+                                                   color: "#9aa0a6"; font.pixelSize: 10 }
+                                            MouseArea {
+                                                id: renameCancelMa; anchors.fill: parent
+                                                hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                onClicked: histRenamePopup.close()
+                                            }
+                                        }
+                                        Rectangle {
+                                            width: 50; height: 20; radius: 3
+                                            color: renameOkMa.containsMouse ? "#2a5fc0" : "#1f4da8"
+                                            border.color: "#3a5fc0"; border.width: 1
+                                            Text { anchors.centerIn: parent; text: "保存"
+                                                   color: "#fff"; font.pixelSize: 10 }
+                                            MouseArea {
+                                                id: renameOkMa; anchors.fill: parent
+                                                hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                onClicked: renameInput.accepted()
+                                            }
+                                        }
+                                    }
+                                }
+
+                                onOpened: {
+                                    // 打开后聚焦并全选，方便直接覆盖输入
+                                    renameInput.forceActiveFocus()
+                                    renameInput.selectAll()
                                 }
                             }
                         }
