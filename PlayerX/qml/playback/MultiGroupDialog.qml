@@ -3540,17 +3540,18 @@ ApplicationWindow {
         return id
     }
 
-    // 计算配置指纹（16 位 hex）：参与字段 = 各路 folderPath/keyword/currentPath
-    // （不含 currentIndex：同目录内切换当前文件视为同一配置的延续）、参考资料区
-    // 全部开关与路径、评分模式、tag。两次启动只要这些字段一致即视为同一配置。
+    // 计算配置指纹（16 位 hex）：参与字段 = 各路 folderPath/keyword（不含
+    // currentIndex 与 currentPath：评分过程中的进度推进/组内切换视频只是
+    // 进度变化，不算配置修改 —— 用户定稿：只改评分记录不产生新的一条记录）、
+    // 参考资料区全部开关与路径、评分模式、tag。两次启动只要这些字段一致
+    // 即视为同一配置。
     function _histConfigKey(snap) {
         if (!snap) return ""
         var parts = []
         var lanes = snap.lanes || []
         for (var i = 0; i < lanes.length; ++i) {
             var ln = lanes[i] || {}
-            parts.push(String(ln.folderPath || "") + "|" + String(ln.keyword || "")
-                       + "|" + String(ln.currentPath || ""))
+            parts.push(String(ln.folderPath || "") + "|" + String(ln.keyword || ""))
         }
         parts.push("ref:" + (snap.refResEnabled === true ? "1" : "0")
                    + "|" + String(snap.refVideoPath || "")
