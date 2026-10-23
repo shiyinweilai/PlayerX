@@ -563,6 +563,12 @@ ApplicationWindow {
             // 仅做调试日志：cache 写失败时仍有 ②③ 兜底，但用户应该看到提示
             console.warn("[MultiGroupDialog] cache 文件写入失败：", _cacheFile())
         }
+
+        // ④ 导入快照：任何 lanes 变化（手动 📁 选目录 / 拖入 / 测试源导入 /
+        //    历史加载重建等）落盘时同步累计「所有导入过的通路」。未选中
+        //    基线（打开设置页 / 取消历史选中）以此为准显示全量导入路，
+        //    弥补启动历史只记"启动过"配置、漏掉从未启动的导入路的问题。
+        try { _recordImportSnapshot() } catch (e) { /* ignore */ }
     }
 
     // 尝试恢复上次保存的 lanes；返回是否成功还原了至少 1 行。
@@ -2796,13 +2802,72 @@ ApplicationWindow {
         _saveRefRes()
     }
 
-    // ─── 未选中基线：从全部启动历史恢复「所有历史导入」的通路 ──────
+    // ─── 「导入快照」持久化：所有导入过的通路（无论是否启动过）─────
+    // 动机：右侧启动历史只记录"启动过"的配置，本地手动导入但从未启动的
+    // 通路（如 📁 选目录 / 拖入 / 测试源导入后没点启动）不在其中 —— 仅靠
+    // 启动历史做并集会把这类路丢掉。这里在每次 lanes 变化落盘时同步维护
+    // 一份「导入快照」：folderPath 或散文件 currentPath 非空的全部路，
+    // 按导入先后顺序去重累计。未选中基线（打开设置页 / 取消历史选中）
+    // 一律以这份快照为准，保证显示"所有导入过的路径"。
+    readonly property string _importSnapKey: "mgd/importSnapV1"
+    property var _importSnap: []   // [{folderPath, keyword, currentPath}]
+    function _loadImportSnap() {
+        var arr = []
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.loadString === "function") {
+                var s = Rating.loadString(_importSnapKey, "") || ""
+                if (s.length > 0) {
+                    var raw = JSON.parse(s)
+                    if (raw && Array.isArray(raw)) arr = raw
+                }
+            }
+        } catch (e) { arr = [] }
+        _importSnap = arr
+        return arr
+    }
+    function _saveImportSnap() {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.saveString === "function")
+                Rating.saveString(_importSnapKey, JSON.stringify(_importSnap))
+        } catch (e) { /* ignore */ }
+    }
+    // 从当前 _rowsModel 采集导入态并合并进导入快照（去重累计，上限 kMaxLanes*2 防膨胀）
+    function _recordImportSnapshot() {
+        var snap = _importSnap && _importSnap.length > 0 ? _importSnap.slice() : []
+        var keyOf = function(it) {
+            return (it.folderPath && it.folderPath.length > 0)
+                    ? ("D:" + it.folderPath)
+                    : ("F:" + it.currentPath)
+        }
+        var seen = {}
+        for (var s0 = 0; s0 < snap.length; ++s0) seen[keyOf(snap[s0] || {})] = true
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var l = _rowsModel.get(i)
+            if (!l) continue
+            if (l.isRefVideo === true) continue   // 参考视频临时行不算导入路
+            var fp = l.folderPath || ""
+            var cp = l.currentPath || ""
+            if (fp.length === 0 && cp.length === 0) continue   // 空槽不入快照
+            var item = { folderPath: fp, keyword: l.keyword || "", currentPath: cp }
+            var k = keyOf(item)
+            if (seen[k]) continue
+            snap.push(item)
+            seen[k] = true
+        }
+        if (snap.length > kMaxLanes * 2) snap = snap.slice(snap.length - kMaxLanes * 2)
+        var changed = (snap.length !== (_importSnap || []).length)
+        _importSnap = snap
+        if (changed) _saveImportSnap()
+    }
+
+    // ─── 未选中基线：恢复「所有导入过」的通路（含未启动过的）───────
     // 触发时机：取消历史选中（再次点击同一卡片）/ 每次打开设置页。
-    // 语义：未选中状态 = 所有历史记录导入过的视频路径（含散文件路），
+    // 语义：未选中状态 = 所有导入过的视频路径 —— 以「导入快照」为主源
+    // （本地导入过但从未启动的路也在这里），启动历史快照作补充。
     // 一律未勾选；选中状态 = 只显示所选记录对应的（loadStartHistory
-    // 会整体重建列表，本函数负责把被覆盖掉的历史路径全部找回来）。
-    // 去重：文件夹路按 folderPath、散文件路按 currentPath；从新到旧遍历，
-    // 共享目录时较新配置的 keyword/进度优先占位。
+    // 会整体重建列表，本函数负责把被覆盖掉的路径全部找回来）。
     function _restoreBaselineLanes() {
         var existFolder = {}, existFile = {}
         for (var i0 = 0; i0 < _rowsModel.count; ++i0) {
@@ -2811,59 +2876,81 @@ ApplicationWindow {
             if (r0.folderPath && r0.folderPath.length > 0) existFolder[r0.folderPath] = true
             else if (r0.currentPath && r0.currentPath.length > 0) existFile[r0.currentPath] = true
         }
+        // 收集待恢复路：导入快照（导入先后序）在前，启动历史（新→旧）补充
+        var pend = []
+        var pendSeen = {}
+        var imp = (_importSnap && _importSnap.length > 0) ? _importSnap : _loadImportSnap()
+        for (var a = 0; a < imp.length; ++a) {
+            var it = imp[a] || {}
+            var ik = (it.folderPath && it.folderPath.length > 0)
+                     ? ("D:" + it.folderPath) : ("F:" + it.currentPath)
+            if (!ik || pendSeen[ik]) continue
+            pend.push({ folderPath: it.folderPath || "", keyword: it.keyword || "",
+                        currentPath: it.currentPath || "" })
+            pendSeen[ik] = true
+        }
         var hist = startHistory || []
-        var added = 0
         for (var i = hist.length - 1; i >= 0; --i) {
             var snap = (hist[i] || {}).snapshot || {}
             var lanes = snap.lanes || []
             for (var j = 0; j < lanes.length; ++j) {
-                if (_rowsModel.count >= kMaxLanes) break
-                var ln = lanes[j] || {}
-                if (ln.isRefVideo === true) continue
-                if (ln.folderPath && ln.folderPath.length > 0) {
-                    if (existFolder[ln.folderPath]) continue
-                    var files = []
-                    try { files = Fs.scanVideoFolderPath(ln.folderPath, true) || [] } catch (e) { files = [] }
-                    if (!files || files.length === 0) {
-                        // 目录已失效：currentPath 还在就按散文件兜底，否则跳过
-                        var cpOk = false
-                        try { cpOk = ln.currentPath && Fs.fileExists(ln.currentPath) } catch (e2) { cpOk = false }
-                        if (!cpOk) continue
-                        files = [ ln.currentPath ]
-                    }
-                    var vis = _filterAndSort(files, ln.keyword || "")
-                    // 原 currentPath 仍在可见列表则保留原位置，否则取首个
-                    var keepIdx = (ln.currentPath && vis.length > 0) ? vis.indexOf(ln.currentPath) : -1
-                    if (keepIdx < 0) keepIdx = vis.length > 0 ? 0 : -1
-                    _laneRuntime.push({ allFiles: files, visibleFiles: vis })
-                    _rowsModel.append({
-                        selected:     false,
-                        folderPath:   ln.folderPath,
-                        keyword:      ln.keyword || "",
-                        currentPath:  keepIdx >= 0 ? vis[keepIdx] : "",
-                        currentIndex: keepIdx,
-                        allCount:     files.length,
-                        visibleCount: vis.length
-                    })
-                    existFolder[ln.folderPath] = true
-                    added++
-                } else if (ln.currentPath && ln.currentPath.length > 0 && !existFile[ln.currentPath]) {
-                    var ok2 = false
-                    try { ok2 = Fs.fileExists(ln.currentPath) } catch (e3) { ok2 = false }
-                    if (!ok2) continue
-                    _laneRuntime.push({ allFiles: [ ln.currentPath ], visibleFiles: [ ln.currentPath ] })
-                    _rowsModel.append({
-                        selected:     false,
-                        folderPath:   "",
-                        keyword:      ln.keyword || "",
-                        currentPath:  ln.currentPath,
-                        currentIndex: 0,
-                        allCount:     1,
-                        visibleCount: 1
-                    })
-                    existFile[ln.currentPath] = true
-                    added++
+                var ln0 = lanes[j] || {}
+                if (ln0.isRefVideo === true) continue
+                var hk = (ln0.folderPath && ln0.folderPath.length > 0)
+                         ? ("D:" + ln0.folderPath) : ("F:" + ln0.currentPath)
+                if (!hk || pendSeen[hk]) continue
+                pend.push({ folderPath: ln0.folderPath || "", keyword: ln0.keyword || "",
+                            currentPath: ln0.currentPath || "" })
+                pendSeen[hk] = true
+            }
+        }
+        var added = 0
+        for (var p = 0; p < pend.length; ++p) {
+            if (_rowsModel.count >= kMaxLanes) break
+            var ln = pend[p]
+            if (ln.folderPath && ln.folderPath.length > 0) {
+                if (existFolder[ln.folderPath]) continue
+                var files = []
+                try { files = Fs.scanVideoFolderPath(ln.folderPath, true) || [] } catch (e) { files = [] }
+                if (!files || files.length === 0) {
+                    // 目录已失效：currentPath 还在就按散文件兜底，否则跳过
+                    var cpOk = false
+                    try { cpOk = ln.currentPath && Fs.fileExists(ln.currentPath) } catch (e2) { cpOk = false }
+                    if (!cpOk) continue
+                    files = [ ln.currentPath ]
                 }
+                var vis = _filterAndSort(files, ln.keyword || "")
+                // 原 currentPath 仍在可见列表则保留原位置，否则取首个
+                var keepIdx = (ln.currentPath && vis.length > 0) ? vis.indexOf(ln.currentPath) : -1
+                if (keepIdx < 0) keepIdx = vis.length > 0 ? 0 : -1
+                _laneRuntime.push({ allFiles: files, visibleFiles: vis })
+                _rowsModel.append({
+                    selected:     false,
+                    folderPath:   ln.folderPath,
+                    keyword:      ln.keyword || "",
+                    currentPath:  keepIdx >= 0 ? vis[keepIdx] : "",
+                    currentIndex: keepIdx,
+                    allCount:     files.length,
+                    visibleCount: vis.length
+                })
+                existFolder[ln.folderPath] = true
+                added++
+            } else if (ln.currentPath && ln.currentPath.length > 0 && !existFile[ln.currentPath]) {
+                var ok2 = false
+                try { ok2 = Fs.fileExists(ln.currentPath) } catch (e3) { ok2 = false }
+                if (!ok2) continue
+                _laneRuntime.push({ allFiles: [ ln.currentPath ], visibleFiles: [ ln.currentPath ] })
+                _rowsModel.append({
+                    selected:     false,
+                    folderPath:   "",
+                    keyword:      ln.keyword || "",
+                    currentPath:  ln.currentPath,
+                    currentIndex: 0,
+                    allCount:     1,
+                    visibleCount: 1
+                })
+                existFile[ln.currentPath] = true
+                added++
             }
         }
         if (added > 0) { _bumpState(); _persistLanes() }
@@ -4331,6 +4418,8 @@ ApplicationWindow {
     Component.onCompleted: {
         // 启动即加载"全局上次导入目录"（轻量、可空，不影响主流程）
         _loadLastImportFolder()
+        // 导入快照：加载「所有导入过的通路」（含从未启动的），供未选中基线恢复
+        _loadImportSnap()
         // 启动历史恢复（先于 nextId 赋值，保证保存副作用不会用空数组覆盖磁盘）
         _loadStartHistory()
         try {
@@ -4355,6 +4444,9 @@ ApplicationWindow {
                 addLane()
             }
         }
+        // 首次采集导入快照：把本次还原出的有效路固化进导入快照
+        // （兼容老版本：升级前导入过但快照尚未建立的用户，重启一次即可补齐）
+        try { _recordImportSnapshot() } catch (e) { /* ignore */ }
     }
 
     // ─── 全局拖拽承接区（有通路时启用） ───────────────────────────
