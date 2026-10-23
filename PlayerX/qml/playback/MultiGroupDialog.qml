@@ -46,6 +46,18 @@ ApplicationWindow {
     // 历史中固化的文件夹路径仍会作为新 lane 出现（默认未勾选），符合"路径固化、
     // 每次打开加载历史路径，新增就增加一路"的预期行为。
     onVisibleChanged: {
+        // 【自动化接管守卫】测试源自动化（点🔔接受/直接开始）链路里，
+        // applyAutoRefResources 已按本次任务回填参考资料并置好勾选，
+        // 随后 _startWithResumeCheck 有进度时调 dlg.show() 弹「继续评分？」
+        // —— 若不拦，这里会做「未选中基线恢复」把刚回填的勾选全部复位成
+        // 未勾选，用户看到的就是"参考资料（未启用，启动时忽略）"。
+        // 守卫只吞一次 show：用户之后手动关闭再打开配置页，基线恢复照常。
+        if (visible && _suppressBaselineOnce) {
+            _suppressBaselineOnce = false
+            _folderHistMerged = true   // 自动化链路刚做过导入合并，跳过重复合并
+            console.log("[MGD] onVisibleChanged: 自动化接管中，跳过本次基线复位")
+            return
+        }
         if (visible && !_folderHistMerged) {
             _folderHistMerged = true
             try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
@@ -778,8 +790,11 @@ ApplicationWindow {
         return arr
     }
 
-    // 最多 9 路（与 Engine 上限一致）
-    readonly property int kMaxLanes: 9
+    // 最多同时打开 9 路（与 Engine 上限一致）—— 仅约束「启动对比」时同时
+    // 打开的勾选路数，不限制左侧列表展示的通路条数（列表可滚动查看全部）。
+    readonly property int kMaxOpenLanes: 9
+    // 列表展示 / 持久化容量：放宽到 50，允许展示所有导入过的路径并上下滚动。
+    readonly property int kMaxLanes: 50
     // 旧语义：多组对比至少 2 路；新语义下作为「是否进入多组对比态」的阈值使用，
     //        当勾选数 < 2 时仅走单文件夹打开，不会把 active 置 true。
     readonly property int kMinLanes: 2
@@ -1172,8 +1187,28 @@ ApplicationWindow {
             console.log("[MGD] 自动化回填：清掉旧参考视频残留", refVideoPath)
             refVideoPath = ""
         }
+        // 【残留 REF 临时行清除】上一次启动注入的 REF 行（isRefVideo=true，
+        // 不入持久化）在再次接受任务时仍残留在 _rowsModel/_laneRuntime 里。
+        // start() 的注入判断"已存在相同路径的路则不重复添加"会因此跳过注入，
+        // 但该残留行的 runtime（allFiles/visibleFiles）在 Engine 重建后已失效
+        // —— 表现为第二次接受（直接开始）时参考视频一路不显示。这里在回填
+        // 参考资料时统一清掉所有 isRefVideo 临时行，让 start() 走全新注入。
+        var removedRefRows = 0
+        for (var arv = _rowsModel.count - 1; arv >= 0; --arv) {
+            var arlv = _rowsModel.get(arv)
+            if (arlv && arlv.isRefVideo === true) {
+                _rowsModel.remove(arv)
+                if (arv < _laneRuntime.length) _laneRuntime.splice(arv, 1)
+                removedRefRows++
+            }
+        }
+        if (removedRefRows > 0)
+            console.log("[MGD] 自动化回填：清除残留 REF 临时行", removedRefRows, "条")
         // 自动化来源带了参考资料 → 顺带把总开关打开，保证返回后状态自洽
         refResEnabled = true
+        // 【接管守卫】回填后即将走 _startWithResumeCheck →（有进度）dlg.show()，
+        // 置标记吞掉那次 show 触发的基线复位，勾选态得以保留到弹窗出现
+        _suppressBaselineOnce = true
         _saveRefRes()
         console.log("[MGD] 已回填自动化参考资料：帧",
                     arr.length, "个, CSV=", refPromptPath || "(无)",
@@ -2132,12 +2167,70 @@ ApplicationWindow {
         if (changed) { _bumpState(); _persistLanes() }
     }
 
-    // 清空所有通道：逐个 removeLane（会同步移除文件夹历史 + 落盘）
+    // 清空所有通道：逐个 removeLane（会同步移除文件夹历史 + 落盘）。
+    // 【等价删除历史记忆】用户语义：点「清空」= 通路列表与右侧启动历史
+    // 的对应记忆一并作废 —— 否则下次打开设置页时，基线恢复（导入快照 +
+    // 启动历史并集）会把刚清掉的路径原样填回来，清空形同虚设。
+    // 因此除逐行删除外，还要同步清空：
+    //   · 导入快照（_importSnap / mgd/importSnapV1）—— 基线恢复主源
+    //   · 启动历史（startHistory / mgd/startHistV2）—— 右侧栏记录与补充源
+    //   · 参考资料区（路径 + 勾选，含参考视频/提示词/参考帧）—— 与
+    //     「清空历史」按钮的语义对齐：通路没了，参考资料同样不残留
     function clearAllLanes() {
         if (_rowsModel.count === 0) return
+        // 0) 同步物理删除这些路的评分记录（含主 CSV 与归档回落屏蔽），
+        //    且清空后历史全没了，用户语义是"从未发生过"，所以走全模式清除。
+        //    只要有 folderPath 的路都清（不区分勾选 —— 清空 = 全部删除）。
+        var clrFolders = []
+        for (var ci0 = 0; ci0 < _rowsModel.count; ++ci0) {
+            var cl0 = _rowsModel.get(ci0)
+            if (cl0 && cl0.folderPath && cl0.folderPath.length > 0)
+                clrFolders.push(cl0.folderPath)
+        }
+        if (clrFolders.length > 0 && typeof Rating !== "undefined"
+                && typeof Rating.markFoldersReset === "function") {
+            try { Rating.markFoldersReset(clrFolders, "off") } catch (e) { /* 安全降级 */ }
+        }
+        // checklist 勾选记录一并清除
+        if (typeof Rating !== "undefined" && typeof Rating.saveString === "function") {
+            try {
+                for (var ci1 = 0; ci1 < _rowsModel.count; ++ci1) {
+                    var cl1 = _rowsModel.get(ci1)
+                    if (!cl1) continue
+                    var crt1 = _laneRuntime[ci1]
+                    var cFiles1 = (crt1 && (crt1.allFiles || crt1.visibleFiles)) || []
+                    for (var cf1 = 0; cf1 < cFiles1.length; ++cf1) {
+                        var cfp1 = cFiles1[cf1] || ""
+                        if (cfp1.length > 0) Rating.saveString("checklist:" + cfp1, "")
+                    }
+                }
+            } catch (e) { /* 安全降级 */ }
+        }
+        // 0.5) 每任务独立文件：连带删除这些路关联的任务评分文件
+        try { _deleteTaskRatingFilesForFolders(clrFolders) } catch (e) { /* ignore */ }
         while (_rowsModel.count > 0) {
             removeLane(0)
         }
+        // 1) 导入快照清空（内存 + 持久化）
+        _importSnap = []
+        try { _saveImportSnap() } catch (e) { /* ignore */ }
+        // 2) 启动历史清空（编号重置为 1，下次从 #1 重新开始）
+        startHistory = []
+        startHistoryNextId = 1
+        try { _saveStartHistory() } catch (e) { /* ignore */ }
+        if (typeof histList !== "undefined" && histList)
+            histList._selectedHistId = -1
+        // 3) 参考资料区清空（路径置空 + 全部未勾选，回到未配置态）
+        refResEnabled = false
+        refVideoEnabled = false
+        refPromptEnabled = false
+        refVideoPath = ""
+        refPromptPath = ""
+        refFramePaths = [ { path: "", enabled: true } ]
+        try { _saveRefRes() } catch (e) { { } }
+        _bumpState()
+        _persistLanes()
+        console.log("[MGD] clearAllLanes: 已同步清空导入快照 / 启动历史 / 参考资料 / 评分记录")
     }
 
     function deselectAllLanes() {
@@ -2539,6 +2632,27 @@ ApplicationWindow {
                         var refFiles = Fs.scanVideoFolderPath(refVideoPath, true) || []
                         if (refFiles.length > 0) {
                         var refVis = _filterAndSort(refFiles, "")
+                        // 【续评对齐】参考视频路的初始位置不能固定为第 1 个视频：
+                        // 「接着评分」/组对齐续播会把各评分路写回到上次评到的组，
+                        // REF 路若仍从 0 开始，会出现「A/B/C 已在第 2 组、REF 还
+                        // 停在第 1 组」的错位。这里取第一条参与评分路的
+                        // currentIndex（与 groupIndex() 口径一致）作为 REF 起始组，
+                        // 并钳位到 REF 目录可见文件数内（REF 比评分路少时不越界）。
+                        var refStartIdx = -1
+                        for (var rq = 0; rq < _rowsModel.count; ++rq) {
+                            var rrow = _rowsModel.get(rq)
+                            if (!rrow || !rrow.selected) continue
+                            if (!rrow.currentPath || rrow.currentPath.length === 0) continue
+                            if (_isRefLaneByPath(rrow.folderPath)) continue
+                            refStartIdx = (typeof rrow.currentIndex === "number"
+                                           && rrow.currentIndex >= 0) ? rrow.currentIndex : 0
+                            break
+                        }
+                        if (refStartIdx < 0) refStartIdx = 0
+                        if (refStartIdx >= refVis.length) refStartIdx = refVis.length - 1
+                        console.log("[MGD][refAlign] REF 注入: refStartIdx=", refStartIdx,
+                                    "refVisCount=", refVis.length,
+                                    "currentPath=", refVis[refStartIdx] || "")
                         // 先写 runtime 再 append（理由同 loadStartHistory）：
                         // delegate 在 append 调用栈内同步创建并读 _laneRuntime
                         _laneRuntime.push({ allFiles: refFiles, visibleFiles: refVis })
@@ -2546,12 +2660,29 @@ ApplicationWindow {
                             selected: true,
                             folderPath: refVideoPath,
                             keyword: "",
-                            currentPath: refVis[0] || "",
-                            currentIndex: 0,
+                            currentPath: refVis[refStartIdx] || "",
+                            currentIndex: refStartIdx,
                             allCount: refFiles.length,
                             visibleCount: refVis.length,
                             isRefVideo: true
                         })
+                        // 【时序加固·根因修复】append 调用栈内 delegate 的
+                        // Component.onCompleted 会同步注入 allFiles → _recomputeVisible；
+                        // 若此刻 currentIndex 的 model 绑定尚未生效（读到 -1），索引被
+                        // 重置为 0 并经 _syncLaneFromRow 写回模型，覆盖注入的 refStartIdx
+                        // —— 表现为「A/B/C 已对齐第 N 组、REF 却从第 1 个视频开始」。
+                        // append 返回后立即以注入意图为准重写 delegate + 模型，双保险。
+                        var refRowIdx = _rowsModel.count - 1
+                        var refRowIt = (typeof rowsRepeater !== "undefined" && rowsRepeater)
+                                        ? rowsRepeater.itemAt(refRowIdx) : null
+                        if (refRowIt && refRowIt.currentIndex !== refStartIdx)
+                            refRowIt.currentIndex = refStartIdx  // 触发 laneChanged → 同步回模型
+                        var refRowChk = _rowsModel.get(refRowIdx) || {}
+                        if (refRowChk.currentIndex !== refStartIdx) {
+                            _rowsModel.setProperty(refRowIdx, "currentIndex", refStartIdx)
+                            _rowsModel.setProperty(refRowIdx, "currentPath", refVis[refStartIdx] || "")
+                            console.log("[MGD][refAlign] 时序加固: 已重写 REF 行 currentIndex→", refStartIdx)
+                        }
                         }
                     }
                 } catch (e) { console.warn("[MGD] 参考视频目录注入失败:", e) }
@@ -2625,6 +2756,19 @@ ApplicationWindow {
             selIdx.push(i)
         }
         if (selIdx.length === 0) return false
+
+        // 【同时打开上限】Engine 最多 9 路同时播放：勾选超过 9 路时按列表
+        // 顺序取前 9 路（自上而下），其余路保留在列表中但不参与本次启动。
+        if (selIdx.length > kMaxOpenLanes) {
+            console.warn("[MGD] start(): 勾选 " + selIdx.length
+                         + " 路超过同时打开上限 " + kMaxOpenLanes
+                         + "，仅启动前 " + kMaxOpenLanes + " 路")
+            _evictNotice = "⚠ 已勾选 " + selIdx.length + " 路，同时打开上限 "
+                           + kMaxOpenLanes + " 路：本次仅启动自上而下前 "
+                           + kMaxOpenLanes + " 路"
+            try { _evictNoticeTimer.restart() } catch (e) { /* ignore */ }
+            selIdx = selIdx.slice(0, kMaxOpenLanes)
+        }
 
         // 启动前的「最终闸」：对每条 currentPath 做 Fs.fileExists 校验；
         // 文件不存在（典型：测试源自动化"重新下载"后文件列表/文件名变了）
@@ -2766,7 +2910,10 @@ ApplicationWindow {
         return ok
     }
 
-    // 启动后清空勾选：全部行 selected=false；isRefVideo 临时行直接移除。
+    // 启动后清空勾选：全部行 selected=false；参考视频临时行（isRefVideo）
+    // 保留但同样置 selected=false —— 不能整行移除：翻组（navigate）以
+    // _startedLaneIdxs 为准逐路 ±1 循环并重新 openFiles，若把 REF 行删掉，
+    // 翻到下一组时参考视频通路会直接消失（只有第一组有参考视频的根因）。
     // 行本身保留（用户返回后仍能看到所有通路，可重新勾选或点历史加载）。
     // 参考资料区同步复位为「未勾选」：路径保留，勾选态不保留 —— 重启/返回后
     // 参考资料一律从「未选」开始，与上方通路「启动即接管」原则一致。自动化
@@ -2777,10 +2924,6 @@ ApplicationWindow {
         for (var i = _rowsModel.count - 1; i >= 0; --i) {
             var l = _rowsModel.get(i)
             if (!l) continue
-            if (l.isRefVideo === true) {
-                _rowsModel.remove(i)
-                continue
-            }
             if (l.selected) _rowsModel.setProperty(i, "selected", false)
         }
         _ensureRuntimeLen(_rowsModel.count)
@@ -3143,6 +3286,9 @@ ApplicationWindow {
     property string _refResInvalidNotice: ""
     // 一次打开周期内参考资料只校验一次的守卫（防 showAndRefresh + onVisibleChanged 双触发）
     property bool _refResValidated: false
+    // 自动化接管守卫：applyAutoRefResources 置 true，吞掉随后那次
+    // dlg.show() 的基线复位（详见 onVisibleChanged 注释）
+    property bool _suppressBaselineOnce: false
     Timer {
         id: _refResInvalidTimer
         interval: 8000
@@ -3175,6 +3321,92 @@ ApplicationWindow {
     // （Rating 模块管理），加载配置重启后 Rating 自动按目录恢复进度。
     property string _histDbPrefix: "mgd/startHist/"
 
+    // ─── 【每任务独立文件】任务级记录的独立持久化 ──────────────────
+    // 动机：评分记录此前只按「文件夹」落在 Rating 模式的 CSV 里，删除历史 /
+    // 清空后 CSV 里的记录还在，再次接受同一任务会"复活"旧评分。用户要求：
+    // 每次启动（一个任务）用一个独立文件维护，把通路路径、参考资料、评分
+    // 记录等全部整合在一起，支持随时二次评分修改，方便维护。
+    // 落地：目录 <评分数据目录>/mgd_tasks/，文件名 task_<id>.json。
+    //   · start() 成功时写一份完整任务文件（含当时的通路/参考资料快照）
+    //   · 评分（星星/checklist）变化时不重写整个文件 —— 评分本体仍在
+    //     Rating CSV（那是上传/导出链路的数据源，不可绕开），任务文件里
+    //     记录「评分摘要 + ratingFile 锚点」，作为人可读、可二次维护的任务档案
+    //   · 删除单条历史 / 清空历史 / 清空通道时，同步删除对应任务文件
+    readonly property string _taskFilePrefix: "task_"
+    function _taskDir() {
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.dataFilePathForMode === "function") {
+                var p = Rating.dataFilePathForMode("subjective") || ""
+                var k = p.lastIndexOf("/")
+                if (k > 0) return p.substring(0, k + 1) + "mgd_tasks/"
+            }
+        } catch (e) { /* ignore */ }
+        return ""
+    }
+    // 写一个任务的独立文件（id 必传；source manual/remote）
+    function _writeTaskFile(id, snap, source) {
+        var dir = _taskDir()
+        if (dir.length === 0 || typeof id !== "number") return
+        try {
+            var task = {
+                id: id,
+                source: source || "manual",
+                savedAt: new Date().toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm:ss"),
+                snapshot: snap || {},
+                // 评分锚点：本任务涉及的文件夹 → 评分模式 CSV 的说明。
+                // 二次评分修改直接在主界面星星上进行，记录会实时更新到
+                // Rating 模式 CSV；此处摘要仅为任务档案的快照参考。
+                ratingAnchor: {
+                    mode: (typeof Rating !== "undefined" && Rating)
+                          ? String(Rating.currentMode || "off") : "off",
+                    folders: (function() {
+                        var f = []
+                        var lanes = (snap || {}).lanes || []
+                        for (var i = 0; i < lanes.length; ++i) {
+                            var fp = (lanes[i] || {}).folderPath || ""
+                            if (fp.length > 0) f.push(fp)
+                        }
+                        return f
+                    })()
+                }
+            }
+            Fs.writeTextFile(dir + _taskFilePrefix + id + ".json", JSON.stringify(task, null, 2))
+            console.log("[MGD] 任务文件已写: task_" + id + ".json")
+        } catch (e) { console.warn("[MGD] 写任务文件失败:", e) }
+    }
+    // 删除一个任务的独立文件（删除历史 / 清空历史时调用）
+    function _deleteTaskFile(id) {
+        var dir = _taskDir()
+        if (dir.length === 0 || typeof id !== "number") return
+        try {
+            if (Fs.fileExists(dir + _taskFilePrefix + id + ".json")) {
+                Fs.writeTextFile(dir + _taskFilePrefix + id + ".json", "")
+                console.log("[MGD] 任务文件已删: task_" + id + ".json")
+            }
+        } catch (e) { /* ignore */ }
+    }
+    // 按文件夹反查并删除所有相关任务文件（清空通道时调用：文件夹对应的任务
+    // 全部作废）。遍历当前启动历史里所有记录的任务文件，凡 snapshot.lanes 的
+    // folderPath 与传入文件夹有交集的，一并作废（写空即视为删除；Fs 无删除
+    // 单文件接口，空文件等价于"不存在"）。
+    function _deleteTaskRatingFilesForFolders(folders) {
+        if (!folders || folders.length === 0) return
+        var src = startHistory || []
+        for (var i = 0; i < src.length; ++i) {
+            var rec = src[i] || {}
+            var lanes = ((rec.snapshot || {}).lanes) || []
+            var hit = false
+            for (var j = 0; j < lanes.length && !hit; ++j) {
+                var fp = (lanes[j] || {}).folderPath || ""
+                for (var f = 0; f < folders.length && !hit; ++f) {
+                    if (fp.length > 0 && fp === folders[f]) hit = true
+                }
+            }
+            if (hit && typeof rec.id === "number") _deleteTaskFile(rec.id)
+        }
+    }
+
     function _saveStartHistory() {
         try {
             if (typeof Rating !== "undefined" && Rating
@@ -3196,6 +3428,8 @@ ApplicationWindow {
             out.push(src[i])
         }
         startHistory = out
+        // 同步作废该任务的独立文件
+        try { _deleteTaskFile(rec.id) } catch (e) { /* ignore */ }
         // 若删除的是当前选中条目，同步清除列表高亮（避免残留）
         if (histList && typeof histList._selectedHistId === "number"
                 && histList._selectedHistId === rec.id)
@@ -3270,15 +3504,18 @@ ApplicationWindow {
     }
     // 启动成功后调用：把本次配置追加为一条历史记录。
     // source: "manual"=本地手动启动 / "remote"=远程接受自动启动
-    // 去重：对本次配置计算 sha 指纹（configKey），若已有记录指纹相同，
-    // 不再新增编号，只刷新该记录的时间戳与来源（评分进度按目录持久化，不受影响）。
+    // 【记录语义（2026-10-23 二次定稿）】以"任务配置"为单位记录：
+    //   · 对本次配置计算 sha 指纹（configKey），已有记录指纹相同（= 同一
+    //     tag、同路径、同参考资料、未修改）→ 复用该条记录，不新增编号，
+    //     只刷新时间戳与来源（界面上仅时间戳/最新标记更新）；
+    //   · 指纹不同（配置有任何修改）→ 新增一条独立记录。
+    // 哈希值同时是该条记录的唯一标识，保证记录不重复。
     function appendStartHistory(source) {
         var snap = _collectStartSnapshot()
         if (!snap) return -1
         var key = _histConfigKey(snap)
         var arr = (startHistory || []).slice()
-        // 同指纹 → 复用原记录：刷新时间戳与来源，编号不变
-        // （置顶状态与自定义名称是用户对"这条记录"的标记，随记录保留）
+        // 同指纹 → 复用原记录：仅刷新时间戳与来源，编号不变
         for (var i = 0; i < arr.length; ++i) {
             if (arr[i] && arr[i].configKey && arr[i].configKey === key) {
                 arr[i] = { id: arr[i].id,
@@ -3288,7 +3525,8 @@ ApplicationWindow {
                            name: arr[i].name || "" }
                 startHistory = arr
                 _saveStartHistory()
-                console.log("[MGD] 启动历史命中同配置 #" + arr[i].id + "，刷新时间戳")
+                _writeTaskFile(arr[i].id, snap, source)
+                console.log("[MGD] 启动历史命中同配置 #" + arr[i].id + "，仅刷新时间戳")
                 return arr[i].id
             }
         }
@@ -3298,6 +3536,7 @@ ApplicationWindow {
         arr.push(rec)
         startHistory = arr
         startHistoryNextId = id + 1
+        _writeTaskFile(id, snap, source)
         return id
     }
 
@@ -4071,6 +4310,21 @@ ApplicationWindow {
     // 以保证每次"打开/激活" Dialog 都能把最新的文件夹历史同步进来；
     // 再叠加 onVisibleChanged 作为兜底。
     function showAndRefresh() {
+        // 【自动化接管守卫】与 onVisibleChanged 同款：测试源自动化（点🔔接受/
+        // 直接开始）链路里 applyAutoRefResources 刚回填参考资料并追加了 REF
+        // 播放行，本函数开头的 _mergeFolderHistoryIntoLanes 会把 REF 临时行
+        // 当"残留"删掉（参考视频随即消失）、_restoreBaseline* 又会把回填的
+        // 勾选全部复位 —— 自动化场景只刷新历史列表后直接显示，跳过这些清理。
+        if (_suppressBaselineOnce) {
+            _suppressBaselineOnce = false
+            _folderHistMerged = true
+            try { _loadStartHistory() } catch (e) { /* ignore */ }
+            console.log("[MGD] showAndRefresh: 自动化接管中，跳过合并/基线复位")
+            show()
+            raise()
+            requestActivate()
+            return
+        }
         try { _mergeFolderHistoryIntoLanes() } catch (e) { /* ignore */ }
         // 每次打开设置页：右侧历史选中态一并重置 —— 上一次点选的高亮/加载痕迹
         // 不应跨打开周期残留，重新打开一律回到「未选中任何历史」的基线。
@@ -4414,6 +4668,8 @@ ApplicationWindow {
     color: "#161619"
     flags: Qt.Dialog
     modality: Qt.NonModal
+    // 内容可用高度（供参考资料区 ScrollView 计算高度上限用）
+    readonly property real availableHeight: height - 120
 
     Component.onCompleted: {
         // 启动即加载"全局上次导入目录"（轻量、可空，不影响主流程）
@@ -4505,7 +4761,7 @@ ApplicationWindow {
             Label {
                 id: hintLabel
                 anchors.centerIn: parent
-                text: "松开以新增一路（最多 " + kMaxLanes + " 路）"
+                text: "松开以新增一路（列表不限，同时打开最多 " + kMaxOpenLanes + " 路）"
                 color: "#7fe5cc"
                 font.pixelSize: 13
                 font.bold: true
@@ -4552,7 +4808,10 @@ ApplicationWindow {
                         // 关键：不要直接改绑定源，回弹等绑定刷新
                         checked = Qt.binding(function() { return selectedCount > 0 })
                         // toggle 语义：当前有任一勾选 → 全部取消；全部未勾 → 全部勾上
-                        if (selectedCount > 0) clearAllLanes()
+                        // 【此处只能是 deselectAllLanes】clearAllLanes 的语义是
+                        // 「删除全部通道 + 清空导入快照/启动历史/参考资料」（破坏性），
+                        // 取消勾选绝不许连带删历史记忆。
+                        if (selectedCount > 0) deselectAllLanes()
                         else selectAllLanes()
                     }
                     ToolTip.visible: hovered
@@ -4893,7 +5152,7 @@ ApplicationWindow {
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Label {
-                            text: "（支持一次拖入多个文件夹，最多 " + kMaxLanes + " 路）"
+                            text: "（支持一次拖入多个文件夹；列表不限，同时打开最多 " + kMaxOpenLanes + " 路）"
                             color: "#777"
                             font.pixelSize: 11
                             Layout.alignment: Qt.AlignHCenter
@@ -4946,8 +5205,19 @@ ApplicationWindow {
         // 与主观对比列表同样的"一行一目录"交互：📁 选择 / 拖拽 / 下拉历史（暂不
         // 需要）/ ✕ 清除；三个绑定分别是参考视频（不评分路）、参考帧×2（侧栏
         // 参考图窗口）、提示词 CSV。持久化，重开对话框自动还原。
-        ColumnLayout {
+        // 【上下分栏】此区与上方通路列表各自独立滚动：通路多了上面滚、参考
+        // 帧多了这里滚，互不挤占。高度策略：通路区 fillHeight 优先占满剩余
+        // 空间，此区按内容自适应（implicitHeight）并设上限防止占满全屏。
+        ScrollView {
+            id: refResScroll
             Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(refResCol.implicitHeight + 12, dlg.availableHeight * 0.42)
+            clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+        ColumnLayout {
+            id: refResCol
+            width: refResScroll.availableWidth
             spacing: 6
 
             // 分组标题 + 启用勾选：只有勾选时，下方配置才在「启动对比」时生效。
@@ -5275,6 +5545,7 @@ ApplicationWindow {
                 }
             }
         }
+        }   // ← refResScroll（参考资料区独立滚动容器）结束
 
             }   // ← 左栏 mainColumn 结束
 
@@ -5856,6 +6127,12 @@ ApplicationWindow {
                     text: "🗑 清空历史"
                     visible: startHistory && startHistory.length > 0
                     onClicked: {
+                        // 先作废所有任务的独立文件，再清内存记录
+                        var all = startHistory || []
+                        for (var ti = 0; ti < all.length; ++ti) {
+                            if (all[ti] && typeof all[ti].id === "number")
+                                try { _deleteTaskFile(all[ti].id) } catch (e) { /* ignore */ }
+                        }
                         startHistory = []
                         // 清空 = 重置：编号退回 1，下次从 #1 重新开始
                         startHistoryNextId = 1
