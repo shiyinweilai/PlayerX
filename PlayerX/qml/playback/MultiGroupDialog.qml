@@ -78,6 +78,11 @@ ApplicationWindow {
         } else if (!visible) {
             // 隐藏时复位，下次打开重新合并（确保期间被拖入的新文件夹也能浮现）
             _folderHistMerged = false
+            // 关闭面板：本次"从历史启动"的上下文结束。下次打开若用户没重新
+            // 点历史卡片就启动，应按新的本地任务处理（可能弹 tag 提醒），
+            // 绝不能沿用上一次的复用 ID 去覆盖某条记录。
+            _histReuseId = -1
+            _tagJustConfirmed = false
         }
         // 兜底：即使不走 showAndRefresh()（如直接 show()）也校验参考资料路径；
         // 用守卫保证一次打开周期只校验一次，避免与 showAndRefresh 重复清理
@@ -1937,6 +1942,157 @@ ApplicationWindow {
         }
     }
 
+    // ─── 设置 tag 弹窗（本地拖入 / 手动选择后启动时使用）───────────────
+    // 触发条件见 _needTagPrompt()：本地启动且当前没有任何 tag。
+    // 用户诉求：本地启动也要有独立 tag（默认 local_tag），否则启动历史里
+    // 多条本地任务 tag 为空会互相撞指纹、无法区分归属。
+    Dialog {
+        id: tagPromptDialog
+        modal: true
+        anchors.centerIn: parent
+        title: "设置任务 tag"
+        standardButtons: Dialog.NoButton
+        property string _text: "local_tag"
+        // 用户确认后要执行的后续动作（默认接着走 _startWithResumeCheck）
+        property var _afterOk: null
+        background: Rectangle {
+            color: "#1f1f24"
+            border.color: "#3a3a45"
+            border.width: 1
+            radius: 6
+        }
+        header: Rectangle {
+            color: "#1f1f24"
+            implicitHeight: 36
+            radius: 6
+            Rectangle {
+                anchors {
+                    left: parent.left; right: parent.right; bottom: parent.bottom
+                }
+                height: parent.radius
+                color: parent.color
+            }
+            Label {
+                anchors.fill: parent
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                text: tagPromptDialog.title
+                color: "#e8e8ec"
+                font.pixelSize: 14
+                font.bold: true
+                verticalAlignment: Text.AlignVCenter
+            }
+            Rectangle {
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                height: 1
+                color: "#2c2c33"
+            }
+        }
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label {
+                Layout.fillWidth: true
+                Layout.maximumWidth: 460
+                wrapMode: Text.WordWrap
+                text: "本次是本地启动的任务，还没有设置 tag。tag 会作为该任务在启动历史中的标识，也会随评分数据一起上传，请填入一个能区分本次任务的名称。"
+                color: "#bdbdc4"
+                font.pixelSize: 12
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.maximumWidth: 460
+                Layout.preferredHeight: 30
+                radius: 4
+                color: "#15151a"
+                border.color: tagInput.activeFocus ? "#0fa085" : "#3a3a42"
+                border.width: 1
+                TextInput {
+                    id: tagInput
+                    anchors.fill: parent
+                    anchors.leftMargin: 8
+                    anchors.rightMargin: 8
+                    // 不用 `text: tagPromptDialog._text` 绑定：输入时会把值写回
+                    // _text，再由 _text 刷新 text，形成绑定循环。改为 onOpened
+                    // 时命令式赋初值，输入过程只单向写回 _text。
+                    color: "#e8e8ec"
+                    font.pixelSize: 12
+                    clip: true
+                    selectByMouse: true
+                    verticalAlignment: TextInput.AlignVCenter
+                    onTextChanged: tagPromptDialog._text = text
+                    onAccepted: tagPromptOkBtn._commit()
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "取消"
+                    onClicked: tagPromptDialog.close()
+                    background: Rectangle {
+                        color: parent.down ? "#3a3a45"
+                              : parent.hovered ? "#2a2a32"
+                                              : "#202024"
+                        border.color: "#3a3a42"
+                        border.width: 1
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#e8e8ec"
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 28
+                    implicitWidth: 70
+                }
+                Button {
+                    id: tagPromptOkBtn
+                    text: "确定并启动"
+                    enabled: tagPromptDialog._text.trim().length > 0
+                    function _commit() {
+                        var t = tagPromptDialog._text.trim()
+                        if (t.length === 0) return
+                        try {
+                            if (typeof Rating !== "undefined" && Rating)
+                                Rating.uploadTag = t
+                        } catch (e) { console.warn("[MGD] 写回 tag 失败:", e) }
+                        var cb = tagPromptDialog._afterOk
+                        tagPromptDialog._afterOk = null
+                        tagPromptDialog.close()
+                        if (cb) { try { cb(t) } catch (e2) { /* ignore */ } }
+                    }
+                    onClicked: _commit()
+                    background: Rectangle {
+                        color: !parent.enabled ? "#1a1a1d"
+                              : parent.down ? "#0d8b73"
+                              : parent.hovered ? "#119c80"
+                                              : "#0fa085"
+                        radius: 4
+                    }
+                    contentItem: Text {
+                        text: parent.text
+                        color: parent.enabled ? "#ffffff" : "#555"
+                        font.pixelSize: 12
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    implicitHeight: 28
+                    implicitWidth: 96
+                }
+            }
+        }
+        onOpened: {
+            tagInput.text = tagPromptDialog._text
+            tagPromptDialog._text = tagInput.text
+            tagInput.forceActiveFocus()
+            tagInput.selectAll()
+        }
+    }
+
     // 待决议的重复确认上下文（同一时刻仅一份）。
     // 字段：
     //   · mode: "batch" | "row"
@@ -2002,6 +2158,8 @@ ApplicationWindow {
         // 1) 先处理新路径（不需要确认）
         var hits = []
         if (freshUrls.length > 0) {
+            // 用户拖入 / 手动新增了文件夹 = 配置已变化，不再是"从这条历史启动"
+            _histReuseId = -1
             try { hits = addFoldersToHistory(freshUrls) || [] } catch (e) { hits = [] }
         }
 
@@ -2594,8 +2752,98 @@ ApplicationWindow {
     // 调用方：① 启动按钮 onClicked；② loadFolders()（测试源自动化"接受"流程复用同一套进度检查，
     //         不再无条件直接 start()，见 loadFolders 里的说明）。dlg.close() 由弹窗回调里负责。
     property bool _startedFromResumeDialog: false
+    // 本地启动时的 tag 兜底值（与用户约定的默认值一致）
+    readonly property string _localTagDefault: "local_tag"
+    // 用户刚在弹窗里确认过 tag：本次启动不再重复提醒（避免同一次启动连环弹窗）
+    property bool _tagJustConfirmed: false
+    // 当前全局 tag（Rating.uploadTag 是唯一真源）
+    function _currentTag() {
+        try {
+            return (typeof Rating !== "undefined" && Rating)
+                   ? String(Rating.uploadTag || "").trim() : ""
+        } catch (e) { return "" }
+    }
+    // 是否存在"忽略 tag 后完全同配置"的历史记录。
+    // 用于压制过度提醒：用户改过 tag 再启动时，视频/参考资料/模式都没变，
+    // 不该再弹窗要 tag（新 tag 会自然形成一条新记录，符合"命名变了算新记录"）。
+    function _histHasSameConfigIgnoringTag(snap) {
+        if (!snap) return false
+        var src = startHistory || []
+        for (var i = 0; i < src.length; ++i) {
+            var rec = src[i]
+            if (!rec || !rec.snapshot || !rec.configKey) continue
+            var probe = {}
+            for (var k in snap) probe[k] = snap[k]
+            probe.tag = String(rec.snapshot.tag || "").trim()
+            var pk = ""
+            try { pk = _histConfigKey(probe) } catch (e) { continue }
+            if (pk === rec.configKey) return true
+        }
+        return false
+    }
+    // 本地启动时是否需要弹窗让用户设置 tag。
+    // 判定基准是「这份配置是否已经在启动历史里记录过」：
+    //   · 已记录过 → 不打扰（重复启动同一任务，沿用原 tag，也不新增记录）；
+    //   · 未记录过 → 这是一份新的本地任务，弹窗让用户给个能区分的 tag。
+    // 这样能覆盖远程任务遗留下来的 tag（例如上一条远程任务叫 datatest，
+    // 本地新拖入完全不同的目录时不会被悄悄冠上 datatest）。
+    // 不打扰的其它情况：远程接受任务（tag 由配置下发）、从历史点击加载
+    // （沿用该记录自带 tag）、刚在弹窗里确认过。
+    function _needTagPrompt() {
+        if (_tagJustConfirmed) return false
+        if (_histPendingSource === "remote") return false
+        if (_histReuseId >= 0) return false
+        var snap = null
+        try { snap = _collectStartSnapshot() } catch (e) { snap = null }
+        if (!snap) return false      // 还没有可启动的配置，交给 canStart 处理
+        var key = ""
+        try { key = _histConfigKey(snap) } catch (e2) { return false }
+        var src = startHistory || []
+        for (var i = 0; i < src.length; ++i) {
+            if (src[i] && src[i].configKey && src[i].configKey === key) return false
+        }
+        // 同一份配置、只是命名不同：不再提醒，交给启动记录按新 tag 记账
+        return !_histHasSameConfigIgnoringTag(snap)
+    }
+    // 弹窗里的预设 tag：
+    //   当前 tag 恰好是"这份配置自己的历史 tag" → 沿用（用户上次为它命名过）；
+    //   其它情况一律預設 local_tag：
+    //     · 当前 tag 为空；
+    //     · 当前 tag 属于别的任务（典型是远程任务遗留下来的 datatest）；
+    //     · 当前 tag 不属于任何历史任务（已删除的残留值）。
+    // 用户明确要求：本地拖入 / 手动选择后启动，预设 tag 为 local_tag。
+    function _tagPromptDefault() {
+        var cur = _currentTag()
+        if (cur.length === 0) return _localTagDefault
+        var snap = null
+        try { snap = _collectStartSnapshot() } catch (e) { snap = null }
+        var key = snap ? _histConfigKey(snap) : ""
+        if (key.length === 0) return _localTagDefault
+        var src = startHistory || []
+        for (var i = 0; i < src.length; ++i) {
+            var rec = src[i]
+            if (!rec || !rec.snapshot) continue
+            if (String(rec.snapshot.tag || "").trim() !== cur) continue
+            if (rec.configKey === key) return cur   // 就是这份配置自己的 tag
+            return _localTagDefault                // 被别的配置占用 → 用默认值
+        }
+        return _localTagDefault                    // 无对应记录 → 残留值，用默认值
+    }
+    function _openTagPrompt() {
+        tagPromptDialog._text = _tagPromptDefault()
+        // 确认后继续原启动流程
+        tagPromptDialog._afterOk = function(t) {
+            _tagJustConfirmed = true
+            _startWithResumeCheck()
+            _tagJustConfirmed = false
+        }
+        tagPromptDialog.open()
+    }
     function _startWithResumeCheck() {
         if (!canStart) return false
+        // 本地拖入文件夹 / 手动选择后启动：没有 tag 时先弹窗提醒设置，
+        // 预设 local_tag，确认后才继续启动（保证每条记录都有独立 tag）。
+        if (_needTagPrompt()) { _openTagPrompt(); return false }
         var info = _collectResumeInfo()
         try { console.log("[MGD] _startWithResumeCheck hasProgress=", info.hasProgress) } catch (e) {}
         if (!info.hasProgress) {
@@ -3192,6 +3440,8 @@ ApplicationWindow {
         _restoreBaselineRefRes()
         _bumpState()
         _persistLanes()
+        // 取消选中：不再是"从这条历史启动"，清除复用标记
+        _histReuseId = -1
         _histLoadNotice = "✓ 已取消选中，恢复未选状态"
         _histLoadTimer.restart()
     }
@@ -3558,7 +3808,9 @@ ApplicationWindow {
             reviewMode: (typeof Rating !== "undefined" && Rating)
                         ? String(Rating.currentMode || "off") : "off",
             // tag：远程接受的任务由配置下发（已灌入 Rating.uploadTag）；
-            // 本地启动取用户手动配置的 tag，未配置则为空（卡片上不显示 tag 行）
+            // 本地启动由「设置任务 tag」弹窗写入（默认 local_tag），未配置则为空。
+            // 全局 Rating.uploadTag 是 tag 的唯一真源：远程下发、历史加载恢复、
+            // 本地弹窗确认都写到同一处，避免多份缓存互相覆盖。
             tag: (typeof Rating !== "undefined" && Rating && Rating.uploadTag)
                  ? String(Rating.uploadTag).trim() : "",
             startedAt: new Date().toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm:ss")
@@ -3575,6 +3827,46 @@ ApplicationWindow {
     function appendStartHistory(source) {
         var snap = _collectStartSnapshot()
         if (!snap) return -1
+        // ── 优先：从右侧历史「点击加载」后启动 ──
+        // 用户要求：任何时候点击历史任务再启动，都不新增记录。因此这里直接
+        // 复用被点击的那条记录（编号/置顶不变），整体刷新其快照与时间戳。
+        // tag 以该记录自身为准：即使全局 Rating.uploadTag 已被其它任务改写
+        // （如远程下发 / 上次手动设置），也不能污染这条历史任务的 tag。
+        if (_histReuseId >= 0) {
+            var reuseId = _histReuseId
+            _histReuseId = -1
+            var rarr = (startHistory || []).slice()
+            for (var ri = 0; ri < rarr.length; ++ri) {
+                if (!rarr[ri] || rarr[ri].id !== reuseId) continue
+                var reuseTag = String(((rarr[ri].snapshot || {}).tag) || "").trim()
+                // 以该记录自身的 tag 为准（含空值）：即使全局 Rating.uploadTag
+                // 已被其它任务写成别的值，也不能污染这条历史任务的身份。
+                snap.tag = reuseTag
+                // 配置指纹比对：把 tag 归位后重算指纹，若与原记录的指纹不一致，
+                // 说明用户点开历史后又改过路径/关键词/参考资料/评分模式 —— 那是
+                // 另一份配置，不能悄悄覆盖原记录，转常规流程（命中其它记录或新增）。
+                var reuseKey = _histConfigKey(snap)
+                if (rarr[ri].configKey && rarr[ri].configKey !== reuseKey) {
+                    console.log("[MGD] 历史 #" + reuseId + " 的配置已被修改，按新配置处理")
+                    break
+                }
+                snap.startedAt = new Date().toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm:ss")
+                rarr[ri] = { id: rarr[ri].id,
+                             pinned: rarr[ri].pinned === true,
+                             pinAt: (typeof rarr[ri].pinAt === "number") ? rarr[ri].pinAt : 0,
+                             source: source === "remote" ? "remote" : (rarr[ri].source || "manual"),
+                             configKey: reuseKey,
+                             snapshot: snap,
+                             name: rarr[ri].name || "" }
+                startHistory = rarr
+                _saveStartHistory()
+                _writeTaskFile(rarr[ri].id, snap, rarr[ri].source)
+                console.log("[MGD] 启动历史 #" + rarr[ri].id + " 由历史点击启动，复用该记录（不新增）")
+                try { _recomputeHistProgress() } catch (e) { /* ignore */ }
+                return rarr[ri].id
+            }
+            console.log("[MGD] 待复用的历史记录 #" + reuseId + " 已不存在，转常规流程")
+        }
         var key = _histConfigKey(snap)
         var arr = (startHistory || []).slice()
         // 同指纹 → 复用原记录：仅刷新时间戳与来源，编号不变
@@ -3582,6 +3874,7 @@ ApplicationWindow {
             if (arr[i] && arr[i].configKey && arr[i].configKey === key) {
                 arr[i] = { id: arr[i].id,
                            pinned: arr[i].pinned === true,
+                           pinAt: (typeof arr[i].pinAt === "number") ? arr[i].pinAt : 0,
                            source: source === "remote" ? "remote" : "manual",
                            configKey: key, snapshot: snap,
                            name: arr[i].name || "" }
@@ -3738,6 +4031,16 @@ ApplicationWindow {
                 Rating.setCurrentMode(snap.reviewMode)
         } catch (e) { console.warn("[MGD] 历史配置评分模式还原失败:", e) }
         _refResValidated = true   // 已校验过存在性，本次打开不再重复校验
+        // tag 恢复：把该记录自带的 tag 写回当前生效 tag，避免随后启动时
+        // 采集到别的任务残留 tag（如 datatest）导致指纹变化。
+        var _histTag = String(snap.tag || "").trim()
+        if (_histTag.length > 0) {
+            try {
+                if (typeof Rating !== "undefined" && Rating) Rating.uploadTag = _histTag
+            } catch (e) { /* ignore */ }
+        }
+        // 标记本次是从这条历史点击加载来的：随后启动一律复用该记录，不新增。
+        _histReuseId = rec.id
         _histLoadNotice = (dead.length > 0)
             ? "⚠ 已加载配置 #" + rec.id + "，其中 " + dead.length + " 路已失效被跳过"
             : "✓ 已加载配置 #" + rec.id + "，点「启动对比」重新开始"
@@ -3750,6 +4053,11 @@ ApplicationWindow {
     // start() 内部按此标记历史来源；loadFolders（远程接受链路）启动前先置为
     // "remote"，手动路径保持默认 "manual"。start() 成功后消费并复位。
     property string _histPendingSource: "manual"
+    // 从右侧启动历史「点击加载」的那条记录 ID（-1 = 未加载历史）。
+    // 用户诉求：任何时候点击历史任务再启动，都不允许新增记录 —— 因此启动
+    // 记录采集时若该 ID 有效，优先复用这条记录（仅刷新时间戳），不复用他人。
+    // 消费时机：appendStartHistory 尾部复位；取消选中时复位。
+    property int _histReuseId: -1
     // 启动历史侧栏可见性（默认展开；可收起成窄条）
     property bool _histPanelVisible: true
     // 历史搜索词：空串显示全部；非空按 tag / 模式 / #ID / 来源 / 时间过滤
@@ -4199,6 +4507,8 @@ ApplicationWindow {
         // 远程接受链路（_tsImportAndStart → loadFolders）启动的历史记录来源
         // 标记为 remote；start() 成功后消费并复位为 manual
         _histPendingSource = "remote"
+        // 远程任务是独立的新任务，不能复用用户此前点击的历史记录
+        _histReuseId = -1
 
         // 1) 先把这一批文件夹追加到历史 lanes（去重 + 持久化）
         var addedPaths = addFoldersToHistory(urls)
