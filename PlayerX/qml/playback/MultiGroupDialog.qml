@@ -124,6 +124,14 @@ ApplicationWindow {
             // 防御：还原期间不要再触发 _restoreLanes（_restoring 在内部已判，
             // 但模式切换通常发生在用户已交互后，此处一般 _restoring=false）
             if (_restoring) return
+            // 加载启动历史时，会先按历史快照重建 lanes，再还原评分模式。
+            // 还原模式会触发本回调，若继续走下面的 _restoreLanes 就会用
+            // 新模式槽位的旧快照把刚重建的 lanes 整个覆盖 —— 抑制这一次。
+            if (_suppressModeReloadOnce) {
+                _suppressModeReloadOnce = false
+                console.log("[MGD] 模式切换来自历史加载，跳过 _restoreLanes")
+                return
+            }
             try {
                 // 读新槽位；为空则不动当前 lanes
                 var s = _fileLoad() || ""
@@ -288,6 +296,10 @@ ApplicationWindow {
 
     // 避免还原过程中 _syncLaneFromRow 反复触发写盘
     property bool _restoring: false
+    // 加载历史时主动还原评分模式期间置 true：抑制 onCurrentModeChanged 里的
+    // _restoreLanes —— 那个分支会按新模式槽位把当前 lanes 整个覆盖掉，
+    // 而此刻我们刚按历史快照重建好 lanes，不能被冲掉。
+    property bool _suppressModeReloadOnce: false
     // 避免 onVisibleChanged 在同一次打开中重复合并
     property bool _folderHistMerged: false
 
@@ -3961,6 +3973,65 @@ ApplicationWindow {
             else dead.push(ln)
         }
         if (alive.length === 0) return "所有路都失效（目录/文件已被删除）"
+        // ── 评分模式同步（必须先于 lanes 重建）───────────────────────────
+        // 历史记录自带 reviewMode，点击它就应该把左下角的模式一起切过去，
+        // 否则会出现「加载的是多维任务、左下角还是质量比较2」的错位。
+        // 先切模式再重建，后面 _persistLanes() 写的就是该记录所属模式的
+        // 槽位，不会把历史配置写进当前模式的进度槽、互相污染。
+        // 【踩坑】不能用 Rating.setCurrentMode(...)：它是 Q_PROPERTY 的 WRITE
+        // 函数，没有 Q_INVOKABLE，QML 里 typeof 拿不到 function，旧代码的
+        // 那层守卫因此恒为 false，整段模式还原从未执行过。这里改为属性赋值
+        // （走同一个 setter）。
+        var _histTag = String(snap.tag || "").trim()
+        var _modeSwitched = false
+        try {
+            if (typeof Rating !== "undefined" && Rating) {
+                var _wantMode = String(snap.reviewMode || "off")
+                var _curMode = String(Rating.currentMode || "off")
+                if (_wantMode.length > 0 && _wantMode !== _curMode) {
+                    // 抑制 onCurrentModeChanged 里的 _restoreLanes：那一步会按
+                    // 新模式槽位的旧快照把 lanes 整个覆盖，而这里马上要按
+                    // 历史快照重建，不能被冲掉。
+                    _suppressModeReloadOnce = true
+                    Rating.currentMode = _wantMode
+                    // 回调是同步执行的，正常情况下上面已被消费；这里再兜一次，
+                    // 防止 onCurrentModeChanged 因其它守卫提前 return 而残留标记，
+                    // 把用户下一次真实的模式切换误吞。
+                    _suppressModeReloadOnce = false
+                    if (String(Rating.currentMode || "off") === _wantMode) {
+                        _modeSwitched = true
+                        console.log("[MGD] 历史加载同步评分模式:", _curMode, "→", _wantMode)
+                    } else {
+                        console.warn("[MGD] 历史加载同步评分模式失败:", _wantMode)
+                    }
+                }
+            }
+        } catch (e) {
+            _suppressModeReloadOnce = false
+            console.warn("[MGD] 历史配置评分模式还原失败:", e)
+        }
+        // tag 恢复：把该记录自带的 tag 写回当前生效 tag，避免随后启动时
+        // 采集到别的任务残留 tag（如 datatest）导致指纹变化。
+        // 顺序很重要：必须在模式切换之后写 —— 切模式会把该模式的默认/缓存
+        // tag（如「多维tag」）灌进 Rating.uploadTag。
+        // 记录本身没有 tag 时同样要写回空串：不能让这次加载的历史任务被
+        // 冠上目标模式的默认 tag，否则它的身份就变了。
+        try {
+            if (typeof Rating !== "undefined" && Rating) Rating.uploadTag = _histTag
+        } catch (e) { /* ignore */ }
+        if (_modeSwitched) {
+            // 切模式同时启动了 60ms 的维度重载定时器，落地时会把
+            // _pendingTagToApply 写回 Rating.uploadTag；不同步这里就会被
+            // 覆盖回该模式的默认 tag。_remoteTag 一并同步保持三方一致。
+            try {
+                var _mr = (typeof Qt !== "undefined" && Qt._playerXRoot)
+                           ? Qt._playerXRoot : null
+                if (_mr) {
+                    _mr._remoteTag = _histTag
+                    _mr._pendingTagToApply = _histTag
+                }
+            } catch (e2) { /* ignore */ }
+        }
         // 重建 lanes：清掉全部现有行，按快照逐路重建
         _rowsModel.clear()
         _laneRuntime = []
@@ -4023,22 +4094,7 @@ ApplicationWindow {
         if (faNew.length === 0) faNew.push({ path: "", enabled: true })
         refFramePaths = faNew
         _saveRefRes()
-        // 评分模式还原（Rating.currentMode 由 Main.qml 顶部菜单管理，这里只写回）
-        try {
-            if (typeof Rating !== "undefined" && Rating
-                && typeof Rating.setCurrentMode === "function"
-                && String(snap.reviewMode || "off") !== String(Rating.currentMode))
-                Rating.setCurrentMode(snap.reviewMode)
-        } catch (e) { console.warn("[MGD] 历史配置评分模式还原失败:", e) }
         _refResValidated = true   // 已校验过存在性，本次打开不再重复校验
-        // tag 恢复：把该记录自带的 tag 写回当前生效 tag，避免随后启动时
-        // 采集到别的任务残留 tag（如 datatest）导致指纹变化。
-        var _histTag = String(snap.tag || "").trim()
-        if (_histTag.length > 0) {
-            try {
-                if (typeof Rating !== "undefined" && Rating) Rating.uploadTag = _histTag
-            } catch (e) { /* ignore */ }
-        }
         // 标记本次是从这条历史点击加载来的：随后启动一律复用该记录，不新增。
         _histReuseId = rec.id
         _histLoadNotice = (dead.length > 0)
