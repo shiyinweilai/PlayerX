@@ -2769,6 +2769,9 @@ Component {
         reviewDimensions: root.cellReviewDimensions
         reviewDimensionsVersion: root.reviewDimensionsVersion
         dimsByMode: root._dimsByMode
+        // 内置默认维度：历史记录可能属于其它评分模式，统计进度时按该记录自己的
+        // 模式取维度（远程覆盖层缺失时用内置默认兜底）
+        builtinDimsByMode: root._builtinDimsByMode
         // quality_slide 模式下第二维度 key，供 allGroupsRated 判断滑动打分是否完整
         slideDimKey: (root.slideDimension && root.slideDimension.key) ? root.slideDimension.key : ""
         // Checklist 配置：非空时 allGroupsRated 会额外校验每个文件是否至少勾选一项

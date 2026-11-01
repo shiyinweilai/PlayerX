@@ -46,6 +46,13 @@ ApplicationWindow {
     // 历史中固化的文件夹路径仍会作为新 lane 出现（默认未勾选），符合"路径固化、
     // 每次打开加载历史路径，新增就增加一路"的预期行为。
     onVisibleChanged: {
+        // 【历史进度刷新】打开面板时重新扫描评分数据（期间可能评分/上传/归档过），
+        // 清空索引缓存并递增修订号，让可见卡片重算「进度/总数」。
+        if (visible) {
+            // 评分数据可能在面板关闭期间变化（评分/上传归档/重置进度），
+            // 打开时清索引并整体重算一次进度映射。
+            _invalidateHistProgress(true)
+        }
         // 【自动化接管守卫】测试源自动化（点🔔接受/直接开始）链路里，
         // applyAutoRefResources 已按本次任务回填参考资料并置好勾选，
         // 随后 _startWithResumeCheck 有进度时调 dlg.show() 弹「继续评分？」
@@ -94,9 +101,21 @@ ApplicationWindow {
     Connections {
         target: (typeof Rating !== "undefined") ? Rating : null
         ignoreUnknownSignals: true
+        // 任何评分写入 / 清空都会触发 changed()：历史卡片的「进度/总数」需要跟着刷新
+        function onChanged() {
+            // 评分写入 / 清空 / 归档：主 CSV 变动，重算进度。
+            // 归档索引不在此清空（上传归档有独立触发点，避免每次打分都全量扫盘）。
+            dlg._invalidateHistProgress(false)
+        }
+        // 切换评分人：索引按 rater 过滤，必须连归档索引一起重建
+        function onCurrentUserChanged() {
+            dlg._invalidateHistProgress(true)
+        }
         function onCurrentModeChanged() {
             // 【归档进度缓存失效】mode 变了，之前扫的归档进度不再适用，清空以免串档
             _archiveRatingCache = ({})
+            // 【历史卡片评分进度】评分数据源随模式变化，清空并重算
+            dlg._invalidateHistProgress(true)
             // 防御：还原期间不要再触发 _restoreLanes（_restoring 在内部已判，
             // 但模式切换通常发生在用户已交互后，此处一般 _restoring=false）
             if (_restoring) return
@@ -1304,6 +1323,10 @@ ApplicationWindow {
     property int reviewDimensionsVersion: 0
     // 按 mode 缓存的维度列表（由 Main.qml 注入），切换 mode 时自动加载对应维度
     property var  dimsByMode: ({})
+    // 内置默认维度（由 Main.qml 注入 root._builtinDimsByMode）。启动历史里可能有
+    // 与当前模式不同的历史记录，统计其评分进度时需要按该记录自己的模式取维度；
+    // 远程覆盖层缺失时以这份内置默认兜底。
+    property var  builtinDimsByMode: ({})
     // 有维度配置时（不限于 multi_dim 模式）走多维布局
     readonly property bool hasDims: reviewDimensions && reviewDimensions.length > 0
     // 启动对比时，如果是多维模式，Main.qml 注入此回调以静默加载最新维度配置
@@ -3455,6 +3478,14 @@ ApplicationWindow {
             histList._selectedHistId = -1
         // nextId 不回退：已删除的编号不复用，后续新记录继续单调递增
         _saveStartHistory()
+        // 删除记录后同步移除其进度条目（避免映射里残留无主 key）
+        try {
+            var m = _histProgressMap
+            if (m && m[String(rec.id)] !== undefined) {
+                delete m[String(rec.id)]
+                _histProgressMap = m
+            }
+        } catch (e) { /* ignore */ }
     }
     function _loadStartHistory() {
         var arr = []
@@ -3474,6 +3505,11 @@ ApplicationWindow {
             }
         } catch (e) { arr = [] }
         startHistory = arr
+        // 历史整体重载：进度映射需要按新列表重建（旧记录可能已被删除）。
+        // 【注意】这里只清空，不立即统计：_loadStartHistory 会在应用启动时被调用，
+        // 若在此统计旧记录（缺 fileCount 需扫盘），会在启动阶段弹出 macOS 文件夹
+        // 授权提示。实际统计推迟到面板可见时（onVisibleChanged）执行。
+        try { _histProgressMap = ({}) } catch (e) { /* ignore */ }
     }
     // 采集当前「将要启动」的完整配置快照（不含运行态）。返回 null = 无有效路。
     function _collectStartSnapshot() {
@@ -3488,12 +3524,19 @@ ApplicationWindow {
             // 临时行。若把 isRefVideo 行也记进 lanes，loadStartHistory 会把它
             // 作为普通行重建，上方通路列表出现重复的 REF 路。
             if (l.isRefVideo === true) continue
+            // 本路参与启动的文件数：历史卡片统计「进度/总数」时直接用它做分母，
+            // 不必再扫目录（避免无谓的磁盘扫描与系统文件夹授权弹窗）。
+            var _fc = (typeof l.visibleCount === "number" && l.visibleCount > 0)
+                    ? l.visibleCount
+                    : ((_laneRuntime[i] && _laneRuntime[i].visibleFiles)
+                        ? _laneRuntime[i].visibleFiles.length : 0)
             lanes.push({
                 folderPath: String(l.folderPath || ""),
                 keyword: String(l.keyword || ""),
                 currentPath: String(l.currentPath || ""),
                 currentIndex: (typeof l.currentIndex === "number") ? l.currentIndex : 0,
-                isRefVideo: l.isRefVideo === true
+                isRefVideo: l.isRefVideo === true,
+                fileCount: _fc
             })
         }
         if (lanes.length === 0) return null
@@ -3556,6 +3599,8 @@ ApplicationWindow {
         startHistory = arr
         startHistoryNextId = id + 1
         _writeTaskFile(id, snap, source)
+        // 新记录出现后立即算一次进度（卡片第二行右侧即可显示 0/N）
+        try { _recomputeHistProgress() } catch (e) { /* ignore */ }
         return id
     }
 
@@ -3842,6 +3887,306 @@ ApplicationWindow {
         if (m.indexOf("quality") >= 0) return "质量比较"
         return m
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 历史卡片「评分进度」统计
+    //   语义：一条历史记录对应一次任务，其总条数 = 各参与路（不含参考视频路）
+    //   的文件数 × 该模式的维度数；已完成条数 = 已打分的（文件 × 维度）组合数。
+    //   例：3 路 × 20 文件 × 1 维度 = 60 条，全部评完显示 60/60。
+    //   非评分模式（reviewMode 为空 / off）不显示。
+    // ═══════════════════════════════════════════════════════════════
+    // 每条历史记录的评分进度结果：{ "<id>": {done, total, complete} }。
+    // 【为什么用预计算而不是在卡片里直接算】
+    //   卡片是 delegate 绑定，若在绑定求值过程中读/写缓存属性
+    //   （_histRateIdxCache 等）会形成绑定循环告警。这里改成「显式重算 →
+    //   写映射」，卡片只读映射，纯读无副作用。
+    property var _histProgressMap: ({})
+    // 各模式「文件路径 → {slideType: 星级}」索引缓存（仅存 >0 的分数）
+    property var _histRateIdxCache: ({})
+    // 各模式的归档评分索引（归档在评分期间不变，单独缓存避免反复扫盘）
+    property var _histArchiveIdxCache: ({})
+    // 各路径（文件夹|关键字）扫描出的文件列表缓存
+    property var _histLaneFilesCache: ({})
+
+    // 取某模式的维度定义：远程/接受来的覆盖层优先，内置默认兜底
+    function _histDimsForMode(mode) {
+        var m = String(mode || "")
+        if (m.length === 0 || m === "off") return []
+        try {
+            if (dimsByMode && dimsByMode[m] && dimsByMode[m].length > 0) return dimsByMode[m]
+        } catch (e) {}
+        try {
+            if (builtinDimsByMode && builtinDimsByMode[m]
+                    && builtinDimsByMode[m].length > 0) return builtinDimsByMode[m]
+        } catch (e) {}
+        return []
+    }
+
+    // 扫描目录并按关键字过滤（带缓存）。仅作为分母计算的最后兜底：
+    // 旧记录没有 fileCount、且当前会话没加载过该目录时才会走到这里。
+    function _scanLaneFiles(folderPath, keyword) {
+        var folder = String(folderPath || "")
+        if (folder.length === 0) return []
+        var kw = String(keyword || "").trim().toLowerCase()
+        var key = folder + "\n" + kw
+        if (_histLaneFilesCache[key] !== undefined) return _histLaneFilesCache[key]
+        var files = []
+        try { files = Fs.scanVideoFolderPath(folder, true) || [] } catch (e) { files = [] }
+        if (kw.length > 0) {
+            var out = []
+            for (var i = 0; i < files.length; ++i) {
+                if (String(files[i]).toLowerCase().indexOf(kw) >= 0) out.push(files[i])
+            }
+            files = out
+        }
+        var c = _histLaneFilesCache
+        c[key] = files
+        _histLaneFilesCache = c
+        return files
+    }
+
+    // 从当前会话已加载的路里取某文件夹 + 关键字的文件数（不扫盘）。
+    // 返回 -1 表示当前会话没有加载该目录，无法得知文件数。
+    function _histLaneCountFromRuntime(folderPath, keyword) {
+        var folder = String(folderPath || "")
+        if (folder.length === 0) return -1
+        var kw = String(keyword || "").trim().toLowerCase()
+        var n = Math.min(_rowsModel.count, _laneRuntime.length)
+        for (var i = 0; i < n; ++i) {
+            var lane = _rowsModel.get(i)
+            if (!lane) continue
+            if (String(lane.folderPath || "") !== folder) continue
+            if (String(lane.keyword || "").trim().toLowerCase() !== kw) continue
+            var rt = _laneRuntime[i]
+            if (rt && rt.visibleFiles) return rt.visibleFiles.length
+        }
+        return -1
+    }
+
+    // 取某模式的重置时间戳表（{ "<mode>::<folder>": epochMs }）
+    // 全表只解析一次并缓存，避免归档行循环里反复 JSON.parse。
+    property var _histResetStampsCache: null
+    function _histResetStamps() {
+        if (_histResetStampsCache !== null) return _histResetStampsCache
+        var obj = ({})
+        try {
+            var raw = Rating.loadString("rating/resetStamps", "") || ""
+            if (raw.length > 0) {
+                var p = JSON.parse(raw)
+                if (p) obj = p
+            }
+        } catch (e) { obj = ({}) }
+        _histResetStampsCache = obj
+        return obj
+    }
+    function _histResetStamp(mode, folderPath) {
+        var obj = _histResetStamps()
+        // 与 C++ 侧 folderResetAfter 一致：复合键 = "<mode>::<行所在目录>"
+        var v = obj[String(mode) + "::" + String(folderPath || "")]
+        return (typeof v === "number") ? v : 0
+    }
+
+    // 构建/取用某模式的评分索引：{ filePath: { slideType: stars } }
+    // 数据来源：主 CSV（该模式）+ 归档批次（主 CSV 已丢时回落），
+    // 归档行按「重置进度」时间戳屏蔽，避免重置后进度从归档里复活。
+    function _histRatingIndex(mode) {
+        var m = String(mode || "")
+        if (m.length === 0 || m === "off") return ({})
+        if (_histRateIdxCache[m] !== undefined) return _histRateIdxCache[m]
+        if (typeof Rating === "undefined" || !Rating) return ({})
+
+        var map = ({})
+        var rater = ""
+        try { rater = String(Rating.currentUser || "") } catch (e) { rater = "" }
+
+        function _put(fp, st, stars) {
+            if (!fp) return
+            var s = (typeof stars === "number") ? stars : 0
+            if (s <= 0) return
+            var e = map[fp]
+            if (!e) { e = ({}); map[fp] = e }
+            var k = String(st || "")
+            if (e[k] === undefined || s > e[k]) e[k] = s
+        }
+
+        // ① 主 CSV（评分即写，必须每次重建，读取成本很低）
+        try {
+            var rows = (typeof Rating.getAllRatingsForMode === "function")
+                     ? (Rating.getAllRatingsForMode(m) || []) : []
+            for (var i = 0; i < rows.length; ++i) {
+                var r = rows[i] || {}
+                var rr = String(r.rater || "")
+                if (rater.length > 0 && rr.length > 0 && rr !== rater) continue
+                _put(String(r.file_path || ""), r.slide_type, r.stars)
+            }
+        } catch (e) { console.warn("[HistProgress] 读取主 CSV 失败:", e) }
+
+        // ② 归档回落（只补主 CSV 里完全没有的文件，与 ratingFor 同语义）
+        //    归档在评分过程中不会变化，按 mode 单独缓存，避免每次评分都全量扫盘。
+        var archMap = _histArchiveIdxCache[m]
+        if (archMap === undefined) {
+            archMap = ({})
+            try {
+                var batches = (typeof Rating.listAllArchiveBatches === "function")
+                            ? (Rating.listAllArchiveBatches() || []) : []
+                for (var b = 0; b < batches.length; ++b) {
+                    var bm = String((batches[b] || {})["mode"] || "")
+                    if (bm !== m) continue
+                    var bn = String((batches[b] || {})["name"] || "")
+                    if (bn.length === 0) continue
+                    var arows = []
+                    try { arows = Rating.loadArchiveBatch(m, bn) || [] } catch (e) { arows = [] }
+                    for (var a = 0; a < arows.length; ++a) {
+                        var ar = arows[a] || {}
+                        var afp = String(ar.file_path || "")
+                        if (afp.length === 0) continue
+                        var arater = String(ar.rater || "")
+                        if (rater.length > 0 && arater.length > 0 && arater !== rater) continue
+                        var astars = (typeof ar.stars === "number") ? ar.stars : 0
+                        if (astars <= 0) continue
+                        // 重置屏蔽：归档行时间早于该文件夹的重置时刻 → 跳过
+                        var dir = afp.substring(0, Math.max(0, afp.lastIndexOf("/")))
+                        var stamp = _histResetStamp(m, dir)
+                        if (stamp > 0) {
+                            var t = String(ar.updated_at || "")
+                            var ms = 0
+                            try { ms = Date.parse(t) } catch (e) { ms = 0 }
+                            if (!(ms > 0) || ms < stamp) continue
+                        }
+                        var ae = archMap[afp]
+                        if (!ae) { ae = ({}); archMap[afp] = ae }
+                        var ak = String(ar.slide_type || "")
+                        if (ae[ak] === undefined || astars > ae[ak]) ae[ak] = astars
+                    }
+                }
+            } catch (e) { console.warn("[HistProgress] 读取归档失败:", e) }
+            var ac = _histArchiveIdxCache
+            ac[m] = archMap
+            _histArchiveIdxCache = ac
+        }
+        for (var fp2 in archMap) {
+            if (map[fp2] !== undefined) continue   // 主 CSV 已有该文件，以主 CSV 为准
+            map[fp2] = archMap[fp2]
+        }
+
+        var cache = _histRateIdxCache
+        cache[m] = map
+        _histRateIdxCache = cache
+        return map
+    }
+
+    // 判断某条历史记录里的一路是否为参考视频路（只显示、不评分）
+    function _histLaneIsRef(snap, lane) {
+        var fp = String((lane || {}).folderPath || "")
+        if (fp.length === 0) return false
+        var rv = String((snap || {}).refVideoPath || "")
+        if (rv.length > 0 && fp === rv) return true
+        return fp.split("/").pop() === "REF"
+    }
+
+    // 计算单条历史记录的评分进度（纯计算：不读写任何缓存属性，可在重算阶段调用）。
+    // 返回 null = 不显示（非评分模式 / 无有效文件）。
+    function _calcHistProgress(rec, rateIdx, dims) {
+        if (!rec || !rec.snapshot) return null
+        var snap = rec.snapshot
+        var mode = String(snap.reviewMode || "off")
+        // 不需要评分的模式：不显示进度
+        if (mode.length === 0 || mode === "off") return null
+
+        var dimKeys = []
+        for (var di = 0; di < dims.length; ++di) {
+            var k = String((dims[di] || {}).key || "")
+            if (k.length > 0) dimKeys.push(k)
+        }
+        if (dimKeys.length === 0) dimKeys.push("")   // 无维度定义：按单条计
+
+        var total = 0
+        var done = 0
+        var lanes = snap.lanes || []
+        for (var li = 0; li < lanes.length; ++li) {
+            var lane = lanes[li] || {}
+            if (_histLaneIsRef(snap, lane)) continue
+            var folder = String(lane.folderPath || "")
+            if (folder.length === 0) continue
+            var kw = String(lane.keyword || "").trim().toLowerCase()
+            // 分母三档兜底，尽量避免扫盘（扫盘会触发 macOS 文件夹授权弹窗）：
+            //   ① 快照里记的 fileCount（启动/统计时采集，最准）；
+            //   ② 当前会话已加载该目录时的运行时文件数；
+            //   ③ 旧记录且目录未加载：只能扫一次目录。
+            var n = 0
+            if (typeof lane.fileCount === "number" && lane.fileCount > 0) {
+                n = lane.fileCount
+            } else {
+                n = _histLaneCountFromRuntime(folder, kw)
+                if (n < 0) n = _scanLaneFiles(folder, kw).length
+            }
+            if (n <= 0) continue
+            total += n * dimKeys.length
+            // 分子：遍历评分索引中归属该目录的文件（键以 "<folder>/" 开头），
+            // 与分母同源，且评分后立即准确。
+            var prefix = folder + "/"
+            for (var fp in rateIdx) {
+                var sp = String(fp)
+                if (sp.indexOf(prefix) !== 0) continue
+                if (kw.length > 0) {
+                    var bn = sp.substring(sp.lastIndexOf("/") + 1).toLowerCase()
+                    if (bn.indexOf(kw) < 0) continue
+                }
+                var entry = rateIdx[fp]
+                if (!entry) continue
+                for (var ki = 0; ki < dimKeys.length; ++ki) {
+                    var dk = dimKeys[ki]
+                    var ok = false
+                    if (dk.length > 0) {
+                        var mt = "multi_" + dk
+                        ok = (entry[mt] !== undefined && entry[mt] > 0)
+                        // 兼容旧数据：单维度模式下可能只写了裸分（无 slide_type 前缀）
+                        if (!ok && dimKeys.length === 1
+                            && entry[""] !== undefined && entry[""] > 0) ok = true
+                    } else {
+                        // 无维度定义（旧数据 / 未配置维度）：任意正分即算评完
+                        for (var ek in entry) {
+                            if (entry[ek] > 0) { ok = true; break }
+                        }
+                    }
+                    if (ok) done++
+                }
+            }
+        }
+        // 分子不可能超过分母（旧记录的 fileCount 与实际文件数可能略有出入）
+        if (done > total) done = total
+        if (total <= 0) return null
+        return { done: done, total: total, complete: done >= total }
+    }
+
+    // 重算全部历史记录的进度并写入 _histProgressMap（卡片只读该映射）。
+    // 触发时机：面板打开、评分写入、模式/账号切换、历史记录增删。
+    function _recomputeHistProgress() {
+        var out = ({})
+        var src = startHistory || []
+        for (var i = 0; i < src.length; ++i) {
+            var rec = src[i]
+            if (!rec || typeof rec.id !== "number") continue
+            var mode = String((rec.snapshot || {}).reviewMode || "off")
+            if (mode.length === 0 || mode === "off") continue
+            try {
+                var pg = _calcHistProgress(rec, _histRatingIndex(mode), _histDimsForMode(mode))
+                if (pg !== null) out[String(rec.id)] = pg
+            } catch (e) {
+                console.warn("[HistProgress] 计算失败 id=", rec.id, e)
+            }
+        }
+        _histProgressMap = out
+    }
+
+    // 使进度缓存失效并重算
+    function _invalidateHistProgress(clearArchive) {
+        _histRateIdxCache = ({})
+        if (clearArchive === true) _histArchiveIdxCache = ({})
+        _histResetStampsCache = null
+        _recomputeHistProgress()
+    }
+
     Timer {
         id: _histLoadTimer
         interval: 8000
@@ -4364,6 +4709,9 @@ ApplicationWindow {
         try { _validateRefResPaths() } catch (e) { console.warn("[MGD] 参考资料校验异常:", e) }
         // 启动历史：每次打开刷新（可能在其它窗口/上一会话有新记录）
         _loadStartHistory()
+        // 历史列表变动后重算一次评分进度（面板打开时 onVisibleChanged 也会触发，
+        // 这里保证走 showAndRefresh 的路径同样是最新数据）
+        try { _invalidateHistProgress(true) } catch (e) { /* ignore */ }
         show()
         raise()
         requestActivate()
@@ -4723,6 +5071,9 @@ ApplicationWindow {
         // 首次采集导入快照：把本次还原出的有效路固化进导入快照
         // （兼容老版本：升级前导入过但快照尚未建立的用户，重启一次即可补齐）
         try { _recordImportSnapshot() } catch (e) { /* ignore */ }
+        // 注：历史卡片的「进度/总数」不在这里统计。此时面板可能尚未打开，
+        // 且旧记录缺 fileCount 时需要扫盘（会触发 macOS 文件夹授权弹窗）。
+        // 统一推迟到面板可见时（onVisibleChanged）统计。
     }
 
     // ─── 全局拖拽承接区（有通路时启用） ───────────────────────────
@@ -5820,13 +6171,32 @@ ApplicationWindow {
                                         font.pixelSize: 9
                                     }
                                 }
-                                Label {
-                                    // 第二行：tag（可通过编辑按钮直接修改；空则留空）
-                                    text: rec && rec.snapshot ? (rec.snapshot.tag || "") : ""
-                                    color: "#8a8a92"
-                                    font.pixelSize: 10
-                                    elide: Text.ElideMiddle
+                                RowLayout {
                                     Layout.fillWidth: true
+                                    spacing: 6
+                                    Label {
+                                        // 第二行：tag（可通过编辑按钮直接修改；空则留空）
+                                        text: rec && rec.snapshot ? (rec.snapshot.tag || "") : ""
+                                        color: "#8a8a92"
+                                        font.pixelSize: 10
+                                        elide: Text.ElideMiddle
+                                        Layout.fillWidth: true
+                                    }
+                                    // 评分进度：tag 右侧显示「已完成/总数」。
+                                    // 评完用绿色，未评完用橙色；非评分模式不显示（宽度为 0）。
+                                    Label {
+                                        id: histProgressLabel
+                                        readonly property var _pg:
+                                            (rec && rec.id !== undefined)
+                                                ? (dlg._histProgressMap[String(rec.id)] || null)
+                                                : null
+                                        visible: _pg !== null
+                                        text: _pg !== null ? (_pg.done + "/" + _pg.total) : ""
+                                        color: _pg !== null && _pg.complete ? "#5ec269" : "#f0a24b"
+                                        font.pixelSize: 10
+                                        font.bold: _pg !== null
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
                                 }
                             }
 
