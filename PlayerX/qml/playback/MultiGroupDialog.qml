@@ -2528,7 +2528,19 @@ ApplicationWindow {
                     var fp = String((rows[r] || {})["file_path"] || "")
                     if (fp.length === 0) continue
                     var st = (rows[r] || {})["stars"]
-                    map[fp] = (typeof st === "number") ? st : 0
+                    if (!(typeof st === "number") || st <= 0) continue
+                    // 【重置屏蔽】与 C++ folderResetAfter / _histRatingIndex 对齐：
+                    // 该文件所在目录在此模式下被「重置进度」或「删除历史」清过之后，
+                    // 早于该时刻的归档行一律跳过。否则删完历史/重置进度后，续播检测
+                    // 仍会从归档快照把进度读回来，继续弹「继续评分？」。
+                    var adir = fp.substring(0, Math.max(0, fp.lastIndexOf("/")))
+                    var astamp = _histResetStamp(bm, adir)
+                    if (astamp > 0) {
+                        var ams = 0
+                        try { ams = Date.parse(String((rows[r] || {})["updated_at"] || "")) } catch (e2) { ams = 0 }
+                        if (!(ams > 0) || ams < astamp) continue
+                    }
+                    map[fp] = st
                 }
             }
         } catch (e) {
@@ -3722,6 +3734,208 @@ ApplicationWindow {
             }
         } catch (e) { console.warn("[MGD] 保存启动历史失败:", e) }
     }
+
+    // ─── 删除 / 清空历史时的「连带清除」─────────────────────────────
+    // 用户诉求：右侧只要删除任意一条、或点「清空历史」，都必须把它连带的
+    // 评分记录与播放进度一起清掉。
+    // 【原缺陷】旧实现只删了 startHistory 列表项 + task_<id>.json 任务档案，
+    // 评分 CSV 与「按模式分槽的 lanes 进度」原封不动。于是同一批文件夹再次
+    // 被接受任务（远程重新下发同名目录）时，_collectResumeInfo 立刻从评分
+    // CSV / 归档里读回旧进度，弹「继续评分？」，看起来像"清空历史没生效"。
+
+    // 文件夹路径规整：去尾部 '/' 或 '\\'，与 C++ normalizeFolderForMatch 对齐
+    // （FolderDialog 返回的路径常带尾斜杠，不规整会导致命中失败）。
+    function _normFolderKey(p) {
+        var s = String(p || "")
+        while (s.length > 1
+               && (s.charAt(s.length - 1) === "/" || s.charAt(s.length - 1) === "\\")) {
+            s = s.substring(0, s.length - 1)
+        }
+        return s
+    }
+    // 一条历史记录涉及的全部文件夹（规整 + 去重）
+    function _histRecordFolders(rec) {
+        var out = [], seen = {}
+        function _add(p) {
+            var k = _normFolderKey(p)
+            if (k.length === 0 || seen[k] === true) return
+            seen[k] = true
+            out.push(k)
+        }
+        try {
+            var lanes = ((rec || {}).snapshot || {}).lanes || []
+            for (var i = 0; i < lanes.length; ++i) _add((lanes[i] || {}).folderPath)
+        } catch (e) { /* ignore */ }
+        try {
+            var ra = (rec || {}).ratingAnchor || {}
+            var raf = ra.folders || []
+            for (var j = 0; j < raf.length; ++j) _add(raf[j])
+        } catch (e) { /* ignore */ }
+        return out
+    }
+    // 真正需要清除的文件夹 = 被删记录的文件夹 − 剩余记录仍在引用的文件夹。
+    // 共享同一文件夹的另一条历史记录不该被连累（它的评分数据要保留）。
+    // 【前置条件】调用前 startHistory 必须已剔除待删记录。
+    function _foldersToPurge(deletedRecs) {
+        var want = [], wseen = {}
+        for (var i = 0; i < deletedRecs.length; ++i) {
+            var fs1 = _histRecordFolders(deletedRecs[i])
+            for (var a = 0; a < fs1.length; ++a) {
+                if (wseen[fs1[a]] === true) continue
+                wseen[fs1[a]] = true
+                want.push(fs1[a])
+            }
+        }
+        if (want.length === 0) return []
+        var keep = {}
+        var src = startHistory || []
+        for (var j = 0; j < src.length; ++j) {
+            var fs2 = _histRecordFolders(src[j])
+            for (var b = 0; b < fs2.length; ++b) keep[fs2[b]] = true
+        }
+        var out = []
+        for (var k = 0; k < want.length; ++k) {
+            if (keep[want[k]] !== true) out.push(want[k])
+        }
+        return out
+    }
+    // 清除评分：传 "off" → C++ 侧遍历全部评分模式，删主 CSV 条目 + 写
+    // rating/resetStamps 时间戳。时间戳同时屏蔽「归档回落」，否则删了主 CSV
+    // 星星还会从归档快照里复活（进度照旧被检测到）。
+    function _purgeRatingsForFolders(folders) {
+        if (!folders || folders.length === 0) return
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && typeof Rating.markFoldersReset === "function") {
+                Rating.markFoldersReset(folders, "off")
+                console.log("[MGD] 连带清除评分记录:", folders.length, "个文件夹")
+            }
+        } catch (e) { console.warn("[MGD] 连带清除评分记录失败:", e) }
+    }
+    // 把一份 lanes 槽位 JSON 里命中文件夹的 currentIndex 归零。
+    // 返回空串 = 没有任何改动（调用方据此跳过写盘）。
+    function _resetProgressJson(json, keySet) {
+        if (!json || json.length === 0) return ""
+        var arr = null
+        try { arr = JSON.parse(json) } catch (e) { return "" }
+        if (!arr || !Array.isArray(arr)) return ""
+        var hit = false
+        for (var i = 0; i < arr.length; ++i) {
+            var it = arr[i]
+            if (!it) continue
+            if (keySet[_normFolderKey(it.folderPath)] !== true) continue
+            if (it.currentIndex !== 0) { it.currentIndex = 0; hit = true }
+        }
+        return hit ? JSON.stringify(arr) : ""
+    }
+    // 清除播放进度：把各模式槽位（off/subjective/quality/test）三轨存储里
+    // 命中这些文件夹的 currentIndex 归零，并同步当前内存 lanes。
+    // 之所以清全部槽位：同一条历史记录可能在不同评分模式下都被推进过，
+    // 记录被删除后任何一种模式的残留都不该在下一次启动时"复活"。
+    function _purgeLaneProgressForFolders(folders) {
+        if (!folders || folders.length === 0) return
+        var keySet = {}
+        for (var i = 0; i < folders.length; ++i) keySet[_normFolderKey(folders[i])] = true
+        var slugs = ["off", "subjective", "quality", "test"]
+        var dir = ""
+        try {
+            if (typeof Fs !== "undefined" && Fs
+                && typeof Fs.appCacheDir === "function") dir = Fs.appCacheDir() || ""
+        } catch (e) { dir = "" }
+        for (var s = 0; s < slugs.length; ++s) {
+            var slug = slugs[s]
+            var lsKey = "multiGroup/lanesJson/" + slug
+            // ① cache 文件（主路）
+            try {
+                if (dir.length > 0 && typeof Fs.readTextFile === "function") {
+                    var p = dir + "/multi_group_lanes_" + slug + ".json"
+                    var out = _resetProgressJson(Fs.readTextFile(p) || "", keySet)
+                    if (out.length > 0 && typeof Fs.writeTextFile === "function")
+                        Fs.writeTextFile(p, out)
+                }
+            } catch (e) { /* ignore */ }
+            // ② LocalStorage 兜底
+            try {
+                var lsOut = _resetProgressJson(_lsLoad(lsKey) || "", keySet)
+                if (lsOut.length > 0) _lsSave(lsKey, lsOut)
+            } catch (e) { /* ignore */ }
+            // ③ QSettings 兜底
+            try {
+                if (typeof Rating !== "undefined" && Rating
+                    && typeof Rating.loadString === "function"
+                    && typeof Rating.saveString === "function") {
+                    var qsOut = _resetProgressJson(Rating.loadString(lsKey, "") || "", keySet)
+                    if (qsOut.length > 0) Rating.saveString(lsKey, qsOut)
+                }
+            } catch (e) { /* ignore */ }
+        }
+        // ④ 内存 lanes 同步归零：否则"删完立刻点启动"仍会用旧索引，
+        //    且随后任何一次 _persistLanes 会把旧索引重新写回槽位。
+        try {
+            var changed = false
+            for (var r = 0; r < _rowsModel.count; ++r) {
+                var l = _rowsModel.get(r)
+                if (!l || keySet[_normFolderKey(l.folderPath)] !== true) continue
+                var rt = _laneRuntime[r]
+                var vis = (rt && rt.visibleFiles) ? rt.visibleFiles : []
+                var first = (vis.length > 0) ? (vis[0] || "") : ""
+                var wantIdx = (first.length > 0) ? 0 : -1
+                if (l.currentIndex === wantIdx && (l.currentPath || "") === first) continue
+                _rowsModel.set(r, {
+                    selected:    l.selected === true,
+                    folderPath:  l.folderPath || "",
+                    keyword:     l.keyword || "",
+                    currentPath: first,
+                    currentIndex: wantIdx,
+                    allCount:    l.allCount || ((rt && rt.allFiles) ? rt.allFiles.length : 0),
+                    visibleCount: l.visibleCount || vis.length
+                })
+                changed = true
+            }
+            if (changed) { _bumpState(); _persistLanes() }
+        } catch (e) { /* ignore */ }
+    }
+    // 清除逐文件勾选记录（"checklist:<filePath>"），与「重置进度」行为一致。
+    // 只处理内存里已加载的文件，不扫盘，避免触发系统文件夹授权弹窗。
+    function _purgeChecklistForFolders(folders) {
+        if (!folders || folders.length === 0) return
+        var keySet = {}
+        for (var i = 0; i < folders.length; ++i) keySet[_normFolderKey(folders[i])] = true
+        try {
+            if (typeof Rating === "undefined" || !Rating
+                || typeof Rating.saveString !== "function") return
+            for (var r = 0; r < _rowsModel.count; ++r) {
+                var l = _rowsModel.get(r)
+                if (!l || keySet[_normFolderKey(l.folderPath)] !== true) continue
+                var rt = _laneRuntime[r]
+                var files = (rt && (rt.allFiles || rt.visibleFiles))
+                            ? (rt.allFiles || rt.visibleFiles) : []
+                for (var f = 0; f < files.length; ++f) {
+                    var fp = files[f] || ""
+                    if (fp.length > 0) Rating.saveString("checklist:" + fp, "")
+                }
+            }
+        } catch (e) { /* ignore */ }
+    }
+    // 连带清除总入口。deletedRecs：被删除的记录（单条 → [rec]，清空 → 全部）。
+    // 【前置条件】startHistory 必须已剔除这些记录（用于计算共享文件夹的豁免）。
+    function _purgeHistoryCascade(deletedRecs) {
+        var folders = []
+        try { folders = _foldersToPurge(deletedRecs || []) } catch (e) { folders = [] }
+        if (folders.length > 0) {
+            _purgeRatingsForFolders(folders)
+            _purgeLaneProgressForFolders(folders)
+            _purgeChecklistForFolders(folders)
+        }
+        // 无论是否命中文件夹都刷新进度缓存：右侧卡片的"进度/总数"要立刻反映删除。
+        // 归档进度缓存（_archiveRatingCache）也必须清：它是「继续评分」检测的
+        // 数据源之一，不清就会用清理前的旧索引继续弹窗。
+        try { _archiveRatingCache = ({}) } catch (e) { /* ignore */ }
+        try { _invalidateHistProgress(true) } catch (e) { /* ignore */ }
+        if (folders.length > 0)
+            console.log("[MGD] 删除历史连带清除完成，文件夹数:", folders.length)
+    }
+
     // 删除单条启动历史（按唯一 id 定位）。其他记录编号不变；仅「清空历史」才重置编号。
     function _removeStartHistory(rec) {
         if (!rec || typeof rec.id !== "number") return
@@ -3738,6 +3952,9 @@ ApplicationWindow {
         if (histList && typeof histList._selectedHistId === "number"
                 && histList._selectedHistId === rec.id)
             histList._selectedHistId = -1
+        // 若删除的是"点击加载中"的那条：复位复用标记，否则后续启动会去找
+        // 一条已不存在的记录（虽然有兜底，但没必要留着脏状态）。
+        if (_histReuseId === rec.id) _histReuseId = -1
         // nextId 不回退：已删除的编号不复用，后续新记录继续单调递增
         _saveStartHistory()
         // 删除记录后同步移除其进度条目（避免映射里残留无主 key）
@@ -3748,6 +3965,10 @@ ApplicationWindow {
                 _histProgressMap = m
             }
         } catch (e) { /* ignore */ }
+        // 连带清除：该记录涉及的文件夹的评分记录 + 播放进度 + 勾选记录。
+        // startHistory 已在上面剔除该记录，_foldersToPurge 才能正确豁免
+        // 仍被其它记录引用的共享文件夹。
+        try { _purgeHistoryCascade([rec]) } catch (e) { /* ignore */ }
     }
     function _loadStartHistory() {
         var arr = []
@@ -6893,7 +7114,11 @@ ApplicationWindow {
                         // 清空 = 重置：编号退回 1，下次从 #1 重新开始
                         startHistoryNextId = 1
                         histList._selectedHistId = -1
+                        _histReuseId = -1
                         _saveStartHistory()
+                        // 连带清除：清空后没有任何记录保留，全部文件夹都不再被引用，
+                        // _foldersToPurge 会把它们全部纳入清理范围（评分 + 进度 + 勾选）。
+                        try { _purgeHistoryCascade(all) } catch (e) { /* ignore */ }
                     }
                     background: Rectangle {
                         radius: 3
