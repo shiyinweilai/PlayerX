@@ -61,11 +61,13 @@ class RatingStore : public QObject {
     //   uploadToken    : 可选；后端开了 PLAYERX_TOKEN 时填一致的值，未开可以为空。
     Q_PROPERTY(QString uploadServerUrl READ uploadServerUrl WRITE setUploadServerUrl NOTIFY uploadConfigChanged)
     Q_PROPERTY(QString uploadToken     READ uploadToken     WRITE setUploadToken     NOTIFY uploadConfigChanged)
-    // 【开发者本地覆盖】uploadUrlOverridden == true 表示当前 uploadServerUrl/uploadToken
-    // 由进程内 override（来源：环境变量 PLAYERX_UPLOAD_URL_DEV / PLAYERX_UPLOAD_TOKEN_DEV）
-    // 优先返回，不落 QSettings，也不接受远端 latest.json 的 clientConfig 覆盖。
-    // 关掉环境变量重启，行为完全等同旧版；因此开发/联调期间使用完全无副作用。
-    // QML 侧用它决定"是否忽略 Updater.clientConfigChanged"，也可用于 UI 上标注"开发者模式"。
+    // 【开发者本地默认】uploadUrlOverridden == true 表示本次进程检测到了开发者
+    // 默认地址（来源：环境变量 PLAYERX_UPLOAD_URL_DEV / PLAYERX_UPLOAD_TOKEN_DEV，
+    // 或 bundle 内 dev-upload.conf）。该地址只作为「默认值」：
+    //   · 用户从未改过地址（QSettings 为空或仍等于上次写入的 dev 默认）→ 自动跟随；
+    //   · 用户在界面改过地址 → 以用户值为准，重编译也不再被顶回本机 IP。
+    // 该标记仍用于 QML 判定"忽略远端 clientConfig 下发"与"跳过自动更新检查"
+    //（避免 dev 构建被 CDN 新版静默替换）。
     Q_PROPERTY(bool    uploadUrlOverridden READ uploadUrlOverridden CONSTANT)
     // 备注 tag：用于区分同一评分人多轮提交（如 test1 / 公司终评）。
     // 同 (rater, tag) 重复上传时后端返回 409，由 UI 弹窗确认后再带 force=true 重传。
@@ -519,12 +521,12 @@ private:
 
     QString m_baseDir;    // 数据根目录（AppDataLocation/PlayerX）
 
-    // 【开发者本地 override】进程启动时从环境变量读入，之后不落 QSettings；
-    //   · m_uploadUrlOverridden : 是否命中（PLAYERX_UPLOAD_URL_DEV 非空）
-    //   · m_uploadUrlOverride   : 覆盖的 URL（例如 http://localhost:2026/）
-    //   · m_uploadTokenOverride : 覆盖的 token（可空；仅当 URL 也 override 时才生效）
-    // 命中时 uploadServerUrl() / uploadToken() 直接返回内存态值，setUploadServerUrl
-    // 拒绝写入以防远端 clientConfig 或 QSettings 里的旧值把它顶掉。
+    // 【开发者本地默认地址】进程启动时从环境变量 / dev-upload.conf 读入。
+    //   · m_uploadUrlOverridden : 本次是否检测到 dev 默认地址（QML 据此跳过自动更新、
+    //                             忽略远端 clientConfig 下发）
+    //   · m_uploadUrlOverride   : 该默认地址（仅启动时写入 QSettings 用，不再参与 getter）
+    //   · m_uploadTokenOverride : 该默认 token（同上）
+    // 注意：getter/setter 一律走 QSettings，用户改过的地址不会被默认值覆盖。
     bool    m_uploadUrlOverridden = false;
     QString m_uploadUrlOverride;
     QString m_uploadTokenOverride;

@@ -37,6 +37,10 @@ constexpr const char* kSettingsUserKey      = "rating/user";
 constexpr const char* kSettingsModeKey      = "rating/mode";
 constexpr const char* kSettingsUploadUrlKey = "rating/uploadUrl";
 constexpr const char* kSettingsUploadTokKey = "rating/uploadToken";
+// 上次启动时生效的「开发者本地默认地址」。用于区分：
+//   · QSettings 里的地址 == 该值 → 用户没手动改过，dev 默认变化（换机器/IP 变）时跟随刷新；
+//   · QSettings 里的地址 != 该值 → 用户显式改过，一律保留用户值，不再被 dev 默认顶掉。
+constexpr const char* kSettingsDevUrlAppliedKey = "rating/devUrlApplied";
 constexpr const char* kSettingsUploadTagKey  = "rating/uploadTag";
 constexpr const char* kSettingsUploadGroupKey = "rating/uploadGroup";
 // 已保存账户列表（JSON 数组：[{name,url,token},...]），用户中心多账户持久化。
@@ -252,11 +256,68 @@ RatingStore::RatingStore(QObject* parent) : QObject(parent) {
         m_uploadUrlOverridden = true;
         m_uploadUrlOverride   = envUrl;
         m_uploadTokenOverride = envToken;
-        qInfo().noquote() << "[RatingStore] 开发者 override 生效 [" << source << "]："
-                          << "uploadServerUrl =" << envUrl
-                          << (m_uploadTokenOverride.isEmpty()
-                              ? QStringLiteral("(token 未设置)")
-                              : QStringLiteral("(token 已设置)"));
+        // 【软默认】dev-upload.conf / 环境变量只作为「默认地址」，不再硬覆盖：
+        //   · QSettings 为空                   → 写入 dev 默认（首次启动 / 新装）；
+        //   · QSettings == 上次写入的 dev 默认  → 跟随本次 dev 默认（换机器 / IP 变化自动生效）；
+        //   · QSettings 与上次 dev 默认不同     → 用户改过，一律保留用户值；
+        //   · lastDev 缺失但已有地址            → 视为用户既有值，保留（绝不覆盖用户数据）。
+        // 这样未打包的本地开发版也能直接在用户中心改 IP / Token。
+        QSettings s;
+        const QString curUrl  = s.value(kSettingsUploadUrlKey).toString().trimmed();
+        const QString lastDev = s.value(kSettingsDevUrlAppliedKey).toString().trimmed();
+        const bool followDev = curUrl.isEmpty()
+                || (!lastDev.isEmpty() && curUrl == lastDev);
+        if (followDev) {
+            s.setValue(kSettingsUploadUrlKey, envUrl);
+            s.setValue(kSettingsDevUrlAppliedKey, envUrl);
+            if (!envToken.isEmpty()) s.setValue(kSettingsUploadTokKey, envToken);
+            s.sync();
+            // 同步当前账户条目，避免「切走再切回」时地址退回旧 IP
+            const QString cur = s.value(kSettingsUserKey).toString().trimmed();
+            if (!cur.isEmpty()) {
+                QVariantList list = loadAccountsList();
+                bool hit = false;
+                for (auto& v : list) {
+                    QVariantMap m = v.toMap();
+                    if (m.value("name").toString() == cur) {
+                        m["url"] = envUrl;
+                        if (!envToken.isEmpty()) m["token"] = envToken;
+                        v = m;
+                        hit = true;
+                        break;
+                    }
+                }
+                if (hit) storeAccountsList(list, this);
+            }
+            qInfo().noquote() << "[RatingStore] 开发者默认地址生效 [" << source << "]："
+                              << "uploadServerUrl =" << envUrl
+                              << "（用户在界面改过后以用户值为准）";
+        } else {
+            qInfo().noquote() << "[RatingStore] 开发者默认地址未生效（用户已自定义），保留："
+                              << curUrl << "（dev 默认：" << envUrl << "）";
+        }
+
+        // 【账号条目迁移】多账号里存的 url 若仍等于 dev 默认地址，说明该账号从未
+        // 单独定制过服务器（只是继承默认值）。此时同步为当前生效地址，
+        // 否则「切换账号」会按账号条目恢复 url，把用户在界面改好的 IP 又顶回本机 IP。
+        const QString effectiveUrl = followDev ? envUrl : curUrl;
+        if (effectiveUrl != envUrl) {
+            QVariantList list = loadAccountsList();
+            bool changed = false;
+            for (auto& v : list) {
+                QVariantMap m = v.toMap();
+                if (m.value("url").toString().trimmed() == envUrl) {
+                    m["url"] = effectiveUrl;
+                    v = m;
+                    changed = true;
+                }
+            }
+            if (changed) {
+                storeAccountsList(list, this);
+                qInfo().noquote() << "[RatingStore] 账号条目中的 dev 默认地址已同步为："
+                                  << effectiveUrl;
+            }
+        }
     }
 
     // ── 旧数据迁移 ──────────────────────────────────────────────────
@@ -1506,22 +1567,13 @@ QByteArray RatingStore::buildArchiveExportCsvBytes(const QString& mode,
 // ═════════════════════════════════════════════════════════════════════
 
 QString RatingStore::uploadServerUrl() const {
-    // 【开发者 override 优先】：环境变量 PLAYERX_UPLOAD_URL_DEV 命中时，
-    // 直接返回内存态 URL，不读 QSettings；这样即使 QSettings 里存着正式 URL，
-    // 开发/联调期间 UI/上传/维度 API 全部走 dev URL。
-    if (m_uploadUrlOverridden) return m_uploadUrlOverride.trimmed();
+    // 【软默认】开发者默认地址已在构造时写入 QSettings（未覆盖用户已自定义的值），
+    // 这里统一读 QSettings，保证「用户在界面改的地址」与「上传实际使用的地址」同源。
     QSettings s;
     return s.value(kSettingsUploadUrlKey).toString().trimmed();
 }
 
 void RatingStore::setUploadServerUrl(const QString& url) {
-    // 【开发者 override 保护】：命中 override 时忽略任何来源的写入（远端 latest.json、
-    // 用户 UI 里改的、旧版持久化恢复），保证进程期内 uploadServerUrl 稳定不被抢走。
-    // 仍然发一次 uploadConfigChanged 通知，让 UI 刷新，但底层值不变。
-    if (m_uploadUrlOverridden) {
-        emit uploadConfigChanged();
-        return;
-    }
     QSettings s;
     QString trimmed = url.trimmed();
     if (s.value(kSettingsUploadUrlKey).toString() == trimmed) return;
@@ -1531,19 +1583,12 @@ void RatingStore::setUploadServerUrl(const QString& url) {
 }
 
 QString RatingStore::uploadToken() const {
-    // 【开发者 override 优先】：URL override 生效时，token 也走内存态，
-    // 允许 dev token 为空（例如后端未启用 PLAYERX_TOKEN），此时返回空串即可。
-    if (m_uploadUrlOverridden) return m_uploadTokenOverride;
+    // 与 uploadServerUrl 同源：一律读 QSettings，dev 默认 token 仅在未设置时写入。
     QSettings s;
     return s.value(kSettingsUploadTokKey).toString();
 }
 
 void RatingStore::setUploadToken(const QString& token) {
-    // 【开发者 override 保护】：与 URL 相同的短路策略。
-    if (m_uploadUrlOverridden) {
-        emit uploadConfigChanged();
-        return;
-    }
     QSettings s;
     if (s.value(kSettingsUploadTokKey).toString() == token) return;
     s.setValue(kSettingsUploadTokKey, token);

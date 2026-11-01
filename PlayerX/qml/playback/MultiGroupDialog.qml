@@ -1472,12 +1472,28 @@ ApplicationWindow {
         var hasChecklist = reviewChecklist
                 && typeof reviewChecklist.length === "number"
                 && reviewChecklist.length > 0
-        // 遍历所有通道，检查每个通道的每个文件（每组）是否都有评分
-        for (var li = 0; li < n; ++li) {
+        // 遍历本次启动参与的通路（启动后 selected 会被清空，若用它做遍历依据，
+        // 循环一次都不进 → 直接 return true → 未评分也能上传。与 groupCount()、
+        // 翻组导航保持同一口径：以 _startedLaneIdxs 为准）
+        var checkIdxs = (_startedLaneIdxs && _startedLaneIdxs.length > 0)
+            ? _startedLaneIdxs.slice() : []
+        if (checkIdxs.length === 0) {
+            // 尚未启动（配置阶段）：回退到勾选态
+            for (var si = 0; si < n; ++si) {
+                var sl = _rowsModel.get(si)
+                if (sl && sl.selected) checkIdxs.push(si)
+            }
+        }
+        if (checkIdxs.length === 0) return false
+        var checkedLanes = 0
+        for (var ci = 0; ci < checkIdxs.length; ++ci) {
+            var li = checkIdxs[ci]
+            if (li < 0 || li >= n) continue
             var lane = _rowsModel.get(li)
-            if (!lane || !lane.selected) continue
+            if (!lane) continue
             // REF 参考视频 lane（参考视频目录或目录名 REF）只显示不评分，不参与完整性判定
             if (_isRefLaneByPath(lane.folderPath)) continue
+            ++checkedLanes
             var rt = _laneRuntime[li]
             if (!rt || !rt.visibleFiles) return false
             for (var fi = 0; fi < rt.visibleFiles.length; ++fi) {
@@ -1514,6 +1530,9 @@ ApplicationWindow {
                 }
             }
         }
+        // 兜底：本次没有任何可评分通路被检查过（例如只剩 REF 路）时，
+        // 不能判定为"全部评完"，否则未评分也会放行上传
+        if (checkedLanes === 0) return false
         return true
     }
 

@@ -950,32 +950,27 @@ Window {
         var archiveRowCount = 0
         if (picked.length === 0) {
             try {
-                // 归档 csv 命名：playerx_<rater>_<mode>__<batch>_<group>.csv
-                // group 即上传 tag，因此【给定 tag 时归档文件唯一】，
-                // 直接按 "_<tag>.csv" 后缀定位，无需用户选择批次。
-                var tagKey = (typeof Rating !== "undefined" && Rating.uploadGroup)
-                             ? String(Rating.uploadGroup).trim() : ""
+                // 归档批次名 = 任务 tag（上传后自动归档时 batch 即为 tag，
+                // 见 _flushPendingArchive → _archiveFolders(picked, tagName, true)），
+                // 因此【必须按 tag 精确匹配批次名】，不做任何模糊/后缀匹配，
+                // 也不回退"最近批次"——否则会把别的任务（例如上月旧批次）的
+                // 记录当成当前任务的记录上传。每个任务 tag 独立，匹配不到就是没有。
+                var tagKey = root._currentUploadTag()
                 var batches = (typeof Rating !== "undefined")
                               ? (Rating.listArchiveBatches(root._selectedMode) || []) : []
                 var hit = null
                 if (tagKey.length > 0) {
-                    // ① 优先：批次目录名 == tag（统一命名后的正规形态，唯一且确定）
                     for (var ti = 0; ti < batches.length; ++ti) {
                         var bt = batches[ti] || {}
                         if (String(bt["name"] || "") === tagKey) { hit = bt; break }
                     }
-                    // ② 回退：按 csv 文件名后缀 _<tag>.csv 匹配（旧时间戳命名残留时）
-                    if (!hit) {
-                        for (var tj = 0; tj < batches.length; ++tj) {
-                            var bj = batches[tj] || {}
-                            if (String(bj["path"] || "").endsWith("_" + tagKey + ".csv")) {
-                                hit = bj; break
-                            }
-                        }
-                    }
+                } else {
+                    console.warn("[QuickUpload] tag 为空 → 不做归档回退")
                 }
-                // ③ 最后退回最近批次
-                if (!hit && batches.length > 0) hit = batches[0]
+                if (!hit) {
+                    console.log("[QuickUpload] 当前 Tab 无记录，且无同 tag 归档批次（tag=",
+                                tagKey, "），视为无数据可上传")
+                }
 
                 if (hit) {
                     var bName = String(hit["name"] || "")
