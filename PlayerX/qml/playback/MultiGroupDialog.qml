@@ -193,11 +193,31 @@ ApplicationWindow {
         } catch (e) { return "off" }
     }
     // 当前模式的人类可读标签，用于弹窗"作用域提示"
+    // 【修复】旧实现走 _modeSlug()，而 _modeSlug 是"持久化槽位"的归一化函数
+    // （只认 subjective / quality / quality_slide / test，其余一律归成 "off"），
+    // 于是多维评分（multi_dim）会被显示成"未启用评分"——与实际评分状态、
+    // 右侧历史里的「#N 多维评分」直接矛盾，也让用户误以为进度不属于评分模式。
+    // 展示标签必须读真实模式，不能用持久化槽位名。
     function _modeLabel() {
-        var m = _modeSlug()
+        var m = "off"
+        try {
+            m = (typeof Rating !== "undefined" && Rating)
+                ? (Rating.currentMode || "off") : "off"
+        } catch (e0) { m = "off" }
+        if (m === "" || m === "off") return "未启用评分"
+        // 优先用官方 label（新增模式无需再改这里）
+        try {
+            var ml = (typeof Rating !== "undefined" && Rating) ? (Rating.modeList || []) : []
+            for (var i = 0; i < ml.length; ++i) {
+                if (ml[i] && ml[i].id === m)
+                    return String(ml[i].label || m)
+            }
+        } catch (e) {}
+        // modeList 不可用时的静态兜底
         if (m === "subjective")    return "主观评分"
         if (m === "quality")       return "质量比较"
         if (m === "quality_slide") return "质量比较2（含滑动对比）"
+        if (m === "multi_dim")     return "多维评分"
         if (m === "test")          return "测试模式"
         return "未启用评分"
     }
@@ -1827,10 +1847,27 @@ ApplicationWindow {
                                 }
                             }
                             Label {
-                                color: modelData.idx > 0 ? "#0fa085" : "#888"
+                                // 【显示口径】此前显示的是"续播位置/总数"(idx+1)，
+                                // 容易被读成"已完成 2/2"，即便其中一项只打了星没勾检查项。
+                                // 现在优先展示真实完成度（星级齐 + 检查项已勾）：
+                                //   全部完成 → "2 / 2"（绿色）；存在未完成 → "1 / 2"（橙色）
+                                // 未完成时额外提示还差什么，方便直接看出是哪类没做完。
+                                property var it: modelData || {}
+                                property int _done: (typeof it._doneCount === "number")
+                                                     ? it._doneCount : -1
+                                property int _tot: it.total || 0
+                                property int _fi: (typeof it._firstIncomplete === "number")
+                                                   ? it._firstIncomplete : -1
+                                color: (_done >= 0 && _tot > 0 && _done >= _tot) ? "#0fa085"
+                                     : (_fi >= 0 ? "#f0a020" : "#888")
                                 font.pixelSize: 12
-                                font.bold: modelData.idx > 0
-                                text: (modelData.idx + 1) + " / " + (modelData.total || 0)
+                                font.bold: _done >= 0 && _tot > 0 && _done >= _tot
+                                text: {
+                                    // 未注入完成度（如未启用评分模式）时，退回原来的位置显示
+                                    if (_done < 0) return (it.idx + 1) + " / " + _tot
+                                    if (_fi >= 0) return "已完成 " + _done + " / " + _tot + " · 续评第 " + (_fi + 1)
+                                    return _done + " / " + _tot
+                                }
                             }
                         }
                     }
@@ -1892,15 +1929,16 @@ ApplicationWindow {
                     onClicked: {
                         // 把 _collectResumeInfo 推荐的 idx 写回 row，
                         // 让 start() 从"上次最后一次评分的下一个"开始播放。
-                        // 仅当推荐 idx 比当前 row.currentIndex 大时才覆盖（不回退）。
-                        // 【组对齐续播】当 info._aligned 为 true 时（存在未评完的路，
-                        // 已按最小推荐 idx 对齐全组），改为"强制覆盖"：即使某路
-                        // 推荐位置比当前小（如已评完的路要退回来对齐），也写入。
-                        // 否则对齐白算，播放画面仍会错位。
+                        // 【回退规则·关键修复】旧逻辑"只增不减"（推荐 idx 比当前小就跳过），
+                        // 于是"第 1 组还有一项没勾检查项、但持久化的 currentIndex 已经是
+                        // 第 2 组"时，位置永远回不到第 1 组——一启动就跳到下一组，正是
+                        // 用户反馈的"第一组明显没评完却直接翻组"。
+                        // 现在：只要该路存在未完成项（_firstIncomplete >= 0），就强制
+                        // 覆盖到该项；组对齐（_aligned）同理；其余情况才保持只增不减。
                         try {
                             var info = resumeChoiceDialog._info || {}
                             var its = info.items || []
-                            var forceOverwrite = (info._aligned === true)
+                            var groupForced = (info._aligned === true)
                             for (var ii = 0; ii < its.length; ++ii) {
                                 var it = its[ii] || {}
                                 var li = (typeof it._laneIndex === "number") ? it._laneIndex : -1
@@ -1912,6 +1950,10 @@ ApplicationWindow {
                                 var rt = _laneRuntime[li]
                                 if (!rt || !rt.visibleFiles) continue
                                 if (ri >= rt.visibleFiles.length) continue
+                                // 该路还有未完成项 → 必须停在它那一组（允许回退）
+                                var hasIncomplete = (typeof it._firstIncomplete === "number")
+                                                    && it._firstIncomplete >= 0
+                                var forceOverwrite = groupForced || hasIncomplete
                                 if (!forceOverwrite
                                         && typeof lane.currentIndex === "number"
                                         && lane.currentIndex >= ri) continue
@@ -2560,6 +2602,79 @@ ApplicationWindow {
         var canQueryRating = (typeof Rating !== "undefined" && Rating
                               && typeof Rating.ratingFor === "function"
                               && Rating.currentMode !== "off")
+        // 「检查项」口径与 allGroupsRated / unratedChecker 保持一致：
+        // 非空 checklist 配置时，每个文件至少要勾一项。
+        var hasChecklist = reviewChecklist
+                && typeof reviewChecklist.length === "number"
+                && reviewChecklist.length > 0
+        var slideTag = ""
+        try {
+            if (typeof Rating !== "undefined" && Rating
+                && Rating.currentMode === "quality_slide"
+                && slideDimKey && slideDimKey.length > 0)
+                slideTag = "multi_" + slideDimKey
+        } catch (e0) { slideTag = "" }
+
+        // 归档进度映射（懒加载）：主 CSV 里查不到时兜底，
+        // 避免"已去上传归档"的文件被判成没评过。
+        var _archRows = null
+        function _starsOf(fp, tag) {
+            if (!canQueryRating || !fp || fp.length === 0) return -1
+            var got = -1
+            try {
+                got = (tag && tag.length > 0) ? Rating.ratingFor(fp, tag)
+                                              : Rating.ratingFor(fp)
+            } catch (e) { got = -1 }
+            if (got < 0 && (!tag || tag.length === 0)) {
+                if (_archRows === null) _archRows = _loadArchiveRatingRows()
+                if (_archRows && _archRows[fp] !== undefined) got = 1
+            }
+            return got
+        }
+        // 该文件是否动过星（任一维度/滑动维度有分即算）
+        function _laneHasStar(fp) { return _starsOf(fp, "") >= 0 }
+        // 星级是否齐：与 allGroupsRated 同口径
+        //   多维：每个维度都要 > 0；单维：总分 > 0；quality_slide：还要滑动分
+        // 【维度未就绪的保险】续播检测发生在「启动对比」之前，而维度配置可能
+        // 要等远程加载/模式切换后才注入（reviewDimensions 为空）。此时若按
+        // "多维每个维度都要有分"去判，会把所有项都判成未完成，续播位置被错误
+        // 拉回第 1 组。因此维度为空时退回单维口径（总分 > 0），与 ratingFor
+        // 的单参查询一致；等维度就绪后 allGroupsRated 仍会做严格校验。
+        function _fileStarsComplete(fp) {
+            if (!canQueryRating) return true
+            if (hasDims) {
+                var hitDims = 0
+                for (var di = 0; di < reviewDimensions.length; ++di) {
+                    if (_starsOf(fp, "multi_" + reviewDimensions[di].key) > 0) ++hitDims
+                }
+                if (hitDims > 0) {
+                    // 至少一个维度能对上 → 维度 key 有效，按"每个维度都要有分"严格判断
+                    if (hitDims < reviewDimensions.length) return false
+                } else {
+                    // 一个维度都对不上：可能是后台改过维度名/key，导致历史记录的
+                    // slide_type 对不上。若该文件确实有评分记录（单参查询能命中），
+                    // 说明它是"按旧维度评过"的，不应被判成未完成而把续播位置拉回
+                    // 第 1 组。此时退回宽松判定（有分即完成）。
+                    if (!(_starsOf(fp, "") >= 0)) return false
+                }
+            } else if (!(_starsOf(fp, "") > 0)) {
+                return false
+            }
+            if (slideTag.length > 0 && !(_starsOf(fp, slideTag) > 0)) return false
+            return true
+        }
+        // 检查项是否漏勾（有配置且该文件一条都没勾）
+        function _fileChecklistMissing(fp) {
+            if (!hasChecklist || !canQueryRating) return false
+            var raw = ""
+            try { raw = Rating.loadString("checklist:" + fp, "") } catch (e) { raw = "" }
+            if (!raw || raw.length === 0) return true
+            try {
+                var arr = JSON.parse(raw)
+                return !(arr && typeof arr.length === "number" && arr.length > 0)
+            } catch (e2) { return true }
+        }
+
         for (var i = 0; i < _rowsModel.count; ++i) {
             var l = _rowsModel.get(i)
             if (!l || !l.selected) continue
@@ -2568,34 +2683,49 @@ ApplicationWindow {
             var idx   = (typeof l.currentIndex === "number" && l.currentIndex >= 0)
                             ? l.currentIndex : 0
 
-            // 通过 RatingStore 探测该 lane 已评分的最大 visible 索引（含 0 = 已取消评分行）
-            // 注意：ratingFor 命中时返回 0..maxStars；未命中返回 -1。
-            // 任一命中即视为"有进度"，并把推荐 idx 提到 lastRated + 1（不超过 total-1）。
+            // 【完成度口径·关键修复】此前只看 ratingFor 是否命中（即"打过星"），
+            // 于是"打了星但没勾检查项"也被算作已完成：弹窗显示 2/2、续播还往前推。
+            // 现在与 allGroupsRated / unratedChecker 对齐——判定一个文件"完成"必须：
+            //   ① 星级齐（多维=每个维度都有分；单维=有分；quality_slide 还要滑动分）
+            //   ② 有 checklist 配置时至少勾了一项
+            // 并且采用"第一个未完成项"作为续播位置：用户明确要求"任何一项没有完成
+            // 都应该停留在当前这一组"，所以存在未完成项时允许把位置往回拉，
+            // 而不是只增不减地一路推到末尾。
+            var doneCount = 0
+            var firstIncomplete = -1
             var lastRated = -1
+            // 是否"动过星"（任一项有任意分）。用来判定"到底有没有上次进度"：
+            // 注意不能只看 doneCount——用户打了星但漏勾检查项时 doneCount=0，
+            // 若因此判定"无进度"就会不弹续评分窗、直接按持久化的旧位置启动，
+            // 反而更容易跳到后面的组。有痕迹就弹窗，让用户自己选。
+            var anyStar = false
             if (canQueryRating) {
                 var rt = _laneRuntime[i]
                 var vis = (rt && rt.visibleFiles) ? rt.visibleFiles : []
-                // 【归档感知】只查主 CSV 会导致"已归档"的文件夹进度丢失：
-                //   评分 → 上传 → 自动归档（记录从主 CSV 移入归档快照）→ 主 CSV 空
-                //   → 下次启动检测不到进度 → 不弹"继续评分"，星星也空白。
-                // 改为：先查主 CSV；未命中的文件再回落到该 mode 的归档批次里查。
-                // 这样"评过并归档"与"评过未归档"的进度都能被识别。
-                var _archRows = null   // 懒加载：仅当主 CSV 漏判时才去扫归档
                 for (var v = 0; v < vis.length; ++v) {
-                    var got = -1
-                    try { got = Rating.ratingFor(vis[v]) } catch (e) { got = -1 }
-                    if (got < 0) {
-                        if (_archRows === null) _archRows = _loadArchiveRatingRows()
-                        if (_archRows && _archRows[vis[v]] !== undefined) got = 1
+                    var visFp = vis[v]
+                    var complete = _fileStarsComplete(visFp) && !_fileChecklistMissing(visFp)
+                    if (complete) {
+                        ++doneCount
+                    } else if (firstIncomplete < 0) {
+                        firstIncomplete = v
                     }
-                    if (got >= 0) lastRated = v
+                    if (!anyStar && _laneHasStar(visFp)) anyStar = true
                 }
-            }
-            if (lastRated >= 0) {
-                hasProgress = true
-                // 推荐到下一个未评分项；若已评到最后一个，停在最后
-                var nextIdx = Math.min(lastRated + 1, Math.max(0, total - 1))
-                if (nextIdx > idx) idx = nextIdx
+                // _lastRated 语义（供下面的"组对齐"取最小用）：
+                //   · 全部完成 → total-1（对齐时跳过，不拖住其他路）
+                //   · 存在未完成 → 第一个未完成项的前一个（没评过则为 -1）
+                if (firstIncomplete < 0) lastRated = (doneCount > 0) ? (total - 1) : -1
+                else lastRated = firstIncomplete - 1
+
+                if (anyStar || doneCount > 0) hasProgress = true
+                // 推荐位置：优先停在"第一个未完成项"（允许回退）；
+                // 全部完成则停在最后一个，保持原行为。
+                if (firstIncomplete >= 0) {
+                    if (firstIncomplete !== idx) idx = firstIncomplete
+                } else if (doneCount > 0 && total > 0 && idx !== total - 1) {
+                    idx = total - 1
+                }
             }
             // 文件名（不带路径）
             var name = ""
@@ -2629,6 +2759,12 @@ ApplicationWindow {
                 // 给"接着评分"分支用：把推荐 idx 同步回 row 时需要它
                 _laneIndex: i,
                 _recommendIdx: idx,
+                // 真实完成度（星级齐 + 检查项已勾才算完成），供弹窗展示。
+                // 未启用评分（canQueryRating=false）时传 -1，表示"无完成度概念"，
+                // 弹窗退回显示播放位置，避免把 off 模式显示成 "0 / 2"。
+                _doneCount: canQueryRating ? doneCount : -1,
+                // 第一个未完成项的可见索引（-1 = 全部完成 / 未启用评分）
+                _firstIncomplete: firstIncomplete,
                 // 给"组对齐"用：该路最后评到的可见索引（-1 = 没评过 / 模式关）；
                 // _isRef：参考视频路不参与评分，对齐取最小值时不能拖住全组
                 _lastRated: lastRated,
@@ -5452,6 +5588,9 @@ ApplicationWindow {
             if (missing.length > 0) {
                 _pendingNavDir = dir
                 _pendingMissing = missing
+                // 先抛视觉提示信号（主界面各未完成通道窗口抖动+描边闪烁），
+                // 再弹提示窗。顺序无关逻辑，只是让用户"先看到哪里有问题"。
+                try { dlg.unratedBlocked(missing) } catch (e) {}
                 unratedDialog.show()
                 return false
             }
@@ -5462,6 +5601,20 @@ ApplicationWindow {
     // 提醒弹窗"跳过"时调用：绕过 reviewMode 拦截，直接执行翻组。
     property int _pendingNavDir: 0
     property var _pendingMissing: []
+
+    // 【翻组被拦截 → 主界面窗口提示】
+    // 纯视觉反馈信号，不参与任何判定：只是把"哪几路没评完"抛给主界面，
+    // 由通道窗口自己抖动 + 描边闪烁。
+    // 为什么单独发信号而不是让 cell 直接读 _pendingMissing：
+    //   · cell 与 dlg 之间没有强引用（Main.qml 里通过属性透传），读属性会引入耦合；
+    //   · 信号只在拦截瞬间触发一次，天然对齐"抖一下"的时序，不会因绑定重算重复抖动。
+    // missing 语义与 unratedChecker() 一致：>=0 为 player 索引，-2/-3 为滑动 L/R。
+    signal unratedBlocked(var missing)
+
+    // 未评分提醒弹窗是否正开着。供主界面各通道窗口判断"要不要持续呼吸描边"：
+    // 弹窗是 ApplicationModal，单次闪一下很可能被盖住看不见，需要在整个弹窗
+    // 期间给出持续提示。这里只暴露只读状态，不改动弹窗任何行为。
+    readonly property bool unratedDialogVisible: unratedDialog.visible
     function _doNavigate(dir) {
 
         // ── 单路浏览：按 viewCount 翻页 ──────────────────────────────

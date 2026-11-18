@@ -7,6 +7,16 @@ import PlayerX 1.0
 
 Item {
     id: videoArea
+
+    // 「翻组被拦」窗口提示信号：由 Main 在 MultiGroupDialog.unratedBlocked 时转发。
+    // players 语义与 unratedChecker() 一致：>=0 为 player 索引，-2/-3 为滑动 L/R 哨兵。
+    // 各 cell 自行判断自己在不在名单里，不在就完全不动。
+    signal unratedFlashRequested(var players)
+    function flashUnratedChannels(players) {
+        if (!players || typeof players.length !== "number" || players.length === 0) return
+        videoArea.unratedFlashRequested(players)
+    }
+
     property alias ratingToast: ratingToast
     property var root: null
     // 滑动对比评分回调，由 Main.qml 传入 Logic.setSlideRating，避免 VideoArea 内引用不到 Logic

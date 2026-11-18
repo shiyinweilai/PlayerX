@@ -43,6 +43,107 @@ Rectangle {
     // videoArea 上，viewRoot（Main root）上只有透传函数没有该信号）
     property var  videoAreaRef: null
 
+    // ─── 翻组被拦截时的窗口提示（纯视觉，不参与任何逻辑）───────────────
+    // 触发链：MultiGroupDialog.navigate() 发现本组没评完 → emit unratedBlocked(missing)
+    //   → Main 转接 videoArea.flashUnratedChannels(missing)
+    //   → 各 cell 若在名单里就抖一下；只要弹窗还开着就持续呼吸描边。
+    //
+    // 两层反馈各解决一个问题：
+    //   · 抖动负责"立刻抓住注意力"，在按下一组的瞬间给出"走不了"的直觉反馈；
+    //   · 呼吸描边负责"持续指认是哪几路"，因为拦截弹窗是模态窗，
+    //     单次抖动很容易被盖住，用户需要抬眼就能看到具体哪几路没完成。
+    //
+    // 只用横向抖动 + 琥珀色描边呼吸：不做缩放（缩放会让画面重采样，破坏 1:1 像素）、
+    // 不用红色（避免被误读成"报错/失败"），统一用琥珀橙 #ffb020。
+    property real _alertShakeX: 0
+
+    // 抖动只做绘制层位移（transform），不改 x/y，不影响 Grid 布局与邻居排布。
+    // 【位移必须取整】动画中间值是小数，直接喂给 Translate 会让视频纹理按
+    // 亚像素平移 → 触发重采样，抖动期间画面发虚。取整后抖动期间仍是整数像素，
+    // 与项目一贯坚持的"1:1 像素上屏"一致。
+    transform: Translate { x: Math.round(cell._alertShakeX) }
+
+    // 拦截提示动效：横向抖动 2 个来回（幅度递减，有自然衰减感）。
+    // 全程 ~300ms，力度克制（±7px），只求"眼角能瞥见"。
+    SequentialAnimation {
+        id: alertAnim
+        NumberAnimation { target: cell; property: "_alertShakeX"; from: 0;  to: -7; duration: 55; easing.type: Easing.OutQuad }
+        NumberAnimation { target: cell; property: "_alertShakeX"; from: -7; to: 7;  duration: 90; easing.type: Easing.InOutQuad }
+        NumberAnimation { target: cell; property: "_alertShakeX"; from: 7;  to: -4; duration: 80; easing.type: Easing.InOutQuad }
+        NumberAnimation { target: cell; property: "_alertShakeX"; from: -4; to: 0;  duration: 70; easing.type: Easing.OutQuad }
+    }
+
+    // 本路是否仍处于「被拦截且未完成」状态：弹窗开着 + 本路在未完成名单里。
+    // 语义与 unratedChecker() 一致（>=0 为 player 索引，-2/-3 是滑动哨兵，
+    // 哨兵不对应任何窗口，自然不会命中）。
+    readonly property bool _alertActive: {
+        var d = cell.multiGroupDialog
+        if (!d || !d.unratedDialogVisible) return false
+        var arr = d._pendingMissing
+        if (!arr || typeof arr.indexOf !== "function") return false
+        return arr.indexOf(cell.playerIdx) >= 0
+    }
+
+    // 琥珀色描边呼吸层：只画边框、不填色、不接收鼠标（Rectangle 默认不拦截事件），
+    // 因此不会影响选中、打分、拖拽、放大等任何交互。
+    // z=90：盖在 HUD（5~20）之上让用户一眼看到，但低于手机比例内选中框(100)
+    // 与 checklist 弹窗(210)/菜单(300)，不会遮挡它们。
+    //
+    // 【为什么是"呼吸"而不是"闪一下就结束"】拦截弹窗是 ApplicationModal，
+    // 会盖在视频窗之上；单次 600ms 的脉冲很可能正好被弹窗挡住或用户没看见。
+    // 只要弹窗还开着、本路还没评完，就持续缓慢呼吸（1.4s 一轮），
+    // 用户随时抬眼都能定位到具体是哪几路——弹窗关闭即自动停止。
+    //
+    // 【opacity 为何用中间属性】动画会"接管"它目标的属性，若让 opacity 既绑定
+    // 表达式又挂动画，两者会互相抢写（qmlint 报 duplicate-property-binding）。
+    // 这里让动画只驱动 _alertBreathe，opacity 纯粹由绑定算出，
+    // 停止时还能靠 Behavior 平滑淡出，不出现硬切。
+    Rectangle {
+        id: alertBorder
+        anchors.fill: videoBox
+        color: "transparent"
+        border.color: "#ffb020"
+        border.width: 3
+        radius: 3
+        z: 90
+        visible: opacity > 0.01
+        opacity: cell._alertActive ? alertBorder._alertBreathe : 0
+        property real _alertBreathe: 0.3
+
+        Behavior on opacity { NumberAnimation { duration: 180 } }
+
+        // 用显式 target 而不是 `SequentialAnimation on _alertBreathe`：
+        // 后者会把属性声明处的初值当成"另一路绑定"，触发 qmllint
+        // duplicate-property-binding 告警。
+        SequentialAnimation {
+            id: alertBreatheAnim
+            running: cell._alertActive
+            loops: Animation.Infinite
+            NumberAnimation {
+                target: alertBorder; property: "_alertBreathe"
+                from: 0.30; to: 0.90; duration: 700; easing.type: Easing.InOutQuad
+            }
+            NumberAnimation {
+                target: alertBorder; property: "_alertBreathe"
+                from: 0.90; to: 0.30; duration: 700; easing.type: Easing.InOutQuad
+            }
+            // 停止后（running=false）把值复位，让 opacity 绑定回到 0
+            onRunningChanged: if (!running) alertBorder._alertBreathe = 0.3
+        }
+    }
+
+    // 收到"翻组被拦"通知：只有本路在未完成名单里才抖一下。
+    Connections {
+        target: cell.videoAreaRef
+        ignoreUnknownSignals: true
+        function onUnratedFlashRequested(players) {
+            if (!players || typeof players.length !== "number") return
+            if (players.indexOf(cell.playerIdx) < 0) return
+            // 从当前值重启：连按下一组时每次都完整播一遍
+            alertAnim.restart()
+        }
+    }
+
     id: cell
 
     // 【星星打分失效 / checklist 不弹出的根因】RatingLogic.js 没有 `.pragma library`，

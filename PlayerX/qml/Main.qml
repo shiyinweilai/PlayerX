@@ -2691,6 +2691,16 @@ Component {
         // 开发者模式：勾选时模式选择菜单显示「测试模式」
         developerMode: root.developerMode
 
+        // ── 翻组被拦 → 未完成通道窗口提示 ──────────────────
+        // 纯视觉转发：MultiGroupDialog 判定本组还有未评分/未勾检查项的通道时
+        // 抛 unratedBlocked(missing)，这里原样交给 VideoArea，由各 cell 自行
+        // 判断是否命中：命中则抖一下（即时反馈），并在弹窗关闭前持续呼吸描边
+        // （持续指认是哪几路没完成）。
+        // 不参与任何评分判定，也不改变翻组拦截行为。
+        onUnratedBlocked: function(missing) {
+            videoArea.flashUnratedChannels(missing)
+        }
+
         // ── 评分模式回调注入 ───────────────────────────────────
         // 由 dlg 内部在 reviewMode=true 时调用，决定当前组未评分的通道索引列表。
         // 这里复用主窗 cellRatings + Engine.fileCount，安全且零侵入。
