@@ -136,6 +136,52 @@ Rectangle {
         return false
     }
 
+    // ─── "已打星但 checklist 未勾"提醒判定 ───────────────────────────
+    // 四个条件同时满足才提示：
+    //   1) 处于评分模式
+    //   2) 不是 REF 参考视频（REF 只做对照，不参与评分，也从不打分）
+    //   3) 本路已经打过分（任一维度 > 0；无维度配置时总分 > 0）
+    //   4) 当前模式配置了 checklist，但本文件的勾选为空
+    //
+    // 为什么用"任一维度 > 0"而不是"全部维度打完"：
+    //   交互链路是「点任意一颗星 → 立刻弹出 checklist 弹窗 → 用户没勾就关掉」，
+    //   所以只要动过星就有漏勾的可能，正好对应你说的"只勾了星星"。
+    //   星星没打完的通道本来就会被「未评分」对话框拦住，不会漏到下一组。
+    //
+    // 只用于 UI 提醒，不参与任何评分 / 校验 / 导出逻辑。
+    readonly property bool _hasAnyRating: {
+        var arr = viewRoot.cellRatings
+        var i = cell.playerIdx
+        if (!arr || i < 0 || i >= arr.length) return false
+        var v = arr[i]
+        if (typeof v === "object" && v !== null) {
+            for (var k in v) if (v[k] > 0) return true
+            return false
+        }
+        return typeof v === "number" && v > 0
+    }
+    readonly property bool _ckCheckedEmpty: {
+        // 显式依赖全局变更计数：checklist 存 QSettings，不读它绑定不会刷新
+        var _rev = viewRoot.checklistRevision
+        // 显式依赖文件列表：翻组 / 替换本路后 filePathAt 会变，必须重算
+        var _dep = Engine.titles
+        var ck = viewRoot.reviewChecklist
+        if (!(ck && typeof ck.length === "number" && ck.length > 0)) return false
+        if (typeof Rating === "undefined") return false
+        var fp = ""
+        try { fp = Engine.filePathAt(cell.playerIdx) || "" } catch (e) { fp = "" }
+        if (fp.length === 0) return true
+        var raw = Rating.loadString("checklist:" + fp, "")
+        if (!raw || raw.length === 0) return true
+        try {
+            var arr2 = JSON.parse(raw)
+            return !(arr2 && typeof arr2.length === "number" && arr2.length > 0)
+        } catch (e) { return true }
+    }
+    readonly property bool _showCkWarning:
+        viewRoot.reviewMode && !cell._isRefLane
+        && cell._hasAnyRating && cell._ckCheckedEmpty
+
     // ─── 内容内框（手机比例 / 固定尺寸锁定）───────────────────
     // 三种模式（与 Main.qml root 上的属性保持一致）：
     //   1) viewRoot.phoneFixedActive (W>0 && H>0)：固定像素尺寸；
@@ -357,7 +403,34 @@ Rectangle {
         readonly property int _channelOccupiedW: channelBar.visible ? (channelBar.width + 6 + 8) : 8
         readonly property int _maxAvailWidth:
             Math.max(150, videoBox.width - (windowBadge.width + 6) - 6 - _channelOccupiedW)
-        implicitWidth:  pathRow.implicitWidth + 12
+
+        // 【为什么需要 TextMetrics】原来 implicitWidth 是 pathRow.implicitWidth + 12，
+        // 而 pathRow 的隐式宽度又由 pathInner（= 目录 implicitWidth + 文件名
+        // implicitWidth）逐级累加而来。Text 的 implicitWidth 是带小数且各自
+        // 取整的，累加后与实际排版宽度存在亚像素差；只要差一丁点，
+        // Text.elide 就判定"放不下"并把尾部换成省略号——于是出现
+        // "A/1.mp4" 明明右侧还有大片空白却显示成 "A/1.m…"。
+        // 这里直接用 TextMetrics 量出两段的真实 advanceWidth 相加，
+        // 再加 3px 余量，保证只要没被右侧胶囊条真正挤到，就一个字都不省略。
+        TextMetrics {
+            id: dirMetrics
+            // 字体直接绑定到实际渲染的 Text，避免默认字体族/粗细不一致
+            // 造成测量偏差（Text 可能继承 ApplicationWindow 的全局字体）。
+            font: dirPrefixLabel.font
+            text: pathBar.pathInfo.dir.length > 0
+                  ? (pathBar.pathInfo.dir + "/")
+                  : ""
+        }
+        TextMetrics {
+            id: fileMetrics
+            font: fileNameLabel.font
+            text: pathBar.pathInfo.file
+        }
+
+        // 目录 + 文件名的真实排版宽度（未含左右 6px 内边距）
+        readonly property real _textW: dirMetrics.advanceWidth + fileMetrics.advanceWidth
+
+        implicitWidth:  Math.ceil(_textW) + 12 + 3
         implicitHeight: pathRow.implicitHeight + 4
         width:  Math.min(implicitWidth, _maxAvailWidth)
         height: implicitHeight
@@ -388,8 +461,13 @@ Rectangle {
                 id: pathInner
                 Layout.fillWidth: true
                 Layout.preferredHeight: 14
-                Layout.preferredWidth: dirPrefixLabel.implicitWidth + fileNameLabel.implicitWidth
-                Layout.minimumWidth: Math.min(dirPrefixLabel.implicitWidth + 16, 160)
+                // 用 TextMetrics 的实测宽度，而不是各 Text 的 implicitWidth。
+                // 原因：fileNameLabel 同时有 left/right 锚点，其 implicitWidth 与
+                // 父项宽度互相依赖，首轮布局若算出 0 就再也不会重算，
+                // parent 的 preferredWidth 被冻结成"只有目录"的窄宽度，
+                // 于是文件名被 elide 成 "A/1.m…"——即用户看到的现象。
+                Layout.preferredWidth: pathBar._textW
+                Layout.minimumWidth: Math.min(dirMetrics.advanceWidth + 16, 160)
 
                 // 目录段：永远完整显示（不省略），靠左
                 Text {
@@ -902,6 +980,36 @@ Rectangle {
                 }
             }
         }   // ← end of channelCol（ColumnLayout 三行布局）
+    }
+
+    // ─── checklist 漏勾提示（仅"已打星但没勾检查项"时出现）───────────────
+    // 用户场景：只点了星星就直接翻下一组，checklist 一个都没勾。
+    // 星条看起来"已经评完"，很容易漏掉检查项，导致导出的标注数据缺一项。
+    // 这里在右上通道信息栏正下方补一行醒目提示，帮助快速定位漏勾的通道。
+    //
+    // 为什么放在 channelBar 外面而不是作为 channelCol 的第 4 行：
+    //   channelBar 的宽度由各行 implicitWidth 的较大者决定，多塞一行文字
+    //   会把整个信息栏撑宽，进而挤压左侧路径胶囊，让文件名重新变成省略号。
+    //   独立悬挂在下方则完全不参与 channelBar 的宽度计算。
+    //
+    // 显隐条件见 cell._showCkWarning：非 REF + 有 checklist 配置 +
+    // 已打分 + checklist 勾选为空。纯提示，不参与任何评分 / 校验逻辑。
+    Text {
+        id: ckWarningRow
+        anchors.right: channelBar.right
+        anchors.top: channelBar.bottom
+        anchors.topMargin: 3
+        // 跟随通道信息栏（C 键）显隐：HUD 全隐藏时提示也不单独残留。
+        visible: cell._showCkWarning && viewRoot.effectiveChannelVisible
+        text: "⚠ 已打分，未勾检查项"
+        // 琥珀黄而非红色：这是"漏了一步"的提醒，不是错误告警。
+        // style 描边保证在亮/暗画面上都能读清。
+        color: "#f0b429"
+        font.pixelSize: 10
+        font.bold: true
+        style: Text.Outline
+        styleColor: "#99000000"
+        z: 5
     }
 
     // ─── Checklist Popup（打完总分后弹出，多维评分模式专用）──────────────

@@ -672,6 +672,12 @@ ApplicationWindow {
     //       这是当前最小实现的明确取舍——后续若要持久化再扩展即可。
     property var cellRatings: []
 
+    // 【checklist 勾选变更计数】checklist 勾选存在 QSettings（Rating.saveString），
+    // 不是 QML 属性，绑定无法感知它的变化。这里用一个自增计数器当"变更信号"：
+    // 每次勾选 / 取消勾选后 +1，任何需要读 checklist 的绑定显式读一下本属性，
+    // 就能在勾选后立刻重算（例如 cell 里"已打星但未勾检查项"的提醒行）。
+    property int checklistRevision: 0
+
     // 「评分模式」全局开关（UI 层）。
     // 真值由 Rating.currentMode 派生：mode != "off" 即为评分态；
     // 这里通过 readonly + 访问 Rating.currentMode 让顶部胶囊条 channelBar

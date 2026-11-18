@@ -330,6 +330,13 @@ function _resolveRatingTarget() {
     return -1
 }
 function _onChecklistChanged() {
+    // checklist 存于 QSettings，不是 QML 属性，绑定感知不到变化；
+    // 这里推进全局计数器，让所有依赖它的绑定（如 cell 内"已打星但未勾检查项"
+    // 的提醒行）在勾选 / 取消后立即重算。
+    try {
+        if (_root && _root.checklistRevision !== undefined)
+            _root.checklistRevision = _root.checklistRevision + 1
+    } catch (e) {}
     if (typeof _multiGroupDialog !== "undefined" && _multiGroupDialog._bumpState)
         _multiGroupDialog._bumpState()
     // 若「视频评分数据」对话框已打开，让它同步重算文件夹完成度（含 checklist 未勾选统计），
