@@ -187,6 +187,27 @@ Rectangle {
 
         // 内容高度：N 个窗口纵向紧挨排列（间隙 0，靠边框区分）
         contentHeight: refSidebar.slotVisibleCount * refSidebar.slotWindowHeight
+        // 点击参考图区（属于"非通道窗口"）同样取消通道选中着色。
+        // 与提示词底栏同理：Flickable 在按下瞬间就 grab 指针，TapHandler 收不到
+        // 完整的 press/release，onTapped 不会触发。改用 MouseArea：单击（未拖动）
+        // 正常收到 clicked，一旦开始拖动就取消点击、grab 交给 Flickable 滚动，
+        // 上下滚动与惯性手感不受影响；槽内图片/按钮的 MouseArea 仍优先。
+        MouseArea {
+            // 不用 anchors.fill: parent —— 这里的 parent 是 Flickable 的
+            // contentItem，高度 = N 个槽位总高，滚动时不会覆盖当前视口。
+            // 显式按视口尺寸铺一层，保证当前可见的空白区域都能点中。
+            x: 0
+            y: slotFlick.contentY
+            width: slotFlick.width
+            height: slotFlick.height
+            z: -1
+            acceptedButtons: Qt.LeftButton
+            onClicked: {
+                if (refSidebar.root && refSidebar.root.currentTab === "play"
+                        && refSidebar.root.selectedIdx >= 0)
+                    refSidebar.root.selectedIdx = -1
+            }
+        }
 
         Column {
             id: slotColumn

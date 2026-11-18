@@ -74,6 +74,9 @@ void installLoginMenuSuppressor(void* ctx, void(*fn)(void*));
 // 标题栏公告文字（macOS 原生标题栏内嵌，红绿灯右侧标题位置，
 // 不占内容区；文字放不下时左右往复滚动）。
 void installTitleBarNotice(QQuickWindow* win, const char* text);
+// 标题栏空白处左键按下监听：仅向 QML 转发"点了一下标题栏空白"，事件本身
+// 原样交还系统，不影响窗口拖动 / 双击 zoom / 原生按钮。
+void installTitleBarBlankClickMonitor(QQuickWindow* win, void* ctx);
 static void openLoginDialogFromNative(void* ctx) {
     // ctx = QML 根对象；QueuedConnection 保证回到 Qt 主事件循环再开对话框
     QMetaObject::invokeMethod(static_cast<QObject*>(ctx),
@@ -358,6 +361,10 @@ int main(int argc, char* argv[]) {
         // 放不下时左右往复滚动）。内容即打分原则提示。
         installTitleBarNotice(qobject_cast<QQuickWindow*>(rootObjs.first()),
                               "打分原则: 相对分更重要，完全符合提示词无物理问题五分，三个视频中更差的要多扣更多分，体现出好坏。");
+        // 标题栏空白处点击监听：让「点击非通道窗口区域取消选中」也能覆盖
+        // 系统原生标题栏这条区域（QML 收不到该区域的鼠标事件）。
+        installTitleBarBlankClickMonitor(qobject_cast<QQuickWindow*>(rootObjs.first()),
+                                         rootObjs.first());
         // 【补一次登录态同步】QML 的 Component.onCompleted 早于此处安装原生按钮，
         // 那次调用因 g_profileBtn 为 nil 被丢弃；而 currentUser 是持久化值、
         // 启动后不再变化，不会触发 currentUserChanged → 按钮会停在图标态。

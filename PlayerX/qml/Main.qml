@@ -229,6 +229,14 @@ ApplicationWindow {
     function _onTitleBarSidebarToggle() {
         root.rightSidebarOpen = !root.rightSidebarOpen
     }
+    // macOS 原生标题栏空白处左键点击（由 C++ 的 NSEvent 本地监听器转发）。
+    // 标题栏属系统原生区域，QML 收不到鼠标事件，因此需要这条旁路：
+    // 点一下标题栏空白 = 「点击了非通道窗口区域」→ 清掉通道选中着色。
+    // 只动 selectedIdx，不碰 Engine.activeIndex，与其它空白点击行为一致。
+    function _onTitleBarBlankClick() {
+        if (root.currentTab === "play" && root.selectedIdx >= 0)
+            root.selectedIdx = -1
+    }
     property bool rightSidebarOpen: true
     // 启动对比（fileCount 0→N）/ 回到空态（N→0）跃迁前的 fileCount 快照：
     // 用于区分"启动对比时默认收起侧栏"与"用户播放中手动开关侧栏"，
@@ -2062,6 +2070,28 @@ ApplicationWindow {
         id: csvBottomVSplitter
         root: root
         csvBottomBar: csvBottomBar
+    }
+
+    // ─── 全局「点击空白处取消通道选中」兜底层 ──────────────────────────
+    // 背景：VideoArea 内部已有一层 z:-1 的 MouseArea，能处理落在视频区内的
+    // 空白点击（cell 之间的 4px 间距、letterbox 之外等）；但视频区以外的区域
+    // （顶部公告条、底部提示词栏、左侧参考图栏空白、左右导航空白、底栏空隙…）
+    // 没有任何一处会清 selectedIdx，导致选中通道后点了别处仍是着色状态。
+    //
+    // 实现要点：
+    //   · 铺满整个窗口（contentItem），z 压到极低 —— 纯兜底，绝不抢上层控件的
+    //     事件：任何按钮 / cell 内 cellMouse / Flickable 都会先消费自己的点击，
+    //     只有"谁都没接"的空白点击才会落到这里；
+    //   · 仅在播放 tab 且确实有选中时才 enabled，无选中时完全失效，零干扰
+    //     （disabled 的 MouseArea 不接收任何事件，连滚轮都不挡）；
+    //   · 只清 selectedIdx，不动 Engine.activeIndex —— 与既有设计一致：
+    //     取消选中只是去掉着色边框，不改变底层播放/渲染聚焦。
+    MouseArea {
+        anchors.fill: parent
+        z: -1000
+        acceptedButtons: Qt.LeftButton
+        enabled: root.currentTab === "play" && root.selectedIdx >= 0
+        onClicked: root.selectedIdx = -1
     }
 
     // ─── 视频网格容器 ────────────────────────────────────────────────────

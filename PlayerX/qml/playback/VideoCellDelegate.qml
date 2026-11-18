@@ -28,8 +28,13 @@ import "../common/MainLogic.js" as Logic
 import "RatingLogic.js" as RatingLogic
 
 Rectangle {
-    // 顶层属性（抽离唯一新增）：playerIdx / viewRoot；其余沿用原 cell 内属性。
+    // 顶层属性（抽离唯一新增）：playerIdx / slotIndex / viewRoot；其余沿用原 cell 内属性。
+    //   · playerIdx：底层 player 索引（评分 / seek / 视频信息等一律用它）
+    //   · slotIndex：当前 visual 槽位（= Repeater 的 index，即数字键 1..9 的序号）
+    //     仅「放大本路」这类必须与数字键语义对齐的操作使用。
+    //     两者在有 REF 置顶 / 拖拽重排时并不相等，混用会导致操作错路。
     property int  playerIdx: -1
+    property int  slotIndex: -1
     property var  viewRoot:  null
     property var  multiGroupDialog: null
     property var  ratingsDialog: null
@@ -553,7 +558,12 @@ Rectangle {
             // 【cell hover 工具按钮】放大/还原本路：等价于按数字键 1..9。
             //   · 当前不是单路视图，或单路视图但聚焦的不是本路 → 进入单路并聚焦本路（=放大）
             //   · 当前是单路视图且聚焦的就是本路           → 回到上次的多路布局（=还原）
-            // 复用 RatingLogic._toggleOne(idx)，与数字键完全同一套行为，不重复实现。
+            // 复用 RatingLogic._toggleOne(slot)，与数字键完全同一套行为，不重复实现。
+            // 【必须传槽位而非 player 索引】_toggleOne 的入参语义是「数字键对应的显示槽位」，
+            //   内部还会再过一次 slotPlayerIndex()。有 REF 置顶（REF 底层是最后一路、
+            //   显示在第 0 槽）或拖拽重排时，playerIdx ≠ slotIndex，传 playerIdx 会被
+            //   二次映射到别的通道——表现为「明明 hover 的是第一个格子(REF)，点下去
+            //   却放大了数字键 4 对应的那一路」。
             // 用方框图标 ⤢ / ⤡ 区分两态：放大态显示 ⤡（视觉上"缩回"），多路态显示 ⤢。
             Rectangle {
                 id: zoomBtn
@@ -562,10 +572,16 @@ Rectangle {
                 Layout.leftMargin: 2
                 radius: 9
                 visible: viewRoot.effectiveChannelVisible
-                // 当前是否处于"本路单路放大"态
+                // 当前是否处于"本路单路放大"态（activeIndex 是 player 索引，故用 playerIdx 比对）
                 readonly property bool isSolo:
                     Engine.layoutMode === 0
                     && Engine.activeIndex === cell.playerIdx
+                // 数字键序号：显示槽位（0-based）+1，与屏幕上的通道序号 / 数字键一致。
+                // 单路视图下 Repeater 只有 1 个 cell、slotIndex 恒为 0，此时多路布局里的
+                // 序号无法得知，沿用旧行为不显示具体数字（只提示"再按数字键"）。
+                readonly property int keyNo:
+                    (cell.slotIndex >= 0 ? cell.slotIndex : cell.playerIdx) + 1
+                readonly property bool isMultiLane: Engine.layoutMode !== 0
                 color: zoomArea.containsMouse ? "#3a78c8"
                       : zoomArea.pressed     ? "#2a5994"
                                              : "#55ffffff"
@@ -584,14 +600,18 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: RatingLogic._toggleOne(cell.playerIdx)
+                    // 传槽位号（不是 playerIdx）：与数字键同语义，_toggleOne 内部再做一次映射
+                    onClicked: RatingLogic._toggleOne(cell.slotIndex >= 0
+                                                      ? cell.slotIndex : cell.playerIdx)
                 }
                 ToolTip.visible: zoomArea.containsMouse
                 ToolTip.delay: 400
                 ToolTip.timeout: 3000
                 ToolTip.text: zoomBtn.isSolo
                               ? "还原多路布局（同：再按数字键）"
-                              : "放大本路（等同按数字键 " + (cell.playerIdx + 1) + "）"
+                              : (zoomBtn.isMultiLane
+                                 ? "放大本路（等同按数字键 " + zoomBtn.keyNo + "）"
+                                 : "放大本路")
             }
             // 关闭本路的 ✕ 按钮：常驻显示（不随 hover 消失），仅当用户按 C
             // 关闭通道信息条 / 全屏抑制角标时才隐藏，与同一行的 #idx·时间·文件名

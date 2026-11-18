@@ -48,12 +48,49 @@ ToolBar {
     height: 44
     // 底部工具栏属于「播放」tab：切换到首页/YUV/码流分析时整条隐藏。
     visible: root.currentTab === "play"
+
+    // ─── 点击底部工具栏空白处 → 取消通道选中着色 ────────────────────────
+    // ToolBar 是 ApplicationWindow 的 footer，整块区域在 contentItem 之外，
+    // 根窗口那层「点击空白取消选中」的兜底 MouseArea 覆盖不到这里，必须
+    // 在工具栏内部自己接。
+    // 这里用挂在根上的 TapHandler：工具栏内部空白处的按下会先落到铺满的
+    // contentItem(RowLayout) 上，它不处理事件 → 沿父链冒泡到 ToolBar 根，
+    // 只有挂在根上才收得到（background 是同级的兄弟节点，收不到冒泡）。
+    // 按钮 / 进度条等自己 accept 事件，因此不会误触发；且 Handler 不吃掉
+    // 事件，不影响任何既有交互。
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        // 关键：禁止"从别的 item 手里抢事件"。默认的 CanTakeOverFromAnything
+        // 会让它在按钮已经接住按下之后再夺走 grab，导致按钮收不到 release、
+        // 点击失效。改成只允许自己被别人抢（ApprovesTakeOverByAnything），
+        // 于是：空白处无人接事件时它正常收到 clicked；按钮上的点击则完整
+        // 归按钮所有，这里不会触发。
+        grabPermissions: PointerHandler.ApprovesTakeOverByAnything
+        onTapped: {
+            if (topBar.root && topBar.root.currentTab === "play"
+                    && topBar.root.selectedIdx >= 0)
+                topBar.root.selectedIdx = -1
+        }
+    }
+
     // 底部栏视觉与 YUV 分析模块的全局总控栏（YuvWindow.qml 最下方那条）保持
     // 同一风格：深色控制条 + 顶部细分隔线，与内嵌控制条同源配色体系。
     background: Rectangle {
         // 深色底色对齐 YUV 分析模块全局总控栏（YuvWindow.qml 最下方那条,
         // #8018181c 半透明深色叠加视频内容后的视觉基调）。
         color: "#8018181c"
+        // 兜底：极边缘 / 无子项覆盖的空白点（如上下 padding 环）也取消选中。
+        // 与上面的 TapHandler 语义相同，重复触发无副作用（都只是置 -1）。
+        MouseArea {
+            anchors.fill: parent
+            z: -1
+            acceptedButtons: Qt.LeftButton
+            onClicked: {
+                if (topBar.root && topBar.root.currentTab === "play"
+                        && topBar.root.selectedIdx >= 0)
+                    topBar.root.selectedIdx = -1
+            }
+        }
         // 顶部细分隔线（与内容区分界，呼应 YUV 总控栏的"悬浮控制条"质感）
         Rectangle {
             anchors.left: parent.left

@@ -175,6 +175,13 @@ Rectangle {
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton
                 cursorShape: Qt.PointingHandCursor
+                // 单击参考图（属于"非通道窗口"区域）→ 取消通道选中着色；
+                // 双击放大仍由下面的 onDoubleClicked 负责，两者互不影响。
+                onClicked: {
+                    if (slotPane.root && slotPane.root.currentTab === "play"
+                            && slotPane.root.selectedIdx >= 0)
+                        slotPane.root.selectedIdx = -1
+                }
                 onDoubleClicked: slotPane.refLightbox.openSlot(slotPane.slot)
                 ToolTip.visible: containsMouse
                 ToolTip.delay: 800

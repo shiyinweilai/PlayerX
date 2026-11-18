@@ -261,8 +261,12 @@ Item {
                 // 把宫格内 cell 抽离为独立组件，便于将来按媒体类型扩展（图片模式等）。
                 // 行为/视觉与原内联 delegate 100% 等价；
                 //   · playerIdx：通过 viewRoot 上的透传函数把 Repeater 的 index 映射到真正的 player 索引
+                //   · slotIndex：Repeater 的 index 原值，即「数字键序号-1」的显示槽位。
+                //     供「放大本路」按钮等需要与数字键语义对齐的操作使用；
+                //     有 REF 置顶 / 拖拽重排时它与 playerIdx 不相等，必须分开传。
                 //   · viewRoot ：把 ApplicationWindow root 整个传入，子组件通过它访问 fmtTime / 评分 / 选中等共享状态
                 playerIdx: viewRoot.slotPlayerIndex(index)
+                slotIndex: index
                 viewRoot: root
                 videoAreaRef: videoArea
                 multiGroupDialog: videoArea.multiGroupDialog

@@ -633,3 +633,60 @@ void installLoginMenuSuppressor(void* ctx, void(*fn)(void*)) {
         }];
     });
 }
+
+// ─── 标题栏空白点击监听（仅用于通知 QML，不改变任何原生行为）──────────
+//
+// 背景：macOS 的标题栏是系统原生区域（红绿灯 + 标题 + 公告文字所在的
+// NSThemeFrame），完全在 Qt 的 contentItem 之外。QML 里的任何 MouseArea /
+// TapHandler 都收不到那里的点击，所以「点击非通道窗口区域取消通道选中」
+// 在标题栏上无法通过 QML 落地。
+//
+// 做法：装一个 NSEvent 本地监听器（addLocalMonitorForEventsMatchingMask），
+// 只在「本窗口 + 是 key window + 落点在标题栏」时向 QML 发一次通知。
+// 关键点是最后 return e —— 事件原样交还给系统，绝不吞掉，因此：
+//   · 标题栏拖动窗口、双击 zoom、红绿灯、个人中心/右侧栏原生按钮全部照旧；
+//   · 只有额外副作用是「顺便清掉通道选中着色」。
+static void* g_titleBarClickCtx = nullptr;
+static id g_titleBarClickMonitor = nil;
+
+void installTitleBarBlankClickMonitor(QQuickWindow* win, void* ctx) {
+    if (!win || !ctx) return;
+    g_titleBarClickCtx = ctx;
+
+    NSView* view = reinterpret_cast<NSView*>(win->winId());
+    NSWindow* nswin = [view window];
+    if (!nswin) return;
+
+    if (g_titleBarClickMonitor) {          // 幂等：重复安装先卸旧的
+        [NSEvent removeMonitor:g_titleBarClickMonitor];
+        g_titleBarClickMonitor = nil;
+    }
+
+    g_titleBarClickMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                              handler:^NSEvent*(NSEvent* e) {
+        @try {
+            if (!g_titleBarClickCtx || e.window != nswin || !nswin.isKeyWindow)
+                return e;
+
+            // 标题栏区域 = contentLayoutRect（该矩形已排除标题栏）之上的部分
+            NSPoint p = e.locationInWindow;
+            NSRect contentRect = nswin.contentLayoutRect;
+            if (p.y < NSMaxY(contentRect)) return e;    // 内容区，交给 Qt 自己处理
+
+            // 落在原生控件（红绿灯 / 个人中心 / 右侧栏按钮，均继承 NSControl）
+            // 上时不处理，避免与它们的既有语义叠加
+            NSView* themeFrame = nswin.contentView.superview;
+            if (themeFrame) {
+                NSView* hit = [themeFrame hitTest:[themeFrame convertPoint:p fromView:nil]];
+                if (hit && [hit isKindOfClass:[NSControl class]]) return e;
+            }
+
+            QMetaObject::invokeMethod(static_cast<QObject*>(g_titleBarClickCtx),
+                                      "_onTitleBarBlankClick", Qt::QueuedConnection);
+        } @catch (NSException* ex) {
+            // 静默：绝不能因为一次异常影响系统事件分发
+        }
+        return e;   // 不吞事件：拖拽 / 双击 / 系统按钮全部保持原生行为
+    }];
+}

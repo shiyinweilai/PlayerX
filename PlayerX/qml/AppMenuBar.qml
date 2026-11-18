@@ -74,6 +74,13 @@ MenuBar {
         }
         TapHandler {
             enabled: appMenuBar.inTitleBar
+            // 单击标题栏空白 = 点击了非通道窗口区域 → 取消通道选中着色。
+            // 与下面的双击最大化互不冲突：双击时单击回调最多多跑一次，
+            // 而它只是把 selectedIdx 置 -1，无副作用。
+            onTapped: {
+                if (root.currentTab === "play" && root.selectedIdx >= 0)
+                    root.selectedIdx = -1
+            }
             onDoubleTapped: {
                 root.visibility = (root.visibility === Window.Maximized)
                                   ? Window.Windowed : Window.Maximized

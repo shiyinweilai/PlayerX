@@ -422,6 +422,30 @@ Rectangle {
                 contentHeight: csvBottomLabel.implicitHeight
                 visible: root.refTextHasCurrent
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                // 点击提示词区（非通道窗口区域）也取消通道选中着色。
+                // 这里不能用 TapHandler：Flickable 在按下的瞬间就会 grab 指针，
+                // pointer handler 拿不到完整的 press/release 序列，onTapped
+                // 永远不触发（实测无效）。改用 MouseArea —— Flickable 对自身
+                // 子项的 MouseArea 走 delayed-press 机制：单击不动时正常收到
+                // clicked，一旦开始拖动就取消点击、把 grab 让给 Flickable 滚动，
+                // 所以拖动/惯性手感完全不受影响。z:-1 让它垫在文本之下。
+                MouseArea {
+                    // 不用 anchors.fill: parent —— 这里的 parent 是 Flickable 的
+                    // contentItem，高度只有文本实际高度；文字短时会留下大片
+                    // 点不到的区域。显式铺到 viewport 大小（取 contentHeight 与
+                    // 可视高度中的大者），整个提示词框内点空白都能取消选中。
+                    x: 0
+                    y: 0
+                    width: csvBottomScroll.width
+                    height: Math.max(csvBottomScroll.contentHeight, csvBottomScroll.height)
+                    z: -1
+                    acceptedButtons: Qt.LeftButton
+                    onClicked: {
+                        if (csvBottomBar.root && csvBottomBar.root.currentTab === "play"
+                                && csvBottomBar.root.selectedIdx >= 0)
+                            csvBottomBar.root.selectedIdx = -1
+                    }
+                }
                 Text {
                     id: csvBottomLabel
                     width: csvBottomScroll.width
