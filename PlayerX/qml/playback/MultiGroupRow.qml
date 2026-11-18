@@ -32,6 +32,11 @@ Rectangle {
     // 动作：删除本行（laneIndex 为 0 时通常隐藏删除按钮）
     property bool removable: true
 
+    // 该路当前文件路径是否已失效（目录/文件被删除或移动）。
+    // 由父级（MultiGroupDialog）注入，本组件只负责着色，不做任何判定/写入。
+    // 空 currentPath（未导入）不算失效，保持原有"未导入"展示。
+    property bool pathInvalid: false
+
     // 弹"📁 选择文件夹"对话框时使用的初始目录（QUrl）。
     // 由父级（MultiGroupDialog）注入"全局上一次成功导入目录"，
     // 这样 1. 已导入的行：再次点 📁 还是从上次目录起步（与 Qt 默认一致）；
@@ -59,8 +64,11 @@ Rectangle {
     // 父级若不调 apply 即视为"取消"，本路保持原状。
     signal folderRequested(url folderUrl, var apply)
     // ─── 视觉 ───────────────────────────────────────────────────────
-    color: "#1a1a1d"
-    border.color: "#2c2c32"
+    // 路径失效时整行改为琥珀色描边 + 暖色底，一眼能定位是哪一路坏了。
+    // 用琥珀而不用红：这不是报错弹窗，只是"该路需要重新指定目录"的提示，
+    // 红色容易被读成程序异常（与既有弹窗用色约定一致）。
+    color: pathInvalid ? "#2a2216" : "#1a1a1d"
+    border.color: pathInvalid ? "#c8871f" : "#2c2c32"
     border.width: 1
     radius: 6
     implicitHeight: 32
@@ -326,12 +334,42 @@ Rectangle {
             onTextChanged: row.keyword = text
         }
 
+        // 失效标记：仅在 currentPath 对应文件已不存在时出现。
+        // 纯视觉提示，不拦点击、不拦截启动（启动前的最终闸仍按原逻辑回退）。
+        Rectangle {
+            visible: row.pathInvalid
+            Layout.preferredHeight: 18
+            Layout.alignment: Qt.AlignVCenter
+            Layout.preferredWidth: _invLabel.implicitWidth + 12
+            radius: 3
+            color: "#3d2c11"
+            border.color: "#c8871f"
+            border.width: 1
+            Label {
+                id: _invLabel
+                anchors.centerIn: parent
+                text: "路径失效"
+                color: "#ffb020"
+                font.pixelSize: 10
+                font.bold: true
+            }
+            ToolTip.visible: _invHover.containsMouse
+            ToolTip.delay: 300
+            ToolTip.text: "该路当前文件已被删除或移动，请重新选择文件夹"
+            MouseArea {
+                id: _invHover
+                anchors.fill: parent
+                hoverEnabled: true
+            }
+        }
+
         // 命中数量徽标（紧凑，不参与 elide，宽度自适应内容）
         Label {
-            color: "#9a9aa8"
+            color: row.pathInvalid ? "#e0a44a" : "#9a9aa8"
             font.pixelSize: 11
             Layout.alignment: Qt.AlignVCenter
             text: {
+                if (row.pathInvalid) return "已失效"
                 if (row.allFiles.length === 0) return "（未导入）"
                 if (row.visibleFiles.length === 0) return "0 / " + row.allFiles.length
                 return (row.currentIndex + 1) + " / " + row.visibleFiles.length
@@ -364,7 +402,7 @@ Rectangle {
                 anchors.fill: parent
                 anchors.leftMargin: 6
                 anchors.rightMargin: 6
-                color: "#cfcfd2"
+                color: row.pathInvalid ? "#f0b357" : "#cfcfd2"
                 font.pixelSize: 12
                 verticalAlignment: Text.AlignVCenter
                 // 显示绝对路径，过长时从开头省略（保留更具辨识度的尾部文件名 + 末级目录）

@@ -52,6 +52,9 @@ ApplicationWindow {
             // 评分数据可能在面板关闭期间变化（评分/上传归档/重置进度），
             // 打开时清索引并整体重算一次进度映射。
             _invalidateHistProgress(true)
+            // 期间文件可能被删除/移动（历史记录里的路径失效），重新校验一次：
+            // 让「启动对比」按钮灰度与行内失效着色立即反映真实状态。
+            try { _refreshLaneValidity() } catch (e) { console.warn("[MGD] 通道路径校验异常:", e) }
         }
         // 【自动化接管守卫】测试源自动化（点🔔接受/直接开始）链路里，
         // applyAutoRefResources 已按本次任务回填参考资料并置好勾选，
@@ -1476,15 +1479,82 @@ ApplicationWindow {
         return n
     }
 
+    // ─── 通道路径有效性（供「启动对比」灰度 + 行内着色）─────────────
+    // 此前 canStart 只看 currentPath 是否非空，不校验文件是否真的还在，
+    // 于是「历史记录里的文件被删掉」后按钮仍是绿色可点 —— 用户点下去才
+    // 在 start() 里静默回退/跳过，容易误以为是程序坏了。
+    // 这里把"路径是否仍然存在"做成一份缓存 map，由 canStart 与行着色共用，
+    // 保证按钮态与行着色同源、不会一处生效一处不生效。
+    // key = currentPath，value = 是否存在。仅在 _refreshLaneValidity() 中重算。
+    property var _laneValidMap: ({})
+    // 递增以驱动依赖该 map 的绑定（QML 无法直接监听 JS 对象内部变化）
+    property int _laneValidRev: 0
+
+    // 是否用"文件仍存在"作为 canStart 的必要条件。
+    // 启动瞬间（active）与自动化接管期间不做此收紧，避免影响既有链路。
+    readonly property bool _laneValidityGate: !active
+    // 刷新全部勾选路的路径有效性。开销很小（每路一次 stat），
+    // 触发点：面板打开、行内容/勾选变化、启动前。
+    function _refreshLaneValidity() {
+        var map = {}
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (!lane) continue
+            var p = lane.currentPath || ""
+            if (p.length === 0) continue
+            if (map[p] !== undefined) continue
+            var ok = false
+            try { ok = Fs.fileExists(p) } catch (e) { ok = false }
+            map[p] = ok
+        }
+        _laneValidMap = map
+        _laneValidRev = _laneValidRev + 1
+    }
+    // 查询某路是否失效（空路径视为"未导入"，不算失效）
+    function _lanePathInvalid(idx) {
+        var _ = _laneValidRev   // 建立绑定依赖
+        if (idx < 0 || idx >= _rowsModel.count) return false
+        var lane = _rowsModel.get(idx)
+        if (!lane) return false
+        var p = lane.currentPath || ""
+        if (p.length === 0) return false
+        var m = _laneValidMap || {}
+        // 尚未校验过的路径不判失效，避免首帧闪烁
+        if (m[p] === undefined) return false
+        return m[p] !== true
+    }
+    // 勾选路里"存在且文件仍有效"的路数（供状态栏提示使用）
+    function _computeValidSelectedCount() {
+        var _ = stateBumper
+        var __ = _laneValidRev
+        var n = 0
+        for (var i = 0; i < _rowsModel.count; ++i) {
+            var lane = _rowsModel.get(i)
+            if (!lane || !lane.selected) continue
+            var p = lane.currentPath || ""
+            if (p.length === 0) continue
+            if (_lanePathInvalid(i)) continue
+            n++
+        }
+        return n
+    }
+
     function _computeCanStart() {
         // 显式触达 stateBumper，让 QML 绑定系统把它纳入依赖；每次 _bumpState() 后 canStart 会重算
         var _ = stateBumper
         // 只要任意一路「勾选 + 有 currentPath」就可以启动；
         // 「勾选但未选文件夹」的行会被 start() 自动忽略，不影响 canStart。
+        // 【新增】再加一条：该路的文件必须仍然存在。全部失效 → 返回 false，
+        // 「启动对比」按钮自动变灰（按钮本身已有 disabled 样式，无需改样式）。
+        // 只要还有一路有效就仍然允许启动——与"失效行会被忽略/回退"的既有语义一致，
+        // 不改变 start() 内部逐路回退的行为。
+        var _rev = _laneValidRev
         for (var i = 0; i < _rowsModel.count; ++i) {
             var lane = _rowsModel.get(i)
             if (!lane || !lane.selected) continue
-            if (lane.currentPath && lane.currentPath.length > 0) return true
+            if (!lane.currentPath || lane.currentPath.length === 0) continue
+            if (_laneValidityGate && _lanePathInvalid(i)) continue
+            return true
         }
         return false
     }
@@ -2518,6 +2588,9 @@ ApplicationWindow {
         })
         _bumpState()
         _persistLanes()
+        // 当前文件变了（切组/选文件夹/恢复历史），重算这一条路的有效性：
+        // 否则切到一个已被删除的文件时，行不会变色、按钮也不会变灰。
+        try { _refreshLaneValidity() } catch (e) { /* ignore */ }
     }
 
     // ─── 对外动作：启动 / 切组 ──────────────────────────────────────
@@ -4101,6 +4174,14 @@ ApplicationWindow {
                 _histProgressMap = m
             }
         } catch (e) { /* ignore */ }
+        // 同理清理失效映射，否则删除后重新按同 id 复用时会串到旧结论
+        try {
+            var im = _histInvalidMap
+            if (im && im[String(rec.id)] !== undefined) {
+                delete im[String(rec.id)]
+                _histInvalidMap = im
+            }
+        } catch (e) { /* ignore */ }
         // 连带清除：该记录涉及的文件夹的评分记录 + 播放进度 + 勾选记录。
         // startHistory 已在上面剔除该记录，_foldersToPurge 才能正确豁免
         // 仍被其它记录引用的共享文件夹。
@@ -4454,9 +4535,9 @@ ApplicationWindow {
         _refResValidated = true   // 已校验过存在性，本次打开不再重复校验
         // 标记本次是从这条历史点击加载来的：随后启动一律复用该记录，不新增。
         _histReuseId = rec.id
-        _histLoadNotice = (dead.length > 0)
-            ? "⚠ 已加载配置 #" + rec.id + "，其中 " + dead.length + " 路已失效被跳过"
-            : "✓ 已加载配置 #" + rec.id + "，点「启动对比」重新开始"
+        // 底部状态栏只做"加载成功"确认。失效路的具体信息（哪几路、怎么处理）
+        // 由紧挨卡片的浮窗展示 —— 用户明确要求别把失效提示放在下面不易看到的位置。
+        _histLoadNotice = "✓ 已加载配置 #" + rec.id + "，点「启动对比」重新开始"
         _histLoadTimer.restart()
         console.log("[MGD] 加载启动历史 #" + rec.id, "alive=", alive.length, "dead=", dead.length)
         return ""
@@ -4622,6 +4703,14 @@ ApplicationWindow {
     //   （_histRateIdxCache 等）会形成绑定循环告警。这里改成「显式重算 →
     //   写映射」，卡片只读映射，纯读无副作用。
     property var _histProgressMap: ({})
+    // 每条历史记录的「路径是否失效」结果：{ "<id>": {dead, total, allDead, deadLanes} }。
+    // 与 _histProgressMap 同样采用「显式重算 → 写映射，卡片只读」的模式，
+    // 避免在 delegate 绑定里做 stat 造成绑定循环和每帧 IO。
+    // dead      = 该记录中已失效（文件/目录不存在）的路数
+    // total     = 该记录的有效路数（不含 REF 参考视频临时行）
+    // allDead   = 全部路都失效（点击也无法加载）
+    // deadLanes = 失效路的序号数组（1 基，与左侧通路列表的「路 N」一致）
+    property var _histInvalidMap: ({})
     // 各模式「文件路径 → {slideType: 星级}」索引缓存（仅存 >0 的分数）
     property var _histRateIdxCache: ({})
     // 各模式的归档评分索引（归档在评分期间不变，单独缓存避免反复扫盘）
@@ -4880,6 +4969,41 @@ ApplicationWindow {
         return { done: done, total: total, complete: done >= total }
     }
 
+    // 重算全部历史记录的路径有效性并写入 _histInvalidMap（卡片只读该映射）。
+    // 判定口径与 loadStartHistory() 保持一致：跳过 REF 参考视频临时行，
+    // 以 currentPath 是否存在为有效依据（目录被删但 currentPath 还在也算有效，
+    // 与「点击加载能成功」的实际行为对齐，避免卡片显示失效但点击其实能加载）。
+    // 触发时机：面板打开、历史增删、行内容变化。
+    function _recomputeHistInvalid() {
+        var out = ({})
+        var src = startHistory || []
+        for (var i = 0; i < src.length; ++i) {
+            var rec = src[i]
+            if (!rec || typeof rec.id !== "number") continue
+            var lanes = ((rec.snapshot || {}).lanes) || []
+            var total = 0, dead = 0
+            var deadLanes = []
+            for (var j = 0; j < lanes.length; ++j) {
+                var ln = lanes[j] || {}
+                if (ln.isRefVideo === true) continue
+                total++
+                var p = String(ln.currentPath || "")
+                var ok = false
+                if (p.length > 0) {
+                    try { ok = Fs.fileExists(p) } catch (e) { ok = false }
+                }
+                if (!ok) {
+                    dead++
+                    deadLanes.push(total)   // 1 基序号，与左侧「路 N」一致
+                }
+            }
+            if (total === 0 || dead === 0) continue
+            out[String(rec.id)] = { dead: dead, total: total,
+                                    allDead: dead >= total, deadLanes: deadLanes }
+        }
+        _histInvalidMap = out
+    }
+
     // 重算全部历史记录的进度并写入 _histProgressMap（卡片只读该映射）。
     // 触发时机：面板打开、评分写入、模式/账号切换、历史记录增删。
     function _recomputeHistProgress() {
@@ -4906,6 +5030,16 @@ ApplicationWindow {
         if (clearArchive === true) _histArchiveIdxCache = ({})
         _histResetStampsCache = null
         _recomputeHistProgress()
+        // 顺带刷新历史卡片的路径有效性：两者触发时机高度重合
+        // （面板打开 / 历史增删 / 评分写入），合并在一起避免遗漏刷新点。
+        // 【为何要判 visible】这里会对每条记录的每个路做一次 stat；若在面板
+        // 不可见时（如后台切评分模式）执行，可能触发 macOS 对 ~/Downloads 等
+        // 目录的授权弹窗。与 _recomputeHistProgress 延迟到面板可见时统计的
+        // 做法保持一致：不可见时先清空，等 onVisibleChanged 再算。
+        try {
+            if (visible) _recomputeHistInvalid()
+            else _histInvalidMap = ({})
+        } catch (e) { console.warn("[MGD] 历史失效校验异常:", e) }
     }
 
     Timer {
@@ -6161,6 +6295,9 @@ ApplicationWindow {
                         currentIndex: model.currentIndex
                         // 全局排序：所有路共用一个排序方式（原每行 A↑ 按钮已移除）
                         sortMode: dlg.globalSortMode
+                        // 该路当前文件是否已被删除/移动：仅用于行内着色与「路径失效」标记，
+                        // 不改变任何交互（点击、切换、启动回退逻辑全部保持原样）
+                        pathInvalid: dlg._lanePathInvalid(index)
                         // 任何一路都允许删除（含最后一路）；删到 0 路后会显示空态占位卡。
                         removable: true
                         // 关键：让"📁 选择文件夹"对话框的起始目录跟随全局上一次导入目录。
@@ -6794,19 +6931,32 @@ ApplicationWindow {
                         // 选中态：记录当前已恢复到左侧界面的历史条目 ID（-1 = 无选中）
                         property int _selectedHistId: -1
                         delegate: Rectangle {
+                            id: histCard
                             width: histScroll.availableWidth
                             height: 44
                             radius: 4
                             property bool _selected: rec && rec.id === histList._selectedHistId
                             property bool _pinned: rec && rec.pinned === true
+                            // 该记录的路径失效情况（只读映射，纯读无副作用）
+                            property var _inv: (rec && rec.id !== undefined)
+                                                ? (dlg._histInvalidMap[String(rec.id)] || null)
+                                                : null
+                            // 全部路都失效 → 卡片整体降饱和 + 橙色描边，
+                            // 与「选中蓝」「置顶金」并列成为第三种状态色，
+                            // 优先级：选中 > 失效 > 置顶（选中是用户当前操作焦点，必须最醒目）
+                            property bool _allDead: _inv !== null && _inv.allDead === true
+                            property bool _someDead: _inv !== null && _inv.dead > 0
                             // 卡片 hover 高亮：卡片本体或浮层按钮 hover 时均保持
                             property bool _rowHover: histRowMa.containsMouse
                                    || (histHoverBtnLayer && histHoverBtnLayer._anyHover)
                             // 置顶暖金背景区分；选中蓝优先级最高
                             color: _selected ? "#24324a"
+                                  : _allDead ? (_rowHover ? "#332a1a" : "#2b2317")
                                   : _pinned ? (_rowHover ? "#3a3320" : "#322b18")
                                   : _rowHover ? "#23232a" : "#1a1a1f"
-                            border.color: _selected ? "#7ec8ff" : "#2c2c32"
+                            border.color: _selected ? "#7ec8ff"
+                                        : _allDead ? "#c8871f"
+                                                   : "#2c2c32"
                             border.width: 1
 
                             // 正序取数：_histFiltered 已排好展示序（置顶在前、新的在上）
@@ -6831,10 +6981,18 @@ ApplicationWindow {
                                     var err = dlg.loadStartHistory(rec)
                                     if (err && err.length > 0) {
                                         histList._selectedHistId = -1
-                                        dlg._histLoadNotice = "⚠ " + err
-                                        dlg._histLoadTimer.restart()
+                                        // 就地弹窗：紧挨本条卡片显示，不再写到
+                                        // 底部状态栏（那里太远，用户看不到）。
+                                        // 全部路失效时用 "all" 模式，可显示具体失效路号；
+                                        // 其它失败原因（记录损坏等）退回 "error" 透传文案。
+                                        if (histCard._allDead) histInvalidPopup._openAt("all", "")
+                                        else histInvalidPopup._openAt("error", err)
                                     } else {
                                         histList._selectedHistId = rec.id
+                                        // 部分路失效被跳过时，同样就地提示，
+                                        // 让用户知道「为什么少了几路」。
+                                        if (histCard._someDead)
+                                            histInvalidPopup._openAt("partial", "")
                                     }
                                 }
                             }
@@ -6880,6 +7038,7 @@ ApplicationWindow {
                                         font.pixelSize: 10
                                     }
                                     Item { Layout.fillWidth: true }
+                                    Item { Layout.fillWidth: true }
                                     // 「最新」徽标：全表时间戳最大的那条记录，
                                     // 放在时间戳左侧小字标识（置顶与否不影响判定）
                                     Label {
@@ -6921,6 +7080,33 @@ ApplicationWindow {
                                         font.pixelSize: 10
                                         elide: Text.ElideMiddle
                                         Layout.fillWidth: true
+                                    }
+                                    // 失效徽标：放在第二行（第一行要放编号/模式/最新/时间戳，
+                                    // 侧栏仅 240px 宽，挤在第一行会把时间戳顶掉）。
+                                    // 全部失效 → 橙色实底「路径失效」；部分失效 → 描边「失效 n/N」。
+                                    Label {
+                                        visible: histCard._someDead
+                                        text: histCard._allDead
+                                              ? "路径失效"
+                                              : ("失效 " + (histCard._inv ? histCard._inv.dead : 0)
+                                                 + "/" + (histCard._inv ? histCard._inv.total : 0))
+                                        color: histCard._allDead ? "#1a1206" : "#f0a24b"
+                                        font.pixelSize: 9
+                                        font.bold: true
+                                        padding: 1
+                                        leftPadding: 4
+                                        rightPadding: 4
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            anchors.margins: 0
+                                            radius: 2
+                                            z: -1
+                                            // 全失效：实底橙（最醒目）；部分失效：深底 + 橙描边
+                                            color: histCard._allDead ? "#e09a2b" : "#2e2416"
+                                            border.color: "#c8871f"
+                                            border.width: histCard._allDead ? 0 : 1
+                                        }
                                     }
                                     // 评分进度：tag 右侧显示「已完成/总数」。
                                     // 评完用绿色，未评完用橙色；非评分模式不显示（宽度为 0）。
@@ -7232,6 +7418,137 @@ ApplicationWindow {
                                     renameInput.selectAll()
                                 }
                             }
+
+                            // ─── 路径失效提示浮窗 ───────────────────────────
+                            // 紧挨本条历史卡片弹出，替代原先显示在底部状态栏的提示
+                            // （那里离操作点太远，用户根本注意不到）。
+                            // 三种场景共用：全部路失效 / 部分路失效被跳过 / 加载报错。
+                            Popup {
+                                id: histInvalidPopup
+                                // 固定宽度：避免长路径把浮窗撑出右侧面板
+                                width: 240
+                                // 面板本身在窗口最右侧，向右弹必定超出窗口；
+                                // 改为贴着卡片左侧弹出（左侧是视频列表区，空间充足），
+                                // 且与卡片留 6px 间隙，视觉上"紧挨着这条记录"。
+                                x: -(width + 6)
+                                padding: 0
+                                modal: false
+                                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                                z: 340
+
+                                // "all"     = 全部路失效（点击也无法加载）
+                                // "partial" = 部分路失效（已跳过并成功加载）
+                                // "error"   = 加载失败（记录损坏等其它原因）
+                                property string _mode: "all"
+                                property string _msg: ""
+
+                                // 打开时把浮窗垂直居中在本条卡片上（水平方向已在 x 中
+                                // 固定为卡片左侧），保持"紧挨这条记录"的视觉关联。
+                                function _openAt(mode, msg) {
+                                    _mode = mode
+                                    _msg = msg || ""
+                                    // 首次打开前 height 可能还没算出来，用 implicitHeight 兜底
+                                    var h = (height > 0 ? height : implicitHeight)
+                                    y = Math.round((histCard.height - h) / 2)
+                                    open()
+                                }
+
+                                // 失效明细文案（由当前模式 + 失效映射拼出）
+                                readonly property string _detail: {
+                                    var inv = histCard._inv
+                                    if (_mode === "error")
+                                        return _msg
+                                    if (!inv) return ""
+                                    var w = (inv.deadLanes && inv.deadLanes.length > 0)
+                                            ? ("路 " + inv.deadLanes.join("、")) : ""
+                                    if (_mode === "all")
+                                        return "该记录引用的视频已被删除或移动（" + w
+                                             + "，共 " + inv.total + " 路全部失效），无法加载。"
+                                    return "配置已加载，但已跳过 " + w + " 的失效路径（共 "
+                                         + inv.total + " 路）。"
+                                }
+
+                                background: Rectangle {
+                                    // 深底 + 橙色描边：与卡片失效态同色系，一眼看出是同一条记录
+                                    color: "#1f1708"
+                                    border.color: _mode === "all" ? "#e09a2b" : "#c8871f"
+                                    border.width: 1
+                                    radius: 6
+                                }
+
+                                contentItem: Item {
+                                    id: histInvalidCol
+                                    implicitHeight: histInvalidRows.implicitHeight + 20
+
+                                    Column {
+                                        id: histInvalidRows
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        anchors.topMargin: 9
+                                        anchors.leftMargin: 10
+                                        anchors.rightMargin: 10
+                                        spacing: 6
+
+                                        // 标题行：橙色警示标题 + 右上角关闭
+                                        Item {
+                                            width: parent.width
+                                            height: 15
+                                            Label {
+                                                anchors.left: parent.left
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: histInvalidPopup._mode === "all"
+                                                      ? "⚠ 路径失效"
+                                                      : (histInvalidPopup._mode === "partial"
+                                                         ? "⚠ 部分路径失效" : "⚠ 加载失败")
+                                                color: "#f5b942"
+                                                font.pixelSize: 11
+                                                font.bold: true
+                                            }
+                                            Label {
+                                                anchors.right: parent.right
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: "✕"
+                                                color: histInvalidCloseMa.containsMouse
+                                                       ? "#ff9090" : "#8a8a92"
+                                                font.pixelSize: 11
+                                                MouseArea {
+                                                    id: histInvalidCloseMa
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: histInvalidPopup.close()
+                                                }
+                                            }
+                                        }
+
+                                        // 明细：说明哪些路失效、影响范围
+                                        Label {
+                                            width: parent.width
+                                            text: histInvalidPopup._detail
+                                            color: "#e6d3ab"
+                                            font.pixelSize: 10
+                                            wrapMode: Text.WordWrap
+                                            lineHeight: 1.25
+                                        }
+
+                                        // 处置建议：给出明确的下一步动作
+                                        Label {
+                                            width: parent.width
+                                            text: histInvalidPopup._mode === "partial"
+                                                  ? "未失效的路可正常启动；失效路需重新选择文件夹。"
+                                                  : (histInvalidPopup._mode === "error"
+                                                     ? "该记录可能已损坏，建议删除后重新导入。"
+                                                     : "请在左侧重新选择该记录的文件夹后再启动，或删除此记录。")
+                                            color: "#9a8a6a"
+                                            font.pixelSize: 9
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+                                }
+
+                                height: implicitHeight
+                            }
                         }
                     }
 
@@ -7417,6 +7734,11 @@ ApplicationWindow {
                         return "✓ 已就绪：将启动 " + effectiveCount + " 路对比（未填文件夹的勾选行会自动忽略）"
                     }
                     if (selectedCount === 0) return "请至少勾选一路"
+                    // 勾选的路都还有 currentPath，但文件已经不存在 → 明确说明原因，
+                    // 否则「启动对比」变灰却没有任何解释，用户无法判断问题在哪。
+                    if (dlg._computeValidSelectedCount() === 0
+                            && dlg._computeEffectiveCount() > 0)
+                        return "⚠ 勾选路的文件已全部失效（已被删除或移动），请重新选择文件夹"
                     return "请为勾选的路选择文件夹并确保有命中文件"
                 }
                 Layout.fillWidth: true
