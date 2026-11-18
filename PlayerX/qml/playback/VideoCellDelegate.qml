@@ -232,8 +232,13 @@ Rectangle {
         }
     }
 
-    // 序号数字（受全局"通道信息"开关控制，默认显示）：无背景矩形，仅纯数字，
-    // 与参考图窗口编号样式保持一致。
+    // ─── 旧「通道编号」数字（保留逻辑，不再显示）────────────────────────
+    // 这里的 text 用的是 playerIdx + 1，即底层 player 索引，等价于"该文件在
+    // 文件夹里的通道号"。有 REF 置顶（REF 底层是最后一路、显示被压到第 0 槽）
+    // 或拖拽重排时，它会与屏幕上的视觉位置错位：REF 挤占了所谓"通道 1"，
+    // 旁边 A 显示 1 却其实对应数字键 2，与「放大本路」提示的序号对不上。
+    // 按需求：只把显示关掉，计算与 REF 分支原样保留（不删任何逻辑），
+    // 屏幕上的编号改由下方 windowBadge 的"窗口号"承担。
     Label {
         id: idxBadge
         anchors.left: videoBox.left
@@ -248,7 +253,70 @@ Rectangle {
         style: Text.Outline
         styleColor: "#80000000"
         z: 5
+        visible: false
+    }
+
+    // ─── 窗口编号徽标（着色小圆圈，显示在每个通道最左上角）──────────────
+    // 语义：纯"窗口号"，从左到右从 1 开始，= 当前显示槽位 + 1，与数字键 /
+    // 「放大本路」按钮提示的序号完全一致（两者都用 cell.slotIndex）。
+    //
+    // 为什么不用 playerIdx：playerIdx 是底层 player 索引（文件夹通道号），
+    // REF 被置顶到第 0 槽时它仍然是最末一路；拖拽重排后同样会错位。
+    // 窗口号只反映"它在屏幕上排第几个窗口"，因此有 REF 时 REF = 1、
+    // A = 2、B = 3…，不会出现"REF 占了通道 1"的误解。
+    //
+    // 单路放大视图的特殊处理：
+    //   Single 布局下 Repeater 只渲染 1 个 cell，slotIndex 恒为 0，
+    //   直接用它会让编号永远是 1（无论放大的是哪一路）。此时改为向
+    //   VideoArea 反查 slotOfPlayer(playerIdx)，还原它在多路布局里的位置。
+    //
+    // 不绑定任何多余逻辑：不参与评分、不参与选中、不参与放大判定，
+    // 也不响应鼠标（无 MouseArea，点击直接穿透到下层 cell），
+    // 仅跟随「通道信息」开关（C 键）与其它 HUD 一起显隐。
+    Rectangle {
+        id: windowBadge
+        anchors.left: videoBox.left
+        anchors.top: videoBox.top
+        anchors.leftMargin: 6
+        anchors.topMargin: 4
+        width: 18
+        height: 18
+        radius: 9
+        // 低饱和雾蓝填充（与选中边框 #4a6fa5 同色系，取稍高不透明度保证
+        // 在亮/暗画面上都能读清），外加一圈极淡白描边提升与视频的分离度。
+        color: "#cc4a6fa5"
+        border.width: 1
+        border.color: "#59ffffff"
+        z: 6
         visible: viewRoot.effectiveChannelVisible
+
+        // 窗口号（1 起）。依赖 _laneOrderBump / fileCount / layoutMode
+        // 自动重算，拖拽重排、翻组、切换布局后都会即时更新。
+        readonly property int windowNo: {
+            // 显式依赖：拖拽交换只改 _laneOrder + _laneOrderBump，若不在
+            // 绑定里直接读到这两个属性，编号可能停在旧值。
+            var _dep = Engine.fileCount
+            var _bump = cell.videoAreaRef ? cell.videoAreaRef._laneOrderBump : 0
+            if (Engine.layoutMode === 0) {
+                // 单路：反查原始槽位（slotIndex 在单路下恒为 0，不可用）
+                if (cell.videoAreaRef
+                        && typeof cell.videoAreaRef.slotOfPlayer === "function") {
+                    var s = cell.videoAreaRef.slotOfPlayer(cell.playerIdx)
+                    if (s >= 0) return s + 1
+                }
+                // 兜底：顺序表不可用（极端场景）时退回 player 索引
+                return cell.playerIdx + 1
+            }
+            return (cell.slotIndex >= 0 ? cell.slotIndex : cell.playerIdx) + 1
+        }
+
+        Text {
+            anchors.centerIn: parent
+            text: windowBadge.windowNo
+            color: "#ffffff"
+            font.pixelSize: 11
+            font.bold: true
+        }
     }
 
     // 顶部左上角"路径胶囊"：紧贴序号徽标右侧，显性显示 父目录/文件名。
@@ -271,8 +339,8 @@ Rectangle {
     //   · 文件名末尾省略（ElideRight），目录段始终完整显示。
     Rectangle {
         id: pathBar
-        anchors.left: idxBadge.right
-        anchors.top: idxBadge.top
+        anchors.left: windowBadge.right
+        anchors.top: windowBadge.top
         anchors.leftMargin: 6
         radius: 3
         // 调稀透明度（0xaa≈67% → 0x33≈20%），在不遮挡画面的前提下
@@ -281,12 +349,14 @@ Rectangle {
         z: 5
         visible: viewRoot.effectiveChannelVisible && fileNameLabel.text !== "—"
         // 宽度上限：不再写死"扣 280"，而是动态跟随右上 channelBar 的实际宽度。
-        // 公式： cell宽 − idxBadge右边 − leftMargin(6) − channelBar实宽 − channelBar右锁margin(6) − 安全间距(8)
+        // 公式： cell宽 − windowBadge右边 − leftMargin(6) − channelBar实宽 − channelBar右锁margin(6) − 安全间距(8)
         // 这样 HUD 变窄后 pathBar 可以跨越原本被 280 硕占的区域，三宫格中也能尽量完整显示。
         // channelBar 不可见时 (effectiveChannelVisible=false) 以 0 计，路径可独享整个顶部。
+        // 注：这里的左偏移基准已从旧的 idxBadge 换成 windowBadge（固定 18px 圆圈）——
+        // 旧徽标隐藏后仍会按 "REF"/数字 撑出不同宽度，用它算会忽宽忽窄。
         readonly property int _channelOccupiedW: channelBar.visible ? (channelBar.width + 6 + 8) : 8
         readonly property int _maxAvailWidth:
-            Math.max(150, videoBox.width - (idxBadge.width + 6) - 6 - _channelOccupiedW)
+            Math.max(150, videoBox.width - (windowBadge.width + 6) - 6 - _channelOccupiedW)
         implicitWidth:  pathRow.implicitWidth + 12
         implicitHeight: pathRow.implicitHeight + 4
         width:  Math.min(implicitWidth, _maxAvailWidth)

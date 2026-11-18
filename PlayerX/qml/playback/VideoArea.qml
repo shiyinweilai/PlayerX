@@ -211,6 +211,23 @@ Item {
         return slot
     }
 
+    // slotPlayerIndex 的反向查询：player 索引 → 显示槽位（0 起）。
+    //
+    // 用途：单路放大视图下 Repeater 只渲染 1 个 cell、index 恒为 0，
+    // cell 拿不到自己"原本是第几个窗口"，左上角窗口号就会永远显示 1。
+    // 这里按 _laneOrder 反查即可还原它在多路布局里的位置。
+    //
+    // 返回 -1 表示查不到（顺序表尚未建立等），调用方自行回退。
+    function slotOfPlayer(player) {
+        videoArea._laneOrderBump   // 依赖：交换后强制重求值
+        var arr = videoArea._laneOrder
+        if (arr && arr.length > 0) {
+            var i = arr.indexOf(player)
+            if (i >= 0) return i
+        }
+        return -1
+    }
+
     // 【通道拖拽重排】文件列表/布局变化时重建映射：
     //   · filesChanged（翻组/换文件/关通道）：保留旧相对顺序，REF 仍置顶。
     //     若无持久化旧顺序则默认恒等。
@@ -221,6 +238,15 @@ Item {
         target: Engine
         function onFilesChanged() { videoArea._rebuildLaneOrder() }
         function onLayoutModeChanged() {
+            // Single(0) 没有自己的持久化顺序，且进入单路时应「沿用」进入前
+            // 那个多路布局的显示顺序——否则 cell 靠 slotOfPlayer 反查窗口号
+            // 会拿到恒等映射，用户拖拽重排过的通道号就显示错了。
+            // Single 下 slotPlayerIndex 直接返回 activeIndex，_laneOrder
+            // 不参与任何映射，因此这里保留旧顺序没有副作用。
+            if (Engine.layoutMode === 0) {
+                videoArea._laneOrderBump++
+                return
+            }
             var saved = videoArea._loadLaneOrder()
             videoArea._laneOrder = saved ? saved : []
             videoArea._laneOrderBump++
