@@ -89,11 +89,11 @@ Item {
     //     · 无 REF 路时：原样返回 slot（恒等映射）。
     function _refPlayerIndex() {
         var n = Engine.fileCount
+        var rp = (videoArea.multiGroupDialog && videoArea.multiGroupDialog.refVideoPath) || ""
         for (var i = 0; i < n; ++i) {
             var fp = Engine.filePathAt(i) || ""
             var dir = fp.substring(0, fp.lastIndexOf("/"))
             if (dir.length > 0 && dir.split("/").pop() === "REF") return i
-            var rp = (videoArea.multiGroupDialog && videoArea.multiGroupDialog.refVideoPath) || ""
             if (rp.length > 0 && dir === rp) return i
         }
         return -1
@@ -238,35 +238,106 @@ Item {
         return -1
     }
 
+    // 按当前布局恢复持久化顺序，并立刻规整一次。
+    //
+    // 【为什么不能直接 _laneOrder = saved】存档里存的是「绝对 player 索引」，而
+    //   参考视频(REF)路每次启动都是由 MultiGroupDialog.start() 追加出来的临时
+    //   最后一路，它的 player 索引随本次启动的路数变化；用户存档又可能来自
+    //   「本次没有 REF」的会话。直接套用存档等于跳过 _rebuildLaneOrder() 里的
+    //   REF 置顶校正，REF 会停在存档中的原位置（通常是末尾）——表现为「按数字
+    //   键放大某路、再按一次回到多路后，参考视频跑到最右侧、变成最大编号通道」。
+    //   若存档长度还大于当前路数，更会出现 slot → 越界 player 的空白格。
+    //   fileCount 为 0（刚启动 / 尚未开文件）时不能规整，否则会把存档当成
+    //   "全部越界"清空，这里只 set，留给 filesChanged 里的重建。
+    function _restoreLaneOrderForLayout() {
+        var saved = videoArea._loadLaneOrder()
+        videoArea._laneOrder = saved ? saved : []
+        videoArea._laneOrderBump++
+        var layout = Engine.layoutMode
+        var n = Engine.fileCount
+        var refIdx = (n > 0) ? videoArea._refPlayerIndex() : -1
+        console.log("[LaneOrder] 恢复顺序 布局=" + layout + " 路数=" + n
+                    + " 存档=" + (saved ? JSON.stringify(saved) : "(无)")
+                    + " REF player索引=" + refIdx)
+        if (n <= 0) return
+        // 配了参考视频却一路都没认出来时，槽位映射会退化成恒等，REF 会停在它
+        // 底层的最后一位（= 最右、最大编号）。这条日志用于区分「存档过期」与
+        // 「REF 根本没识别到」两种不同成因，是给用户排查时最关键的一行。
+        if (refIdx < 0) {
+            var rp0 = (videoArea.multiGroupDialog
+                       && videoArea.multiGroupDialog.refVideoPath) || ""
+            if (rp0.length > 0) {
+                var dirs = []
+                for (var dj = 0; dj < n; ++dj) {
+                    var f2 = Engine.filePathAt(dj) || ""
+                    dirs.push(f2.substring(0, f2.lastIndexOf("/")).split("/").pop())
+                }
+                console.log("[LaneOrder] ⚠ 已配置参考视频但未识别到 REF 路"
+                            + " refVideoPath=" + rp0 + " 各路目录=[" + dirs.join(", ") + "]")
+            }
+        }
+        var before = JSON.stringify(videoArea._laneOrder)
+        videoArea._rebuildLaneOrder()
+        var after = JSON.stringify(videoArea._laneOrder)
+        // 存档与规整结果不一致 → 说明存档是过期/异构的（典型：存档来自没有
+        // 参考视频的会话，而本次有 REF），这条日志是定位"REF 跑到最右"的关键证据。
+        if (before !== after)
+            console.log("[LaneOrder] 存档已过期，已按 REF 置顶规整: " + before + " → " + after)
+        var map = []
+        for (var s = 0; s < Math.min(n, videoArea._laneOrder.length); ++s) {
+            var pi = videoArea._laneOrder[s]
+            var fp = Engine.filePathAt(pi) || ""
+            var dir = fp.substring(0, fp.lastIndexOf("/"))
+            map.push((s + 1) + "=" + (pi + 1) + ":" + (dir.split("/").pop() || "?")
+                     + (pi === refIdx ? "(REF)" : ""))
+        }
+        console.log("[LaneOrder] 最终槽位映射(槽=通道:目录) " + map.join(" "))
+        // 规整结果与存档不一致（REF 归位 / 剔除越界 / 补齐缺失）→ 回写存档，
+        // 避免每次切换布局都重复纠正。Single(0) 无顺序语义，不写。
+        if (layout !== 0 && before !== after)
+            _persistLaneOrder()
+    }
+
     // 【通道拖拽重排】文件列表/布局变化时重建映射：
     //   · filesChanged（翻组/换文件/关通道）：保留旧相对顺序，REF 仍置顶。
     //     若无持久化旧顺序则默认恒等。
     //   · layoutMode 变化：不同布局的持久化顺序各自独立，切换时按
-    //     该布局自己的存档恢复（无存档则恒等）。
+    //     该布局自己的存档恢复，并强制做一次 REF 置顶规整。
     // Component.onCompleted：首次进入时尝试恢复上次布局的存档。
     Connections {
         target: Engine
-        function onFilesChanged() { videoArea._rebuildLaneOrder() }
+        function onFilesChanged() {
+            var prev = JSON.stringify(videoArea._laneOrder)
+            videoArea._rebuildLaneOrder()
+            // 规整确实改动了顺序（典型：存档来自没有 REF 的旧会话，本次有 REF）
+            // → 回写存档，避免这份过期顺序在下次切布局时又原样套回来。
+            // fileCount 为 0（关闭全部文件）时不回写，免得把空顺序存进设置。
+            if (Engine.fileCount > 0 && Engine.layoutMode !== 0
+                    && prev !== JSON.stringify(videoArea._laneOrder)) {
+                console.log("[LaneOrder] filesChanged 顺序已规整并回写: " + prev
+                            + " → " + JSON.stringify(videoArea._laneOrder)
+                            + "（路数=" + Engine.fileCount
+                            + " REF player索引=" + videoArea._refPlayerIndex() + "）")
+                videoArea._persistLaneOrder()
+            }
+        }
         function onLayoutModeChanged() {
             // Single(0) 没有自己的持久化顺序，且进入单路时应「沿用」进入前
             // 那个多路布局的显示顺序——否则 cell 靠 slotOfPlayer 反查窗口号
             // 会拿到恒等映射，用户拖拽重排过的通道号就显示错了。
             // Single 下 slotPlayerIndex 直接返回 activeIndex，_laneOrder
             // 不参与任何映射，因此这里保留旧顺序没有副作用。
+            console.log("[LaneOrder] 布局切换 → " + Engine.layoutMode
+                        + "（0=单路）当前顺序=" + JSON.stringify(videoArea._laneOrder))
             if (Engine.layoutMode === 0) {
                 videoArea._laneOrderBump++
                 return
             }
-            var saved = videoArea._loadLaneOrder()
-            videoArea._laneOrder = saved ? saved : []
-            videoArea._laneOrderBump++
-            if (!saved) videoArea._rebuildLaneOrder()
+            videoArea._restoreLaneOrderForLayout()
         }
     }
     Component.onCompleted: {
-        var saved = videoArea._loadLaneOrder()
-        videoArea._laneOrder = saved ? saved : []
-        if (!saved) videoArea._rebuildLaneOrder()
+        videoArea._restoreLaneOrderForLayout()
     }
 
     // 「空白处点击取消选中」底层 MouseArea。
