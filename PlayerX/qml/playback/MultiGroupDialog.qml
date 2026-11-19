@@ -74,6 +74,10 @@ ApplicationWindow {
         // 每次打开设置页：恢复「未选中」基线 —— 通路 = 所有历史导入路径并集
         // （未勾选），参考资料 = 当前 + 历史路径并集（未勾选）。
         try { _restoreBaselineLanes(); _restoreBaselineRefRes() } catch (e) { /* ignore */ }
+        // 基线恢复会往模型里追加新行，而上面那次校验发生在恢复之前（那时行还不存在），
+        // 新恢复的行因此拿不到有效性结论、不会着色。这里在恢复后再补校验一次，
+        // 让「文件已被删除的路」一打开就是琥珀色失效态。
+        try { _refreshLaneValidity() } catch (e) { /* ignore */ }
         // 历史选中态同样重置（兜底路径：不走 showAndRefresh 直接 show() 时）
         if (typeof histList !== "undefined" && histList
             && typeof histList._selectedHistId === "number")
@@ -981,15 +985,27 @@ ApplicationWindow {
     // 与测试源自动化 _tsImportAndStart 的行为保持一致（等价手动点左下角「图片」按钮）。
     signal refResourcesBound()
 
-    // 参考资料区是否配置了任何有效项（参考视频 / 参考帧 / 提示词 CSV）
+    // 参考资料区是否配置了任何"真正可用"的项（参考视频 / 参考帧 / 提示词 CSV）。
     // 注意：总开关关闭时一律视为未配置，启动时不绑定、也不展开侧栏。
+    // 【为何要校验存在性】失效路径现在会保留在输入框里（只标红不删除），
+    // 若这里只判"字符串非空"，那么全是失效路径时也会返回 true，导致启动后
+    // 把空的参考图侧栏 / 提示词栏展开出来。必须与 start() 里的绑定条件
+    // （Fs.isDirectoryPath / Fs.fileExists）保持一致。
     function _anyRefResConfigured() {
         if (!refResEnabled) return false
-        if (refVideoPath.length > 0) return true
-        if (refPromptPath.length > 0) return true
+        if (refVideoEnabled && refVideoPath.length > 0) {
+            try { if (Fs.isDirectoryPath(refVideoPath)) return true } catch (e) {}
+        }
+        if (refPromptEnabled && refPromptPath.length > 0) {
+            try { if (Fs.fileExists(refPromptPath)) return true } catch (e) {}
+        }
         var fa = refFramePaths || []
         for (var i = 0; i < fa.length; ++i) {
-            if (fa[i] && String(fa[i].path || "").length > 0) return true
+            var it = fa[i] || {}
+            var p = String(it.path || "")
+            if (p.length === 0) continue
+            if (it.enabled === false) continue
+            try { if (Fs.isDirectoryPath(p)) return true } catch (e) {}
         }
         return false
     }
@@ -1016,6 +1032,23 @@ ApplicationWindow {
         if (on) refResEnabled = true
         _saveRefRes()
     }
+    // 按「路径现在是否真实存在」重算某槽位的失效标记（key: video / prompt / frame<idx>）。
+    // 路径本身【不会被清空】：用户填了什么就保留什么，只是非空且不存在时标成失效态，
+    // 启动时由各自的存在性检查自动跳过（见 start() 里三处 Fs 校验）。
+    function _setRefInvalidMark(key, pathValue, isFile) {
+        var p = String(pathValue || "")
+        var bad = false
+        if (p.length > 0) {
+            try { bad = !(isFile ? Fs.fileExists(p) : Fs.isDirectoryPath(p)) }
+            catch (e) { bad = true }
+        }
+        var cur = _refResInvalidPaths || {}
+        var m = ({})
+        for (var k in cur) { if (k !== key) m[k] = cur[k] }
+        if (bad) m[key] = p
+        _refResInvalidPaths = m
+    }
+
     function setRefVideo(p) {
         var np = (p || "").trim()
         // 即时纠偏：参考视频栏若填入的是纯图片目录（无视频、有图片），
@@ -1032,6 +1065,7 @@ ApplicationWindow {
                         console.log("[MGD] 参考视频栏填入图片目录，自动改绑到参考帧", slot + 1, ":", np)
                         setRefFrame(slot, np)
                         refVideoPath = ""
+                        _setRefInvalidMark("video", "", false)
                         _saveRefRes()
                         return
                     }
@@ -1039,6 +1073,8 @@ ApplicationWindow {
             } catch (e) { console.warn("[MGD] setRefVideo 即时纠偏失败:", e) }
         }
         refVideoPath = np
+        // 路径保留原样（不清空）；只在非空且目录不存在时标为失效态
+        _setRefInvalidMark("video", np, false)
         _saveRefRes()
     }
     // 设置第 idx 槽的参考帧路径（不足则补齐空槽；idx 越界自动追加，上限 kMaxRefFrames）
@@ -1049,6 +1085,7 @@ ApplicationWindow {
         while (arr.length <= idx) arr.push({ path: "", enabled: true })
         arr[idx].path = (p || "").trim()
         refFramePaths = arr
+        _setRefInvalidMark("frame" + idx, arr[idx].path, false)
         _saveRefRes()
     }
     // 设置第 idx 槽的单独勾选态
@@ -1075,6 +1112,18 @@ ApplicationWindow {
         arr.splice(idx, 1)
         if (arr.length === 0) arr.push({ path: "", enabled: true })
         refFramePaths = arr
+        // 失效标记是按下标存的，删槽后必须整体左移，否则后面槽位的着色会错位
+        // （例如删除"参考帧 2"后，原本属于 3 的失效标记会显示到 2 上）。
+        var m = _refResInvalidPaths || {}
+        var out = ({})
+        for (var k in m) {
+            if (k === "video" || k === "prompt") { out[k] = m[k]; continue }
+            var si = parseInt(String(k).replace("frame", ""), 10)
+            if (isNaN(si)) continue
+            if (si === idx) continue                    // 被删槽位自身的标记丢弃
+            out["frame" + (si > idx ? si - 1 : si)] = m[k]
+        }
+        _refResInvalidPaths = out
         _saveRefRes()
     }
     // 深拷贝参考帧数组（避免直接改引用导致绑定不刷新）
@@ -1111,6 +1160,7 @@ ApplicationWindow {
     }
     function setRefPrompt(p) {
         refPromptPath = (p || "").trim()
+        _setRefInvalidMark("prompt", refPromptPath, true)
         _saveRefRes()
     }
 
@@ -1125,75 +1175,49 @@ ApplicationWindow {
     // 注：自动化回填（applyAutoRefResources）的路径在回填时已确保存在，此函数
     //     兜底覆盖所有来源（历史持久化 / 手动残留）。
     function _validateRefResPaths() {
-        var removed = []
-        var changed = false
+        // 只做「探测 + 标记」，绝不改动路径本身。
+        // 用户诉求：空的输入框上给警告没有意义 —— 要保留原路径，并对非空且
+        // 无效的路径着色提示。启动时的存在性检查（start() 里参考视频/参考帧/
+        // 提示词三处 Fs 校验）会自动跳过失效项，所以保留失效路径不会影响启动。
+        var mark = ({})
+        var bad = []
 
         // 1) 参考视频目录
         if (refVideoPath.length > 0) {
             var rvOk = false
             try { rvOk = Fs.isDirectoryPath(refVideoPath) } catch (e) { rvOk = false }
-            if (!rvOk) {
-                console.warn("[MGD] 参考视频目录已失效，清空:", refVideoPath)
-                removed.push("参考视频 " + refVideoPath)
-                refVideoPath = ""
-                changed = true
-            }
+            if (!rvOk) { mark["video"] = refVideoPath; bad.push("参考视频 " + refVideoPath) }
         }
 
         // 2) 提示词 CSV
         if (refPromptPath.length > 0) {
             var cpOk = false
             try { cpOk = Fs.fileExists(refPromptPath) } catch (e) { cpOk = false }
-            if (!cpOk) {
-                console.warn("[MGD] 提示词 CSV 已失效，清空:", refPromptPath)
-                removed.push("提示词 " + refPromptPath)
-                refPromptPath = ""
-                changed = true
-            }
+            if (!cpOk) { mark["prompt"] = refPromptPath; bad.push("提示词 " + refPromptPath) }
         }
 
-        // 3) 参考帧目录（逐槽校验；全部为空时不动）
+        // 3) 参考帧目录（逐槽）
         var fa = refFramePaths || []
-        var dirtyFrames = false
         for (var i = 0; i < fa.length; ++i) {
             var fp = String((fa[i] && fa[i].path) || "")
             if (fp.length === 0) continue
             var fOk = false
             try { fOk = Fs.isDirectoryPath(fp) } catch (e) { fOk = false }
             if (!fOk) {
-                console.warn("[MGD] 参考帧", (i + 1), "目录已失效，清空:", fp)
-                removed.push("参考帧" + (i + 1) + " " + fp)
-                fa[i].path = ""
-                dirtyFrames = true
+                mark["frame" + i] = fp
+                bad.push("参考帧" + (i + 1) + " " + fp)
             }
-        }
-        if (dirtyFrames) {
-            // 重建数组触发绑定刷新（参考帧行是 Repeater model，直接改元素不刷新）
-            var newFa = []
-            for (var j = 0; j < fa.length; ++j)
-                newFa.push({ path: String(fa[j].path || ""), enabled: fa[j].enabled !== false })
-            refFramePaths = newFa
-            changed = true
         }
 
-        if (changed) {
-            // 若清理后参考资料区已完全空置，把总开关一并复位，避免空配置仍占状态
-            if (refVideoPath.length === 0 && refPromptPath.length === 0) {
-                var anyFrame = false
-                for (var k = 0; k < (refFramePaths || []).length; ++k) {
-                    if (String((refFramePaths[k] || {}).path || "").length > 0) {
-                        anyFrame = true; break
-                    }
-                }
-                if (!anyFrame) refResEnabled = false
-            }
-            _saveRefRes()
-            _refResInvalidNotice = "⚠ 参考资料含失效路径，已自动清空 " + removed.length
-                                  + " 项（原目录/文件已被删除或移动）"
+        _refResInvalidPaths = mark
+
+        if (bad.length > 0) {
+            console.warn("[MGD] 参考资料存在失效路径（保留原值，仅标记）:", bad.join(" | "))
+            _refResInvalidNotice = "⚠ 参考资料有 " + bad.length
+                                  + " 项路径已失效（已保留原路径并高亮，启动时自动跳过）"
             _refResInvalidTimer.restart()
-            console.log("[MGD] 参考资料路径校验完成，清理:", removed.join(" | "))
         }
-        return removed.length
+        return bad.length
     }
     // 由自动化流程（_tsImportAndStart）回填：把本次实际绑定的参考帧目录列表与
     // 提示词 CSV 写回参考资料区并持久化，使返回对话框时展示与当前组一致，
@@ -1269,6 +1293,8 @@ ApplicationWindow {
         // 置标记吞掉那次 show 触发的基线复位，勾选态得以保留到弹窗出现
         _suppressBaselineOnce = true
         _saveRefRes()
+        // 回填的路径理论上都已存在，仍做一次探测，确保失效色与实际一致
+        try { _validateRefResPaths() } catch (e) { /* ignore */ }
         console.log("[MGD] 已回填自动化参考资料：帧",
                     arr.length, "个, CSV=", refPromptPath || "(无)",
                     " 参考视频=", refVideoPath || "(无)")
@@ -2551,6 +2577,7 @@ ApplicationWindow {
         refVideoPath = ""
         refPromptPath = ""
         refFramePaths = [ { path: "", enabled: true } ]
+        _refResInvalidPaths = ({})
         try { _saveRefRes() } catch (e) { { } }
         _bumpState()
         _persistLanes()
@@ -3120,6 +3147,7 @@ ApplicationWindow {
                         console.log("[MGD] 参考视频目录实为图片目录，自动改绑到参考帧1:", refVideoPath)
                         setRefFrame(0, refVideoPath)
                         refVideoPath = ""
+                        _setRefInvalidMark("video", "", false)
                         _saveRefRes()
                     }
                 }
@@ -3656,6 +3684,8 @@ ApplicationWindow {
         for (var k = 0; k < frames.length; ++k) arr.push({ path: frames[k], enabled: false })
         if (arr.length === 0) arr.push({ path: "", enabled: true })
         refFramePaths = arr
+        // 基线里的路径来自历史快照，可能早已失效：只重算标记，保留路径本身
+        try { _validateRefResPaths() } catch (e) { /* ignore */ }
         _saveRefRes()
     }
 
@@ -3809,6 +3839,11 @@ ApplicationWindow {
     }
     // 参考资料路径校验提示（打开 Dialog 时发现失效路径被清理后显示，自动消失）
     property string _refResInvalidNotice: ""
+    // 参考资料中"路径非空但当前不存在"的槽位：{ "video": "/旧/路径", "frame0": "..." }
+    // 仅用于行内着色与「路径失效」标记，路径本身【不会被清空或改写】，
+    // 也不影响启动（start() 里三处 Fs 校验会自动跳过失效项）。
+    // 每次路径写入、历史加载、基线恢复、面板打开都会重算（见 _setRefInvalidMark）。
+    property var _refResInvalidPaths: ({})
     // 一次打开周期内参考资料只校验一次的守卫（防 showAndRefresh + onVisibleChanged 双触发）
     property bool _refResValidated: false
     // 自动化接管守卫：applyAutoRefResources 置 true，吞掉随后那次
@@ -4532,6 +4567,9 @@ ApplicationWindow {
         if (faNew.length === 0) faNew.push({ path: "", enabled: true })
         refFramePaths = faNew
         _saveRefRes()
+        // 历史里的参考资料路径可能已被删除：这里只重算标记（不清空、不改路径），
+        // 让这些行以失效色显示原路径，用户一眼看出需要重新指定哪一项。
+        try { _validateRefResPaths() } catch (e) { /* ignore */ }
         _refResValidated = true   // 已校验过存在性，本次打开不再重复校验
         // 标记本次是从这条历史点击加载来的：随后启动一律复用该记录，不新增。
         _histReuseId = rec.id
@@ -5557,6 +5595,9 @@ ApplicationWindow {
         // 视频路径并集（全部未勾选）；参考资料 = 当前 + 全部历史的路径并集
         // （一律未勾选）。勾选只能通过右侧历史点击加载，或用户手动勾选。
         try { _restoreBaselineLanes(); _restoreBaselineRefRes() } catch (e) { console.warn("[MGD] 基线恢复异常:", e) }
+        // 恢复基线会新建若干行，而 onVisibleChanged 里的那次校验发生在此之前，
+        // 新行拿不到结论就不会着色。这里补一次，保证失效路一打开即变色。
+        try { _refreshLaneValidity() } catch (e) { /* ignore */ }
         _folderHistMerged = true
         // 每次打开自动清理空槽位（未导入的占位行）与死路（目录已失效），
         // 避免它们长期占用 kMaxLanes 名额堵死新导入
@@ -6560,6 +6601,12 @@ ApplicationWindow {
                 property string hint: ""
                 property int frameSlot: -1     // -1=非参考帧；>=0=参考帧槽位（0 基）
                 property bool isCsv: false
+                // 该槽位路径"非空但不存在"（空 = 正常）。路径本身【保留不清空】，
+                // 只做视觉标记：让用户看清是哪一项、坏在哪个路径，并且可以直接在
+                // 原值上编辑修正，而不是面对一个空框重新回忆当初填了什么。
+                property string invalidPath: ""
+                readonly property bool invalid: invalidPath.length > 0
+                                                && path.length > 0
                 // 是否显示单独勾选框（仅参考帧行用）；checked 表示该帧是否参与绑定
                 property bool checkable: false
                 property bool checked: true
@@ -6575,10 +6622,15 @@ ApplicationWindow {
                 // 行始终可交互：即使总开关未启用，也允许单独勾选 / 改路径。
                 // 勾选任意单项会自动打开总开关（见各行 onToggleChecked）。
                 // 未启用时仅做轻度变暗提示，不禁用，确保勾选框清晰可点。
-                opacity: dlg.refResEnabled ? 1.0 : 0.72
+                // 失效行例外：始终全不透明，否则总开关关着时着色会被压暗、看不出问题。
+                opacity: (dlg.refResEnabled || invalid) ? 1.0 : 0.72
                 enabled: true
-                color: refDrop.containsDrag ? "#23281f" : "#1a1a1f"
-                border.color: refDrop.containsDrag ? "#b8952e" : "#2c2c32"
+                // 失效态用琥珀色底 + 描边（与左侧通路的失效行同一套色），
+                // 不用红色：这不是程序报错，只是"这一项需要重新指定"的提示。
+                color: refDrop.containsDrag ? "#23281f"
+                                           : (invalid ? "#2a2216" : "#1a1a1f")
+                border.color: refDrop.containsDrag ? "#b8952e"
+                                                   : (invalid ? "#c8871f" : "#2c2c32")
                 border.width: 1
 
                 RowLayout {
@@ -6626,21 +6678,52 @@ ApplicationWindow {
                         font.bold: true
                         Layout.preferredWidth: 58
                     }
+                    // 失效徽标：紧贴项名，明确告知"这一项的路径现在找不到"。
+                    // 路径仍保留在输入框里，用户可直接在其上修改。
+                    Rectangle {
+                        visible: resRow.invalid
+                        Layout.preferredHeight: 16
+                        Layout.preferredWidth: _refInvLabel.implicitWidth + 10
+                        Layout.alignment: Qt.AlignVCenter
+                        radius: 2
+                        color: "#e09a2b"
+                        Label {
+                            id: _refInvLabel
+                            anchors.centerIn: parent
+                            text: "路径失效"
+                            color: "#1a1206"
+                            font.pixelSize: 9
+                            font.bold: true
+                        }
+                        ToolTip.visible: _refInvHover.containsMouse
+                        ToolTip.delay: 300
+                        ToolTip.text: "路径不存在：" + resRow.invalidPath
+                                     + "\n可直接在输入框内修改，或点 📁 重新选择"
+                                     + "\n（启动对比时会自动跳过此项）"
+                        MouseArea {
+                            id: _refInvHover
+                            anchors.fill: parent
+                            hoverEnabled: true
+                        }
+                    }
                     TextField {
                         id: resPathField
                         Layout.fillWidth: true
                         Layout.preferredHeight: 22
+                        // 路径始终原样显示（失效也不清空），用户可直接在框内修正。
                         placeholderText: resRow.hint
                         text: resRow.path
                         selectByMouse: true
-                        color: "#e8e8ec"
+                        // 失效行的文字一并转琥珀色，配合行底色/描边形成三重提示
+                        color: resRow.invalid ? "#f0b64a" : "#e8e8ec"
                         font.pixelSize: 11
                         // 右内边距给内嵌 ✕ 按钮留位；无内容时不留白
                         rightPadding: resRow.path.length > 0 ? 26 : 8
                         background: Rectangle {
                             radius: 3
                             color: "#14141a"
-                            border.color: resPathField.activeFocus ? "#3a78c8" : "#2c2c32"
+                            border.color: resPathField.activeFocus ? "#3a78c8"
+                                        : (resRow.invalid ? "#c8871f" : "#2c2c32")
                             border.width: 1
                         }
                         onEditingFinished: {
@@ -6753,6 +6836,7 @@ ApplicationWindow {
                 label: "参考视频"
                 hint: "参考视频目录（拖拽或点击 📁 选择；启动后自动附加为不评分的一路）"
                 path: dlg.refVideoPath
+                invalidPath: String((dlg._refResInvalidPaths || {})["video"] || "")
                 checkable: true
                 checked: dlg.refVideoEnabled
                 onApplyPath: function(p) { dlg.setRefVideo(p) }
@@ -6763,6 +6847,7 @@ ApplicationWindow {
                 hint: "prompt.csv（可选，绑定到提示词面板）"
                 isCsv: true
                 path: dlg.refPromptPath
+                invalidPath: String((dlg._refResInvalidPaths || {})["prompt"] || "")
                 checkable: true
                 checked: dlg.refPromptEnabled
                 onApplyPath: function(p) { dlg.setRefPrompt(p) }
@@ -6787,6 +6872,7 @@ ApplicationWindow {
                         var it = (dlg.refFramePaths && dlg.refFramePaths[index]) || {}
                         return String(it.path || "")
                     }
+                    invalidPath: String((dlg._refResInvalidPaths || {})["frame" + index] || "")
                     onApplyPath: function(p) { dlg.setRefFrame(index, p) }
                     onToggleChecked: function(want) { dlg.setRefFrameEnabled(index, want) }
                     onRemoveRow: dlg.removeRefFrameSlot(index)
